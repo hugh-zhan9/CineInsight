@@ -7,22 +7,23 @@
   />
 
   <main v-else class="photo-library">
+    <PageHeader class="photo-library__header" title="图片" subtitle="独立扫描入库的本地图片库，可筛选、查看与管理。" />
+
     <section class="photo-toolbar glass-surface">
-      <div class="photo-toolbar__title">
-        <h2>图片</h2>
-        <p>独立扫描入库的本地图片库，可筛选、查看与管理。</p>
-      </div>
       <div class="photo-toolbar__controls">
+        <!-- 两组模式切换暂留页内写法：SegmentedControl 还不能给每个选项挂 data-test，而这几个钩子在基线里。 -->
         <div class="photo-search-mode" role="group" aria-label="搜索模式">
           <button
             type="button"
             :class="['photo-search-mode__btn', { active: searchMode === 'name' }]"
+            :aria-pressed="searchMode === 'name' ? 'true' : 'false'"
             data-test="photo-mode-name"
             @click="setSearchMode('name')"
           >文件名</button>
           <button
             type="button"
             :class="['photo-search-mode__btn', { active: searchMode === 'semantic' }]"
+            :aria-pressed="searchMode === 'semantic' ? 'true' : 'false'"
             :disabled="!semanticAvailable"
             :title="semanticAvailable ? '语义搜索：按文件名与标签匹配' : semanticNotice"
             data-test="photo-mode-semantic"
@@ -33,12 +34,14 @@
           <button
             type="button"
             :class="['photo-view-mode__btn', { active: displayMode === 'stream' }]"
+            :aria-pressed="displayMode === 'stream' ? 'true' : 'false'"
             data-test="photo-display-stream"
             @click="setDisplayMode('stream')"
           >图片流</button>
           <button
             type="button"
             :class="['photo-view-mode__btn', { active: displayMode === 'wall' }]"
+            :aria-pressed="displayMode === 'wall' ? 'true' : 'false'"
             title="同一份图片流，只显示缩略图的紧凑平铺；点图查看、勾选照旧"
             data-test="photo-display-wall"
             @click="setDisplayMode('wall')"
@@ -46,6 +49,7 @@
           <button
             type="button"
             :class="['photo-view-mode__btn', { active: displayMode === 'folders' }]"
+            :aria-pressed="displayMode === 'folders' ? 'true' : 'false'"
             :disabled="searchMode === 'semantic'"
             :title="searchMode === 'semantic' ? '语义搜索结果按相关度展示，暂不按文件夹汇总' : '每个直属文件夹作为一个独立图集，不递归包含子文件夹'"
             data-test="photo-display-folders"
@@ -86,32 +90,38 @@
         <button
           ref="photoFilterTrigger"
           type="button"
-          :class="['toolbar-btn', { 'toolbar-btn--on': activePhotoFilterCount > 0 }]"
+          :class="['btn', 'btn--secondary', 'photo-toolbar__menu', { 'photo-toolbar__menu--on': activePhotoFilterCount > 0 }]"
+          :aria-expanded="photoMenu === 'filter' ? 'true' : 'false'"
           data-test="photo-filter-open"
           @click="togglePhotoMenu('filter', 'photoFilterTrigger')"
         >
+          <AppIcon name="filter" :size="16" />
           筛选
-          <span v-if="activePhotoFilterCount > 0" class="toolbar-btn__badge">{{ activePhotoFilterCount }}</span>
-          <span class="toolbar-btn__caret">▾</span>
+          <AppBadge v-if="activePhotoFilterCount > 0" tone="accent" :count="activePhotoFilterCount" />
+          <AppIcon class="photo-toolbar__caret" name="chevron-down" :size="16" />
         </button>
         <button
           ref="photoManageTrigger"
           type="button"
-          class="toolbar-btn toolbar-btn--strong"
+          class="btn btn--secondary photo-toolbar__menu"
+          :aria-expanded="photoMenu === 'manage' ? 'true' : 'false'"
           data-test="photo-manage-open"
           @click="togglePhotoMenu('manage', 'photoManageTrigger')"
         >
           管理
-          <span v-if="photoAttentionCount > 0" class="toolbar-btn__badge">{{ photoAttentionCount }}</span>
-          <span class="toolbar-btn__caret">▾</span>
+          <AppBadge v-if="photoAttentionCount > 0" tone="accent" :count="photoAttentionCount" />
+          <AppIcon class="photo-toolbar__caret" name="chevron-down" :size="16" />
         </button>
+        <!-- 批量动作只在有勾选时出现，不选不等于全选（D-UD-10）。整条换成 SelectionBar 还差两件事，见 B2 交接：
+             SelectionBar 不能挂基线钩子 photo-select-all / photo-clear-selection；图片搜索没有总数，给不出「全选当前结果（N）」。 -->
         <div v-if="images.length" :class="['photo-selection-tools', { 'photo-selection-tools--active': selectedImageIDs.length > 0 }]" data-test="photo-selection-tools">
           <span class="photo-selection-tools__count">已选 {{ selectedImageIDs.length }} 张</span>
-          <button type="button" class="btn-secondary btn-compact" data-test="photo-select-all" @click="toggleSelectAll">
+          <button type="button" class="btn btn--secondary btn--sm" data-test="photo-select-all" @click="toggleSelectAll">
             {{ allLoadedSelected ? '取消全选' : '全选已加载' }}
           </button>
-          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" data-test="photo-clear-selection" @click="clearSelection">清除选择</button>
-          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" :disabled="batchBusy" data-test="photo-batch-tag-open" @click="openBatchTagPicker">批量添加标签</button>
+          <button v-if="selectedImageIDs.length" type="button" class="btn btn--ghost btn--sm" data-test="photo-clear-selection" @click="clearSelection">取消选择</button>
+          <span v-if="selectedImageIDs.length" class="photo-selection-tools__spacer"></span>
+          <button v-if="selectedImageIDs.length" type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-tag-open" @click="openBatchTagPicker">批量添加标签</button>
           <div v-if="selectedImageIDs.length" class="photo-tag-combobox photo-batch-tag-search">
             <input
               ref="batchTagInput"
@@ -132,22 +142,21 @@
               @blur="closeBatchTagMenu"
             />
             <div v-if="batchTagMenuOpen" id="photo-batch-tag-options" class="photo-tag-options" role="listbox" data-test="photo-batch-tag-options">
-              <button
+              <div
                 v-for="(tag, index) in filteredBatchTags"
                 :id="`photo-batch-tag-option-${tag.id}`"
                 :key="tag.id"
-                type="button"
                 role="option"
                 :aria-selected="index === batchTagActiveIndex"
                 :class="['photo-tag-option', { active: index === batchTagActiveIndex }]"
                 @mouseenter="batchTagActiveIndex = index"
                 @mousedown.prevent="batchAddTag(tag)"
-              >{{ tag.name }}</button>
+              >{{ tag.name }}</div>
               <span v-if="filteredBatchTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
             </div>
           </div>
-          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" :disabled="batchBusy" data-test="photo-batch-metadata-edit" @click="openMetadataBatchEdit">批量编辑…</button>
-          <button v-if="selectedImageIDs.length" type="button" class="btn-danger btn-compact" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">删除所选</button>
+          <button v-if="selectedImageIDs.length" type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-metadata-edit" @click="openMetadataBatchEdit">批量编辑…</button>
+          <button v-if="selectedImageIDs.length" type="button" class="btn btn--danger btn--sm" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">{{ deleteActionLabel }}</button>
         </div>
       </div>
       <BasePopover
@@ -220,11 +229,11 @@
               {{ selection.name }}
               <button
                 type="button"
-                class="tag-remove"
+                class="btn-icon tag-remove"
                 :aria-label="`移除人物筛选 ${selection.name}`"
                 :data-test="`photo-person-filter-remove-${selection.id}`"
                 @click="removePersonFilter(selection.id)"
-              >×</button>
+              ><AppIcon name="close" :size="16" /></button>
             </span>
           </div>
           <div class="photo-tag-combobox">
@@ -246,17 +255,16 @@
               @blur="closePersonFilterMenu"
             />
             <div v-if="personFilterMenuOpen" id="photo-person-filter-options" class="photo-tag-options" role="listbox" data-test="photo-person-filter-options">
-              <button
+              <div
                 v-for="(item, index) in filteredPersonFilterCandidates"
                 :id="`photo-person-filter-option-${item.person.id}`"
                 :key="item.person.id"
-                type="button"
                 role="option"
                 :aria-selected="index === personFilterActiveIndex"
                 :class="['photo-tag-option', { active: index === personFilterActiveIndex }]"
                 @mouseenter="personFilterActiveIndex = index"
                 @mousedown.prevent="addPersonFilter(item)"
-              >{{ item.person.display_name }}</button>
+              >{{ item.person.display_name }}</div>
               <span v-if="filteredPersonFilterCandidates.length === 0" class="photo-tag-options__empty">没有匹配人物</span>
             </div>
           </div>
@@ -274,27 +282,28 @@
         @close="closePhotoMenu"
       />
 
-      <p v-if="semanticNotice" class="photo-toolbar__semantic-notice" role="status" data-test="photo-semantic-unavailable">{{ semanticNotice }}</p>
-      <div v-if="imageTags.length" class="photo-toolbar__tags">
-        <button
+      <p v-if="semanticNotice" class="photo-toolbar__semantic-notice" role="status" data-test="photo-semantic-unavailable">
+        <AppIcon name="info" :size="16" />{{ semanticNotice }}
+      </p>
+      <div v-if="imageTags.length" class="photo-toolbar__tags" role="group" aria-label="按标签筛选">
+        <FilterChip
           v-for="tag in imageTags"
           :key="tag.id"
-          type="button"
-          :class="['tag-chip', { active: filters.tagIDs.includes(tag.id) }]"
-          :style="{ '--tag-color': tag.color }"
-          @click="toggleTagFilter(tag.id)"
-        >
-          {{ tag.name }}
-        </button>
+          :label="tag.name"
+          :active="filters.tagIDs.includes(tag.id)"
+          data-test="photo-tag-filter"
+          @toggle="toggleTagFilter(tag.id)"
+        />
       </div>
     </section>
 
-    <!-- 切走再切回不重新加载列表（滚动位置要留着），所以用提示条告诉用户库里有变化。 -->
-    <div v-if="libraryChanged" class="photo-library__refresh" role="status" data-test="photo-library-refresh">
-      <span>图片库有更新。刷新会回到列表顶部。</span>
-      <button type="button" class="btn-secondary btn-compact" data-test="photo-library-refresh-apply" @click="applyLibraryRefresh">刷新</button>
-      <button type="button" class="photo-library__refresh-dismiss" aria-label="忽略此提示" data-test="photo-library-refresh-dismiss" @click="libraryChanged = false">×</button>
-    </div>
+    <!-- 切走再切回不重新加载列表（滚动位置要留着），所以用横幅告诉用户库里有变化。 -->
+    <AppBanner v-if="libraryChanged" tone="accent" data-test="photo-library-refresh" title="图片库有更新。刷新会回到列表顶部。">
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="photo-library-refresh-apply" @click="applyLibraryRefresh">刷新</button>
+        <button type="button" class="btn-icon btn--sm" aria-label="忽略此提示" data-test="photo-library-refresh-dismiss" @click="libraryChanged = false"><AppIcon name="close" :size="16" /></button>
+      </template>
+    </AppBanner>
 
     <TrashUndoBanner
       ref="trashUndo"
@@ -302,16 +311,19 @@
       :after-restore="afterTrashRestore"
     />
 
-    <p v-if="error" class="photo-library__error" role="alert">{{ error }}</p>
+    <AppBanner v-if="error" class="photo-library__error" tone="danger" role="alert" :title="error" />
     <p v-if="folderModeRoot && folderLoading" class="photo-folder-loading" role="status" data-test="photo-folder-loading">正在整理图片文件夹…</p>
+    <div v-if="folderModeRoot && folderLoading && !folderGroups.length" class="photo-folder-grid" aria-hidden="true">
+      <SkeletonBlock v-for="index in 8" :key="index" shape="card" :lines="2" />
+    </div>
 
     <div v-if="folderModeActive" class="photo-folder-breadcrumb glass-surface" data-test="photo-folder-breadcrumb">
-      <button type="button" class="btn-secondary btn-compact" data-test="photo-folder-back" @click="leaveFolder">← 文件夹</button>
+      <button type="button" class="btn btn--ghost btn--sm" data-test="photo-folder-back" @click="leaveFolder"><AppIcon name="chevron-left" :size="16" />文件夹</button>
       <div class="photo-folder-breadcrumb__text">
         <strong>{{ activeFolder.name }}</strong>
-        <button type="button" class="btn-secondary btn-compact" @click="openSystemFolder(activeFolder.directory)">打开目录</button>
         <span :title="activeFolder.directory">{{ activeFolder.directory }} · {{ activeFolder.count }} 张图片</span>
       </div>
+      <button type="button" class="btn btn--secondary btn--sm photo-folder-breadcrumb__reveal" @click="openSystemFolder(activeFolder.directory)">在访达中显示</button>
     </div>
 
     <div v-if="folderModeRoot && folderGroups.length" ref="folderShell" class="photo-folder-window" data-test="photo-folder-window">
@@ -320,7 +332,7 @@
       <article v-for="folder in renderedFolders" :key="folder.directory" class="photo-folder-card glass-surface">
         <button
           type="button"
-          class="photo-folder-card__open"
+          class="btn-link photo-folder-card__open"
           :title="`打开 ${folder.directory}`"
           :aria-label="`打开文件夹 ${folder.name}`"
           @click="enterFolder(folder)"
@@ -344,15 +356,17 @@
             <span :title="folder.directory">{{ folder.directory }}</span>
           </div>
         </button>
-        <button type="button" class="btn-secondary btn-compact" data-test="photo-folder-system-open" @click="openSystemFolder(folder.directory)">打开目录</button>
+        <div class="photo-folder-card__actions">
+          <button type="button" class="btn btn--ghost btn--sm" data-test="photo-folder-system-open" @click="openSystemFolder(folder.directory)">在访达中显示</button>
+        </div>
         <button
           type="button"
-          class="btn-danger btn-compact photo-folder-card__delete"
+          class="btn btn--danger btn--sm photo-folder-card__delete"
           :disabled="folderDeleting"
-          :title="`删除 ${folder.name} 里的全部图片`"
+          :title="settings?.delete_original_file ? `把 ${folder.name} 里的全部图片移到废纸篓` : `把 ${folder.name} 里的全部图片从图片库移除`"
           data-test="photo-folder-delete"
           @click="deleteFolder(folder)"
-        >删除文件夹</button>
+        >{{ deleteVerb }}…</button>
       </article>
     </section>
     <div v-if="folderWindowed && folderWindow.bottomSpacer > 0" :style="{ height: `${folderWindow.bottomSpacer}px` }" aria-hidden="true"></div>
@@ -392,7 +406,7 @@
                 @change="toggleImageSelection(image.id, $event.target.checked)"
               />
             </label>
-            <button type="button" class="photo-card__media" :title="image.name" @click="activateImage(row.startIndex + offset)">
+            <button type="button" class="btn-link photo-card__media" :title="image.name" @click="activateImage(row.startIndex + offset)">
               <img
                 v-if="!failedThumbs[image.id]"
                 :src="`/preview/image-thumbnail/${image.id}`"
@@ -409,19 +423,20 @@
             <div v-if="!wallMode" class="photo-card__overlay">
               <button
                 type="button"
-                :class="['photo-card__action', { 'photo-card__action--active': image.is_favorite }]"
+                :class="['btn-icon', 'btn--secondary', 'btn--sm', 'photo-card__action', { 'photo-card__action--active': image.is_favorite }]"
                 :title="image.is_favorite ? '取消收藏' : '收藏'"
                 :aria-label="`${image.is_favorite ? '取消收藏' : '收藏'} ${image.name}`"
+                :aria-pressed="image.is_favorite ? 'true' : 'false'"
                 @click.stop="toggleFavorite(image)"
-              >{{ image.is_favorite ? '★' : '☆' }}</button>
+              ><AppIcon name="star" :size="16" /></button>
               <button
                 type="button"
-                class="photo-card__action photo-card__action--danger"
-                title="删除"
-                :aria-label="`删除 ${image.name}`"
+                class="btn-icon btn--secondary btn--sm photo-card__action photo-card__action--danger"
+                :title="deleteVerb"
+                :aria-label="`${deleteVerb} ${image.name}`"
                 data-test="photo-card-delete"
                 @click.stop="requestDelete(image)"
-              >×</button>
+              ><AppIcon name="trash" :size="16" /></button>
             </div>
             <div v-if="!wallMode" class="photo-card__meta">
               <span :title="image.name">{{ image.name }}</span>
@@ -437,76 +452,94 @@
       <div v-if="virtualized && windowState.bottomSpacer > 0" :style="{ height: `${windowState.bottomSpacer}px` }" aria-hidden="true"></div>
     </section>
 
+    <div v-if="!folderModeRoot && loading && !loadedOnce" class="photo-skeleton-grid" aria-hidden="true" data-test="photo-grid-skeleton">
+      <SkeletonBlock v-for="index in 12" :key="index" shape="card" :lines="1" />
+    </div>
+
+    <!-- 空态（D-UD-06）：每种都给下一步。 -->
     <div v-if="showEmptyState" class="photo-empty" data-test="photo-empty">
-      <template v-if="searchMode === 'semantic' && !filters.keyword.trim()">
-        <h3 data-test="photo-semantic-prompt">输入内容开始语义搜索</h3>
-        <p>语义搜索按图片的文件名与标签匹配，例如"海边"。只在图片库内进行，不会返回视频。</p>
-      </template>
-      <template v-else-if="searchMode === 'semantic'">
-        <h3>没有语义命中</h3>
-        <p v-if="semanticCoverage && Number(semanticCoverage.indexed) === 0" data-test="photo-semantic-no-index">
-          图片语义索引还没有建立。请先在设置页运行"图片语义索引"任务。
-        </p>
-        <p v-else>换个说法再试，或给更多图片打上标签后重跑图片语义索引。</p>
-      </template>
-      <template v-else-if="folderModeRoot && imageDirectories.length === 0">
-        <h3>还没有配置图片扫描目录</h3>
-        <p>先在设置页添加图片目录，再回来扫描入库。</p>
-        <div class="photo-empty__actions">
-          <button type="button" class="btn-primary" data-test="photo-empty-settings" @click="$emit('open-settings')">去设置添加图片目录</button>
-          <button type="button" class="btn-secondary" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中...' : '立即扫描' }}</button>
-        </div>
-      </template>
-      <template v-else-if="folderModeRoot && hasActiveFilters">
-        <h3>没有符合筛选条件的文件夹</h3>
-        <p>调整关键词、标签或评分区间后重试。</p>
-      </template>
-      <template v-else-if="folderModeRoot">
-        <h3>还没有可展示的文件夹</h3>
-        <p>目录已配置，点击扫描把磁盘上的图片同步进来。</p>
-        <div class="photo-empty__actions">
-          <button type="button" class="btn-primary" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中...' : '立即扫描' }}</button>
-        </div>
-      </template>
-      <template v-else-if="folderModeActive">
-        <h3>文件夹中没有符合条件的图片</h3>
-        <p>调整筛选条件，或返回文件夹列表查看其他图集。</p>
-      </template>
-      <template v-else-if="imageDirectories.length === 0">
-        <h3>还没有配置图片扫描目录</h3>
-        <p>先在设置页添加图片目录，再回来扫描入库。</p>
-        <div class="photo-empty__actions">
-          <button type="button" class="btn-primary" data-test="photo-empty-settings" @click="$emit('open-settings')">去设置添加图片目录</button>
-          <button type="button" class="btn-secondary" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中...' : '立即扫描' }}</button>
-        </div>
-      </template>
-      <template v-else-if="hasActiveFilters">
-        <h3>没有符合筛选条件的图片</h3>
-        <p>调整关键词、标签或评分区间后重试。</p>
-      </template>
-      <template v-else>
-        <h3>图片库为空</h3>
-        <p>目录已配置，点击扫描把磁盘上的图片同步进来。</p>
-        <div class="photo-empty__actions">
-          <button type="button" class="btn-primary" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中...' : '立即扫描' }}</button>
-        </div>
-      </template>
+      <EmptyState
+        v-if="searchMode === 'semantic' && !filters.keyword.trim()"
+        icon="search"
+        data-test="photo-semantic-prompt"
+        title="输入内容开始语义搜索"
+        message="语义搜索按图片的文件名与标签匹配，例如“海边”。只在图片库内进行，不会返回视频。"
+      />
+      <EmptyState
+        v-else-if="searchMode === 'semantic' && semanticCoverage && Number(semanticCoverage.indexed) === 0"
+        icon="search"
+        data-test="photo-semantic-no-index"
+        title="没有语义命中"
+        message="图片语义索引还没有建立。请先在设置页运行“图片语义索引”任务。"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" @click="$emit('open-settings')">去设置</button>
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="searchMode === 'semantic'"
+        icon="search"
+        title="没有语义命中"
+        message="换个说法再试，或给更多图片打上标签后重跑图片语义索引。"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" @click="setSearchMode('name')">改用文件名搜索</button>
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="folderModeRoot ? imageDirectories.length === 0 : (!folderModeActive && imageDirectories.length === 0)"
+        icon="folder"
+        title="还没有配置图片扫描目录"
+        message="先在设置页添加图片目录，再回来扫描入库。"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--primary btn--sm" data-test="photo-empty-settings" @click="$emit('open-settings')">去设置添加图片目录</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中…' : '立即扫描' }}</button>
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="folderModeActive"
+        icon="image"
+        title="文件夹中没有符合条件的图片"
+        message="调整筛选条件，或返回文件夹列表查看其他图集。"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" @click="leaveFolder">返回文件夹列表</button>
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="hasActiveFilters"
+        icon="filter"
+        :title="folderModeRoot ? '没有符合筛选条件的文件夹' : '没有符合筛选条件的图片'"
+        message="调整关键词、标签或评分区间后重试。"
+      />
+      <EmptyState
+        v-else
+        icon="image"
+        :title="folderModeRoot ? '还没有可展示的文件夹' : '图片库为空'"
+        message="目录已配置，点击扫描把磁盘上的图片同步进来。"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--primary btn--sm" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中…' : '立即扫描' }}</button>
+        </template>
+      </EmptyState>
     </div>
 
     <button
       v-if="hasMore"
       type="button"
-      class="btn-secondary photo-library__more"
+      class="btn btn--secondary photo-library__more"
       :disabled="loading"
       data-test="photo-load-more"
       @click="loadMore()"
     >
-      {{ loading ? '加载中...' : '加载更多图片' }}
+      {{ loading ? '加载中…' : '加载更多图片' }}
     </button>
 
+    <!-- 全屏查看器（D-UD-13）：关闭固定在右上角，← → 切换，Esc 退出，F 收藏。 -->
     <div v-if="viewerImage" class="photo-viewer" role="dialog" aria-modal="true" :aria-label="`查看 ${viewerImage.name}`" data-test="photo-viewer">
-      <button type="button" class="photo-viewer__close" title="关闭 (Esc)" data-test="photo-viewer-close" @click="closeViewer">×</button>
-      <button type="button" class="photo-viewer__nav photo-viewer__nav--prev" :disabled="viewerIndex <= 0" title="上一张 (←)" @click="viewerPrev">‹</button>
+      <button type="button" class="btn-icon btn--secondary photo-viewer__close" aria-label="关闭" title="关闭 (Esc)" data-test="photo-viewer-close" @click="closeViewer"><AppIcon name="close" :size="20" /></button>
+      <button type="button" class="btn-icon photo-viewer__nav photo-viewer__nav--prev" aria-label="上一张" :disabled="viewerIndex <= 0" title="上一张 (←)" @click="viewerPrev"><AppIcon name="chevron-left" :size="24" /></button>
       <div class="photo-viewer__stage" @click.self="closeViewer">
         <img
           v-if="!viewerImageError"
@@ -524,13 +557,13 @@
           <small>{{ formatBytes(viewerImage.size) }}<template v-if="viewerImage.width && viewerImage.height"> · {{ viewerImage.width }}×{{ viewerImage.height }}</template></small>
         </div>
       </div>
-      <button type="button" class="photo-viewer__nav photo-viewer__nav--next" :disabled="viewerIndex >= images.length - 1" title="下一张 (→)" @click="viewerNext">›</button>
+      <button type="button" class="btn-icon photo-viewer__nav photo-viewer__nav--next" aria-label="下一张" :disabled="viewerIndex >= images.length - 1" title="下一张 (→)" @click="viewerNext"><AppIcon name="chevron-right" :size="24" /></button>
 
       <aside class="photo-viewer__sidebar glass-surface">
         <h3 :title="viewerImage.name">{{ viewerImage.name }}</h3>
-        <button type="button" class="btn-secondary btn-compact" data-test="photo-viewer-directory" @click="revealViewerImage">打开所在目录</button>
+        <button type="button" class="btn btn--secondary btn--sm photo-viewer__reveal" data-test="photo-viewer-directory" @click="revealViewerImage">在访达中显示</button>
         <WallpaperButton kind="image" :media-id="Number(viewerImage.id)" />
-        <p v-if="viewerDirectoryError" role="alert">{{ viewerDirectoryError }}</p>
+        <p v-if="viewerDirectoryError" class="photo-viewer__error" role="alert">{{ viewerDirectoryError }}</p>
         <dl class="photo-viewer__facts">
           <dt>路径</dt><dd :title="viewerImage.path">{{ viewerImage.path }}</dd>
           <dt>尺寸</dt><dd>{{ viewerImage.width && viewerImage.height ? `${viewerImage.width}×${viewerImage.height}` : '未探测' }}</dd>
@@ -553,11 +586,12 @@
             <h4>收藏与评分</h4>
             <button
               type="button"
-              :class="['photo-card__action', { 'photo-card__action--active': viewerImage.is_favorite }]"
+              :class="['btn', 'btn--secondary', 'btn--sm', 'photo-viewer__favorite', { 'photo-viewer__favorite--on': viewerImage.is_favorite }]"
               :title="viewerImage.is_favorite ? '取消收藏 (F)' : '收藏 (F)'"
+              :aria-pressed="viewerImage.is_favorite ? 'true' : 'false'"
               data-test="photo-viewer-favorite"
               @click="toggleFavorite(viewerImage)"
-            >{{ viewerImage.is_favorite ? '★ 已收藏' : '☆ 收藏' }}</button>
+            ><AppIcon name="star" :size="16" />{{ viewerImage.is_favorite ? '已收藏' : '收藏' }}</button>
           </div>
           <div class="photo-viewer__rating">
             <input
@@ -567,11 +601,12 @@
               max="10"
               step="0.5"
               class="number-input"
+              aria-label="评分"
               placeholder="0–10，步进 0.5"
               data-test="photo-rating-input"
               @change="applyRating"
             />
-            <button type="button" class="btn-secondary btn-compact" data-test="photo-rating-clear" @click="clearRating">清空</button>
+            <button type="button" class="btn btn--ghost btn--sm" data-test="photo-rating-clear" @click="clearRating">清空</button>
           </div>
         </div>
 
@@ -580,7 +615,7 @@
           <div class="photo-viewer__tags">
             <span v-for="tag in viewerImage.tags || []" :key="tag.id" class="tag-badge" :style="{ '--tag-color': tag.color }">
               {{ tag.name }}
-              <button type="button" class="tag-remove" :aria-label="`移除标签 ${tag.name}`" @click="removeTag(viewerImage, tag)">×</button>
+              <button type="button" class="btn-icon tag-remove" :aria-label="`移除标签 ${tag.name}`" @click="removeTag(viewerImage, tag)"><AppIcon name="close" :size="16" /></button>
             </span>
             <span v-if="!(viewerImage.tags || []).length" class="photo-viewer__muted">尚无标签</span>
           </div>
@@ -602,17 +637,16 @@
               @blur="closeTagMenu"
             />
             <div v-if="tagMenuOpen" id="photo-tag-options" class="photo-tag-options" role="listbox" data-test="photo-tag-options">
-              <button
+              <div
                 v-for="(tag, index) in filteredAddableTags"
                 :id="`photo-tag-option-${tag.id}`"
                 :key="tag.id"
-                type="button"
                 role="option"
                 :aria-selected="index === tagActiveIndex"
                 :class="['photo-tag-option', { active: index === tagActiveIndex }]"
                 @mouseenter="tagActiveIndex = index"
                 @mousedown.prevent="addTag(viewerImage, tag)"
-              >{{ tag.name }}</button>
+              >{{ tag.name }}</div>
               <span v-if="filteredAddableTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
             </div>
           </div>
@@ -625,12 +659,12 @@
               {{ item.person.display_name }}
               <button
                 type="button"
-                class="tag-remove"
+                class="btn-icon tag-remove"
                 :aria-label="`移除人物 ${item.person.display_name}`"
                 :disabled="viewerPersonBusy"
                 :data-test="`photo-person-remove-${item.person.id}`"
                 @click="removeViewerPerson(item)"
-              >×</button>
+              ><AppIcon name="close" :size="16" /></button>
             </span>
             <span v-if="!viewerPeople.length" class="photo-viewer__muted">尚无人物</span>
           </div>
@@ -652,17 +686,16 @@
               @blur="closeViewerPersonMenu"
             />
             <div v-if="viewerPersonMenuOpen" id="photo-person-options" class="photo-tag-options" role="listbox" data-test="photo-person-options">
-              <button
+              <div
                 v-for="(item, index) in filteredViewerPersonCandidates"
                 :id="`photo-person-option-${item.person.id}`"
                 :key="item.person.id"
-                type="button"
                 role="option"
                 :aria-selected="index === viewerPersonActiveIndex"
                 :class="['photo-tag-option', { active: index === viewerPersonActiveIndex }]"
                 @mouseenter="viewerPersonActiveIndex = index"
                 @mousedown.prevent="addViewerPerson(item)"
-              >{{ item.person.display_name }}</button>
+              >{{ item.person.display_name }}</div>
               <span v-if="filteredViewerPersonCandidates.length === 0" class="photo-tag-options__empty">没有匹配人物</span>
             </div>
           </div>
@@ -673,12 +706,12 @@
             <h4>AI 标签候选</h4>
             <button
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :disabled="retagging"
               title="已有手工标签的图片也会重新分析"
               data-test="photo-ai-retag"
               @click="retagImage"
-            >{{ retagging ? '分析中...' : '重新分析' }}</button>
+            >{{ retagging ? '分析中…' : '重新分析' }}</button>
           </div>
           <p v-if="viewerDetailError" class="photo-viewer__muted">{{ viewerDetailError }}</p>
           <ul v-else-if="viewerCandidates.length" class="photo-viewer__candidates" data-test="photo-ai-candidates">
@@ -687,14 +720,14 @@
               <span class="photo-viewer__muted">{{ confidenceLabel(candidate.confidence) }}</span>
               <button
                 type="button"
-                class="btn-primary btn-compact"
+                class="btn btn--primary btn--sm"
                 :disabled="candidateBusy"
                 :data-test="`photo-ai-candidate-approve-${candidate.id}`"
                 @click="approveViewerCandidate(candidate)"
               >接受</button>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :disabled="candidateBusy"
                 :data-test="`photo-ai-candidate-reject-${candidate.id}`"
                 @click="rejectViewerCandidate(candidate)"
@@ -702,18 +735,28 @@
             </li>
           </ul>
           <p v-else class="photo-viewer__muted" data-test="photo-ai-candidates-empty">没有待审候选。</p>
-          <p v-if="retagError" class="photo-library__error" role="alert" data-test="photo-ai-retag-error">{{ retagError }}</p>
+          <p v-if="retagError" class="photo-viewer__error" role="alert" data-test="photo-ai-retag-error">{{ retagError }}</p>
         </div>
 
         <div class="photo-viewer__block">
-          <button type="button" class="btn-danger" data-test="photo-viewer-delete" :disabled="deletingImageIDs.includes(viewerImage.id)" @click="requestDelete(viewerImage)">删除这张图片</button>
+          <button type="button" class="btn btn--danger" data-test="photo-viewer-delete" :disabled="deletingImageIDs.includes(viewerImage.id)" @click="requestDelete(viewerImage)"><AppIcon name="trash" :size="16" />{{ deleteActionLabel }}</button>
         </div>
       </aside>
     </div>
 
-    <BaseModal v-if="deleteTarget" close-on-overlay stop-modal-clicks @close="deleteTarget = null">
-      <h2>确认删除</h2>
-      <p>确定要删除图片 "{{ deleteTarget.name }}"<template v-if="deleteTarget.size > 0">（{{ formatBytes(deleteTarget.size) }}）</template> 吗？</p>
+    <!-- 单张删除确认（设置里开了「删除前确认」时）：按勾选在两种去向之间选，按钮写明是哪一种（D-UD-08）。 -->
+    <DialogShell
+      v-if="deleteTarget"
+      size="sm"
+      :title="deleteFileChoice ? '移到废纸篓' : '从图片库移除'"
+      :busy="deleting"
+      stop-modal-clicks
+      data-test="photo-delete-dialog"
+      @close="deleteTarget = null"
+    >
+      <p class="photo-delete__message">
+        将图片「{{ deleteTarget.name }}」<template v-if="deleteTarget.size > 0">（{{ formatBytes(deleteTarget.size) }}）</template>{{ deleteFileChoice ? '移到废纸篓' : '从图片库移除' }}。
+      </p>
       <div class="photo-delete__options">
         <label>
           <input v-model="deleteFileChoice" type="checkbox" data-test="photo-delete-file" />
@@ -721,11 +764,11 @@
         </label>
       </div>
       <p class="photo-viewer__muted" data-test="photo-delete-consequence">{{ deleteFileChoice ? deleteTrashHint : deleteRecordOnlyHint }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-danger" :disabled="deleting" data-test="photo-delete-confirm" @click="confirmDelete">确认删除</button>
-        <button type="button" class="btn-secondary" :disabled="deleting" @click="deleteTarget = null">取消</button>
-      </div>
-    </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" :disabled="deleting" @click="deleteTarget = null">取消</button>
+        <button type="button" class="btn btn--danger" :disabled="deleting" data-test="photo-delete-confirm" @click="confirmDelete">{{ deleteFileChoice ? '移到废纸篓' : '从图片库移除' }}</button>
+      </template>
+    </DialogShell>
 
     <MetadataBatchEditDialog
       v-if="metadataBatchEdit"
@@ -738,9 +781,16 @@
       @undone="markImagesChanged"
     />
 
-    <BaseModal v-if="batchDeletePending" close-on-overlay stop-modal-clicks @close="batchDeletePending = false">
-      <h2>确认删除所选图片</h2>
-      <p>确定要删除已选的 {{ selectedImageIDs.length }} 张图片吗？</p>
+    <DialogShell
+      v-if="batchDeletePending"
+      size="sm"
+      :title="batchDeleteFileChoice ? '移到废纸篓' : '从图片库移除'"
+      :busy="batchBusy"
+      stop-modal-clicks
+      data-test="photo-batch-delete-dialog"
+      @close="batchDeletePending = false"
+    >
+      <p class="photo-delete__message">将已选的 {{ selectedImageIDs.length }} 张图片{{ batchDeleteFileChoice ? '移到废纸篓' : '从图片库移除' }}。</p>
       <div class="photo-delete__options">
         <label>
           <input v-model="batchDeleteFileChoice" type="checkbox" data-test="photo-batch-delete-file" />
@@ -748,11 +798,11 @@
         </label>
       </div>
       <p class="photo-viewer__muted" data-test="photo-batch-delete-consequence">{{ batchDeleteFileChoice ? deleteTrashHint : deleteRecordOnlyHint }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-danger" :disabled="batchBusy" data-test="photo-batch-delete-confirm" @click="confirmBatchDelete">确认删除</button>
-        <button type="button" class="btn-secondary" :disabled="batchBusy" @click="batchDeletePending = false">取消</button>
-      </div>
-    </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" :disabled="batchBusy" @click="batchDeletePending = false">取消</button>
+        <button type="button" class="btn btn--danger" :disabled="batchBusy" data-test="photo-batch-delete-confirm" @click="confirmBatchDelete">{{ batchDeleteFileChoice ? '移到废纸篓' : '从图片库移除' }}</button>
+      </template>
+    </DialogShell>
 
     <ImageAITagReviewPanel
       :visible="showAITagReview"
@@ -771,7 +821,14 @@ import {
   ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories, RecordImageView
 } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppBadge from './ui/AppBadge.vue';
+import AppBanner from './ui/AppBanner.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
+import EmptyState from './ui/EmptyState.vue';
+import FilterChip from './ui/FilterChip.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import WallpaperButton from './WallpaperButton.vue';
 import BaseMenu from './ui/BaseMenu.vue';
 import BasePopover from './ui/BasePopover.vue';
@@ -827,7 +884,10 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, TrashUndoBanner, ImageAITagReviewPanel, WallpaperButton, MetadataBatchEditDialog },
+  components: {
+    AppBadge, AppBanner, AppIcon, BaseMenu, BasePopover, DialogShell, EmptyState, FilterChip, ImageAITagReviewPanel,
+    MetadataBatchEditDialog, PageHeader, PhotoCleanupPage, SkeletonBlock, TrashUndoBanner, WallpaperButton
+  },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },
@@ -953,6 +1013,10 @@ export default {
       if (this.filters.takenAfter || this.filters.takenBefore) count += 1;
       return count;
     },
+    // 删除按钮上写明是哪一种（D-UD-08）：按设置「删除原文件」决定移到废纸篓还是只从图片库移除；
+    // 开着「删除前确认」时会先弹确认框（框里还能改），按钮带「…」。
+    deleteVerb() { return this.settings?.delete_original_file ? '移到废纸篓' : '从图片库移除'; },
+    deleteActionLabel() { return this.settings?.confirm_before_delete ? `${this.deleteVerb}…` : this.deleteVerb; },
     photoAttentionCount() {
       return (this.aiTagPending || 0) + (this.cleanupDone ? this.cleanupGroupCount || 0 : 0);
     },
@@ -1223,13 +1287,13 @@ export default {
   methods: {
     async openSystemFolder(directory) {
       try { await OpenImageDirectory(directory); }
-      catch (err) { this.error = `打开目录失败：${err}`; }
+      catch (err) { this.error = `在访达中显示失败：${err}`; }
     },
     async revealViewerImage() {
       const id = this.viewerImage?.id; if (!id) return;
       this.viewerDirectoryError = '';
       try { await RevealImage(Number(id)); }
-      catch (err) { if (this.viewerImage?.id === id) this.viewerDirectoryError = `打开目录失败：${err}`; }
+      catch (err) { if (this.viewerImage?.id === id) this.viewerDirectoryError = `在访达中显示失败：${err}`; }
     },
     togglePhotoMenu(name, triggerRef) {
       if (this.photoMenu === name) {
@@ -1277,17 +1341,22 @@ export default {
     async deleteFolder(folder) {
       if (!folder?.directory || this.folderDeleting) return;
       const deleteFile = Boolean(this.settings?.delete_original_file);
+      // 按文件夹整批处理、事先没有逐张看过，所以先确认（D-UD-07 第 2 级：写清数量与影响）。
       const confirmed = await confirmAction(deleteFile
         ? {
-          title: '删除文件夹',
+          title: '把文件夹里的图片移到废纸篓',
           message: `将「${folder.name}」下的 ${folder.count} 张图片移到废纸篓，可在回收站恢复。\n磁盘上的文件夹本身和子文件夹里的图片都不会动。`,
+          impact: '在访达中清空废纸篓之后才会释放空间。',
           confirmText: '移到废纸篓',
+          level: 'confirm',
           danger: true
         }
         : {
-          title: '删除文件夹',
+          title: '把文件夹里的图片从图片库移除',
           message: `将「${folder.name}」下的 ${folder.count} 张图片从图片库移除，文件保留在磁盘上。\n以后扫描到同一批文件不会再收录，可在回收站「允许重新收录」。子文件夹里的图片不受影响。`,
+          impact: '只删记录，磁盘上的文件不动。',
           confirmText: '从图片库移除',
+          level: 'confirm',
           danger: true
         });
       if (!confirmed) return;
@@ -2660,168 +2729,188 @@ export default {
 </script>
 
 <style scoped>
-.photo-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }
-/* 与视频库同构地吸顶：勾选若干张之后往下滚，批量按钮必须一直在手边，
-   否则要滚回顶部才能操作。z-index 压过网格但让开浮层（1200）和弹窗（1000）。 */
-.photo-toolbar { position: sticky; top: 0; z-index: 90; padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; flex-direction: column; gap: 8px; }
-.photo-toolbar__title h2 { margin: 0 0 3px; font-size: 18px; }
-.photo-toolbar__title p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.photo-library { padding: var(--space-4) var(--space-5) var(--space-6); display: flex; flex-direction: column; gap: var(--space-3); }
+.photo-library > .photo-library__header { margin-bottom: 0; }
+/* 与视频库同构地吸顶：勾选若干张之后往下滚，批量按钮必须一直在手边，否则要滚回顶部才能操作。 */
+.photo-toolbar { position: sticky; top: 0; z-index: var(--z-sticky); padding: 10px var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); display: flex; flex-direction: column; gap: var(--space-2); }
 .photo-toolbar__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.photo-toolbar__menu { gap: 6px; padding: 0 var(--space-3); font-weight: var(--fw-regular); }
+.photo-toolbar__menu--on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.photo-toolbar__caret { color: var(--text-muted); }
+.photo-toolbar__menu--on .photo-toolbar__caret { color: var(--accent-text); }
 /* 选中态把这一条变成与视频库同构的批量栏：主色底、发丝线分隔。 */
-.photo-selection-tools { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
-.photo-selection-tools--active { margin: 0 -16px -10px; padding: 8px 16px; border-top: 1px solid var(--accent-border); background: var(--accent-soft); }
-.photo-selection-tools--active .photo-selection-tools__count { color: var(--accent-text); font-weight: 650; }
-.photo-selection-tools__count { color: var(--text-secondary); font-size: 12px; }
+.photo-selection-tools { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding-top: var(--space-1); }
+.photo-selection-tools--active { flex-basis: calc(100% + 2 * var(--space-4)); margin: 0 calc(-1 * var(--space-4)); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--accent-border); border-bottom: 1px solid var(--accent-border); background: var(--accent-soft); }
+/* 批量栏是工具栏的最后一行时贴住底边（下面没有标签行）。 */
+.photo-toolbar__controls:last-child > .photo-selection-tools--active { margin-bottom: -10px; border-bottom: 0; border-radius: 0 0 var(--radius) var(--radius); }
+.photo-selection-tools__count { color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.photo-selection-tools--active .photo-selection-tools__count { color: var(--accent-text); font-weight: var(--fw-semibold); }
+.photo-selection-tools__spacer { flex: 1; }
 .photo-batch-tag-search { width: 210px; }
 .photo-tag-combobox { position: relative; min-width: 0; }
 .photo-tag-combobox > .search-input { width: 100%; }
-.photo-tag-options { position: absolute; top: calc(100% + 4px); right: 0; left: 0; z-index: 20; max-height: 220px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); box-shadow: 0 10px 24px rgba(0, 0, 0, .22); }
-.photo-tag-option { display: block; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+/* 候选列表叠在所在区块里（工具栏或查看器侧栏）的局部层上。 */
+.photo-tag-options { position: absolute; top: calc(100% + var(--space-1)); right: 0; left: 0; z-index: 3; max-height: 220px; overflow-y: auto; padding: var(--space-1); border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--panel-bg); box-shadow: var(--shadow-popover); }
+.photo-tag-option { display: block; width: 100%; padding: 7px var(--space-2); border-radius: calc(var(--radius-sm) - 2px); color: var(--text-primary); font-size: var(--fs-secondary); text-align: left; cursor: pointer; }
 .photo-tag-option:hover,
-.photo-tag-option.active { background: var(--control-bg); color: var(--accent-color); }
-.photo-tag-options__empty { display: block; padding: 8px; color: var(--text-muted); font-size: 12px; }
-.photo-cleanup-open-btn { display: inline-flex; align-items: center; gap: 6px; }
-.photo-cleanup-badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
-.photo-cleanup-badge--done { background: var(--accent-color); color: #fff; }
+.photo-tag-option.active { background: var(--accent-soft); color: var(--accent-text); }
+.photo-tag-options__empty { display: block; padding: var(--space-2); color: var(--text-muted); font-size: var(--fs-caption); }
 .photo-toolbar__keyword { max-width: 240px; }
 .photo-toolbar__sort { width: auto; min-width: 120px; }
 .photo-toolbar__ai { width: auto; min-width: 140px; }
-.photo-toolbar__favorite { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; white-space: nowrap; cursor: pointer; }
-.photo-toolbar__rating { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.photo-toolbar__favorite { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: var(--fs-secondary); white-space: nowrap; cursor: pointer; }
+.photo-toolbar__rating { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-caption); }
 .photo-toolbar__rating .number-input { width: 76px; }
-.photo-toolbar__taken { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
-.photo-toolbar__timeline { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; white-space: nowrap; cursor: pointer; }
+.photo-toolbar__taken { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-caption); }
+.photo-toolbar__timeline { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: var(--fs-secondary); white-space: nowrap; cursor: pointer; }
 .photo-toolbar__timeline input:disabled { cursor: not-allowed; }
 .photo-toolbar__date { width: 148px; }
 .photo-toolbar__date:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .photo-toolbar__people { display: grid; gap: 6px; }
-.photo-toolbar__people > span:first-child { color: var(--text-muted); font-size: 12px; }
+.photo-toolbar__people > span:first-child { color: var(--text-muted); font-size: var(--fs-caption); }
 .photo-person-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.photo-search-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); }
-.photo-search-mode__btn { padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
-.photo-search-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
-.photo-search-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.photo-view-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); }
-.photo-view-mode__btn { padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
-.photo-view-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
+/* 两组模式切换：外观与 SegmentedControl 一致（见模板里的说明）。 */
+.photo-search-mode,
+.photo-view-mode { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
+.photo-search-mode__btn,
+.photo-view-mode__btn { height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; cursor: pointer; }
+.photo-search-mode__btn:hover:not(:disabled),
+.photo-view-mode__btn:hover:not(:disabled) { color: var(--text-primary); }
+.photo-search-mode__btn.active,
+.photo-view-mode__btn.active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
+.photo-search-mode__btn:focus-visible,
+.photo-view-mode__btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
+.photo-search-mode__btn:disabled,
 .photo-view-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.photo-toolbar__semantic-notice { margin: 0; color: var(--text-muted); font-size: 12px; }
-.photo-library__refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--accent-color); border-radius: 10px; background: var(--control-bg); color: var(--text-primary); font-size: 12px; }
-.photo-library__refresh span { flex: 1; min-width: 0; }
-.photo-library__refresh-dismiss { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; }
-.photo-library__refresh-dismiss:hover { background: var(--border-color); color: var(--text-primary); }
-.photo-library__error { margin: 0; color: var(--danger-color); }
-.photo-folder-loading { margin: 0; color: var(--text-muted); font-size: 12px; }
+.photo-toolbar__semantic-notice { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
+.photo-folder-loading { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 
-.photo-folder-breadcrumb { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; }
-.photo-folder-breadcrumb__text { display: grid; min-width: 0; gap: 2px; }
-.photo-folder-breadcrumb__text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; }
-.photo-folder-breadcrumb__text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
-.photo-folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.photo-folder-card { position: relative; min-width: 0; overflow: hidden; border-radius: 13px; }
+.photo-folder-breadcrumb { display: flex; align-items: center; gap: 10px; padding: var(--space-2) var(--space-3); border-radius: var(--radius); }
+.photo-folder-breadcrumb__text { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.photo-folder-breadcrumb__text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: var(--fs-secondary); }
+.photo-folder-breadcrumb__text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--fs-caption); }
+.photo-folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-3); }
+.photo-folder-card { position: relative; min-width: 0; overflow: hidden; border-radius: var(--radius-lg); }
 /* 删除按钮压在封面右上角，且在"打开文件夹"那个大按钮之外，点它不会误进文件夹。 */
-.photo-folder-card__delete { position: absolute; z-index: 2; top: 8px; right: 8px; opacity: 0; transition: opacity var(--transition); }
+.photo-folder-card__delete { position: absolute; z-index: 2; top: var(--space-2); right: var(--space-2); opacity: 0; transition: opacity var(--transition); }
 .photo-folder-card:hover .photo-folder-card__delete,
 .photo-folder-card__delete:focus-visible { opacity: 1; }
-.photo-folder-card__open { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+/* 整张卡片（封面 + 文字）是一个按钮：用无边框的文字链接按钮，排版按卡片改。 */
+.photo-folder-card__open { display: block; width: 100%; color: inherit; font-size: inherit; font-weight: var(--fw-regular); text-align: left; }
+.photo-folder-card__open:hover:not(:disabled) { text-decoration: none; }
 .photo-folder-card__open:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .photo-folder-card__covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: 1.55; gap: 2px; overflow: hidden; background: var(--thumb-bg); }
 .photo-folder-card__covers img { width: 100%; height: 100%; min-width: 0; min-height: 0; display: block; object-fit: cover; }
 .photo-folder-card__covers[data-cover-count="1"] img { grid-column: 1 / -1; grid-row: 1 / -1; }
 .photo-folder-card__covers[data-cover-count="3"] img:last-of-type { grid-column: 1 / -1; }
-.photo-folder-card__cover-fallback { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; color: var(--text-muted); font-size: 11px; }
-.photo-folder-card__meta { display: grid; gap: 3px; padding: 10px 12px 12px; }
-.photo-folder-card__meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; }
-.photo-folder-card__meta small { color: var(--text-secondary); font-size: 11px; }
-.photo-folder-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 10px; }
+.photo-folder-card__cover-fallback { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; color: var(--text-muted); font-size: var(--fs-caption); }
+.photo-folder-card__meta { display: grid; gap: 3px; padding: 10px var(--space-3) var(--space-1); }
+.photo-folder-card__meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: var(--fs-secondary); }
+.photo-folder-card__meta small { color: var(--text-secondary); font-size: var(--fs-caption); }
+.photo-folder-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--fs-caption); }
+.photo-folder-card__actions { display: flex; padding: 0 var(--space-2) var(--space-2); }
 
 /* 虚拟化网格：外层只负责堆叠"行"，列数由 --photo-columns 显式给出（而不是 auto-fill），
    保证 DOM 布局与 photoGrid.js 的窗口计算用的是同一个列数。 */
 .photo-grid { display: block; }
 .photo-grid-row { display: grid; grid-template-columns: repeat(var(--photo-columns, 1), minmax(0, 1fr)); gap: var(--photo-grid-gap, 12px); box-sizing: border-box; }
+.photo-skeleton-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-3); }
 .photo-timeline-header { display: flex; align-items: flex-end; overflow: hidden; box-sizing: border-box; }
-.photo-timeline-header h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
-.photo-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.photo-timeline-header h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: var(--fs-secondary); font-weight: var(--fw-semibold); letter-spacing: 0.2px; }
+.photo-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
 .photo-card:hover { border-color: var(--border-strong); }
 /* 勾选框只在悬停或已选时显形：常驻会在密集缩略图上形成一片噪点。
    键盘聚焦时也要显形，否则用键盘的人根本看不到它。 */
-.photo-card__select { position: absolute; z-index: 3; top: 6px; left: 6px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; background: var(--overlay-strong); cursor: pointer; opacity: 0; transition: opacity var(--transition); }
+.photo-card__select { position: absolute; z-index: 3; top: 6px; left: 6px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: var(--radius-sm); background: var(--overlay-strong); cursor: pointer; opacity: 0; transition: opacity var(--transition); }
 .photo-card:hover .photo-card__select,
 .photo-card__select:focus-within,
 .photo-card--selected .photo-card__select { opacity: 1; }
 .photo-card__select input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
-/* 定高卡片：缩略图区高度由列宽算出（等价于 aspect-ratio 1），信息条固定 52px，
-   两者相加即 photoGrid 的 cellHeight，布局无需实测回写。 */
-.photo-card__media { display: block; width: 100%; height: var(--photo-cell-media, auto); aspect-ratio: 1; padding: 0; border: 0; background: var(--thumb-bg); cursor: pointer; }
+/* 定高卡片：缩略图区高度由列宽算出（等价于 aspect-ratio 1），信息条固定高度，
+   两者相加即 photoGrid 的 cellHeight，布局无需实测回写。缩略图整块是按钮：用无边框的文字链接按钮，尺寸按格子改。 */
+.photo-card__media { display: block; width: 100%; height: var(--photo-cell-media, auto); aspect-ratio: 1; background: var(--thumb-bg); color: inherit; cursor: pointer; }
+.photo-card__media:hover:not(:disabled) { text-decoration: none; }
 .photo-card__media img { width: 100%; height: 100%; display: block; object-fit: cover; }
-.photo-card__fallback { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: var(--text-muted); }
-.photo-card__fallback strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 12px; }
-.photo-format-badge { display: inline-block; padding: 2px 8px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 11px; font-style: normal; font-weight: 700; letter-spacing: 0.4px; }
-.photo-card__overlay { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity var(--transition); }
+.photo-card__fallback { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-3); color: var(--text-muted); }
+.photo-card__fallback strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: var(--fs-caption); }
+.photo-format-badge { display: inline-block; padding: 2px var(--space-2); border: 1px solid var(--border-color); border-radius: var(--radius-pill); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-caption); font-style: normal; font-weight: var(--fw-bold); letter-spacing: 0.4px; }
+.photo-card__overlay { position: absolute; top: var(--space-2); right: var(--space-2); display: flex; gap: 6px; opacity: 0; transition: opacity var(--transition); }
 .photo-card:hover .photo-card__overlay,
 .photo-card:focus-within .photo-card__overlay { opacity: 1; }
-.photo-card__action { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 7px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--panel-bg); color: var(--text-secondary); font-size: 13px; cursor: pointer; }
-.photo-card__action--active { color: var(--warning-color); opacity: 1; }
+.photo-card__action { border-radius: var(--radius-pill); }
+.photo-card__action--active,
+.photo-card__action--active:hover:not(:disabled) { color: var(--warning-color); }
+.photo-card__action--active .ui-icon,
+.photo-viewer__favorite--on .ui-icon { fill: currentColor; }
 .photo-card:has(.photo-card__action--active) .photo-card__overlay { opacity: 1; }
-.photo-card__action--danger:hover { color: var(--danger-color); border-color: var(--danger-border); }
+.photo-card__action--danger:hover:not(:disabled) { border-color: var(--danger-border); color: var(--danger-text); }
 .photo-card__meta { display: grid; align-content: start; gap: 2px; height: var(--photo-card-meta, 86px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }
-.photo-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-primary); }
-.photo-card__meta small { color: var(--text-muted); font-size: 11px; }
+.photo-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-caption); color: var(--text-primary); }
+.photo-card__meta small { color: var(--text-muted); font-size: var(--fs-caption); }
 /* 缩略图墙：格子只剩方形缩略图，无边框（WALL_CELL.border 为 0，缩略图边长不让出边框）；
    勾选框沿用上面「悬停或已选才显形」的规则。失败占位只留格式徽标，文件名在悬停提示里。 */
-.photo-grid--wall .photo-card { border: 0; border-radius: 6px; }
+.photo-grid--wall .photo-card { border: 0; border-radius: var(--radius-sm); }
 .photo-grid--wall .photo-card__media:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .photo-grid--wall .photo-card__fallback { padding: 6px; }
 .photo-grid--wall .photo-card__fallback strong { display: none; }
 .photo-card__tags {
   margin: 2px 0 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.photo-empty { padding: 48px 16px; text-align: center; color: var(--text-muted); }
-.photo-empty h3 { margin: 0 0 8px; color: var(--text-primary); }
-.photo-empty p { margin: 0 0 16px; font-size: 13px; }
-.photo-empty__actions { display: flex; justify-content: center; gap: 10px; }
 .photo-library__more { align-self: center; }
 
-/* grid-template-rows 必须显式给一行确定高度：隐式行是 auto，img 的 max-height:100%
+/* 全屏查看器：压暗层上的控件两主题都用白字（--recap-hero-*，同观看回顾的大图层）。
+   grid-template-rows 必须显式给一行确定高度：隐式行是 auto，img 的 max-height:100%
    会因为父级高度不确定而失效，竖图就按原始尺寸撑出视口显示不全。 */
-.photo-viewer { position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: minmax(0, 1fr) min(360px, 38vw); grid-template-rows: minmax(0, 1fr); background: rgba(8, 12, 20, 0.86); }
-.photo-viewer__stage { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; padding: 48px 56px; }
-.photo-viewer__img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
-.photo-viewer__fallback { max-width: 420px; display: grid; gap: 10px; justify-items: center; padding: 24px; border: 1px dashed rgba(255, 255, 255, 0.3); border-radius: 12px; color: rgba(255, 255, 255, 0.75); text-align: center; }
-.photo-viewer__fallback strong { color: #fff; word-break: break-all; }
-.photo-viewer__fallback p { margin: 0; font-size: 13px; }
-.photo-viewer__fallback small { font-size: 11px; word-break: break-all; }
-.photo-viewer__close { position: absolute; top: 14px; left: 14px; z-index: 2; width: 34px; height: 34px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.14); color: #fff; font-size: 18px; cursor: pointer; }
-.photo-viewer__nav { position: absolute; top: 50%; z-index: 2; width: 40px; height: 40px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.14); color: #fff; font-size: 22px; cursor: pointer; transform: translateY(-50%); }
+.photo-viewer { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; grid-template-columns: minmax(0, 1fr) min(360px, 38vw); grid-template-rows: minmax(0, 1fr); background: var(--overlay-strong); }
+.photo-viewer__stage { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; padding: var(--space-7) 56px; }
+.photo-viewer__img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); }
+.photo-viewer__fallback { max-width: 420px; display: grid; gap: 10px; justify-items: center; padding: var(--space-5); border: 1px dashed var(--recap-hero-chip-border); border-radius: var(--radius); color: var(--recap-hero-muted); text-align: center; }
+.photo-viewer__fallback strong { color: var(--recap-hero-fg); word-break: break-all; }
+.photo-viewer__fallback p { margin: 0; font-size: var(--fs-secondary); }
+.photo-viewer__fallback small { font-size: var(--fs-caption); word-break: break-all; }
+/* 关闭固定在整个查看器的右上角（宽屏时压在侧栏右上角，窄屏时在图片区右上角），所以带底色与描边，两种底上都看得见。 */
+.photo-viewer__close { position: absolute; top: var(--space-3); right: var(--space-3); z-index: 3; border-radius: var(--radius-pill); }
+.photo-viewer__nav { position: absolute; top: 50%; z-index: 2; width: 40px; height: 40px; border-radius: var(--radius-pill); background: var(--recap-hero-chip); color: var(--recap-hero-fg); transform: translateY(-50%); }
+.photo-viewer__nav:hover:not(:disabled) { background: var(--recap-hero-chip-border); color: var(--recap-hero-fg); transform: translateY(-50%); }
 .photo-viewer__nav:disabled { opacity: 0.35; cursor: default; }
 .photo-viewer__nav--prev { left: 14px; }
 .photo-viewer__nav--next { right: calc(min(360px, 38vw) + 14px); }
-.photo-viewer__sidebar { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px 16px; border-radius: 0; overflow-y: auto; }
-.photo-viewer__sidebar h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
-.photo-viewer__facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }
+.photo-viewer__sidebar { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px var(--space-4); border-radius: 0; overflow-y: auto; }
+/* 侧栏内容比视口高时按内容滚动，不许把标题、按钮压扁。 */
+.photo-viewer__sidebar > * { flex-shrink: 0; }
+/* 右上角留给关闭按钮。 */
+.photo-viewer__sidebar h3 { margin: 0; padding-right: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-section); font-weight: var(--fw-semibold); line-height: 34px; }
+.photo-viewer__reveal { align-self: flex-start; }
+.photo-viewer__facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; margin: 0; font-size: var(--fs-caption); }
 .photo-viewer__facts dt { color: var(--text-muted); }
 .photo-viewer__facts dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
-.photo-viewer__block { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border-color); }
-.photo-viewer__block h4 { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.photo-viewer__block { display: grid; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-color); }
+.photo-viewer__block h4 { margin: 0; font-size: var(--fs-secondary); font-weight: var(--fw-semibold); color: var(--text-secondary); }
 .photo-viewer__block-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.photo-viewer__block-heading h4 { margin: 0; font-size: 13px; color: var(--text-secondary); }
-.photo-viewer__rating { display: flex; align-items: center; gap: 8px; }
-.photo-viewer__rating .number-input { width: 120px; }
+.photo-viewer__favorite--on { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning-text); }
+.photo-viewer__rating { display: flex; align-items: center; gap: var(--space-2); }
+.photo-viewer__rating .number-input { width: 160px; }
 .photo-viewer__tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .photo-viewer__tag-add { width: 100%; }
-.photo-viewer__muted { margin: 0; color: var(--text-muted); font-size: 12px; }
+.photo-viewer__muted { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
+.photo-viewer__error { margin: 0; color: var(--danger-text); font-size: var(--fs-caption); }
 .photo-viewer__candidates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.photo-viewer__candidate { display: flex; align-items: center; gap: 8px; }
-.photo-delete__options { display: grid; gap: 8px; margin-top: 14px; }
-.photo-delete__options label { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
+.photo-viewer__candidate { display: flex; align-items: center; gap: var(--space-2); }
+/* 标签与人物徽标里的 ×：只有图标、贴着文字，不用按钮的方形尺寸。 */
+.tag-badge .tag-remove { width: 16px; height: 16px; border-radius: var(--radius-pill); }
+.tag-badge .tag-remove .ui-icon { width: 12px; height: 12px; }
+.photo-delete__message { margin: 0; }
+.photo-delete__options { display: grid; gap: var(--space-2); margin-top: 14px; }
+.photo-delete__options label { display: inline-flex; align-items: center; gap: 7px; font-size: var(--fs-secondary); }
+.photo-delete__options + .photo-viewer__muted { margin-top: var(--space-2); }
 
 @media (max-width: 900px) {
   .photo-viewer { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }

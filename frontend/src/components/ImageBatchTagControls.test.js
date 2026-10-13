@@ -15,3 +15,14 @@ it('adds tags only to selected images and retains failed selections for retry', 
  expect(w.text()).toContain('1 张图片添加失败');
  expect(w.emitted('added')[0][0].imageIDs).toEqual([1]); w.unmount();
 });
+
+it('全部选上后同一个按钮改为「取消选择」，点了清空', async () => {
+ const w = mount(ImageBatchTagControls, { props: { imageIDs: [1, 2], selectedIDs: [1, 2] } });
+ const toggle = w.get('[data-test="image-batch-select-all"]');
+ expect(toggle.text()).toBe('取消选择');
+ await toggle.trigger('click');
+ expect(w.emitted('update:selectedIDs')[0]).toEqual([[]]);
+ await w.setProps({ selectedIDs: [1] });
+ expect(w.get('[data-test="image-batch-select-all"]').text()).toBe('全选已加载');
+ w.unmount();
+});

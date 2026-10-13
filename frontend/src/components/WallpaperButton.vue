@@ -1,6 +1,6 @@
 <template>
   <div class="wallpaper-action">
-    <button type="button" class="btn-secondary btn-compact" data-test="wallpaper-set"
+    <button type="button" class="btn btn--secondary btn--sm" data-test="wallpaper-set"
       :disabled="busy || loading || !preflight?.eligible" :title="preflight?.message || hint" @click="apply">
       {{ busy ? '正在设置…' : kind === 'video' ? '设为动态壁纸' : '设为桌面壁纸' }}
     </button>
@@ -8,7 +8,7 @@
     <small v-else-if="notice" role="status" data-test="wallpaper-notice">{{ notice }}</small>
     <small v-else-if="!loading && preflight && !preflight.eligible" data-test="wallpaper-ineligible">{{ preflight.message }}</small>
     <small v-else>{{ hint }}</small>
-    <button v-if="!loading && !preflight?.eligible" type="button" class="btn-secondary btn-compact"
+    <button v-if="!loading && !preflight?.eligible" type="button" class="btn btn--ghost btn--sm"
       data-test="wallpaper-recheck" @click="check">重新检查</button>
   </div>
 </template>
@@ -56,7 +56,7 @@ export default {
 };
 </script>
 <style scoped>
-.wallpaper-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.wallpaper-action small { flex: 1 1 180px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.wallpaper-action [role="alert"] { color: var(--danger-color, #c44); }
+.wallpaper-action { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.wallpaper-action small { flex: 1 1 180px; color: var(--text-secondary); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.wallpaper-action [role="alert"] { color: var(--danger-text); }
 </style>
