@@ -1,10 +1,7 @@
 <template>
   <DialogShell title="版本组" size="lg" class="version-panel" data-test="version-panel" @close="onEscape">
-    <!-- 页签暂用旧的分段样式：AppTabs 还不能给每个页签带 data-test（version-panel-tab-*），见统一设计待迁移清单。 -->
-    <div class="merge-type-switch version-panel__tabs" role="group" aria-label="版本组分区">
-      <button type="button" :class="{ active: tab === 'suggestions' }" data-test="version-panel-tab-suggestions" @click="tab = 'suggestions'">建议（{{ suggestions.length }}）</button>
-      <button type="button" :class="{ active: tab === 'groups' }" data-test="version-panel-tab-groups" @click="tab = 'groups'">已有的组</button>
-    </div>
+    <!-- 两个分区（D-UD-06 AppTabs），每个页签带 version-panel-tab-* 钩子；建议的条数写在徽标里。 -->
+    <AppTabs v-model="tab" class="version-panel__tabs" :tabs="panelTabs" aria-label="版本组分区" />
     <p v-if="error" class="version-panel__error" role="alert" data-test="version-panel-error">{{ error }}</p>
 
     <div v-if="tab === 'suggestions'" class="version-panel__body">
@@ -60,6 +57,7 @@
 <script>
 import { CreateVersionGroup, DismissVersionGroupSuggestion, ListVersionGroupSuggestions, ListVersionGroups } from '../../wailsjs/go/main/App';
 import AppBadge from './ui/AppBadge.vue';
+import AppTabs from './ui/AppTabs.vue';
 import DialogShell from './ui/DialogShell.vue';
 import EmptyState from './ui/EmptyState.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
@@ -71,7 +69,7 @@ import { versionGroupErrorText, versionGroupTitle, versionMemberFacts, versionMe
 // 建议从不自动建组；任何写操作成功后 emit changed，片库页原地刷新。
 export default {
   name: 'VersionGroupPanel',
-  components: { AppBadge, DialogShell, EmptyState, SkeletonBlock, VersionGroupDialog },
+  components: { AppBadge, AppTabs, DialogShell, EmptyState, SkeletonBlock, VersionGroupDialog },
   emits: ['close', 'changed'],
   data() {
     return {
@@ -85,6 +83,14 @@ export default {
       error: '',
       managedGroupID: 0
     };
+  },
+  computed: {
+    panelTabs() {
+      return [
+        { key: 'suggestions', label: '建议', count: String(this.suggestions.length), dataTest: 'version-panel-tab-suggestions' },
+        { key: 'groups', label: '已有的组', dataTest: 'version-panel-tab-groups' }
+      ];
+    }
   },
   mounted() {
     this.loadSuggestions();
@@ -169,8 +175,6 @@ export default {
 </script>
 
 <style scoped>
-.version-panel__tabs { display: inline-grid; grid-template-columns: repeat(2, auto); }
-.version-panel__tabs button { padding: 0 var(--space-3); }
 .version-panel__body { margin-top: var(--space-3); max-height: 60vh; overflow-y: auto; }
 .version-panel__placeholder { padding: var(--space-4) 0; }
 .version-panel__list { list-style: none; margin: var(--space-2) 0; padding: 0; }

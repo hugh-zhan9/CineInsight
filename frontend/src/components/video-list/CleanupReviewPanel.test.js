@@ -1167,6 +1167,16 @@ describe('IMG-11 覆盖率与空态', () => {
     expect(chip('clip').coverage).toBe('尚未计算');
     expect(chip('same-source').coverage).toBe('');
     expect(wrapper.findAll('[data-test="cleanup-coverage-chip"]').map(node => node.text())).toEqual(['已算 3 / 10', '尚未计算']);
+    // 类别是一排 FilterChip（D-UD-06）：「全部类别」不带条数，其余名字后面是条数（覆盖度跟在条数后面）；点一下只看这一类。
+    const chips = wrapper.findAll('[data-test="cleanup-category"]');
+    expect(chips.map(node => node.text())).toEqual(wrapper.vm.cleanupCategoryOptions.map(option =>
+      option.key === 'all' ? option.label : `${option.label}${option.count}${option.coverage || ''}`));
+    expect(chips[0].attributes('aria-pressed')).toBe('true');
+    const nearIndex = wrapper.vm.cleanupCategoryOptions.findIndex(option => option.key === 'near');
+    await chips[nearIndex].trigger('click');
+    expect(wrapper.vm.cleanupCategory).toBe('near');
+    expect(wrapper.findAll('[data-test="cleanup-category"]')[nearIndex].attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="cleanup-dismissed-tab"]').attributes('aria-pressed')).toBe('false');
     wrapper.unmount();
   });
 

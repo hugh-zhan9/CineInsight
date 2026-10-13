@@ -149,7 +149,7 @@ describe('对比方式与声音', () => {
     expect(wrapper.find('[data-test="version-compare-divider"]').exists()).toBe(false);
     await wrapper.get('[data-test="version-compare-mode-slider"]').trigger('click');
     expect(stage.classes()).toContain('version-compare__stage--slider');
-    expect(wrapper.get('[data-test="version-compare-mode-slider"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="version-compare-mode-slider"]').attributes('aria-checked')).toBe('true');
     expect(wrapper.get('[data-test="version-compare-video-left"]').element).toBe(left);
     expect(wrapper.get('[data-test="version-compare-video-right"]').element).toBe(right);
     expect(wrapper.vm.clipPath).toBe('inset(0 50% 0 0)');
@@ -182,11 +182,11 @@ describe('对比方式与声音', () => {
     const { left, right } = await openDialog();
     expect(left.muted).toBe(false);
     expect(right.muted).toBe(true);
-    expect(wrapper.get('[data-test="version-compare-audio-left"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="version-compare-audio-left"]').attributes('aria-checked')).toBe('true');
     await wrapper.get('[data-test="version-compare-audio-right"]').trigger('click');
     expect(left.muted).toBe(true);
     expect(right.muted).toBe(false);
-    expect(wrapper.get('[data-test="version-compare-audio-right"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="version-compare-audio-right"]').attributes('aria-checked')).toBe('true');
     await wrapper.get('[data-test="version-compare-audio-left"]').trigger('click');
     expect(left.muted).toBe(false);
     expect(right.muted).toBe(true);

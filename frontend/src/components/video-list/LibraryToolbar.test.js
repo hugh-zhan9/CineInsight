@@ -437,6 +437,18 @@ describe('语义入口置灰', () => {
     expect(wrapper.find('[data-test="search-mode-semantic"]').attributes('disabled')).toBeUndefined();
     wrapper.unmount();
   });
+
+  it('搜索模式是 SegmentedControl：当前模式 aria-checked，点别的模式发 set-search-mode', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ searchMode: 'file' }) });
+    await wrapper.vm.$nextTick();
+    const group = wrapper.get('[role="radiogroup"][aria-label="搜索模式"]');
+    expect(group.findAll('[role="radio"]').map(radio => radio.attributes('data-test'))).toEqual(['search-mode-file', 'search-mode-subtitle', 'search-mode-semantic']);
+    expect(wrapper.get('[data-test="search-mode-file"]').attributes('aria-checked')).toBe('true');
+    await wrapper.get('[data-test="search-mode-file"]').trigger('click');
+    await wrapper.get('[data-test="search-mode-subtitle"]').trigger('click');
+    expect(wrapper.emitted('set-search-mode')).toEqual([['subtitle']]);
+    wrapper.unmount();
+  });
 });
 
 describe('人物筛选组合框（META-02）', () => {

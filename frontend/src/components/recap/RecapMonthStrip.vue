@@ -5,7 +5,7 @@
         v-for="item in months"
         :key="item.month"
         type="button"
-        :class="['recap-film__frame', { 'is-empty': !item.best, 'is-unavailable': item.best && !item.best.video.available }]"
+        :class="['btn-plain', 'recap-film__frame', { 'is-empty': !item.best, 'is-unavailable': item.best && !item.best.video.available }]"
         :disabled="!item.best || !item.best.video.available"
         :title="item.best ? `${item.month}月之最：${item.best.video.title}（${item.best.count} 次）` : `${item.month}月没有播放`"
         @click="$emit('open', item.best.video)"

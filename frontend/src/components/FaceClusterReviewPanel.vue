@@ -14,12 +14,9 @@
     </div>
 
     <!-- 三个视图（D-PC30）：待处理 = 追加候选 + 未命名；已命名可解除关联、改派；
-         已忽略可恢复。未命名与已忽略按服务端游标分页（D-PC29），不再一次拉全部。 -->
-    <nav class="face-review__views" aria-label="人脸组视图">
-      <button type="button" :class="{ active: view === 'pending' }" data-test="face-cluster-view-pending" @click="switchView('pending')">待处理 <span>{{ pendingCountText }}</span></button>
-      <button type="button" :class="{ active: view === 'named' }" data-test="face-cluster-view-named" @click="switchView('named')">已命名 <span>{{ namedClusters.length }}</span></button>
-      <button type="button" :class="{ active: view === 'ignored' }" data-test="face-cluster-view-ignored" @click="switchView('ignored')">已忽略<span v-if="ignored.loaded">{{ ignored.items.length }}{{ ignored.cursor ? '+' : '' }}</span></button>
-    </nav>
+         已忽略可恢复。未命名与已忽略按服务端游标分页（D-PC29），不再一次拉全部。
+         页签是 D-UD-06 AppTabs：条数原样写（还有下一页时带「+」），已忽略打开过才有条数。 -->
+    <AppTabs class="face-review__views" :tabs="viewTabs" :model-value="view" aria-label="人脸组视图" @update:model-value="switchView" />
 
     <p v-if="error" class="face-review__error" role="alert" data-test="face-cluster-review-error">{{ error }}</p>
     <p v-if="notice" class="face-review__notice" role="status" data-test="face-cluster-review-notice">{{ notice }}</p>
@@ -372,6 +369,7 @@
 <script>
 import FaceClusterDetailDialog from './FaceClusterDetailDialog.vue';
 import AppIcon from './ui/AppIcon.vue';
+import AppTabs from './ui/AppTabs.vue';
 import {
   ConfirmFaceClusterAppend, ConfirmFaceClusterAppendObservations, DismissFaceClusterAppend, GetFaceClusterObservations,
   IgnoreFaceCluster, LinkFaceCluster, ListFaceClusterPage, ListIgnoredFaceClusters, ListPeople, NameFaceCluster,
@@ -408,7 +406,7 @@ const EMPTY_RELINK_FORM = () => ({ clusterID: 0, mode: 'unlink', loading: false,
 // 三处看到的是同一批簇，一个簇可能同时含视频与图片观测，因此这里不按媒体类型筛。
 export default {
   name: 'FaceClusterReviewPanel',
-  components: { AppIcon, FaceClusterDetailDialog },
+  components: { AppIcon, AppTabs, FaceClusterDetailDialog },
   // loaded 载荷 { unnamed, appendPending, unnamedHasMore }：unnamed 是已加载的未命名组数，
   // 还有下一页时 unnamedHasMore 为真（宿主据此写「N+ 组」）。
   emits: ['changed', 'loaded'],
@@ -452,6 +450,18 @@ export default {
     },
     hiddenNamedCount() {
       return Math.max(0, this.namedClusters.length - this.namedLimit);
+    },
+    viewTabs() {
+      return [
+        { key: 'pending', label: '待处理', count: this.pendingCountText, dataTest: 'face-cluster-view-pending' },
+        { key: 'named', label: '已命名', count: String(this.namedClusters.length), dataTest: 'face-cluster-view-named' },
+        {
+          key: 'ignored',
+          label: '已忽略',
+          count: this.ignored.loaded ? `${this.ignored.items.length}${this.ignored.cursor ? '+' : ''}` : null,
+          dataTest: 'face-cluster-view-ignored'
+        }
+      ];
     },
     pendingCountText() {
       return `${this.appendCards.length + this.unnamed.items.length}${this.unnamed.hasMore ? '+' : ''}`;
@@ -1091,42 +1101,6 @@ export default {
   color: var(--text-muted);
   font-size: var(--fs-caption);
 }
-.face-review__views {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.face-review__views button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: var(--fs-caption);
-}
-
-.face-review__views button.active {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-color);
-  font-weight: 700;
-}
-
-.face-review__views span {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-size: var(--fs-caption);
-  text-align: center;
-}
-
 .face-review__append {
   display: flex;
   flex-wrap: wrap;

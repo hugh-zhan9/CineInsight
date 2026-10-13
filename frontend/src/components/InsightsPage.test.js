@@ -10,8 +10,8 @@ import InsightsPage from './InsightsPage.vue';
 import { GetLibraryInsights } from '../../wailsjs/go/main/App';
 
 function mountWith(stats, directories = []) {
-  // 页头不桩掉：页签与刷新按钮在 PageHeader 的 actions 插槽里。
-  const wrapper = shallowMount(InsightsPage, { props: { directories }, global: { stubs: { PageHeader: false } } });
+  // 页头不桩掉：页签（AppTabs）在 PageHeader 的 below 插槽里，刷新按钮在 actions 插槽里。
+  const wrapper = shallowMount(InsightsPage, { props: { directories }, global: { stubs: { PageHeader: false, AppTabs: false, SegmentedControl: false } } });
   wrapper.vm.stats = stats;
   return wrapper;
 }
@@ -137,7 +137,8 @@ describe('InsightsPage 观看记录（P-037，D-PC43）', () => {
   // 走一遍真实的加载：挂载时的 GetLibraryInsights 就返回这份统计，不会在断言途中被 null 覆盖。
   async function mountLoaded(stats) {
     GetLibraryInsights.mockResolvedValueOnce(stats);
-    const wrapper = shallowMount(InsightsPage, { props: { directories: [] } });
+    // 来源切换是 SegmentedControl（D-UD-06），不桩掉才能点到每个选项。
+    const wrapper = shallowMount(InsightsPage, { props: { directories: [] }, global: { stubs: { SegmentedControl: false } } });
     await flushPromises();
     return wrapper;
   }
@@ -168,8 +169,8 @@ describe('InsightsPage 观看记录（P-037，D-PC43）', () => {
       { source: 'mobile_feed', label: '手机观看', count: 1 },
       { source: 'jellyfin_view', label: 'Jellyfin 观看', count: 1 }
     ]);
-    const buttons = wrapper.findAll('[data-test="insights-heatmap-sources"] button');
-    expect(buttons.map(button => button.text())).toEqual(['全部6', '启动播放2', '随机启动播放1', '内嵌观看1', '手机观看1', 'Jellyfin 观看1']);
+    const buttons = wrapper.findAll('[data-test="insights-heatmap-sources"] [role="radio"]');
+    expect(buttons.map(button => button.text())).toEqual(['全部 6', '启动播放 2', '随机启动播放 1', '内嵌观看 1', '手机观看 1', 'Jellyfin 观看 1']);
     expect(wrapper.get('[data-test="insights-heatmap-total"]').text()).toContain('近一年 6 条');
     wrapper.unmount();
   });
@@ -183,7 +184,7 @@ describe('InsightsPage 观看记录（P-037，D-PC43）', () => {
     expect(day.count).toBe(1);
     expect(day.title).toBe('2026-08-30 · 共 3 条（启动播放 2 · 内嵌观看 1）');
     expect(wrapper.vm.heatmapDays.find(item => item.date === '2026-08-31').count).toBe(0);
-    expect(wrapper.get('[data-test="insights-heatmap-source-inline_view"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="insights-heatmap-source-inline_view"]').attributes('aria-checked')).toBe('true');
     wrapper.unmount();
   });
 
@@ -193,7 +194,7 @@ describe('InsightsPage 观看记录（P-037，D-PC43）', () => {
     wrapper.vm.stats = heatmapStats([{ date: '2026-09-01', count: 4 }]);
     await wrapper.vm.$nextTick();
     expect(wrapper.vm.activeHeatmapSource).toBe('all');
-    expect(wrapper.get('[data-test="insights-heatmap-source-all"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="insights-heatmap-source-all"]').attributes('aria-checked')).toBe('true');
     expect(wrapper.vm.heatmapTotal).toBe(4);
     expect(wrapper.vm.heatmapSourceOptions).toEqual([{ source: 'all', label: '全部', count: 4 }]);
     expect(wrapper.vm.heatmapDays.find(item => item.date === '2026-09-01').title).toBe('2026-09-01 · 4 条');
@@ -211,7 +212,7 @@ describe('InsightsPage 存储体检页签（2026-10-12）', () => {
   it('离开洞察页之后体检面板才报 videos-changed（例如从「最近操作」撤销了删除）：照样转给宿主，不再重取概览', async () => {
     GetLibraryInsights.mockResolvedValue(baseStats);
     const onVideosChanged = vi.fn();
-    const wrapper = shallowMount(InsightsPage, { props: { onVideosChanged }, global: { stubs: { PageHeader: false } } });
+    const wrapper = shallowMount(InsightsPage, { props: { onVideosChanged }, global: { stubs: { PageHeader: false, AppTabs: false, SegmentedControl: false } } });
     await flushPromises();
     await wrapper.get('[data-test="insights-tab-storage"]').trigger('click');
     // 宿主模板里的 @videos-changed 就是面板拿到的这个监听。

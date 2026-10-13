@@ -236,6 +236,25 @@
 .toolbar-btn__caret { color: var(--text-muted); }
 .toolbar-btn--on .toolbar-btn__caret { color: var(--accent-text); }
 
+/* 整张卡片、海报、头像这类可点区域（统一设计 D-UD-15 按钮守卫认可的第四种按钮类）：只清掉浏览器按钮外观，
+   外形完全由组件自己的类决定。重置用 :where() 压到零优先级，组件类不论先后都能覆盖它；
+   键盘焦点环保留正常优先级，组件自己写了 :focus-visible 时以组件为准。 */
+:where(.btn-plain) {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+:where(.btn-plain:disabled) { cursor: default; }
+.btn-plain:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 .merge-type-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }
 .merge-type-switch button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .merge-type-switch button.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }

@@ -26,4 +26,20 @@ describe('AppBanner', () => {
     expect(AppBanner.props.tone.validator('info')).toBe(false);
     expect(mount(AppBanner, { props: { title: 'a' } }).find('.ui-banner__message').exists()).toBe(false);
   });
+
+  it('a title slot replaces the plain title and the default slot adds lines under the message', () => {
+    const wrapper = mount(AppBanner, {
+      props: { tone: 'accent', message: '重启后生效。' },
+      slots: {
+        title: '字幕索引 <b class="count">3</b> 条待重建',
+        default: '<p class="extra">恢复备份后应用会自动退出。</p><p class="extra">再打开即用恢复的数据。</p>'
+      }
+    });
+    expect(wrapper.get('.ui-banner__title').text()).toBe('字幕索引 3 条待重建');
+    expect(wrapper.get('.ui-banner__title .count').text()).toBe('3');
+    const parts = wrapper.findAll('.ui-banner__text > *');
+    expect(parts.map(part => part.classes()[0])).toEqual(['ui-banner__title', 'ui-banner__message', 'ui-banner__extra']);
+    expect(wrapper.findAll('.ui-banner__extra .extra').map(line => line.text())).toEqual(['恢复备份后应用会自动退出。', '再打开即用恢复的数据。']);
+    expect(mount(AppBanner, { props: { title: 'a' } }).findAll('.ui-banner__text > *')).toHaveLength(1);
+  });
 });

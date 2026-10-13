@@ -6,34 +6,11 @@
 
     <!-- 人物候选与 AI 标签是两批不同的候选，但都是"确认后才写库"的审阅动作，
          放在同一个面板的两个页签下，和视频侧待审工作台同一套形状。 -->
-    <nav class="image-ai-tag-review__tabs" aria-label="图片审阅类型">
-      <button
-        type="button"
-        :class="{ active: section === 'tags' }"
-        data-test="image-ai-tag-review-tab"
-        @click="section = 'tags'"
-      >AI 标签待审</button>
-      <button
-        type="button"
-        :class="{ active: section === 'face' }"
-        data-test="image-face-cluster-review-tab"
-        @click="section = 'face'"
-      >人物候选</button>
-    </nav>
+    <AppTabs v-model="section" class="image-ai-tag-review__tabs" :tabs="sectionTabs" aria-label="图片审阅类型" />
 
     <div v-if="section === 'tags'" class="image-ai-tag-review__toolbar">
       <input v-model="keyword" type="search" class="search-input image-ai-tag-review__search" data-test="image-ai-tag-search" aria-label="搜索全部图片待审候选" placeholder="搜索文件名、路径、标签或理由" />
-      <div class="image-ai-tag-review__filters" role="group" aria-label="置信度筛选">
-        <button
-          v-for="option in confidenceOptions"
-          :key="option.value"
-          type="button"
-          :class="['btn', 'btn--secondary', 'btn--sm', { active: confidence === option.value }]"
-          :aria-pressed="confidence === option.value ? 'true' : 'false'"
-          :data-test="`image-ai-tag-confidence-${option.value || 'all'}`"
-          @click="setConfidence(option.value)"
-        >{{ option.label }}</button>
-      </div>
+      <SegmentedControl label="置信度筛选" :options="confidenceOptions" :model-value="confidence" @update:model-value="setConfidence" />
       <button
         type="button"
         class="btn btn--secondary btn--sm"
@@ -152,7 +129,9 @@ import {
   RejectImageAITagCandidate, RejectImageAITagCandidatesByImage
 } from '../../wailsjs/go/main/App';
 import AppIcon from './ui/AppIcon.vue';
+import AppTabs from './ui/AppTabs.vue';
 import DialogShell from './ui/DialogShell.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import AIReviewBatchControls from './AIReviewBatchControls.vue';
 import ReviewCandidateWindow from './ReviewCandidateWindow.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
@@ -160,7 +139,7 @@ import { applyReviewCandidateRefresh, reviewOutcomeCandidateIDs, filterCandidate
 
 export default {
   name: 'ImageAITagReviewPanel',
-  components: { ReviewCandidateWindow, AIReviewBatchControls, AppIcon, DialogShell, FaceClusterReviewPanel },
+  components: { ReviewCandidateWindow, AIReviewBatchControls, AppIcon, AppTabs, DialogShell, FaceClusterReviewPanel, SegmentedControl },
   props: {
     visible: { type: Boolean, default: false }
   },
@@ -193,11 +172,15 @@ export default {
       // 缩略图失败在一次打开内是黏的：文件真的没了的时候，每次审批后的重新加载
       // 都去重试等于白发请求。重新打开面板时清空，给临时失败一次重试机会。
       failedThumbs: {},
+      sectionTabs: [
+        { key: 'tags', label: 'AI 标签待审', dataTest: 'image-ai-tag-review-tab' },
+        { key: 'face', label: '人物候选', dataTest: 'image-face-cluster-review-tab' }
+      ],
       confidenceOptions: [
         { value: '', label: '全部' },
         { value: 'high', label: '高' },
         { value: 'medium', label: '中' }
-      ]
+      ].map(option => ({ ...option, dataTest: `image-ai-tag-confidence-${option.value || 'all'}` }))
     };
   },
   computed: {
@@ -439,27 +422,7 @@ export default {
   color: var(--text-secondary);
 }
 
-.image-ai-tag-review__tabs {
-  display: flex;
-  gap: 6px;
-  margin-bottom: var(--space-3);
-  border-bottom: 1px solid var(--hairline-faint);
-}
-
-.image-ai-tag-review__tabs button {
-  padding: 6px var(--space-3);
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--fs-secondary);
-  cursor: pointer;
-}
-
-.image-ai-tag-review__tabs button.active {
-  border-bottom-color: var(--accent-color);
-  color: var(--text-primary);
-}
+.image-ai-tag-review__tabs { margin-bottom: var(--space-3); }
 
 .image-ai-tag-review__toolbar {
   display: flex;
@@ -479,12 +442,6 @@ export default {
 
 .image-ai-tag-review__toolbar + .image-ai-tag-review__filters {
   margin-bottom: var(--space-3);
-}
-
-.image-ai-tag-review__filters .btn.active {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-text);
 }
 
 .image-ai-tag-review__count {

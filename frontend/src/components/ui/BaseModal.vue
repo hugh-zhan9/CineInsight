@@ -1,5 +1,5 @@
 <template>
-  <div class="modal-overlay" @click.self="handleOverlayClick">
+  <div :class="['modal-overlay', overlayClass]" @click.self="handleOverlayClick">
     <div class="modal" role="dialog" aria-modal="true" v-bind="$attrs" @click="handleModalClick">
       <slot />
     </div>
@@ -18,7 +18,9 @@ export default {
   inheritAttrs: false,
   props: {
     closeOnOverlay: { type: Boolean, default: false },
-    stopModalClicks: { type: Boolean, default: false }
+    stopModalClicks: { type: Boolean, default: false },
+    // 加在遮罩节点上的类（其余属性落在里面的对话框节点上），给 DialogShell 的全窗口尺寸去掉遮罩留白用。
+    overlayClass: { type: String, default: '' }
   },
   // overlay-click：点到遮罩本身（不论 closeOnOverlay），给 DialogShell 按「有没有表单」自己决定关不关。
   emits: ['close', 'overlay-click'],

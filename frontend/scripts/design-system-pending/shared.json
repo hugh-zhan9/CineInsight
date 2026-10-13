@@ -3,22 +3,13 @@
   "pending": {
     "colors": {},
     "font-scale": {
-      "components/ui/ActionMenu.vue": 1,
-      "components/ui/BaseMenu.vue": 4,
-      "components/ui/StatTile.vue": 9,
       "styles/components.css": 3
     },
-    "z-index": {
-      "components/ui/ActionMenu.vue": 1,
-      "components/ui/BasePopover.vue": 1
-    },
+    "z-index": {},
     "vars": {},
     "dialogs": {},
     "page-header": {},
     "wording": {},
-    "buttons": {
-      "components/ui/ActionMenu.vue": 1,
-      "components/ui/BaseMenu.vue": 1
-    }
+    "buttons": {}
   }
 }

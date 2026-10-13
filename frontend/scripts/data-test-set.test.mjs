@@ -24,11 +24,20 @@ function collectVueFiles(dir) {
   return found;
 }
 
+// 钩子有两种写法：模板属性 data-test="…" / :data-test="…"（含共享组件的 select-all-data-test="…" 这类钩子属性），
+// 以及交给 components/ui 的 AppTabs / SegmentedControl 的逐项字段 dataTest: '…'（组件把它渲染成这一项的
+// data-test，见各自的单测）。后一种按前一种的样子记：dataTest: 'x' 记成 data-test="x"，
+// dataTest: `x-${y}` 记成 data-test="`x-${y}`"（与 :data-test="`x-${y}`" 记法一致）。
+const ITEM_HOOK = /(?<![\w$])dataTest:\s*(?:'([^'\n]*)'|"([^"\n]*)"|(`[^`\n]*`))/g;
 const present = new Map();
 for (const file of collectVueFiles(srcDir)) {
   const source = readFileSync(file, 'utf8');
   for (const match of source.matchAll(/data-test="[^"]*"/g)) {
     if (!present.has(match[0])) present.set(match[0], file);
+  }
+  for (const match of source.matchAll(ITEM_HOOK)) {
+    const hook = `data-test="${match[1] ?? match[2] ?? match[3]}"`;
+    if (!present.has(hook)) present.set(hook, file);
   }
 }
 

@@ -4,6 +4,7 @@
     :class="['ui-dialog', `ui-dialog--${size}`]"
     :aria-labelledby="titleId"
     :aria-busy="busy ? 'true' : undefined"
+    :overlay-class="size === 'full' ? 'ui-dialog-overlay--full' : ''"
     tabindex="-1"
     @close="requestClose"
     @overlay-click="handleOverlayClick"
@@ -15,7 +16,7 @@
         type="button"
         class="btn-icon btn--sm ui-dialog__close"
         aria-label="关闭"
-        data-test="dialog-shell-close"
+        :data-test="closeDataTest"
         :disabled="busy"
         @click="requestClose"
       ><AppIcon name="close" :size="16" /></button>
@@ -30,14 +31,17 @@ import AppIcon from './AppIcon.vue';
 import AppSpinner from './AppSpinner.vue';
 import BaseModal from './BaseModal.vue';
 
-export const DIALOG_SIZES = ['sm', 'md', 'lg', 'xl'];
+export const DIALOG_SIZES = ['sm', 'md', 'lg', 'xl', 'full'];
 const FORM_CONTROLS = 'input:not([type="hidden"]), select, textarea, [contenteditable="true"]';
 let titleSeq = 0;
 
 // 对话框骨架（D-UD-06、D-UD-13），由 BaseModal 扩展；页面里的对话框都用它，BaseModal 只给这里用（守卫 5）。
 // 标题 h2（--fs-section）+ 右上 ×（aria-label「关闭」）；Esc 与 × 总能关，busy 时都忽略并在标题旁转圈。
 // closeOnOverlay 不传时按内容决定：正文里没有表单控件才允许点遮罩关（有表单的点外面不关，免得丢输入）。
-// footer 插槽放按钮：第一个（「取消」）靠左，其余靠右，主操作放最后。尺寸 sm 420 / md 560 / lg 760 / xl 940。
+// footer 插槽放按钮：第一个（「取消」）靠左，其余靠右，主操作放最后。尺寸 sm 420 / md 560 / lg 760 / xl 940，
+// full 铺满整个窗口（无遮罩留白、无圆角，给字幕工作台、版本对比这类全窗口工作区）。
+// busy 时拒绝了一次关闭（Esc、点遮罩；× 此时禁用点不到）会发 close-blocked，宿主可以借它提示「正在…，完成后再关」。
+// × 的 data-test 默认 dialog-shell-close，宿主要保留自己原有的钩子时用 close-data-test 换掉。
 // 其余属性（class、data-test 等）透传到对话框节点上。
 export default {
   name: 'DialogShell',
@@ -47,9 +51,10 @@ export default {
     title: { type: String, required: true },
     size: { type: String, default: 'md', validator: size => DIALOG_SIZES.includes(size) },
     closeOnOverlay: { type: Boolean, default: null },
-    busy: { type: Boolean, default: false }
+    busy: { type: Boolean, default: false },
+    closeDataTest: { type: String, default: 'dialog-shell-close' }
   },
-  emits: ['close'],
+  emits: ['close', 'close-blocked'],
   data() {
     titleSeq += 1;
     return { titleId: `ui-dialog-title-${titleSeq}` };
@@ -70,7 +75,8 @@ export default {
   },
   methods: {
     requestClose() {
-      if (!this.busy) this.$emit('close');
+      if (this.busy) this.$emit('close-blocked');
+      else this.$emit('close');
     },
     hasFormControls() {
       return Boolean(this.$refs.body?.querySelector(FORM_CONTROLS));
@@ -92,6 +98,9 @@ export default {
 :deep(.ui-dialog--md) { max-width: 560px; }
 :deep(.ui-dialog--lg) { max-width: 760px; }
 :deep(.ui-dialog--xl) { max-width: 940px; }
+:deep(.ui-dialog--full) { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; }
+/* 遮罩是本组件的根（BaseModal 的根节点），带本组件的 scope 属性；全窗口时去掉四周留白。 */
+.ui-dialog-overlay--full { padding: 0; }
 .ui-dialog__head { display: flex; flex: none; align-items: center; gap: var(--space-2); padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5); }
 .ui-dialog__title { flex: 1; min-width: 0; margin: 0; color: var(--text-primary); font-size: var(--fs-section); font-weight: var(--fw-semibold); line-height: 1.4; overflow-wrap: anywhere; }
 .ui-dialog__busy { color: var(--accent-text); }

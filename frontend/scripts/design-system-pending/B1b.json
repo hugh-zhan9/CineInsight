@@ -8,10 +8,6 @@
     "dialogs": {},
     "page-header": {},
     "wording": {},
-    "buttons": {
-      "components/VersionCompareDialog.vue": 4,
-      "components/VersionGroupPanel.vue": 2,
-      "components/video-list/SaveViewDialog.vue": 3
-    }
+    "buttons": {}
   }
 }

@@ -9,7 +9,7 @@
           <div class="notes-toolbar"><input v-model="keyword" class="search-input notes-search" aria-label="查找片库视频" placeholder="输入片名或文件名" :disabled="saving" /><button type="button" class="btn btn--secondary btn--sm" :disabled="searching || saving" @click="search(false)">查找</button></div>
           <p v-if="searchError" class="notes-alert" role="alert">{{ searchError }}</p>
           <p v-if="searched && !searching && !searchError && !videos.length" class="empty-hint">没有找到视频</p>
-          <button v-for="video in videos" :key="video.id" type="button" class="diary-video-choice" :disabled="saving" :aria-pressed="selected?.id === video.id" @click="selected = video">{{ video.display_title || video.name }}</button>
+          <button v-for="video in videos" :key="video.id" type="button" class="btn-plain diary-video-choice" :disabled="saving" :aria-pressed="selected?.id === video.id" @click="selected = video">{{ video.display_title || video.name }}</button>
           <button v-if="nextCursor" type="button" class="btn btn--secondary btn--sm" :disabled="searching || saving" @click="search(true)">下一页视频</button>
           <p v-if="selected" class="help-text">已选择：{{ selected.display_title || selected.name }}</p>
         </div>

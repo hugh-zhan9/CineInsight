@@ -199,7 +199,7 @@ describe('AITagReviewDialog same-source review', () => {
     await wrapper.vm.loadCandidates();
     await flushPromises();
     expect(wrapper.find('.same-source-row').exists()).toBe(false);
-    expect(wrapper.get('[data-test="ai-candidate-review-tab"]').classes()).toContain('active');
+    expect(wrapper.get('[data-test="ai-candidate-review-tab"]').attributes('aria-selected')).toBe('true');
     await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
 
     const confirmButton = wrapper.findAll('.same-source-row button').find(button => button.text() === '确认同源');
@@ -617,7 +617,7 @@ describe('AITagReviewDialog META-08 同源已读时机与待审总数', () => {
     const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
     await wrapper.vm.loadCandidates();
     await flushPromises();
-    expect(wrapper.get('[data-test="ai-candidate-review-tab"]').text()).toContain('137');
+    expect(wrapper.get('[data-test="ai-candidate-review-tab"] .ui-tabs__count').text()).toBe('137');
     expect(wrapper.get('[data-test="ai-review-counts"]').text()).toContain('AI 标签待审 137 条（已加载 1 条）');
   });
 });

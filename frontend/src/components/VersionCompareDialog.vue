@@ -2,15 +2,9 @@
   <div class="version-compare" role="dialog" aria-modal="true" aria-label="版本对比播放" data-test="version-compare">
     <header class="version-compare__bar">
       <h2 class="version-compare__title">版本对比</h2>
-      <!-- 两组切换暂用工具栏按钮：SegmentedControl 还不能给每个选项带 data-test（version-compare-mode-* / audio-*），见统一设计待迁移清单。 -->
-      <div class="version-compare__group" role="group" aria-label="对比方式">
-        <button type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': mode === 'side' }]" :aria-pressed="mode === 'side'" data-test="version-compare-mode-side" @click="mode = 'side'">并排</button>
-        <button type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': mode === 'slider' }]" :aria-pressed="mode === 'slider'" data-test="version-compare-mode-slider" @click="mode = 'slider'">滑动对比</button>
-      </div>
-      <div class="version-compare__group" role="group" aria-label="声音来源">
-        <button type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': audioSide === 'left' }]" :aria-pressed="audioSide === 'left'" data-test="version-compare-audio-left" @click="audioSide = 'left'">左侧声音</button>
-        <button type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': audioSide === 'right' }]" :aria-pressed="audioSide === 'right'" data-test="version-compare-audio-right" @click="audioSide = 'right'">右侧声音</button>
-      </div>
+      <!-- 对比方式与声音来源（D-UD-06 SegmentedControl），每个选项带 version-compare-mode-* / audio-* 钩子。 -->
+      <SegmentedControl v-model="mode" class="version-compare__segments" label="对比方式" :options="modeOptions" />
+      <SegmentedControl v-model="audioSide" class="version-compare__segments" label="声音来源" :options="audioOptions" />
       <!-- 片头长短不一的两个版本：右侧整体提前或推后，只在这次打开内有效。 -->
       <div class="version-compare__group" role="group" aria-label="右侧偏移">
         <span class="version-compare__group-label">右侧偏移</span>
@@ -109,6 +103,7 @@
 <script>
 import { GetPreviewSession, GetVideoDetails } from '../../wailsjs/go/main/App';
 import AppIcon from './ui/AppIcon.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import {
   COMPARE_SYNC_INTERVAL_MS, applyCompareOffset, compareClipPath, compareDriftSeek, compareFollowerTarget, compareMediaErrorText,
@@ -127,7 +122,7 @@ const emptySide = () => ({
 // 关闭时（按钮、Esc、宿主卸载）两个媒体元素都暂停并清掉 src，后台不留播放。
 export default {
   name: 'VersionCompareDialog',
-  components: { AppIcon },
+  components: { AppIcon, SegmentedControl },
   props: {
     leftVideoId: { type: Number, required: true },
     rightVideoId: { type: Number, required: true }
@@ -148,7 +143,15 @@ export default {
       scrubbing: false,
       transportError: '',
       released: false,
-      state: { left: emptySide(), right: emptySide() }
+      state: { left: emptySide(), right: emptySide() },
+      modeOptions: [
+        { value: 'side', label: '并排', dataTest: 'version-compare-mode-side' },
+        { value: 'slider', label: '滑动对比', dataTest: 'version-compare-mode-slider' }
+      ],
+      audioOptions: [
+        { value: 'left', label: '左侧声音', dataTest: 'version-compare-audio-left' },
+        { value: 'right', label: '右侧声音', dataTest: 'version-compare-audio-right' }
+      ]
     };
   },
   computed: {

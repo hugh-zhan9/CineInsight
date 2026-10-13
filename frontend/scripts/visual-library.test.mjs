@@ -48,9 +48,11 @@ assert.match(appShell, /photoPageVisible\(\)\s*{\s*return this\.currentPage === 
 assert.match(photoPage, /pageActive\(active\)/, 'photo page should react to becoming active again');
 assert.match(photoPage, /restoreScrollPosition\(\)\s*{/, 'photo page should restore the shared scroll position');
 
-// 勾选之后往下滚，批量操作条必须跟着吸顶，否则要滚回顶部才能点"删除所选"。
-assert.match(photoPage, /\.photo-toolbar\s*{[^}]*position:\s*sticky/s, 'photo toolbar should stick so batch actions stay reachable');
-assert.match(photoPage, /\.photo-selection-tools\b/, 'batch actions live inside the sticky toolbar');
+// 勾选之后往下滚，批量操作必须一直够得着，否则要滚回顶部才能点"删除所选"。工具栏吸顶；批量动作在统一的
+// 选择操作条 SelectionBar 里（D-UD-10），放在列表之后、吸在内容区底部（SelectionBar 自己是 position: sticky）。
+assert.match(photoPage, /\.photo-toolbar\s*{[^}]*position:\s*sticky/s, 'photo toolbar should stick');
+assert.match(photoPage, /<SelectionBar[^>]*data-test="photo-selection-tools"/s, 'batch actions live in the shared SelectionBar');
+assert.ok(photoPage.indexOf('<SelectionBar') > photoPage.indexOf('data-test="photo-load-more"'), 'the selection bar sits after the list so it sticks to the bottom of the content');
 
 // 图片 AI 标签审阅弹窗：scoped 选择器落不到 BaseModal 内层面板上，必须走 :deep，
 // 否则整条规则失效——宽度停在全局 .modal 的 500px，而且完全不封高，候选一多就撑出窗口。

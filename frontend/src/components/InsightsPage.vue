@@ -2,21 +2,6 @@
   <section class="page-content insights-page">
     <PageHeader title="片库洞察" subtitle="基于本地片库与观看状态的只读统计">
       <template #actions>
-      <!-- 「存储体检」（2026-10-12）：空间都去哪了、哪些能回收，列出的久未观看大文件可以直接移到废纸篓。
-           页签暂沿用原写法：AppTabs 还不能给每个页签挂 data-test（insights-tab-*），见统一设计第 0 步 B3b 交接。 -->
-      <nav class="insights-tabs" role="tablist" aria-label="洞察内容">
-        <button
-          v-for="item in tabs"
-          :key="item.key"
-          type="button"
-          role="tab"
-          :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': tab === item.key }]"
-          :aria-selected="tab === item.key"
-          :disabled="storageStatus.processing"
-          :data-test="`insights-tab-${item.key}`"
-          @click="tab = item.key"
-        >{{ item.label }}</button>
-      </nav>
       <button
         v-if="tab === 'overview'"
         type="button"
@@ -32,6 +17,11 @@
         data-test="storage-refresh"
         @click="refreshStorage"
       >{{ storageStatus.loading ? '体检中…' : '刷新' }}</button>
+      </template>
+      <!-- 「存储体检」（2026-10-12）：空间都去哪了、哪些能回收，列出的久未观看大文件可以直接移到废纸篓。
+           页签（D-UD-06 AppTabs）带 insights-tab-* 钩子；体检正在删除时锁住，不让切走。 -->
+      <template #below>
+        <AppTabs v-model="tab" :tabs="pageTabs" aria-label="洞察内容" />
       </template>
     </PageHeader>
     <StorageHealthPanel
@@ -86,17 +76,15 @@
               少<i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i>多
             </div>
           </div>
-          <div class="heatmap-sources" role="group" aria-label="按来源查看" data-test="insights-heatmap-sources">
-            <button
-              v-for="option in heatmapSourceOptions"
-              :key="option.source"
-              type="button"
-              :class="['heatmap-source', { active: option.source === activeHeatmapSource }]"
-              :aria-pressed="option.source === activeHeatmapSource"
-              :data-test="`insights-heatmap-source-${option.source}`"
-              @click="heatmapSource = option.source"
-            >{{ option.label }}<small>{{ formatNumber(option.count) }}</small></button>
-          </div>
+          <!-- 按来源看（D-UD-06 SegmentedControl）：选项名后面是近一年的条数，每项带 insights-heatmap-source-* 钩子。 -->
+          <SegmentedControl
+            class="heatmap-sources"
+            label="按来源查看"
+            :options="heatmapSourceSegments"
+            :model-value="activeHeatmapSource"
+            data-test="insights-heatmap-sources"
+            @update:model-value="heatmapSource = $event"
+          />
           <p class="insights-play-events" data-test="insights-play-events">{{ playEventsSummaryText }}</p>
           <p class="insights-play-events-note" data-test="insights-watch-records-note">口径：「启动播放」在应用启动外部播放器时即记一次，不代表看了多久；内嵌观看、手机观看与 Jellyfin 观看在同一次播放累计超过 60 秒（短片取时长的一半）或看完时记一次。累计事件包含重复播放及已删除影片；历史事件每部仅补记一次。热力图仅展示近一年。</p>
           <div class="watch-heatmap" aria-label="近一年观看记录热力图">
@@ -153,8 +141,10 @@ import { GetImageInsights, GetLibraryInsights } from '../../wailsjs/go/main/App'
 import BucketChart from './insights/BucketChart.vue';
 import StorageHealthPanel from './insights/StorageHealthPanel.vue';
 import AppBanner from './ui/AppBanner.vue';
+import AppTabs from './ui/AppTabs.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
@@ -183,7 +173,7 @@ function playSourceLabel(source) {
 
 export default {
   name: 'InsightsPage',
-  components: { AppBanner, BucketChart, EmptyState, PageHeader, SkeletonBlock, StorageHealthPanel },
+  components: { AppBanner, AppTabs, BucketChart, EmptyState, PageHeader, SegmentedControl, SkeletonBlock, StorageHealthPanel },
   // busy-change：存储体检正在删除视频，App 据此不让切走（撤销条挂在本页上）。
   emits: ['open-video-id', 'run-command', 'busy-change'],
   props: {
@@ -241,6 +231,16 @@ export default {
         { source: 'all', label: '全部', count: all },
         ...orderedSources(totals).map(source => ({ source, label: playSourceLabel(source), count: totals[source] }))
       ];
+    },
+    heatmapSourceSegments() {
+      return this.heatmapSourceOptions.map(option => ({
+        value: option.source,
+        label: `${option.label} ${this.formatNumber(option.count)}`,
+        dataTest: `insights-heatmap-source-${option.source}`
+      }));
+    },
+    pageTabs() {
+      return this.tabs.map(item => ({ ...item, disabled: this.storageStatus.processing, dataTest: `insights-tab-${item.key}` }));
     },
     // 选中的来源刷新后不在了（比如一年窗口滑过），回到「全部」。
     activeHeatmapSource() {
@@ -416,9 +416,6 @@ export default {
 .insights-page { display: grid; gap: var(--space-4); }
 .insights-page > :deep(.ui-page-header) { margin-bottom: 0; }
 .insights-section-head { margin-top: 6px; }
-.insights-tabs { display: inline-flex; gap: 6px; padding: var(--space-1); border: 1px solid var(--hairline); border-radius: var(--radius-pill); background: var(--panel-bg); }
-.insights-tabs .toolbar-btn { border-radius: var(--radius-pill); border-color: transparent; }
-.insights-tabs .toolbar-btn--on { border-color: var(--accent-color); }
 .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
 .insights-loading { padding: var(--space-4) 0; }
 .insights-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
@@ -433,11 +430,7 @@ export default {
 .insights-progress { height: 5px; margin-top: 3px; border-radius: 3px; background: var(--neutral-softer); }
 .insights-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent-color); }
 .heatmap-legend { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-muted); font-size: var(--fs-caption); }
-.heatmap-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--space-3); }
-.heatmap-source { display: inline-flex; align-items: baseline; gap: 6px; height: var(--h-compact); padding: 0 var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-pill); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-caption); cursor: pointer; }
-.heatmap-source small { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-caption); }
-.heatmap-source:hover { border-color: var(--border-strong); background: var(--control-hover-bg); }
-.heatmap-source.active { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.heatmap-sources { flex-wrap: wrap; max-width: 100%; margin-bottom: var(--space-3); }
 .heatmap-legend i { width: 10px; height: 10px; border-radius: 2px; }
 .insights-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .insights-panel--wide { grid-column: 1 / -1; }

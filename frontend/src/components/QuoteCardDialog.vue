@@ -2,18 +2,8 @@
   <Teleport to="body">
     <DialogShell title="台词卡" size="xl" data-test="quote-card-dialog" @close="$emit('close')">
       <div class="quote-card-dialog__content">
-        <div class="quote-card-dialog__templates" role="radiogroup" aria-label="版式">
-          <button
-            v-for="option in templates"
-            :key="option.value"
-            type="button"
-            role="radio"
-            :aria-checked="template === option.value"
-            :class="['quote-card-dialog__template', { 'quote-card-dialog__template--active': template === option.value }]"
-            :data-test="`quote-card-template-${option.value}`"
-            @click="template = option.value"
-          >{{ option.label }}</button>
-        </div>
+        <!-- 版式（D-UD-06 SegmentedControl），每项带 quote-card-template-* 钩子。 -->
+        <SegmentedControl v-model="template" class="quote-card-dialog__templates" label="版式" :options="templateOptions" />
 
         <div class="quote-card-dialog__stage">
           <canvas v-show="frameState === 'ready'" ref="canvas" class="quote-card-dialog__canvas" data-test="quote-card-canvas" :data-template="template"></canvas>
@@ -57,6 +47,7 @@
 <script>
 import { markRaw } from 'vue';
 import DialogShell from './ui/DialogShell.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import { SaveQuoteCard } from '../../wailsjs/go/main/App';
 import { formatSceneTime } from '../utils/sceneSearch.js';
 import {
@@ -81,7 +72,7 @@ function errorText(err) {
 // 画面读不出来时只报错并禁用导出，不出纯文字卡。宿主每次打开都重新挂载本组件（v-if）。
 export default {
   name: 'QuoteCardDialog',
-  components: { DialogShell },
+  components: { DialogShell, SegmentedControl },
   props: {
     videoID: { type: Number, required: true },
     atMS: { type: Number, default: 0 },
@@ -105,6 +96,9 @@ export default {
     };
   },
   computed: {
+    templateOptions() {
+      return this.templates.map(option => ({ value: option.value, label: option.label, dataTest: `quote-card-template-${option.value}` }));
+    },
     atTime() {
       return Math.max(0, Math.round(Number(this.atMS) || 0));
     },
@@ -218,12 +212,6 @@ export default {
 .quote-card-dialog__content { display: flex; flex-direction: column; gap: 10px; }
 /* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
    SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
-.quote-card-dialog__templates { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
-.quote-card-dialog__template { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
-.quote-card-dialog__template:hover:not(:disabled) { color: var(--text-primary); }
-.quote-card-dialog__template:disabled { opacity: 0.45; cursor: not-allowed; }
-.quote-card-dialog__template--active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
-.quote-card-dialog__template:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 .quote-card-dialog__templates { align-self: flex-start; }
 .quote-card-dialog__stage { display: grid; place-items: center; min-height: 200px; border-radius: var(--radius); background: var(--thumb-bg); overflow: hidden; }
 .quote-card-dialog__canvas { display: block; max-width: 100%; max-height: 56vh; width: auto; height: auto; }

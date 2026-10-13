@@ -126,7 +126,7 @@ export default {
 <style>
 .base-popover {
   position: fixed;
-  z-index: 1200;
+  z-index: var(--z-menu);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   background: var(--panel-bg);

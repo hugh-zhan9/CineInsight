@@ -2,7 +2,7 @@
   <div class="ui-empty">
     <span v-if="icon" class="ui-empty__icon"><AppIcon :name="icon" :size="24" /></span>
     <p class="ui-empty__title">{{ title }}</p>
-    <p v-if="message" class="ui-empty__message">{{ message }}</p>
+    <p v-if="message" class="ui-empty__message" :data-test="messageDataTest || undefined">{{ message }}</p>
     <div v-if="$slots.actions" class="ui-empty__actions"><slot name="actions" /></div>
   </div>
 </template>
@@ -12,13 +12,15 @@ import AppIcon from './AppIcon.vue';
 
 // 空状态（D-UD-06）：永远给下一步——actions 插槽放「添加扫描目录」「清除筛选」之类的按钮。
 // icon 是图标集里的名字（可选）。只描述「这里没有东西」，加载中用 SkeletonBlock，出错用 AppBanner 或提示。
+// data-test 等属性落在外层；messageDataTest 落在说明那一行上（宿主给说明文字单独挂测试钩子用）。
 export default {
   name: 'EmptyState',
   components: { AppIcon },
   props: {
     title: { type: String, required: true },
     message: { type: String, default: '' },
-    icon: { type: String, default: '' }
+    icon: { type: String, default: '' },
+    messageDataTest: { type: String, default: '' }
   }
 };
 </script>

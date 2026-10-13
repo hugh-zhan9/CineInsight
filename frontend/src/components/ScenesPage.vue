@@ -17,18 +17,8 @@
         :maxlength="maxQueryLength"
         placeholder="例如：雨夜里的告白、海边日落、两个人在厨房吵架"
       />
-      <div class="scenes-modes" role="radiogroup" aria-label="检索模式">
-        <button
-          v-for="option in modes"
-          :key="option.value"
-          type="button"
-          role="radio"
-          :aria-checked="mode === option.value"
-          :data-test="`scenes-mode-${option.value}`"
-          :class="['scenes-mode', { 'scenes-mode--on': mode === option.value }]"
-          @click="setMode(option.value)"
-        >{{ option.label }}</button>
-      </div>
+      <!-- 检索模式（D-UD-06 SegmentedControl），每项带 scenes-mode-* 钩子。 -->
+      <SegmentedControl label="检索模式" :options="modeOptions" :model-value="mode" @update:model-value="setMode" />
       <button type="submit" class="btn btn--primary" data-test="scenes-submit" :disabled="!canSearch">检索</button>
       <button type="button" class="btn btn--secondary" data-test="scenes-pick-image" title="选一张图片，也可以直接拖进本页或粘贴" @click="$refs.imageInput.click()">以图搜片</button>
       <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden data-test="scenes-image-input" @change="onImagePicked" />
@@ -96,7 +86,7 @@
         <div v-for="(hit, index) in group.hits" :key="`${hit.source}-${hit.start_ms}-${index}`" class="scenes-hit-row">
         <button
           type="button"
-          class="scenes-hit"
+          class="btn-plain scenes-hit"
           :data-test="`scenes-hit-${group.videoID}-${index}`"
           @click="openHit(hit)"
         >
@@ -171,6 +161,7 @@ import { quoteCardMomentMS } from '../utils/quoteCard.js';
 import QuoteCardDialog from './QuoteCardDialog.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import ProgressBar from './ui/ProgressBar.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 
@@ -188,7 +179,7 @@ const RUNTIME_STATE_TEXT = {
 // 每次检索取一个请求代次，晚到的旧结果直接丢弃；点击命中交给宿主打开详情抽屉并内嵌播放。
 export default {
   name: 'ScenesPage',
-  components: { EmptyState, PageHeader, ProgressBar, QuoteCardDialog, SkeletonBlock },
+  components: { EmptyState, PageHeader, ProgressBar, QuoteCardDialog, SegmentedControl, SkeletonBlock },
   props: {
     pageActive: { type: Boolean, default: true },
     // 片库工具栏「在当前筛选中搜场景」带来的范围：{ filter, token }；为空表示全部视频。
@@ -219,6 +210,9 @@ export default {
     };
   },
   computed: {
+    modeOptions() {
+      return this.modes.map(option => ({ value: option.value, label: option.label, dataTest: `scenes-mode-${option.value}` }));
+    },
     canSearch() {
       const query = this.query.trim();
       return query.length > 0 && query.length <= SCENE_QUERY_MAX_LENGTH;
@@ -545,12 +539,6 @@ export default {
 .scenes-search__input { flex: 1 1 320px; min-width: 0; }
 /* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
    SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
-.scenes-modes { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
-.scenes-mode { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
-.scenes-mode:hover:not(:disabled) { color: var(--text-primary); }
-.scenes-mode:disabled { opacity: 0.45; cursor: not-allowed; }
-.scenes-mode--on { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
-.scenes-mode:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 .scenes-scope { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--fs-secondary); margin-bottom: 10px; }
 .scenes-coverage { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); font-size: var(--fs-secondary); color: var(--text-secondary); }
 .scenes-coverage__provider { font-size: var(--fs-caption); }

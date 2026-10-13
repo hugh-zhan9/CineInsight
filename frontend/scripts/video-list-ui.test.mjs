@@ -28,8 +28,9 @@ assert.match(appSource, /class="app-shell glass-app-shell"/, 'app shell should u
 // 菜单分四组。下面钉的是新结构，以及"收进去之后一个都不能少"。
 assert.match(toolbarSource, /class="toolbar-row"/, 'toolbar should have a query row of always-on controls');
 assert.match(toolbarSource, /class="toolbar-row toolbar-row--tags"/, 'tag filtering and selection should live on their own row');
-// 统一设计（D-UD-06）：布局与行高用统一的 SegmentedControl；搜索模式带基线 data-test，暂留同外观的本地分段器。
-assert.match(toolbarSource, /class="segmented" role="group" aria-label="搜索模式"/, 'search mode should stay a segmented control');
+// 统一设计（D-UD-06）：搜索模式、布局与行高都用统一的 SegmentedControl；搜索模式逐项带基线钩子 search-mode-*。
+assert.match(toolbarSource, /<SegmentedControl[^>]*?label="搜索模式"[^>]*?:options="searchModeSegments"/s, 'search mode should use the shared SegmentedControl');
+assert.match(toolbarSource, /dataTest: `search-mode-\$\{mode\.value\}`/, 'each search mode keeps its search-mode-* hook');
 assert.match(toolbarSource, /<SegmentedControl\s+label="片库布局"/, 'layout should use the shared SegmentedControl');
 assert.match(toolbarSource, /<SegmentedControl[\s\S]*?label="行高"/, 'row density should use the shared SegmentedControl');
 assert.match(toolbarSource, /class="split-btn"/, 'random play should be one split button, not a select plus two buttons');

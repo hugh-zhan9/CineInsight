@@ -90,7 +90,9 @@ describe('VideoDetailPage data', () => {
     expect(api.GetPreviewSession).not.toHaveBeenCalled();
 
     expect(wrapper.get('[data-test="detail-title"]').text()).toBe('影片5');
+    expect(wrapper.get('[data-test="detail-title"]').element.tagName).toBe('H2');
     expect(wrapper.get('[data-test="detail-original-title"]').text()).toBe('Original Title');
+    expect(wrapper.get('.ui-hero-header [data-test="detail-actions"]').exists()).toBe(true);
     expect(['year', 'duration', 'resolution', 'versions', 'rating'].map(key => wrapper.get(`[data-test="detail-fact-${key}"]`).text()))
       .toEqual(['2001 年', '10:00', '1920×1080', '2 个版本', '评分 7.5']);
     expect(wrapper.get('[data-test="detail-tag-3"]').text()).toBe('科幻');

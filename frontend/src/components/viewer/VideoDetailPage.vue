@@ -52,9 +52,8 @@
             <img v-if="!posterFailed" :src="posterURL" alt="" data-test="detail-poster" @error="posterFailed = true" />
             <RecapIcon v-else name="plays" />
           </span>
-          <div class="recap-hero__body viewer-detail__body">
-            <h2 class="recap-hero__title" data-test="detail-title">{{ title }}</h2>
-            <p v-if="originalTitle" class="recap-hero__meta" data-test="detail-original-title">{{ originalTitle }}</p>
+          <!-- 大图区的文字层（D-UD-06 HeroHeader）：标题沿用 h2，原名写在 meta 行。 -->
+          <HeroHeader class="recap-hero__body viewer-detail__body" :title="title" :meta="originalTitle" :heading-level="2" title-data-test="detail-title" meta-data-test="detail-original-title">
             <p v-if="facts.length" class="recap-hero__meta viewer-detail__facts">
               <span v-for="fact in facts" :key="fact.key" :data-test="`detail-fact-${fact.key}`">{{ fact.text }}</span>
             </p>
@@ -86,7 +85,7 @@
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-edit" @click="$emit('edit-in-manage', Number(video.id))">编辑资料</button>
             </div>
             <p v-if="actionError" class="viewer-detail__error" role="alert" data-test="detail-action-error">{{ actionError }}</p>
-          </div>
+          </HeroHeader>
         </div>
       </RecapBackdrop>
       <section v-if="description" class="recap-section" data-test="detail-description">
@@ -97,7 +96,7 @@
       <section v-if="people.length" class="recap-section" data-test="detail-people">
         <header class="recap-section__head"><h3><RecapIcon name="person" /> 演职人员</h3><small>{{ people.length }} 人</small></header>
         <div class="recap-people">
-          <button v-for="item in people" :key="item.person.id" type="button" class="recap-person" :data-test="`detail-person-${item.person.id}`" @click="openEntity('person', item.person.id, item.person.display_name)">
+          <button v-for="item in people" :key="item.person.id" type="button" class="btn-plain recap-person" :data-test="`detail-person-${item.person.id}`" @click="openEntity('person', item.person.id, item.person.display_name)">
             <span class="recap-person__avatar"><img v-if="item.avatar_url" :src="item.avatar_url" alt="" loading="lazy" /><b v-else>{{ initial(item.person.display_name) }}</b></span>
             <strong>{{ item.person.display_name }}</strong><small>{{ item.active_video_count }} 部</small>
           </button>
@@ -202,6 +201,7 @@ import RecapIcon from '../recap/RecapIcon.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import AppBanner from '../ui/AppBanner.vue';
 import AppIcon from '../ui/AppIcon.vue';
+import HeroHeader from '../ui/HeroHeader.vue';
 import StatTile from '../ui/StatTile.vue';
 import TagPill from '../ui/TagPill.vue';
 import RatingStars from './RatingStars.vue';
@@ -231,8 +231,8 @@ function errorText(err) {
 export default {
   name: 'VideoDetailPage',
   components: {
-    AppBanner, AppIcon, BookmarkPanel, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon, RecapMediaCard,
-    StatTile, TagPill
+    AppBanner, AppIcon, BookmarkPanel, HeroHeader, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon,
+    RecapMediaCard, StatTile, TagPill
   },
   props: {
     // 要展示的视频 ID 与可选的起播位置（毫秒，场景检索进来时有）。

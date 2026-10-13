@@ -8,13 +8,6 @@
     "dialogs": {},
     "page-header": {},
     "wording": {},
-    "buttons": {
-      "components/AITagReviewDialog.vue": 3,
-      "components/DataCarePage.vue": 1,
-      "components/FaceClusterReviewPanel.vue": 3,
-      "components/ImageAITagReviewPanel.vue": 2,
-      "components/InsightsPage.vue": 2,
-      "components/data-care/LostMediaPanel.vue": 1
-    }
+    "buttons": {}
   }
 }

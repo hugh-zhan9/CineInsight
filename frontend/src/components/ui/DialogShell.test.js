@@ -56,6 +56,42 @@ describe('DialogShell', () => {
     expect(wrapper.emitted('close')).toHaveLength(1);
   });
 
+  it('busy: a refused Esc or overlay click emits close-blocked; a form dialog\'s overlay click is not a close request', async () => {
+    const wrapper = mountDialog({ props: { busy: true } });
+    pressEscape();
+    await wrapper.get('.modal-overlay').trigger('click');
+    expect(wrapper.emitted('close-blocked')).toHaveLength(2);
+    expect(wrapper.emitted('close')).toBeUndefined();
+    await wrapper.setProps({ busy: false });
+    pressEscape();
+    expect(wrapper.emitted('close-blocked')).toHaveLength(2);
+    expect(wrapper.emitted('close')).toHaveLength(1);
+
+    const form = mountDialog({ props: { busy: true }, slots: { default: '<input type="text" class="text-input">' } });
+    await form.get('.modal-overlay').trigger('click');
+    expect(form.emitted('close-blocked')).toBeUndefined();
+    pressEscape();
+    expect(form.emitted('close-blocked')).toHaveLength(1);
+  });
+
+  it('close-data-test replaces the × hook', async () => {
+    const wrapper = mountDialog({ props: { closeDataTest: 'cleanup-close' } });
+    expect(wrapper.find('[data-test="dialog-shell-close"]').exists()).toBe(false);
+    const close = wrapper.get('[data-test="cleanup-close"]');
+    expect(close.attributes('aria-label')).toBe('关闭');
+    await close.trigger('click');
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('size="full" fills the window: full-size dialog class and an overlay without padding class', () => {
+    expect(DialogShell.props.size.validator('full')).toBe(true);
+    const full = mountDialog({ props: { size: 'full' } });
+    expect(full.get('[role="dialog"]').classes()).toEqual(expect.arrayContaining(['ui-dialog', 'ui-dialog--full']));
+    expect(full.get('.modal-overlay').classes()).toContain('ui-dialog-overlay--full');
+    const normal = mountDialog({ props: { size: 'xl' } });
+    expect(normal.get('.modal-overlay').classes()).not.toContain('ui-dialog-overlay--full');
+  });
+
   it('by default the overlay closes a dialog without form controls but not one with a form', async () => {
     const plain = mountDialog();
     await plain.get('.ui-dialog').trigger('click');

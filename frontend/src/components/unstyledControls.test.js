@@ -9,8 +9,6 @@ import { loadPendingLists, ratchetFailures } from '../../scripts/design-system-r
 // 原生外观。2026-10-11 观看笔记、待播队列、今晚看什么等新页面就是这样“样式丢失”的。
 const SRC = join(process.cwd(), 'src');
 const EXEMPT_INPUT_TYPES = /type="(checkbox|radio|range|file|hidden|color)"/;
-// 由全局后代选择器（components.css 的 `.setting-item input`）统一着样式的控件。
-const ALLOWED = new Set(['components/settings/JellyfinSection.vue:input']);
 
 function listVueFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -42,19 +40,20 @@ describe('form controls use the shared style primitives', () => {
     const offenders = [];
     for (const path of listVueFiles(SRC)) {
       const file = relative(SRC, path);
-      const controls = unstyledControls(path).filter(item => !ALLOWED.has(`${file}:${item.split('@')[0]}`));
+      const controls = unstyledControls(path);
       if (controls.length) offenders.push(`${file}: ${controls.join(' ')}`);
     }
     expect(offenders).toEqual([]);
   });
 });
 
-// 统一设计守卫（D-UD-15，详细设计 §5 末段）：按钮必须带 .btn / .btn-link / .btn-icon 之一，或是 components/ui 组件内部
-// 已登记的例外（下面 INTERNAL_BUTTONS，按「文件:类名」登记）。旧按钮类（btn-primary、row-btn、toolbar-btn…）
+// 统一设计守卫（D-UD-15，详细设计 §5 末段）：按钮必须带 .btn / .btn-link / .btn-icon 之一，整张卡片、海报、头像这类
+// 可点区域带 .btn-plain（components.css：只清掉浏览器按钮外观、给焦点环，外形由组件自己的类决定），
+// 或是 components/ui 组件内部已登记的例外（下面 INTERNAL_BUTTONS，按「文件:类名」登记）。旧按钮类（btn-primary、row-btn、toolbar-btn…）
 // 换装前暂由 scripts/design-system-pending/*.json 的 buttons 清单放行。清单按文件记「还剩几个不合规按钮」，
 // 是棘轮（与 design-system.test.mjs 共用 scripts/design-system-ratchet.mjs）：不在清单里的文件出现不合规按钮、
 // 或个数比清单多都会失败；个数比清单少会失败并提示把数字改小，清零了提示把这一项删掉。手机端 short-feed/ 不查。
-const BUTTON_CLASSES = new Set(['btn', 'btn-link', 'btn-icon']);
+const BUTTON_CLASSES = new Set(['btn', 'btn-link', 'btn-icon', 'btn-plain']);
 const INTERNAL_BUTTONS = new Set([
   'components/ui/AppTabs.vue:ui-tabs__tab',
   'components/ui/SegmentedControl.vue:ui-segmented__option',

@@ -98,6 +98,29 @@ describe('AppTabs', () => {
     wrapper.unmount();
   });
 
+  it('each tab carries its own dataTest as data-test; tabs without one get none', () => {
+    const wrapper = mountTabs({
+      tabs: [{ key: 'video', label: '视频', dataTest: 'trash-tab-video' }, { key: 'image', label: '图片', dataTest: 'trash-tab-image' }, { key: 'hidden', label: '扫描隐藏' }],
+      modelValue: 'video'
+    });
+    const tabs = wrapper.findAll('[role="tab"]');
+    expect(tabs.map(tab => tab.attributes('data-test'))).toEqual(['trash-tab-video', 'trash-tab-image', undefined]);
+    expect(wrapper.attributes('data-test')).toBe('care-tabs');
+    wrapper.unmount();
+  });
+
+  it('a string count is shown as given (no 99+ cap), an empty string shows no count', () => {
+    const wrapper = mountTabs({
+      tabs: [{ key: 'pending', label: '待处理', count: '21+' }, { key: 'tags', label: 'AI 标签待审', count: '137' }, { key: 'named', label: '已命名', count: '' }],
+      modelValue: 'pending'
+    });
+    const tabs = wrapper.findAll('[role="tab"]');
+    expect(tabs[0].get('.ui-tabs__count').text()).toBe('21+');
+    expect(tabs[1].get('.ui-tabs__count').text()).toBe('137');
+    expect(tabs[2].find('.ui-tabs__count').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('idPrefix wires each tab to its panel', () => {
     const wrapper = mountTabs({ idPrefix: 'care' });
     const first = wrapper.findAll('[role="tab"]')[0];

@@ -383,7 +383,10 @@ describe('最近操作（D-UD-09）', () => {
 
   it('没有记录时给空状态，并写明只在内存里、重启后清空', async () => {
     const wrapper = await openRecent();
-    expect(wrapper.get('[data-test="task-center-tab-recent"]').attributes('aria-pressed')).toBe('true');
+    // 分区是 AppTabs（D-UD-06）：当前页签 aria-selected；没有记录时不带条数徽标。
+    expect(wrapper.get('[data-test="task-center-tab-recent"]').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('[data-test="task-center-tab-tasks"]').attributes('aria-selected')).toBe('false');
+    expect(wrapper.find('[data-test="task-center-tab-recent"] .ui-tabs__count').exists()).toBe(false);
     expect(wrapper.find('[data-test="task-center-operations-empty"]').exists()).toBe(true);
     expect(wrapper.get('[data-test="task-center-operations-note"]').text()).toContain('应用重启后清空');
     expect(wrapper.get('[data-test="task-center-operations-note"]').text()).toContain('最近 20 次');
@@ -404,7 +407,7 @@ describe('最近操作（D-UD-09）', () => {
     expect(rows[0].text()).toContain('刚刚');
     expect(rows[1].text()).toContain('5 分钟前');
     expect(rows[0].get(`[data-test="task-operation-undo-${newer}"]`).text()).toBe('撤销');
-    expect(wrapper.get('[data-test="task-center-tab-recent"]').text()).toContain('2');
+    expect(wrapper.get('[data-test="task-center-tab-recent"] .ui-tabs__count').text()).toBe('2');
 
     // 开着时相对时间会走：再过一分钟，「刚刚」变成「1 分钟前」。
     vi.advanceTimersByTime(60000);

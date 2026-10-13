@@ -129,6 +129,19 @@ describe('SelectionBar', () => {
     expect(link.attributes('disabled')).toBeDefined();
   });
 
+  it('the two built-in links take the host hooks through select-all-data-test / clear-data-test', async () => {
+    const wrapper = mountBar({ count: 1, totalMatching: 5, selectAllDataTest: 'photo-select-all', clearDataTest: 'photo-clear-selection' });
+    expect(wrapper.find('[data-test="selection-bar-select-all-matching"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="selection-bar-clear"]').exists()).toBe(false);
+    const selectAll = wrapper.get('[data-test="photo-select-all"]');
+    expect(selectAll.text()).toBe('全选当前结果（5）');
+    await selectAll.trigger('click');
+    await wrapper.get('[data-test="photo-clear-selection"]').trigger('click');
+    expect(wrapper.emitted('select-all-matching')).toHaveLength(1);
+    expect(wrapper.emitted('clear')).toHaveLength(1);
+    expect(wrapper.get('[data-test="selection-bar-count"]').text()).toBe('已选 1 项');
+  });
+
   it('selectAllMatchingLabel is the one wording for the bar and the library toolbar', () => {
     expect(selectAllMatchingLabel(20)).toBe('全选当前结果（20）');
     expect(selectAllMatchingLabel(null)).toBe('全选当前结果');

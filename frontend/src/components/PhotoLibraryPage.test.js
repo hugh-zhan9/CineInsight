@@ -482,6 +482,22 @@ describe('PhotoLibraryPage folder display', () => {
     await flushPromises();
     expect(api.ListImageFolderGroups).toHaveBeenCalledTimes(3);
     expect(wrapper.find('[data-test="photo-folder-grid"]').exists()).toBe(true);
+
+    // 展示模式是分段控件：文件夹里再点一次（已选中的）「按文件夹」也回到文件夹列表，在列表里再点什么也不做。
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(7, { directory: '/photos' })]));
+    await wrapper.findAll('.photo-folder-card__open')[0].trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.activeFolder).not.toBeNull();
+    expect(wrapper.get('[data-test="photo-display-folders"]').attributes('aria-checked')).toBe('true');
+    const groupsBefore = api.ListImageFolderGroups.mock.calls.length;
+    await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.activeFolder).toBeNull();
+    expect(wrapper.find('[data-test="photo-folder-grid"]').exists()).toBe(true);
+    expect(api.ListImageFolderGroups.mock.calls.length).toBe(groupsBefore + 1);
+    await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    expect(api.ListImageFolderGroups.mock.calls.length).toBe(groupsBefore + 1);
   });
 });
 
@@ -2039,16 +2055,26 @@ describe('PhotoLibraryPage 工具栏收纳', () => {
     wrapper.unmount();
   });
 
-  it('选中态把选择工具条变成批量栏', async () => {
-    // 工具条只在有已加载图片时渲染。
+  it('D-UD-10 有勾选才出底部选择操作条；没勾选时工具栏上一键「全选当前结果（N）」，N 是已显示的张数', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.images = [{ id: 1, name: 'a.jpg', tags: [] }];
+    wrapper.vm.images = [{ id: 1, name: 'a.jpg', tags: [] }, { id: 2, name: 'b.jpg', tags: [] }];
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('[data-test="photo-selection-tools"]').exists()).toBe(true);
-    expect(wrapper.find('.photo-selection-tools--active').exists()).toBe(false);
+    expect(wrapper.find('[data-test="photo-selection-tools"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="photo-select-all"]')).toHaveLength(1);
+    expect(wrapper.get('[data-test="photo-select-all"]').text()).toBe('全选当前结果（2）');
+
     wrapper.vm.selectedImageIDs = [1];
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('.photo-selection-tools--active').exists()).toBe(true);
+    const bar = wrapper.get('[data-test="photo-selection-tools"]');
+    expect(bar.attributes('role')).toBe('toolbar');
+    expect(bar.get('[data-test="selection-bar-count"]').text()).toBe('已选 1 项');
+    // 工具栏上的按钮让位给操作条里的同一个钩子：只选已显示的，不往下加载。
+    expect(wrapper.findAll('[data-test="photo-select-all"]')).toHaveLength(1);
+    await bar.get('[data-test="photo-select-all"]').trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([1, 2]);
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+    expect(bar.get('[data-test="selection-bar-count"]').text()).toBe('已选当前结果全部 2 项');
+    expect(wrapper.find('[data-test="photo-select-all"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });
@@ -2394,7 +2420,7 @@ describe('PhotoLibraryPage 缩略图墙', () => {
     if (stored !== null) store['cineinsight-photo-display-mode'] = stored;
     const wrapper = await mountPage();
     expect(wrapper.vm.displayMode).toBe(expected);
-    expect(wrapper.get(`[data-test="photo-display-${expected}"]`).classes()).toContain('active');
+    expect(wrapper.get(`[data-test="photo-display-${expected}"]`).attributes('aria-checked')).toBe('true');
     wrapper.unmount();
   });
 
@@ -2407,7 +2433,7 @@ describe('PhotoLibraryPage 缩略图墙', () => {
     await flushPromises();
     expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
     expect(store['cineinsight-photo-display-mode']).toBe('wall');
-    expect(wrapper.get('[data-test="photo-display-wall"]').classes()).toContain('active');
+    expect(wrapper.get('[data-test="photo-display-wall"]').attributes('aria-checked')).toBe('true');
     expect(wrapper.get('[data-test="photo-grid"]').classes()).toContain('photo-grid--wall');
     expect(wrapper.findAll('.photo-card')).toHaveLength(3);
     expect(wrapper.find('.photo-card__meta').exists()).toBe(false);
@@ -2627,6 +2653,23 @@ describe('PhotoLibraryPage 统一设计（D-UD-06 / D-UD-08 / D-UD-13 / D-UD-14�
     wrapper.unmount();
   });
 
+  it('D-UD-10 选择操作条：Esc 清空勾选；查看器开着时 Esc 只关查看器', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = mount(PhotoLibraryPage, { props: { settings: baseSettings(), tags: [] }, attachTo: document.body });
+    await flushPromises();
+    await wrapper.get('[data-test="photo-select-1"]').setValue(true);
+    wrapper.vm.openViewer(1); await flushPromises();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.viewerIndex).toBe(-1);
+    expect(wrapper.vm.selectedImageIDs).toEqual([1]);
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.selectedImageIDs).toEqual([]);
+    expect(wrapper.find('[data-test="photo-selection-tools"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('没选中时不出批量动作；「取消选择」清空选择', async () => {
     api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
     const wrapper = await mountPage();
@@ -2634,7 +2677,7 @@ describe('PhotoLibraryPage 统一设计（D-UD-06 / D-UD-08 / D-UD-13 / D-UD-14�
       expect(wrapper.find(`[data-test="${hook}"]`).exists()).toBe(false);
     }
     await wrapper.get('[data-test="photo-select-2"]').setValue(true);
-    expect(wrapper.get('[data-test="photo-clear-selection"]').text()).toBe('取消选择');
+    expect(wrapper.get('[data-test="photo-clear-selection"]').text()).toBe('取消选择Esc');
     await wrapper.get('[data-test="photo-clear-selection"]').trigger('click');
     expect(wrapper.vm.selectedImageIDs).toEqual([]);
     expect(wrapper.find('[data-test="photo-batch-delete"]').exists()).toBe(false);

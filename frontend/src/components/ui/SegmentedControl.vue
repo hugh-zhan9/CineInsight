@@ -11,6 +11,7 @@
       :title="option.title || undefined"
       :tabindex="index === focusIndex ? 0 : -1"
       :disabled="option.disabled || undefined"
+      :data-test="option.dataTest || undefined"
       @click="select(option)"
     >
       <AppIcon v-if="option.icon" :name="option.icon" :size="16" />
@@ -25,8 +26,8 @@ import AppIcon from './AppIcon.vue';
 // 分段（D-UD-06）：同一内容的不同看法（视图切换、排序方向），单选。role=radiogroup，
 // 只有选中项在 Tab 序列里（选中项不可用或没有选中项时，换成第一个可用项）；← ↑ / → ↓ 从当前有焦点的选项
 // 选上一个 / 下一个可用项（首尾循环、跳过 disabled），Home / End 跳到两端，焦点跟着走，选中即生效。
-// 选项 { value, label?, icon?, ariaLabel?, title?, disabled? }：只有图标、没有 label 时用 ariaLabel（或 title）
-// 作读屏名，两者都没有在开发环境里告警。页内一级分区用 AppTabs，不用它。
+// 选项 { value, label?, icon?, ariaLabel?, title?, disabled?, dataTest? }：只有图标、没有 label 时用 ariaLabel（或 title）
+// 作读屏名，两者都没有在开发环境里告警；dataTest 落在这个选项按钮上（data-test，宿主保留测试钩子用）。页内一级分区用 AppTabs，不用它。
 export default {
   name: 'SegmentedControl',
   components: { AppIcon },

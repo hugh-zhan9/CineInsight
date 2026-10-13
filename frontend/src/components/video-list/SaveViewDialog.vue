@@ -1,12 +1,15 @@
 <template>
   <DialogShell v-if="saveViewDialog.show" :title="dialogTitle" size="sm" :busy="saveViewDialog.saving" class="save-view-dialog" @close="saveViewDialog.show = false">
       <!-- 三种用法（D-PC35、LIB-15）：另存为新视图、用当前条件覆盖已有视图、只改名字。
-           分段暂用旧样式：SegmentedControl 还不能给每个选项带 data-test（save-view-mode-*），见统一设计待迁移清单。 -->
-      <div v-if="savedViews.length > 0" class="merge-type-switch save-view-modes" role="group" aria-label="保存方式">
-        <button type="button" :class="{ active: saveViewDialog.mode === 'create' }" data-test="save-view-mode-create" @click="switchMode('create')">另存为新视图</button>
-        <button type="button" :class="{ active: saveViewDialog.mode === 'update' }" data-test="save-view-mode-update" @click="switchMode('update')">用当前条件更新</button>
-        <button type="button" :class="{ active: saveViewDialog.mode === 'rename' }" data-test="save-view-mode-rename" @click="switchMode('rename')">重命名</button>
-      </div>
+           D-UD-06 SegmentedControl，每个选项带 save-view-mode-* 钩子。 -->
+      <SegmentedControl
+        v-if="savedViews.length > 0"
+        class="save-view-modes"
+        label="保存方式"
+        :options="modeOptions"
+        :model-value="saveViewDialog.mode"
+        @update:model-value="switchMode"
+      />
       <select
         v-if="saveViewDialog.mode !== 'create'"
         v-model.number="saveViewDialog.viewID"
@@ -41,6 +44,7 @@
 <script>
 import { SaveLibraryView, UpdateSavedLibraryView } from '../../../wailsjs/go/main/App';
 import DialogShell from '../ui/DialogShell.vue';
+import SegmentedControl from '../ui/SegmentedControl.vue';
 
 // 保存视图里的 tag_ids_json / person_ids_json 是 JSON 数组；读不出来按空处理，不让一条坏记录拖垮菜单。
 export function parseSavedViewIDs(json) {
@@ -87,7 +91,7 @@ function saveViewErrorText(err) {
 // 这里通过两个函数 prop 拿到它们，保存流程本身的先后顺序不变。
 export default {
   name: 'SaveViewDialog',
-  components: { DialogShell },
+  components: { DialogShell, SegmentedControl },
   props: {
     currentLibraryFilter: { type: Function, required: true },
     afterSaved: { type: Function, required: true },
@@ -97,7 +101,12 @@ export default {
   },
   data() {
     return {
-      saveViewDialog: { show: false, mode: 'create', viewID: 0, name: '', saving: false, error: '' }
+      saveViewDialog: { show: false, mode: 'create', viewID: 0, name: '', saving: false, error: '' },
+      modeOptions: [
+        { value: 'create', label: '另存为新视图', dataTest: 'save-view-mode-create' },
+        { value: 'update', label: '用当前条件更新', dataTest: 'save-view-mode-update' },
+        { value: 'rename', label: '重命名', dataTest: 'save-view-mode-rename' }
+      ]
     };
   },
   computed: {
@@ -176,9 +185,10 @@ export default {
 
 <style scoped>
 .save-view-modes {
+  display: flex;
   margin-bottom: var(--space-3);
-  grid-template-columns: repeat(3, 1fr);
 }
+.save-view-modes :deep(.ui-segmented__option) { flex: 1; }
 .save-view-target {
   width: 100%;
   margin-bottom: var(--space-2);

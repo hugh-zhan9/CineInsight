@@ -16,7 +16,7 @@
           type="button"
           role="menuitem"
           :ref="el => registerItem(el, index)"
-          :class="['base-menu__item', { 'base-menu__item--danger': item.danger, 'base-menu__item--active': index === activeIndex }]"
+          :class="['btn-plain', 'base-menu__item', { 'base-menu__item--danger': item.danger, 'base-menu__item--active': index === activeIndex }]"
           :disabled="item.disabled"
           :data-menu-id="item.id"
           @click="select(item)"
@@ -120,8 +120,8 @@ export default {
 .base-menu__heading {
   padding: 9px 10px 4px;
   color: var(--text-muted);
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-bold);
   letter-spacing: 0.08em;
 }
 
@@ -141,11 +141,14 @@ export default {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
   text-align: left;
   cursor: pointer;
   outline: none;
 }
+
+/* 键盘移到哪一项就高亮哪一项（--active 底色），不再叠 .btn-plain 的焦点环。 */
+.base-menu .base-menu__item:focus-visible { outline: none; }
 
 .base-menu__item--active:not(:disabled) {
   background: var(--accent-soft);
@@ -165,7 +168,7 @@ export default {
   width: 12px;
   flex: none;
   color: var(--accent-text);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .base-menu__label {
@@ -176,6 +179,6 @@ export default {
 .base-menu__shortcut {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 </style>

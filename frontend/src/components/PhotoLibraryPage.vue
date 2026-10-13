@@ -11,51 +11,23 @@
 
     <section class="photo-toolbar glass-surface">
       <div class="photo-toolbar__controls">
-        <!-- 两组模式切换暂留页内写法：SegmentedControl 还不能给每个选项挂 data-test，而这几个钩子在基线里。 -->
-        <div class="photo-search-mode" role="group" aria-label="搜索模式">
-          <button
-            type="button"
-            :class="['photo-search-mode__btn', { active: searchMode === 'name' }]"
-            :aria-pressed="searchMode === 'name' ? 'true' : 'false'"
-            data-test="photo-mode-name"
-            @click="setSearchMode('name')"
-          >文件名</button>
-          <button
-            type="button"
-            :class="['photo-search-mode__btn', { active: searchMode === 'semantic' }]"
-            :aria-pressed="searchMode === 'semantic' ? 'true' : 'false'"
-            :disabled="!semanticAvailable"
-            :title="semanticAvailable ? '语义搜索：按文件名与标签匹配' : semanticNotice"
-            data-test="photo-mode-semantic"
-            @click="setSearchMode('semantic')"
-          >语义</button>
-        </div>
-        <div class="photo-view-mode" role="group" aria-label="图片展示模式">
-          <button
-            type="button"
-            :class="['photo-view-mode__btn', { active: displayMode === 'stream' }]"
-            :aria-pressed="displayMode === 'stream' ? 'true' : 'false'"
-            data-test="photo-display-stream"
-            @click="setDisplayMode('stream')"
-          >图片流</button>
-          <button
-            type="button"
-            :class="['photo-view-mode__btn', { active: displayMode === 'wall' }]"
-            :aria-pressed="displayMode === 'wall' ? 'true' : 'false'"
-            title="同一份图片流，只显示缩略图的紧凑平铺；点图查看、勾选照旧"
-            data-test="photo-display-wall"
-            @click="setDisplayMode('wall')"
-          >缩略图墙</button>
-          <button
-            type="button"
-            :class="['photo-view-mode__btn', { active: displayMode === 'folders' }]"
-            :aria-pressed="displayMode === 'folders' ? 'true' : 'false'"
-            :disabled="searchMode === 'semantic'"
-            :title="searchMode === 'semantic' ? '语义搜索结果按相关度展示，暂不按文件夹汇总' : '每个直属文件夹作为一个独立图集，不递归包含子文件夹'"
-            data-test="photo-display-folders"
-            @click="setDisplayMode('folders')"
-          >按文件夹</button>
-        </div>
+        <!-- 搜索模式与展示模式（D-UD-06 SegmentedControl），每个选项带 photo-mode-* / photo-display-* 钩子。
+             文件夹里再点一次「按文件夹」回到文件夹列表：分段控件点当前项不发事件，靠冒上来的 click 接住。 -->
+        <SegmentedControl
+          class="photo-search-mode"
+          label="搜索模式"
+          :options="searchModeOptions"
+          :model-value="searchMode"
+          @update:model-value="setSearchMode"
+        />
+        <SegmentedControl
+          class="photo-view-mode"
+          label="图片展示模式"
+          :options="displayModeOptions"
+          :model-value="displayMode"
+          @update:model-value="setDisplayMode"
+          @click="reselectFolders"
+        />
         <input
           v-model="filters.keyword"
           class="search-input photo-toolbar__keyword"
@@ -112,52 +84,14 @@
           <AppBadge v-if="photoAttentionCount > 0" tone="accent" :count="photoAttentionCount" />
           <AppIcon class="photo-toolbar__caret" name="chevron-down" :size="16" />
         </button>
-        <!-- 批量动作只在有勾选时出现，不选不等于全选（D-UD-10）。整条换成 SelectionBar 还差两件事，见 B2 交接：
-             SelectionBar 不能挂基线钩子 photo-select-all / photo-clear-selection；图片搜索没有总数，给不出「全选当前结果（N）」。 -->
-        <div v-if="images.length" :class="['photo-selection-tools', { 'photo-selection-tools--active': selectedImageIDs.length > 0 }]" data-test="photo-selection-tools">
-          <span class="photo-selection-tools__count">已选 {{ selectedImageIDs.length }} 张</span>
-          <button type="button" class="btn btn--secondary btn--sm" data-test="photo-select-all" @click="toggleSelectAll">
-            {{ allLoadedSelected ? '取消全选' : '全选已加载' }}
-          </button>
-          <button v-if="selectedImageIDs.length" type="button" class="btn btn--ghost btn--sm" data-test="photo-clear-selection" @click="clearSelection">取消选择</button>
-          <span v-if="selectedImageIDs.length" class="photo-selection-tools__spacer"></span>
-          <button v-if="selectedImageIDs.length" type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-tag-open" @click="openBatchTagPicker">批量添加标签</button>
-          <div v-if="selectedImageIDs.length" class="photo-tag-combobox photo-batch-tag-search">
-            <input
-              ref="batchTagInput"
-              :disabled="batchBusy"
-              v-model="batchTagKeyword"
-              type="search"
-              class="search-input"
-              placeholder="搜索标签，回车添加"
-              role="combobox"
-              autocomplete="off"
-              aria-controls="photo-batch-tag-options"
-              :aria-expanded="batchTagMenuOpen"
-              :aria-activedescendant="batchTagMenuOpen && filteredBatchTags[batchTagActiveIndex] ? `photo-batch-tag-option-${filteredBatchTags[batchTagActiveIndex].id}` : undefined"
-              data-test="photo-batch-tag-search"
-              @focus="openBatchTagMenu"
-              @input="handleBatchTagInput"
-              @keydown="handleBatchTagKeydown"
-              @blur="closeBatchTagMenu"
-            />
-            <div v-if="batchTagMenuOpen" id="photo-batch-tag-options" class="photo-tag-options" role="listbox" data-test="photo-batch-tag-options">
-              <div
-                v-for="(tag, index) in filteredBatchTags"
-                :id="`photo-batch-tag-option-${tag.id}`"
-                :key="tag.id"
-                role="option"
-                :aria-selected="index === batchTagActiveIndex"
-                :class="['photo-tag-option', { active: index === batchTagActiveIndex }]"
-                @mouseenter="batchTagActiveIndex = index"
-                @mousedown.prevent="batchAddTag(tag)"
-              >{{ tag.name }}</div>
-              <span v-if="filteredBatchTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
-            </div>
-          </div>
-          <button v-if="selectedImageIDs.length" type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-metadata-edit" @click="openMetadataBatchEdit">批量编辑…</button>
-          <button v-if="selectedImageIDs.length" type="button" class="btn btn--danger btn--sm" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">{{ deleteActionLabel }}</button>
-        </div>
+        <!-- 没有勾选时在这里一键全选（与片库工具栏同一句文案）；有勾选之后全选与批量动作都在底部的选择操作条里。 -->
+        <button
+          v-if="images.length && !selectedImageIDs.length"
+          type="button"
+          class="btn btn--secondary"
+          data-test="photo-select-all"
+          @click="selectAllDisplayed"
+        >{{ selectAllDisplayedLabel }}</button>
       </div>
       <BasePopover
         v-if="photoMenu === 'filter'"
@@ -536,6 +470,59 @@
       {{ loading ? '加载中…' : '加载更多图片' }}
     </button>
 
+    <!-- 选择操作条（D-UD-10）：有勾选才浮在内容区底部，放在列表之后、吸底靠 position: sticky。图片搜索没有结果总数，
+         「全选当前结果（N）」只选已显示的 N 张、不往下加载；保留原有钩子 photo-select-all / photo-clear-selection。 -->
+    <SelectionBar
+      class="photo-selection-bar"
+      :count="selectedImageIDs.length"
+      :total-matching="images.length"
+      :all-matching-selected="allLoadedSelected"
+      select-all-data-test="photo-select-all"
+      clear-data-test="photo-clear-selection"
+      data-test="photo-selection-tools"
+      @select-all-matching="selectAllDisplayed"
+      @clear="clearSelection"
+    >
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-tag-open" @click="openBatchTagPicker">批量添加标签</button>
+        <div class="photo-tag-combobox photo-batch-tag-search">
+          <input
+            ref="batchTagInput"
+            :disabled="batchBusy"
+            v-model="batchTagKeyword"
+            type="search"
+            class="search-input"
+            placeholder="搜索标签，回车添加"
+            role="combobox"
+            autocomplete="off"
+            aria-controls="photo-batch-tag-options"
+            :aria-expanded="batchTagMenuOpen"
+            :aria-activedescendant="batchTagMenuOpen && filteredBatchTags[batchTagActiveIndex] ? `photo-batch-tag-option-${filteredBatchTags[batchTagActiveIndex].id}` : undefined"
+            data-test="photo-batch-tag-search"
+            @focus="openBatchTagMenu"
+            @input="handleBatchTagInput"
+            @keydown="handleBatchTagKeydown"
+            @blur="closeBatchTagMenu"
+          />
+          <div v-if="batchTagMenuOpen" id="photo-batch-tag-options" class="photo-tag-options" role="listbox" data-test="photo-batch-tag-options">
+            <div
+              v-for="(tag, index) in filteredBatchTags"
+              :id="`photo-batch-tag-option-${tag.id}`"
+              :key="tag.id"
+              role="option"
+              :aria-selected="index === batchTagActiveIndex"
+              :class="['photo-tag-option', { active: index === batchTagActiveIndex }]"
+              @mouseenter="batchTagActiveIndex = index"
+              @mousedown.prevent="batchAddTag(tag)"
+            >{{ tag.name }}</div>
+            <span v-if="filteredBatchTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
+          </div>
+        </div>
+        <button type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-metadata-edit" @click="openMetadataBatchEdit">批量编辑…</button>
+        <button type="button" class="btn btn--danger btn--sm" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">{{ deleteActionLabel }}</button>
+      </template>
+    </SelectionBar>
+
     <!-- 全屏查看器（D-UD-13）：关闭固定在右上角，← → 切换，Esc 退出，F 收藏。 -->
     <div v-if="viewerImage" class="photo-viewer" role="dialog" aria-modal="true" :aria-label="`查看 ${viewerImage.name}`" data-test="photo-viewer">
       <button type="button" class="btn-icon btn--secondary photo-viewer__close" aria-label="关闭" title="关闭 (Esc)" data-test="photo-viewer-close" @click="closeViewer"><AppIcon name="close" :size="20" /></button>
@@ -828,6 +815,8 @@ import DialogShell from './ui/DialogShell.vue';
 import EmptyState from './ui/EmptyState.vue';
 import FilterChip from './ui/FilterChip.vue';
 import PageHeader from './ui/PageHeader.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
+import SelectionBar, { selectAllMatchingLabel } from './ui/SelectionBar.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import WallpaperButton from './WallpaperButton.vue';
 import BaseMenu from './ui/BaseMenu.vue';
@@ -886,7 +875,8 @@ export default {
   name: 'PhotoLibraryPage',
   components: {
     AppBadge, AppBanner, AppIcon, BaseMenu, BasePopover, DialogShell, EmptyState, FilterChip, ImageAITagReviewPanel,
-    MetadataBatchEditDialog, PageHeader, PhotoCleanupPage, SkeletonBlock, TrashUndoBanner, WallpaperButton
+    MetadataBatchEditDialog, PageHeader, PhotoCleanupPage, SegmentedControl, SelectionBar, SkeletonBlock, TrashUndoBanner,
+    WallpaperButton
   },
   props: {
     settings: { type: Object, required: true },
@@ -1165,6 +1155,36 @@ export default {
     },
     allLoadedSelected() {
       return this.images.length > 0 && this.images.every(image => this.selectedImageIDs.includes(Number(image.id)));
+    },
+    // 「全选当前结果（N）」（D-UD-10 实施修订）：图片搜索没有结果总数，当前结果就是已显示的图片，N 是它们的张数，不往下加载。
+    selectAllDisplayedLabel() {
+      return selectAllMatchingLabel(this.images.length);
+    },
+    searchModeOptions() {
+      return [
+        { value: 'name', label: '文件名', dataTest: 'photo-mode-name' },
+        {
+          value: 'semantic',
+          label: '语义',
+          disabled: !this.semanticAvailable,
+          title: this.semanticAvailable ? '语义搜索：按文件名与标签匹配' : this.semanticNotice,
+          dataTest: 'photo-mode-semantic'
+        }
+      ];
+    },
+    displayModeOptions() {
+      const semantic = this.searchMode === 'semantic';
+      return [
+        { value: 'stream', label: '图片流', dataTest: 'photo-display-stream' },
+        { value: 'wall', label: '缩略图墙', title: '同一份图片流，只显示缩略图的紧凑平铺；点图查看、勾选照旧', dataTest: 'photo-display-wall' },
+        {
+          value: 'folders',
+          label: '按文件夹',
+          disabled: semantic,
+          title: semantic ? '语义搜索结果按相关度展示，暂不按文件夹汇总' : '每个直属文件夹作为一个独立图集，不递归包含子文件夹',
+          dataTest: 'photo-display-folders'
+        }
+      ];
     },
     hasActiveFilters() {
       return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0
@@ -2066,8 +2086,12 @@ export default {
         ? (this.selectedImageIDs.includes(id) ? this.selectedImageIDs : [...this.selectedImageIDs, id])
         : this.selectedImageIDs.filter(item => item !== id);
     },
-    toggleSelectAll() {
-      this.selectedImageIDs = this.allLoadedSelected ? [] : this.images.map(image => Number(image.id));
+    selectAllDisplayed() {
+      this.selectedImageIDs = this.images.map(image => Number(image.id));
+    },
+    // 文件夹里再点一次「按文件夹」：回到文件夹列表（分段控件点当前项不发 update，这里接冒上来的 click）。
+    reselectFolders(event) {
+      if (this.activeFolder && event?.target?.closest?.('[data-test="photo-display-folders"]')) this.setDisplayMode('folders');
     },
     clearSelection() {
       this.selectedImageIDs = [];
@@ -2738,14 +2762,10 @@ export default {
 .photo-toolbar__menu--on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
 .photo-toolbar__caret { color: var(--text-muted); }
 .photo-toolbar__menu--on .photo-toolbar__caret { color: var(--accent-text); }
-/* 选中态把这一条变成与视频库同构的批量栏：主色底、发丝线分隔。 */
-.photo-selection-tools { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding-top: var(--space-1); }
-.photo-selection-tools--active { flex-basis: calc(100% + 2 * var(--space-4)); margin: 0 calc(-1 * var(--space-4)); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--accent-border); border-bottom: 1px solid var(--accent-border); background: var(--accent-soft); }
-/* 批量栏是工具栏的最后一行时贴住底边（下面没有标签行）。 */
-.photo-toolbar__controls:last-child > .photo-selection-tools--active { margin-bottom: -10px; border-bottom: 0; border-radius: 0 0 var(--radius) var(--radius); }
-.photo-selection-tools__count { color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
-.photo-selection-tools--active .photo-selection-tools__count { color: var(--accent-text); font-weight: var(--fw-semibold); }
-.photo-selection-tools__spacer { flex: 1; }
+/* 底部选择操作条（SelectionBar）：页面是 flex 纵列、行距已由 gap 给出，不再要它自带的上边距。
+   批量加标签的候选列表在吸底的条上，向上展开，免得落到窗口外。 */
+.photo-library > .photo-selection-bar { margin-top: 0; }
+.photo-selection-bar .photo-tag-options { top: auto; bottom: calc(100% + var(--space-1)); }
 .photo-batch-tag-search { width: 210px; }
 .photo-tag-combobox { position: relative; min-width: 0; }
 .photo-tag-combobox > .search-input { width: 100%; }
@@ -2770,19 +2790,6 @@ export default {
 .photo-toolbar__people { display: grid; gap: 6px; }
 .photo-toolbar__people > span:first-child { color: var(--text-muted); font-size: var(--fs-caption); }
 .photo-person-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-/* 两组模式切换：外观与 SegmentedControl 一致（见模板里的说明）。 */
-.photo-search-mode,
-.photo-view-mode { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
-.photo-search-mode__btn,
-.photo-view-mode__btn { height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; cursor: pointer; }
-.photo-search-mode__btn:hover:not(:disabled),
-.photo-view-mode__btn:hover:not(:disabled) { color: var(--text-primary); }
-.photo-search-mode__btn.active,
-.photo-view-mode__btn.active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
-.photo-search-mode__btn:focus-visible,
-.photo-view-mode__btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
-.photo-search-mode__btn:disabled,
-.photo-view-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__semantic-notice { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 .photo-folder-loading { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 

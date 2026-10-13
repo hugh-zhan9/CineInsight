@@ -6,24 +6,8 @@
     "z-index": {},
     "vars": {},
     "dialogs": {},
-    "page-header": {
-      "components/viewer/HomePage.vue": 1
-    },
+    "page-header": {},
     "wording": {},
-    "buttons": {
-      "components/DiaryEditor.vue": 1,
-      "components/EntityLibraryPage.vue": 3,
-      "components/MovieChartPage.vue": 2,
-      "components/NotesThumb.vue": 1,
-      "components/QuoteCardDialog.vue": 1,
-      "components/RecapPage.vue": 7,
-      "components/ScenesPage.vue": 2,
-      "components/ViewingNotesPage.vue": 1,
-      "components/recap/RecapLiveFeed.vue": 1,
-      "components/recap/RecapMediaCard.vue": 1,
-      "components/recap/RecapMonthStrip.vue": 1,
-      "components/viewer/HomePage.vue": 1,
-      "components/viewer/VideoDetailPage.vue": 1
-    }
+    "buttons": {}
   }
 }

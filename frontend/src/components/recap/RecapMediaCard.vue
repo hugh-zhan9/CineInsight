@@ -1,7 +1,7 @@
 <template>
   <button
     type="button"
-    :class="['recap-card', `recap-card--${kind}`, `recap-card--${variant}`, { 'recap-card--unavailable': !available }]"
+    :class="['btn-plain', 'recap-card', `recap-card--${kind}`, `recap-card--${variant}`, { 'recap-card--unavailable': !available }]"
     :disabled="!available"
     :title="available ? title : `${title}（已不在库中）`"
     :data-test="`recap-card-${kind}`"
