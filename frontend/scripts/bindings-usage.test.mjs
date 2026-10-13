@@ -16,13 +16,14 @@ assert.ok(exported.size > 0, 'App.d.ts should export bindings');
 // 2026-10-13 UI 二期 P2-A 先合入后端接口，由 P2-B..E 接入界面；接入的那一组把对应项从这里删掉（守卫会提醒）。
 const allowedUnused = new Map([
   ['ListCollectionProgress', 'UI 二期 D-P2-02「追到哪了」：P2-B 首页与视频页、P2-D 作品集页接入'],
-  ['ListWatchlistLibraryState', 'UI 二期 D-P2-03 想看已在库：P2-C 片单「想看」标签接入'],
-  ['LinkWatchlistEntryVideo', 'UI 二期 D-P2-03「确认」关联：P2-C 片单「想看」标签接入'],
-  ['UnlinkWatchlistEntryVideo', 'UI 二期 D-P2-03「解除」关联：P2-C 片单「想看」标签接入'],
   ['ListWatchlistInLibrary', 'UI 二期 D-P2-07 首页「想看的片片库里已有」：P2-B 首页接入'],
 ]);
-// 待裁决：前端已不用、去留还没定的绑定；目前为空（SearchSubtitleMatchesWithFilters 已由主代理裁决删除）。
-const pendingRuling = new Map([]);
+// 待裁决：前端已不用、去留还没定的绑定（SearchSubtitleMatchesWithFilters 已由主代理裁决删除）。
+const pendingRuling = new Map([
+  // 2026-10-13 P2-C：片单「想看」改读 ListWatchlistLibraryState（后端已把豆瓣条目的 movie_video_links 合并进去、
+  // 减去解除过的），这个只按豆瓣 ID 读关联的旧接口没有别的前端调用方了；删 Go 方法属后端，待主代理裁决。
+  ['ListMovieVideoLinks', 'UI 二期 P2-C 想看页改用 ListWatchlistLibraryState 后无前端调用方，去留待裁决'],
+]);
 
 function collectSources(dir) {
   const found = [];

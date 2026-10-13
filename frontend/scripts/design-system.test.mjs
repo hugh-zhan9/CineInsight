@@ -136,10 +136,8 @@ const PAGE_FILES = {
   collections: 'components/EntityLibraryPage.vue',
   photos: 'components/PhotoLibraryPage.vue',
   'photos-manage': 'components/PhotoLibraryPage.vue',
-  watchlist: 'components/WatchlistPage.vue',
-  'movie-chart': 'components/MovieChartPage.vue',
-  'watched-movies': 'components/WatchedMoviesPage.vue',
-  'viewing-notes': 'components/ViewingNotesPage.vue',
+  // 片单（D-P2-04）：想看、榜单、观影记录、观看笔记四页嵌在它的标签里，不再是顶层页面。
+  lists: 'components/viewer/ListsPage.vue',
   recap: 'components/RecapPage.vue',
   scenes: 'components/ScenesPage.vue',
   'manage-home': 'components/manage/ManageHomePage.vue',

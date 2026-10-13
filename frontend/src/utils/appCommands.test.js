@@ -15,8 +15,8 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import {
-  appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS, MANAGE_NAV_GROUPS, pageArea,
-  VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS
+  appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS, DEFAULT_LIST_TAB, isListTab,
+  LIST_TABS, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea, resolvePageRoute, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS
 } from './appCommands.js';
 import { commandList, findCommand, registerCommands, unregisterCommands } from './commandRegistry.js';
 import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './feedback.js';
@@ -89,6 +89,9 @@ describe('应用级命令注册', () => {
 
     commandByID('nav:page:photos').run();
     expect(wrapper.vm.currentPage).toBe('photos');
+    commandByID('nav:page:lists').run();
+    expect(wrapper.vm.currentPage).toBe('lists');
+    // 旧的片单页面命令把别名 key 交给 navigateTo，由 App 换成片单的对应标签（App.test.js 钉住落点）。
     commandByID('nav:page:watchlist').run();
     expect(wrapper.vm.currentPage).toBe('watchlist');
   });
@@ -135,12 +138,14 @@ describe('应用级命令注册', () => {
   it('D-UI-09 每个页面 key 只属于一个区域；视频与片库管理、图片与图片管理是两个 key', () => {
     const viewer = VIEWER_NAV_GROUPS.flatMap(group => group.pages).map(page => page.key);
     const manage = MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => !page.command).map(page => page.key);
-    expect(viewer).toEqual(['home', 'videos', 'people', 'collections', 'photos', 'watchlist', 'movie-chart', 'watched-movies', 'viewing-notes', 'recap', 'scenes']);
+    expect(viewer).toEqual(['home', 'videos', 'people', 'collections', 'photos', 'lists', 'recap', 'scenes']);
     expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
     expect(viewer.filter(key => manage.includes(key))).toEqual([]);
     for (const key of viewer) expect(pageArea(key), key).toBe('viewer');
     for (const key of manage) expect(pageArea(key), key).toBe('manage');
     expect(pageArea(VIDEO_DETAIL_PAGE)).toBe('viewer');
+    // 片单的四个别名同属观看区：拿旧 key 当来源的「打开一部片」照旧进整页详情。
+    for (const tab of LIST_TABS) expect(pageArea(tab.key), tab.key).toBe('viewer');
     expect(pageArea('pending-work')).toBeNull();
     expect(pageArea('no-such-page')).toBeNull();
     // 管理侧的三个动作入口走既有命令。
@@ -154,7 +159,7 @@ describe('应用级命令注册', () => {
     const wrapper = host({ settings: { browser_bridge_enabled: true } });
     const existing = ['videos', 'people', 'collections', 'photos', 'viewing-notes', 'recap', 'watchlist', 'movie-chart',
       'watched-movies', 'insights', 'data-care', 'scenes', 'video-workbench', 'downloads', 'settings'];
-    for (const key of [...existing, 'home', 'manage-home', 'library-manage', 'photos-manage']) {
+    for (const key of [...existing, 'home', 'lists', 'manage-home', 'library-manage', 'photos-manage']) {
       expect(commandByID(`nav:page:${key}`), key).not.toBeNull();
     }
     expect(commandByID('nav:page:video-detail')).toBeNull();
@@ -164,6 +169,33 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('manage-home');
     commandByID('nav:page:home').run();
     expect(wrapper.vm.currentPage).toBe('home');
+  });
+
+  it('D-P2-04 片单合一：顶栏只有「片单」一项，四个旧页面 key 是它的标签别名，命令面板里紧跟「片单」、标签与命令名不变', () => {
+    host();
+    expect(VIEWER_NAV_GROUPS.find(group => group.key === 'lists')).toMatchObject({ label: '片单', pages: [{ key: LISTS_PAGE, label: '片单' }] });
+    expect(VIEWER_NAV_GROUPS.some(group => 'menu' in group)).toBe(false);
+    expect(LIST_TABS.map(tab => [tab.key, tab.label])).toEqual([
+      ['watchlist', '想看'], ['movie-chart', '榜单'], ['watched-movies', '观影记录'], ['viewing-notes', '观看笔记']
+    ]);
+    expect(DEFAULT_LIST_TAB).toBe('watchlist');
+    const keys = COMMAND_PALETTE_PAGES.map(page => page.key);
+    expect(keys.slice(keys.indexOf('lists'), keys.indexOf('lists') + 5)).toEqual(['lists', 'watchlist', 'movie-chart', 'watched-movies', 'viewing-notes']);
+    expect(commandByID('nav:page:lists').label).toBe('打开片单');
+    expect(commandByID('nav:page:watchlist').label).toBe('打开想看');
+    expect(commandByID('nav:page:viewing-notes').label).toBe('打开观看笔记');
+  });
+
+  it('D-P2-04 resolvePageRoute：别名换成 lists 并带上标签（保留其他参数），其余 key 与参数原样', () => {
+    expect(resolvePageRoute('watchlist')).toEqual({ page: 'lists', params: { tab: 'watchlist' } });
+    expect(resolvePageRoute('viewing-notes', { extra: 1 })).toEqual({ page: 'lists', params: { extra: 1, tab: 'viewing-notes' } });
+    expect(resolvePageRoute('lists', { tab: 'movie-chart' })).toEqual({ page: 'lists', params: { tab: 'movie-chart' } });
+    expect(resolvePageRoute('lists')).toEqual({ page: 'lists', params: null });
+    expect(resolvePageRoute('recap')).toEqual({ page: 'recap', params: null });
+    expect(resolvePageRoute('')).toEqual({ page: '', params: null });
+    expect(isListTab('watched-movies')).toBe(true);
+    expect(isListTab('lists')).toBe(false);
+    expect(isListTab(undefined)).toBe(false);
   });
 
   it('D-UI-09 智能视图与保存视图落在当前区域的片库页：观看侧「视频」，管理侧「片库管理」', async () => {

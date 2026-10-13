@@ -47,8 +47,8 @@ afterEach(() => {
   while (wrappers.length) wrappers.pop().unmount();
 });
 
-async function page() {
-  const wrapper = mount(WatchedMoviesPage);
+async function page(props = {}) {
+  const wrapper = mount(WatchedMoviesPage, { props });
   wrappers.push(wrapper);
   await flushPromises();
   return wrapper;
@@ -74,7 +74,7 @@ describe('只显示榜单标记，不掺主片库的已看', () => {
 
   // D-PC52（用户 R8 裁决）推翻了 D-MC11 的「两边互不影响」：观影记录可以关联片库视频并双向同步已看，
   // 所以本页多了撤销、关联、建议与按 ID 取视频四个绑定。仍然不许碰榜单缓存（D-MC05）。
-  it('APP-05 绑定只有观影记录、撤销、关联与建议、取视频这几个，不读榜单缓存，且不接受任何 props', () => {
+  it('APP-05 绑定只有观影记录、撤销、关联与建议、取视频这几个，不读榜单缓存，且不接受任何数据 props', () => {
     const imported = [...SOURCE.matchAll(/import\s*\{([^}]*)\}\s*from\s*'[^']*wailsjs\/go\/main\/App'/g)]
       .flatMap(match => match[1].split(',').map(name => name.trim()).filter(Boolean));
 
@@ -82,8 +82,9 @@ describe('只显示榜单标记，不掺主片库的已看', () => {
       'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'ListWatchedMovies', 'SuggestLibraryMatchesBatch', 'UnlinkMovieVideo'
     ]);
     expect(imported).not.toContain('ListMovieChart');
-    // 没有 props ⇒ 父组件也喂不进来片库侧的数据，两条路径一起堵上。
-    expect(WatchedMoviesPage.props).toBeUndefined();
+    // 只有一个排版开关（嵌在片单页里时去掉页头，D-P2-04），没有数据 props ⇒ 父组件也喂不进来片库侧的数据，两条路径一起堵上。
+    expect(Object.keys(WatchedMoviesPage.props || {})).toEqual(['embedded']);
+    expect(WatchedMoviesPage.props.embedded.type).toBe(Boolean);
   });
 });
 
@@ -288,6 +289,14 @@ describe('观影记录与片库的闭环（D-PC52）', () => {
     // 页头换成 PageHeader（统一设计 D-UD-06），页面标题是 h1。
     expect(wrapper.get('h1').text()).toBe('观影记录');
     expect(find(wrapper, 'scope-note').text()).toContain('互相同步');
+  });
+
+  it('嵌在片单页里（embedded）不显示自己的页头，内容与说明照常', async () => {
+    const wrapper = await page({ embedded: true });
+    expect(wrapper.find('h1').exists()).toBe(false);
+    expect(wrapper.classes()).not.toContain('page-content');
+    expect(find(wrapper, 'scope-note').text()).toContain('互相同步');
+    expect(find(wrapper, 'summary').exists()).toBe(true);
   });
 
   it('APP-05 取消已看先确认，关联了视频时说明视频也会改回未看，成功后重读', async () => {

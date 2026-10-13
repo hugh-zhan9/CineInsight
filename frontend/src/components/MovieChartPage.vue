@@ -1,6 +1,7 @@
 <template>
-  <section class="page-content movie-chart-page">
-    <PageHeader title="年度榜单" subtitle="按年份浏览在内地公映的电影（含尚未上映的），看到合适的就直接标「想看 / 不想看 / 已看」。" />
+  <section :class="['movie-chart-page', embedded ? 'movie-chart-page--embedded' : 'page-content']">
+    <!-- embedded：嵌在片单页的「榜单」标签里（D-P2-04），页头由片单页提供。 -->
+    <PageHeader v-if="!embedded" title="年度榜单" subtitle="按年份浏览在内地公映的电影（含尚未上映的），看到合适的就直接标「想看 / 不想看 / 已看」。" />
 
     <div class="movie-chart-toolbar">
       <label class="movie-chart-field">
@@ -147,6 +148,10 @@ const EMPTY_BACKFILL = { pending: 0, total: 0 };
 export default {
   name: 'MovieChartPage',
   components: { EmptyState, PageHeader, SegmentedControl, SkeletonBlock },
+  props: {
+    // 嵌在片单页里时不显示自己的页头，也不再套一层页面留白（片单页提供）。
+    embedded: { type: Boolean, default: false }
+  },
   data() {
     const currentYear = new Date().getFullYear();
     return {
@@ -479,6 +484,7 @@ export default {
 
 <style scoped>
 .movie-chart-page { max-width: 1000px; margin: 0 auto; padding: 24px 28px 40px; }
+.movie-chart-page--embedded { max-width: none; margin: 0; padding: 0; }
 .movie-chart-note { color: var(--text-secondary); font-size: var(--fs-secondary); }
 .movie-chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
 .movie-chart-field { display: flex; align-items: center; gap: 8px; font-size: var(--fs-secondary); }

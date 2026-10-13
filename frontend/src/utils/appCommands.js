@@ -7,7 +7,7 @@
 // 因此这里依赖 App.vue 的状态、ref 与方法：
 //   this.currentPage / this.startupError / this.settings（可缺省）
 //   this.$refs.videoListPage（常挂载，v-show 切换）/ this.$refs.settingsPage（v-if）
-//   this.navigateTo(page)：切页。能直接切时同步返回 true；设置页有未保存修改时返回 Promise，
+//   this.navigateTo(page, params?)：切页（别名 key 由它换成真正的页面，见 resolvePageRoute）。能直接切时同步返回 true；设置页有未保存修改时返回 Promise，
 //     用户放弃切页时 resolve 为 false（见下面的 whenNavigated）
 //   this.openTaskCenter() / this.openPendingWork()：打开任务中心抽屉与待处理工作台
 //   this.openVideo(video, { from })：打开一部片，按调用方区域分流到整页详情或片库管理的抽屉（D-UI-07）
@@ -27,7 +27,7 @@ import { recordBackgroundTasks } from './sessionChanges.js';
 // 顶栏只显示当前区域那一套，命令面板列出两边全部页面（APP-12、APP-14：两边读同一份清单，不会各自漏页）。
 // 「视频」与「片库管理」是同一个常挂载片库页的两个 key，「图片」与「图片管理」同理，key 只决定顶栏归属。
 // requiresBrowserBridge：只在设置里开启了浏览器插件桥接时显示（「下载」页）。
-// menu：这一组在顶栏收成一个下拉按钮（「片单」）。
+// 「片单」是一个页面（D-P2-04，四个标签），不再是下拉；原来的四个页面 key 是它的别名，见下面的 LIST_TABS。
 export const VIEWER_NAV_GROUPS = [
   {
     key: 'browse',
@@ -43,13 +43,8 @@ export const VIEWER_NAV_GROUPS = [
   {
     key: 'lists',
     label: '片单',
-    menu: true,
     pages: [
-      { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
-      { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
-      // 顶栏「已看」改名「观影记录」（D-PC52），与片库的「已看」智能视图区分开；旧说法留作关键词。
-      { key: 'watched-movies', label: '观影记录', keywords: ['watched', 'guanying', 'yikan', 'kanguo', '看过', '已看', '榜单已看'] },
-      { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] }
+      { key: 'lists', label: '片单', keywords: ['lists', 'piandan', '片单', '想看', '榜单', '观影记录', '观看笔记'] }
     ]
   },
   {
@@ -108,13 +103,39 @@ export const MANAGE_NAV_GROUPS = [
 // 整页详情（D-UI-05）：观看区的页面，但要带视频 ID，不在顶栏与命令面板里。
 export const VIDEO_DETAIL_PAGE = 'video-detail';
 
+// 片单（D-P2-04）：一个页面 `lists`，四个标签，第一个（想看）是默认标签。原来的四个页面 key 保留为别名：
+// navigateTo、命令面板里原有的页面命令（命令 ID 不变）、各页发出的 navigate(key) 与记下的旧 key 都经
+// resolvePageRoute 换成 `lists` + 对应标签，currentPage 永远不会是别名。顶栏只有「片单」一项。
+export const LISTS_PAGE = 'lists';
+export const LIST_TABS = [
+  { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
+  { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
+  // 顶栏「已看」改名「观影记录」（D-PC52），与片库的「已看」智能视图区分开；旧说法留作关键词。
+  { key: 'watched-movies', label: '观影记录', keywords: ['watched', 'guanying', 'yikan', 'kanguo', '看过', '已看', '榜单已看'] },
+  { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] }
+];
+export const DEFAULT_LIST_TAB = LIST_TABS[0].key;
+const LIST_TAB_KEYS = new Set(LIST_TABS.map(tab => tab.key));
+
+export function isListTab(key) {
+  return LIST_TAB_KEYS.has(key);
+}
+
+// 页面 key（可能是别名）+ 参数 → 真正的页面与参数：别名换成 `lists` 并带上 { tab }，其余原样。
+export function resolvePageRoute(page, params = null) {
+  if (LIST_TAB_KEYS.has(page)) return { page: LISTS_PAGE, params: { ...(params || {}), tab: page } };
+  return { page, params: params || null };
+}
+
 // 顶栏一组里真正的页面（去掉动作入口）。
 function navPages(groups) {
   return groups.flatMap(group => group.pages).filter(page => !page.command);
 }
 
+// 别名同属观看区：拿旧 key 当「打开一部片」来源（from）的调用方照旧进整页详情。
 const PAGE_AREAS = new Map([
   ...navPages(VIEWER_NAV_GROUPS).map(page => [page.key, 'viewer']),
+  ...LIST_TABS.map(tab => [tab.key, 'viewer']),
   [VIDEO_DETAIL_PAGE, 'viewer'],
   ...navPages(MANAGE_NAV_GROUPS).map(page => [page.key, 'manage'])
 ]);
@@ -135,8 +156,12 @@ export const DATA_CARE_COMMANDS = [
   { tab: 'health', label: '体检', keywords: ['health', 'check', '体检', '一致性'] }
 ];
 
-// 页面导航的全集：两个区域的全部页面（含设置），先观看后管理。
-const COMMAND_PAGES = [...navPages(VIEWER_NAV_GROUPS), ...navPages(MANAGE_NAV_GROUPS)];
+// 页面导航的全集：两个区域的全部页面（含设置），先观看后管理。片单的四个别名紧跟「片单」，
+// 原有的 nav:page:watchlist 等命令 ID 照旧注册，执行时由 App 的 navigateTo 换成对应标签。
+const COMMAND_PAGES = [
+  ...navPages(VIEWER_NAV_GROUPS).flatMap(page => (page.key === LISTS_PAGE ? [page, ...LIST_TABS] : [page])),
+  ...navPages(MANAGE_NAV_GROUPS)
+];
 
 export function isNavPageVisible(page, settings) {
   return !page?.requiresBrowserBridge || Boolean(settings?.browser_bridge_enabled);

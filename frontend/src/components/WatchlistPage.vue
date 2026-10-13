@@ -1,6 +1,7 @@
 <template>
-  <section class="page-content watchlist-page">
-    <PageHeader title="想看" subtitle="记下想看但还没收进片库的影片，选好类型后自动去对应的资料源补全信息。" />
+  <section :class="['watchlist-page', embedded ? 'watchlist-page--embedded' : 'page-content']">
+    <!-- embedded：嵌在片单页的「想看」标签里（D-P2-04），页头由片单页提供。 -->
+    <PageHeader v-if="!embedded" title="想看" subtitle="记下想看但还没收进片库的影片，选好类型后自动去对应的资料源补全信息。" />
 
     <form class="watchlist-form" data-test="watchlist-form" @submit.prevent="save">
       <label for="watchlist-title">{{ editID ? '修改片名' : '添加想看的影片' }}</label>
@@ -40,6 +41,15 @@
       </template>
     </EmptyState>
 
+    <!-- 片库里的对应情况（D-P2-03）读失败：片单本身照常显示，这里说明并给重试。 -->
+    <AppBanner v-if="libraryError" class="watchlist-library-banner" tone="warning" title="没能读出片库里的对应情况"
+      :message="libraryError" data-test="watchlist-library-error">
+      <template #actions>
+        <button class="btn btn--secondary btn--sm" type="button" :disabled="loading"
+          data-test="watchlist-library-retry" @click="retryLibrary">重试</button>
+      </template>
+    </AppBanner>
+
     <ul class="watchlist-list">
       <li v-for="entry in entries" :key="entry.id" class="watchlist-entry" data-test="watchlist-entry">
         <div class="watchlist-entry-main">
@@ -59,6 +69,7 @@
               <span v-if="entry.year">{{ entry.year }}</span>
               <span v-if="entry.rating">{{ Number(entry.rating).toFixed(1) }} 分</span>
               <time :datetime="entry.created_at">{{ formatDate(entry.created_at) }} 添加</time>
+              <AppBadge v-if="notInLibrary(entry)" :data-test="`watchlist-not-in-library-${entry.id}`">不在库</AppBadge>
             </div>
             <p v-if="failureText(entry)" class="watchlist-failure" :data-test="`watchlist-failure-${entry.id}`">
               {{ failureText(entry) }}
@@ -66,12 +77,22 @@
             <p v-if="genresOf(entry).length" class="watchlist-detail-line">{{ genresOf(entry).join(' · ') }}</p>
             <p v-if="creditsText(entry)" class="watchlist-detail-line">{{ creditsText(entry) }}</p>
             <p v-if="entry.overview" class="watchlist-overview">{{ entry.overview }}</p>
-            <!-- 片库关联提示（APP-06）：只读建议，不自动删条目；用户一键关联或从片单移除。 -->
-            <div v-if="linkedText(entry)" class="watchlist-library" :data-test="`watchlist-linked-${entry.id}`">
-              <span>{{ linkedText(entry) }}</span>
-              <!-- 关联错了要能撤回（D-PC52）：只断开已看同步，不动片单条目与视频本身。 -->
-              <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
-                :data-test="`watchlist-unlink-${entry.id}`" @click="unlink(entry)">取消关联</button>
+            <!-- 片库里的对应情况（D-P2-03，所有来源）：已在库（播放 / 解除，自动连上的标「自动匹配」）、
+                 可能已有（确认后才关联）、不在库（只是 meta 行里的一个标记）。片单不会因入库自动删条目，
+                 已在库与可能已有都给一键「移除（片单）」。 -->
+            <div v-if="linkedOf(entry).length" class="watchlist-library watchlist-library--linked" :data-test="`watchlist-linked-${entry.id}`">
+              <AppBadge tone="success">已在库</AppBadge>
+              <span v-for="video in linkedOf(entry)" :key="video.video_id" class="watchlist-library__match"
+                :data-test="`watchlist-linked-video-${entry.id}-${video.video_id}`">
+                <span class="watchlist-library__title">{{ video.title }}</span>
+                <AppBadge v-if="video.origin === 'auto'" :data-test="`watchlist-auto-${entry.id}-${video.video_id}`">自动匹配</AppBadge>
+                <AppBadge v-if="video.is_watched">看过</AppBadge>
+                <button class="btn btn--primary btn--sm" type="button" :data-test="`watchlist-play-${entry.id}-${video.video_id}`"
+                  @click="$emit('open-video-id', video.video_id)">播放</button>
+                <!-- 解除只去掉这一条关联、能再确认回来，所以不弹确认框，做完给带「撤销」的提示（D-UD-07 第 1 级）。 -->
+                <button class="btn btn--ghost btn--sm" type="button" :disabled="busy || loading"
+                  :data-test="`watchlist-unlink-${entry.id}-${video.video_id}`" @click="unlinkVideo(entry, video)">解除</button>
+              </span>
               <button class="btn btn--danger btn--sm" type="button" :disabled="busy || loading"
                 :data-test="`watchlist-remove-after-link-${entry.id}`" @click="remove(entry)">移除（片单）</button>
             </div>
@@ -80,13 +101,14 @@
               <span v-for="suggestion in suggestionsOf(entry)" :key="suggestion.video_id" class="watchlist-library__match"
                 :data-test="`watchlist-suggestion-${entry.id}-${suggestion.video_id}`">
                 {{ suggestion.display_title || suggestion.name }}
-                <button v-if="doubanIDOf(entry)" class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
-                  :data-test="`watchlist-link-${entry.id}-${suggestion.video_id}`" @click="linkSuggestion(entry, suggestion)">关联</button>
+                <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading" title="确认是同一部，关联到这个片库视频"
+                  :data-test="`watchlist-link-${entry.id}-${suggestion.video_id}`" @click="confirmSuggestion(entry, suggestion)">确认</button>
               </span>
               <button class="btn btn--danger btn--sm" type="button" :disabled="busy || loading"
                 :data-test="`watchlist-remove-suggested-${entry.id}`" @click="remove(entry)">移除（片单）</button>
-              <span v-if="!doubanIDOf(entry)" class="watchlist-library__hint">补全到豆瓣条目后才能关联片库视频。</span>
             </div>
+            <SkeletonBlock v-else-if="libraryLoadingOf(entry)" class="watchlist-library-skeleton" :lines="1"
+              :data-test="`watchlist-library-loading-${entry.id}`" />
           </div>
         </div>
         <div class="watchlist-actions">
@@ -138,13 +160,16 @@
 
 <script>
 import {
-  ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, LinkMovieToVideo, ListMovieVideoLinks, ListWatchlist,
-  ListWatchlistCandidates, RetryWatchlistEnrichment, SuggestLibraryMatchesBatch, UnlinkMovieVideo, UpdateWatchlistEntry
+  ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, LinkWatchlistEntryVideo, ListWatchlist,
+  ListWatchlistCandidates, ListWatchlistLibraryState, RetryWatchlistEnrichment, SuggestLibraryMatchesBatch,
+  UnlinkWatchlistEntryVideo, UpdateWatchlistEntry
 } from '../../wailsjs/go/main/App';
+import AppBadge from './ui/AppBadge.vue';
+import AppBanner from './ui/AppBanner.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
-import { confirmAction, notifySuccess } from '../utils/feedback.js';
+import { confirmAction, notifySuccess, notifyUndo } from '../utils/feedback.js';
 
 // D-WM02 的五个类型，顺序即下拉框顺序，默认落在第一个（电影）。
 const KIND_OPTIONS = [
@@ -205,16 +230,42 @@ function libraryMatchKey(title, year) {
   return `${title}|${Number(year) || 0}`;
 }
 
+// ListWatchlistLibraryState 一次最多查 200 条（services.watchlistLibraryStateMaxEntries）。
+const LIBRARY_STATE_BATCH = 200;
+// 「片库中可能已有」每条最多列几部。
+const SUGGESTION_LIMIT = 3;
+
+function chunks(list, size) {
+  const result = [];
+  for (let index = 0; index < list.length; index += size) result.push(list.slice(index, index + size));
+  return result;
+}
+
+// 调一个接口，成败都落成 { ok, value | error }，同步抛出的也算失败。
+function settle(call) {
+  return Promise.resolve().then(call).then(value => ({ ok: true, value }), error => ({ ok: false, error }));
+}
+
 export default {
   name: 'WatchlistPage',
-  components: { EmptyState, PageHeader, SkeletonBlock },
+  components: { AppBadge, AppBanner, EmptyState, PageHeader, SkeletonBlock },
+  props: {
+    // 嵌在片单页里时不显示自己的页头，也不再套一层页面留白（片单页提供）。
+    embedded: { type: Boolean, default: false }
+  },
+  // open-video-id(videoID)：「已在库 · 播放」，由宿主进这部片的整页详情。
+  emits: ['open-video-id'],
   data() {
     return {
       entries: [], nextID: 0, keyword: '', title: '', kind: DEFAULT_KIND, kindTouched: false,
       editID: 0, error: '', loading: false, loaded: false, busy: false, requestID: 0,
       candidateEntryID: 0, candidates: [], candidateLoading: false, candidateError: '', candidateRequestID: 0,
       brokenPosters: [], kindOptions: KIND_OPTIONS,
-      origins: {}, suggestions: {}, suggestionRequestID: 0, linked: {}
+      origins: {},
+      // 片库里的对应情况（D-P2-03），按条目 ID：linked = ListWatchlistLibraryState 的已关联视频，
+      // suggestions = SuggestLibraryMatchesBatch 的建议；没有这个键表示还没读到（或第一次就没读出来）。
+      // libraryLoading 是正在读的条目 ID；libraryError 是最近一次读失败的原因（横幅 + 重试）。
+      linked: {}, suggestions: {}, libraryLoading: {}, libraryError: ''
     };
   },
   computed: {
@@ -241,6 +292,7 @@ export default {
   },
   beforeUnmount() {
     this.requestID++;
+    this._disposed = true;
     if (typeof this.progressOff === 'function') this.progressOff();
   },
   methods: {
@@ -256,7 +308,8 @@ export default {
         this.origins = more ? { ...this.origins, ...(page.origins || {}) } : { ...(page.origins || {}) };
         this.nextID = page.next_id;
         this.loaded = true;
-        this.loadSuggestions(page.entries || [], more);
+        if (!more) this.resetLibrary();
+        this.loadLibrary(page.entries || []);
       } catch (err) {
         if (requestID === this.requestID) this.error = `读取想看片单失败：${err}`;
       } finally {
@@ -424,95 +477,126 @@ export default {
         this.entries.splice(index, 1, fresh);
       } catch (err) {
         this.error = `刷新想看条目失败：${err}`;
-      }
-    },
-    // 「片库中可能已有」（D-PC52）：一页条目一次批量查询，不逐条调单条接口。
-    // 建议只读、不出网；查不到或查询失败都只是不显示，不影响片单本身。
-    async loadSuggestions(entries, append) {
-      const requestID = ++this.suggestionRequestID;
-      const queries = entries.map(entry => ({ title: entry.title, year: Number(entry.year) || 0 }));
-      if (!queries.length) {
-        if (!append) this.suggestions = {};
         return;
       }
-      try {
-        const result = (await SuggestLibraryMatchesBatch(queries)) || {};
-        if (requestID !== this.suggestionRequestID) return;
-        const next = append ? { ...this.suggestions } : {};
-        for (const entry of entries) {
-          const list = result[libraryMatchKey(entry.title, entry.year)];
-          next[entry.id] = Array.isArray(list) ? list.slice(0, 3) : [];
-        }
-        this.suggestions = next;
-      } catch {
-        if (requestID === this.suggestionRequestID && !append) this.suggestions = {};
-      }
-      await this.loadExistingLinks(entries, append, requestID);
+      // 补全成功、选定候选之后后端已同步跑过这一条的自动关联，片名与年份也可能变了：这一行的片库情况重读。
+      await this.loadLibrary(this.entries.filter(item => item.id === id));
     },
-    // 已有的关联存在后端（movie_video_links），刷新页面后也要认得出来，否则已关联的条目又显示成「可能已有 · 关联」。
-    // 只查本页带豆瓣 ID 的条目；查询失败只是不显示关联，不影响片单本身。
-    async loadExistingLinks(entries, append, requestID) {
-      const targets = entries.filter(entry => this.doubanIDOf(entry));
-      const results = await Promise.all(targets.map(async entry => {
-        try {
-          return { entry, links: (await ListMovieVideoLinks(this.doubanIDOf(entry))) || [] };
-        } catch {
-          return { entry, links: [] };
-        }
-      }));
-      if (requestID !== this.suggestionRequestID) return;
-      const next = append ? { ...this.linked } : {};
-      for (const { entry, links } of results) {
-        if (links.length) next[entry.id] = { ...links[0], video_ids: links.map(link => link.video_id) };
-        else delete next[entry.id];
-      }
-      this.linked = next;
+    // 片库里的对应情况（D-P2-03）：一批条目一次批量查（已关联 ListWatchlistLibraryState，建议 SuggestLibraryMatchesBatch），
+    // 两者各自成败。每个条目记一个请求序号，后发的请求作废先发的：翻页、单行刷新、确认 / 解除之后的重读互不覆盖；
+    // 重新读第一页（搜索、刷新）时 resetLibrary 清空旧状态。读失败只影响这一块：横幅说明并给重试，片单本身照常。
+    resetLibrary() {
+      this._libraryTokens = new Map();
+      this.linked = {};
+      this.suggestions = {};
+      this.libraryLoading = {};
+      this.libraryError = '';
     },
+    async loadLibrary(entries) {
+      const targets = (entries || []).filter(entry => entry && entry.id);
+      if (!targets.length) return;
+      if (!this._libraryTokens) this._libraryTokens = new Map();
+      const token = (this._librarySeq = (this._librarySeq || 0) + 1);
+      for (const entry of targets) this._libraryTokens.set(entry.id, token);
+      this.libraryLoading = { ...this.libraryLoading, ...Object.fromEntries(targets.map(entry => [entry.id, true])) };
+      const current = entry => this._libraryTokens.get(entry.id) === token;
+      const [states, suggestions] = await Promise.all([
+        settle(async () => Object.assign({}, ...(await Promise.all(
+          chunks(targets.map(entry => entry.id), LIBRARY_STATE_BATCH).map(ids => ListWatchlistLibraryState(ids))
+        )).map(result => result || {}))),
+        settle(async () => (await SuggestLibraryMatchesBatch(targets.map(entry => ({ title: entry.title, year: Number(entry.year) || 0 })))) || {})
+      ]);
+      if (this._disposed) return;
+      const mine = targets.filter(current);
+      if (!mine.length) return;
+      const linked = { ...this.linked };
+      const suggested = { ...this.suggestions };
+      const loading = { ...this.libraryLoading };
+      // 读失败的那一样保留上一次读到的（第一次就失败则仍是「没读到」，这一行不显示片库情况）。
+      for (const entry of mine) {
+        delete loading[entry.id];
+        // 没在结果里的条目（刚被删掉）按没有关联算。
+        if (states.ok) linked[entry.id] = Array.isArray(states.value[entry.id]?.linked) ? states.value[entry.id].linked : [];
+        if (suggestions.ok) {
+          const list = suggestions.value[libraryMatchKey(entry.title, entry.year)];
+          suggested[entry.id] = Array.isArray(list) ? list : [];
+        }
+      }
+      this.linked = linked;
+      this.suggestions = suggested;
+      this.libraryLoading = loading;
+      const failure = !states.ok ? states.error : (!suggestions.ok ? suggestions.error : null);
+      if (failure !== null) this.libraryError = String(failure);
+      else if (this.entries.every(entry => this.libraryKnown(entry))) this.libraryError = '';
+    },
+    retryLibrary() {
+      this.libraryError = '';
+      return this.loadLibrary(this.entries);
+    },
+    libraryKnown(entry) {
+      return Array.isArray(this.linked[entry.id]) && Array.isArray(this.suggestions[entry.id]);
+    },
+    libraryLoadingOf(entry) {
+      return Boolean(this.libraryLoading[entry.id]);
+    },
+    linkedOf(entry) {
+      return this.linked[entry.id] || [];
+    },
+    // 每条最多列 SUGGESTION_LIMIT 部。只在没有任何关联时才显示（已在库优先，见模板），所以已关联的不会出现在这里；
+    // 解除过的那一对后端没有返回给前端，会照常列出，再点「确认」就关联回来。
     suggestionsOf(entry) {
-      return this.suggestions[entry.id] || [];
+      return (this.suggestions[entry.id] || []).slice(0, SUGGESTION_LIMIT);
     },
-    // 关联靠豆瓣 ID（movie_video_links 的键）：只有补全到豆瓣条目的片单项才能关联。
-    doubanIDOf(entry) {
-      return entry.source_name === 'douban' && entry.source_item_id ? String(entry.source_item_id) : '';
+    // 「不在库」只在两样都读到了、既没有关联也没有建议时才说；没读出来时什么都不说。
+    notInLibrary(entry) {
+      return this.libraryKnown(entry) && !this.linkedOf(entry).length && !this.suggestionsOf(entry).length;
     },
-    async linkSuggestion(entry, suggestion) {
-      const doubanID = this.doubanIDOf(entry);
-      if (!doubanID || this.busy) return;
+    // 「确认」：把建议的这部关联上（豆瓣条目由后端写榜单那张关联表，已看同步照旧），再重读这一行。
+    async confirmSuggestion(entry, suggestion) {
+      if (this.busy) return;
       this.busy = true;
       try {
-        await LinkMovieToVideo(doubanID, suggestion.video_id);
-        this.linked = { ...this.linked, [entry.id]: { ...suggestion, video_ids: [suggestion.video_id] } };
+        await LinkWatchlistEntryVideo(entry.id, suggestion.video_id);
+        this.linked = {
+          ...this.linked,
+          [entry.id]: [...this.linkedOf(entry), { video_id: suggestion.video_id, title: suggestion.display_title || suggestion.name, origin: 'manual', is_watched: false }]
+        };
         notifySuccess('已关联片库视频');
         this.error = '';
       } catch (err) {
         this.error = `关联片库视频失败：${err}`;
+        return;
       } finally {
         this.busy = false;
       }
+      await this.loadLibrary([entry]);
     },
-    // 取消关联：解除这个豆瓣条目关联的全部视频，之后回到「片库中可能已有」的建议。
-    async unlink(entry) {
-      const doubanID = this.doubanIDOf(entry);
-      const linked = this.linked[entry.id];
-      if (!doubanID || !linked || this.busy) return;
+    // 「解除」：只去掉这一条关联（后端记下「解除过」，之后不再自动连这一对），不弹确认；提示里的「撤销」把它确认回来。
+    async unlinkVideo(entry, video) {
+      if (this.busy) return;
       this.busy = true;
       try {
-        for (const videoID of linked.video_ids || [linked.video_id]) await UnlinkMovieVideo(doubanID, videoID);
-        const next = { ...this.linked };
-        delete next[entry.id];
-        this.linked = next;
-        notifySuccess('已取消关联，之后两边的已看状态不再同步');
+        await UnlinkWatchlistEntryVideo(entry.id, video.video_id);
+        this.linked = { ...this.linked, [entry.id]: this.linkedOf(entry).filter(item => item.video_id !== video.video_id) };
+        notifyUndo(`已解除「${entry.title}」与「${video.title}」的关联`, () => this.relinkVideo(entry.id, video.video_id));
         this.error = '';
       } catch (err) {
-        this.error = `取消关联失败：${err}`;
+        this.error = `解除关联失败：${err}`;
+        return;
       } finally {
         this.busy = false;
       }
+      await this.loadLibrary([entry]);
     },
-    linkedText(entry) {
-      const suggestion = this.linked[entry.id];
-      if (!suggestion) return '';
-      return `已关联片库视频：${suggestion.display_title || suggestion.name}。片库里已经有了，可以从片单移除。`;
+    // 撤销解除：重新确认这一对。失败时抛出，由提示的动作报「撤销失败」。页面已关掉也照样关联，只是不再刷新。
+    async relinkVideo(entryID, videoID) {
+      await LinkWatchlistEntryVideo(entryID, videoID);
+      if (this._disposed) return;
+      await this.loadLibrary(this.entries.filter(entry => entry.id === entryID));
+    },
+    // 补全到豆瓣条目的片单项：与年度榜单的「想看」双向同步（移除时要说明）。
+    doubanIDOf(entry) {
+      return entry.source_name === 'douban' && entry.source_item_id ? String(entry.source_item_id) : '';
     },
     originLabel(entry) {
       return ORIGIN_LABELS[this.origins[entry.id]] || ORIGIN_LABELS.manual;
@@ -589,6 +673,7 @@ export default {
 
 <style scoped>
 .watchlist-page { max-width: 960px; margin: 0 auto; padding: 24px 28px 40px; }
+.watchlist-page--embedded { max-width: none; margin: 0; padding: 0; }
 .watchlist-hint { color: var(--text-secondary); font-size: var(--fs-secondary); }
 .watchlist-skeleton { margin-top: var(--space-2); }
 .watchlist-form { margin: 0 0 24px; padding: 18px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-faint); }
@@ -639,7 +724,9 @@ export default {
 .watchlist-library { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); font-size: var(--fs-secondary); color: var(--text-secondary); }
 .watchlist-library__label { color: var(--text-primary); font-weight: var(--fw-semibold); }
 .watchlist-library__match { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
-.watchlist-library__hint { flex-basis: 100%; font-size: var(--fs-caption); }
+.watchlist-library__title { color: var(--text-primary); }
+.watchlist-library-skeleton { max-width: 240px; }
+.watchlist-library-banner { margin-bottom: var(--space-3); }
 .watchlist-failure { margin: 0; color: var(--danger-text); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .watchlist-detail-line { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .watchlist-overview { margin: 0; font-size: var(--fs-secondary); line-height: 1.5; overflow-wrap: anywhere; }

@@ -1,10 +1,15 @@
 <template>
-  <main class="page-content viewing-notes-page" data-test="viewing-notes-page">
-    <PageHeader title="观看笔记" subtitle="观影日记、片段书签，以及无法确认观看的播放记录。">
+  <main :class="['viewing-notes-page', embedded ? 'viewing-notes-page--embedded' : 'page-content']" data-test="viewing-notes-page">
+    <PageHeader v-if="!embedded" title="观看笔记" subtitle="观影日记、片段书签，以及无法确认观看的播放记录。">
       <template #actions><button type="button" class="btn btn--primary" data-test="diary-add" @click="editor = {}">手动补记</button></template>
       <!-- 三个分区（D-UD-06 AppTabs），每个页签带 notes-tab-* 钩子。 -->
       <template #below><AppTabs v-model="tab" :tabs="tabs" aria-label="观看笔记分类" /></template>
     </PageHeader>
+    <!-- embedded：嵌在片单页的「观看笔记」标签里（D-P2-04），标题与说明由片单页提供，三个分区与「手动补记」留在这一行。 -->
+    <div v-else class="notes-embedded-bar">
+      <AppTabs v-model="tab" :tabs="tabs" aria-label="观看笔记分类" />
+      <button type="button" class="btn btn--primary" data-test="diary-add" @click="editor = {}">手动补记</button>
+    </div>
     <BookmarkPanel v-if="tab === 'bookmarks'" :page-active="pageActive" @open-bookmark="$emit('open-bookmark', $event)" @open-video="$emit('open-video', $event)" />
     <template v-else>
       <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reset">刷新</button></div>
@@ -57,7 +62,7 @@ import PageHeader from './ui/PageHeader.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction } from '../utils/feedback.js';
 export default {
-  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { AppTabs, BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
+  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true }, embedded: { type: Boolean, default: false } }, components: { AppTabs, BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
   data: () => ({ tabs: [{ key: 'diary', label: '观影日记', dataTest: 'notes-tab-diary' }, { key: 'bookmarks', label: '片段书签', dataTest: 'notes-tab-bookmarks' }, { key: 'history', label: '播放记录', dataTest: 'notes-tab-history' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
   watch: { pageActive(active) { if (active) { this.load(); this.loadReview(); } }, tab() { this.reset(); }, year() { this.reset(); }, keyword() { this.reset(); } },
   mounted() { this.reset(); }, beforeUnmount() { this.generation++; this.reviewGeneration++; this._disposed = true; },
@@ -98,6 +103,9 @@ export default {
 </script>
 <style scoped>
 .viewing-notes-page { display: grid; gap: 12px; align-content: start; overflow: auto; box-sizing: border-box; }
+.viewing-notes-page--embedded { overflow: visible; }
+.notes-embedded-bar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.notes-embedded-bar > .ui-tabs { flex: 1 1 auto; }
 .notes-filters { margin-bottom: 0; }
 .notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; }
 .notes-year .number-input { width: 96px; }

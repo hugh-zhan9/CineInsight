@@ -13,7 +13,7 @@ vi.mock('../wailsjs/go/main/App', () => api);
 
 import App from './App.vue';
 import BaseModal from './components/ui/BaseModal.vue';
-import { registerCommands, unregisterCommands } from './utils/commandRegistry.js';
+import { findCommand, registerCommands, unregisterCommands } from './utils/commandRegistry.js';
 import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
 import { closeVersionCompare, openVersionCompare, versionCompareState } from './utils/versionCompare.js';
 import { resetSessionChanges, sessionChanges } from './utils/sessionChanges.js';
@@ -64,11 +64,10 @@ async function mountApp() {
   return wrapper;
 }
 
-// 「片单」在观看导航里收成下拉（D-UI-02）：点开下拉，再选其中一页。
-async function openListsMenuPage(wrapper, key) {
-  await wrapper.get('[data-test="nav-menu-lists"]').trigger('click');
-  wrapper.findComponent({ name: 'BaseMenu' }).vm.$emit('select', { id: key });
-  wrapper.findComponent({ name: 'BaseMenu' }).vm.$emit('close');
+// 「片单」是一个页面、四个标签（D-P2-04）：点顶栏「片单」，再点其中一个标签（ListsPage 发 update:tab）。
+async function openListsTab(wrapper, tab) {
+  await wrapper.get('[data-test="nav-lists"]').trigger('click');
+  wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('update:tab', tab);
   await flushPromises();
 }
 
@@ -149,40 +148,111 @@ it('启动失败时仍可打开只读诊断，不挂载片库或任务中心', a
   expect(wrapper.findComponent({ name: 'SystemHealthPanel' }).exists()).toBe(false);
 });
 
-it('顶栏想看入口按需挂载独立片单页', async () => {
+// 片单（D-P2-04）：一个页面 lists，四个标签。首次进入才挂载、之后只隐藏（观看笔记的编辑与翻页状态留着），
+// 各标签何时挂载由 ListsPage 管（见 viewer/ListsPage.test.js）。
+it('顶栏「片单」按需挂载片单页，默认「想看」标签；离开后只隐藏，回来是同一个实例', async () => {
   const wrapper = await mountApp();
-  expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(false);
-  await openListsMenuPage(wrapper, 'watchlist');
-  expect(wrapper.vm.currentPage).toBe('watchlist');
-  expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(true);
+  expect(wrapper.findComponent({ name: 'ListsPage' }).exists()).toBe(false);
+  await wrapper.get('[data-test="nav-lists"]').trigger('click');
+  expect(wrapper.vm.currentPage).toBe('lists');
+  expect(wrapper.get('[data-test="nav-lists"]').classes()).toContain('active');
+  const lists = wrapper.findComponent({ name: 'ListsPage' });
+  expect(lists.props()).toMatchObject({ tab: 'watchlist', pageActive: true });
+
+  await wrapper.get('[data-test="nav-recap"]').trigger('click');
+  expect(wrapper.findComponent({ name: 'ListsPage' }).vm).toBe(lists.vm);
+  expect(wrapper.findComponent({ name: 'ListsPage' }).props('pageActive')).toBe(false);
+  expect(wrapper.findComponent({ name: 'ListsPage' }).isVisible()).toBe(false);
+  await wrapper.get('[data-test="nav-lists"]').trigger('click');
+  expect(wrapper.findComponent({ name: 'ListsPage' }).vm).toBe(lists.vm);
 });
 
-// 榜单页一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），所以必须是
-// 点进去才挂载：留在别的页面上不该有那个副作用。
-it('顶栏榜单入口按需挂载年度榜单页，切走即卸载', async () => {
+it('标签是页面参数：点标签、navigateTo(lists, { tab }) 切标签；不带标签或认不出的标签留在原标签', async () => {
   const wrapper = await mountApp();
-  expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(false);
+  await openListsTab(wrapper, 'watched-movies');
+  const lists = () => wrapper.findComponent({ name: 'ListsPage' });
+  expect(wrapper.vm.currentPage).toBe('lists');
+  expect(lists().props('tab')).toBe('watched-movies');
 
-  await openListsMenuPage(wrapper, 'movie-chart');
-  expect(wrapper.vm.currentPage).toBe('movie-chart');
-  expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(true);
+  expect(wrapper.vm.navigateTo('lists', { tab: 'movie-chart' })).toBe(true);
+  await flushPromises();
+  expect(lists().props('tab')).toBe('movie-chart');
+  wrapper.vm.navigateTo('lists');
+  wrapper.vm.navigateTo('lists', { tab: 'no-such-tab' });
+  await flushPromises();
+  expect(lists().props('tab')).toBe('movie-chart');
 
-  await openListsMenuPage(wrapper, 'watchlist');
-  expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(false);
+  // 离开再从顶栏回来，还是离开时的那个标签。
+  await wrapper.get('[data-test="nav-home"]').trigger('click');
+  await wrapper.get('[data-test="nav-lists"]').trigger('click');
+  expect(lists().props('tab')).toBe('movie-chart');
 });
 
-// 已看页每次挂载都重读一次本地标记表，所以同样按需挂载：切走卸载、切回来重新读，
-// 不用自己维护失效。
-it('顶栏已看入口按需挂载已看页，切走即卸载', async () => {
-  const wrapper = await mountApp();
-  expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(false);
+describe('片单的四个旧页面 key 是别名（D-P2-04）', () => {
+  it.each([
+    ['watchlist'], ['movie-chart'], ['watched-movies'], ['viewing-notes']
+  ])('navigateTo(%s) 打开片单的对应标签，currentPage 是 lists', async key => {
+    const wrapper = await mountApp();
+    expect(wrapper.vm.navigateTo(key)).toBe(true);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('lists');
+    expect(wrapper.vm.listsTab).toBe(key);
+    expect(wrapper.findComponent({ name: 'ListsPage' }).props('tab')).toBe(key);
+    expect(wrapper.vm.area).toBe('viewer');
+  });
 
-  await openListsMenuPage(wrapper, 'watched-movies');
-  expect(wrapper.vm.currentPage).toBe('watched-movies');
-  expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(true);
+  it('命令面板里原有的页面命令（ID 不变）打开对应标签；已在片单上时只换标签', async () => {
+    const wrapper = await mountApp();
+    await findCommand('nav:page:movie-chart').run();
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('lists');
+    expect(wrapper.vm.listsTab).toBe('movie-chart');
+    await findCommand('nav:page:watched-movies').run();
+    expect(wrapper.vm.listsTab).toBe('watched-movies');
+    await findCommand('nav:page:lists').run();
+    expect(wrapper.vm.listsTab).toBe('watched-movies');
+  });
 
-  await openListsMenuPage(wrapper, 'movie-chart');
-  expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(false);
+  it('各页发出的 navigate(旧 key) 落到对应标签：回顾「查看观影日记」、观影记录「去榜单」', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'recap' });
+    wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('navigate', 'viewing-notes');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('lists');
+    expect(wrapper.vm.listsTab).toBe('viewing-notes');
+    wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('navigate', 'movie-chart');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('lists');
+    expect(wrapper.vm.listsTab).toBe('movie-chart');
+  });
+
+  it('设置页有未保存修改时别名同样先确认，放弃后才落到对应标签', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'settings', settingsDirty: true });
+    const result = wrapper.vm.navigateTo('viewing-notes');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('settings');
+    expect(wrapper.vm.listsTab).toBe('watchlist');
+    resolveConfirm(true);
+    expect(await result).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('lists');
+    expect(wrapper.vm.listsTab).toBe('viewing-notes');
+  });
+
+  it('从片单进整页详情，返回栈记下当时的标签，返回时回到那个标签', async () => {
+    const wrapper = await mountApp();
+    api.GetVideosByIDs.mockResolvedValue([{ id: 7, name: 'a.mp4' }]);
+    await openListsTab(wrapper, 'watched-movies');
+    wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('open-video', { id: 7 });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(wrapper.vm.detailReturnStack).toEqual([expect.objectContaining({ page: 'lists', params: { tab: 'watched-movies' } })]);
+    await wrapper.setData({ listsTab: 'watchlist' });
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('back');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('lists');
+    expect(wrapper.vm.listsTab).toBe('watched-movies');
+  });
 });
 
 describe('扫描目录配置变更', () => {
@@ -489,13 +559,13 @@ describe('顶栏信息架构（APP-14）', () => {
     }));
   }
 
-  it('D-UI-02 观看区：首页 · 视频 · 人物 · 作品集 · 图片 · 片单（下拉）· 回顾 · 场景检索，右侧待播队列与「管理」', async () => {
+  it('D-UI-02 / D-P2-04 观看区：首页 · 视频 · 人物 · 作品集 · 图片 · 片单 · 回顾 · 场景检索，右侧待播队列与「管理」', async () => {
     const wrapper = await mountApp();
 
     expect(wrapper.find('[data-test="nav-area-viewer"]').exists()).toBe(true);
     expect(groupLabels(wrapper)).toEqual([
       { key: 'browse', label: '浏览', pages: ['首页', '视频', '人物', '作品集', '图片'] },
-      { key: 'lists', label: '片单', pages: ['片单▾'] },
+      { key: 'lists', label: '片单', pages: ['片单'] },
       { key: 'review', label: '回顾与检索', pages: ['回顾', '场景检索'] }
     ]);
     expect(wrapper.findAll('.header-nav__divider')).toHaveLength(2);
@@ -505,14 +575,13 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(wrapper.find('[data-test="open-task-center"]').exists()).toBe(false);
     expect(wrapper.findAll('.header-tools .header-tool-btn').map(button => button.text())).toEqual(['待播队列', '管理']);
 
-    // 片单下拉：想看、榜单、观影记录、观看笔记；「已看」改名「观影记录」（D-PC52）。
-    const trigger = wrapper.get('[data-test="nav-menu-lists"]');
-    expect(trigger.attributes('aria-expanded')).toBe('false');
-    await trigger.trigger('click');
-    expect(trigger.attributes('aria-expanded')).toBe('true');
-    expect(wrapper.findComponent({ name: 'BaseMenu' }).props('items').map(item => item.label)).toEqual(['想看', '榜单', '观影记录', '观看笔记']);
+    // 「片单」不再是下拉（D-P2-04）：一个页面，四个标签在页里；「已看」改名「观影记录」（D-PC52）。
+    const lists = wrapper.get('[data-test="nav-lists"]');
+    expect(lists.attributes('aria-haspopup')).toBeUndefined();
+    expect(wrapper.find('[data-test="nav-menu-lists"]').exists()).toBe(false);
     expect(wrapper.get('.header-nav').text()).not.toContain('已看');
-    await trigger.trigger('click');
+    await lists.trigger('click');
+    expect(wrapper.vm.currentPage).toBe('lists');
     expect(wrapper.findComponent({ name: 'BaseMenu' }).exists()).toBe(false);
   });
 
@@ -948,21 +1017,22 @@ it('集中整理路由的旧导航确认迟到不会覆盖新任务', async () =
 // D-UI-07：观看笔记属于观看区，书签定位进整页详情并从书签起点起播；片库页的抽屉不再接手。
 it('观看笔记的书签进整页详情并从书签起点起播，不在页面挂载时启动播放', async () => {
   const wrapper = await mountApp(); const openBookmark = vi.fn(); wrapper.findComponent({ name: 'VideoListPage' }).vm.openBookmark = openBookmark;
-  await openListsMenuPage(wrapper, 'viewing-notes'); expect(wrapper.findComponent({ name: 'VideoDetailPage' }).exists()).toBe(false);
+  await openListsTab(wrapper, 'viewing-notes'); expect(wrapper.findComponent({ name: 'VideoDetailPage' }).exists()).toBe(false);
   const resolution = { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 0, end_ms: null }, source_token: 'checked' };
-  wrapper.findComponent({ name: 'ViewingNotesPage' }).vm.$emit('open-bookmark', resolution); await flushPromises();
+  // 观看笔记嵌在片单页里（D-P2-04），书签事件经 ListsPage 原样转出来。
+  wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('open-bookmark', resolution); await flushPromises();
   expect(wrapper.vm.currentPage).toBe('video-detail'); expect(openBookmark).not.toHaveBeenCalled();
   expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props()).toMatchObject({ videoId: 7, startAtMs: 0 });
-  expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['viewing-notes']);
+  expect(wrapper.vm.detailReturnStack.map(entry => [entry.page, entry.params])).toEqual([['lists', { tab: 'viewing-notes' }]]);
 });
 
 // I-1：书签的整段区间（起点、终点、原片版本）交给详情页的 bookmark，起播位置仍是书签起点。
 it('观看笔记的书签把整段区间交给整页详情；返回到上一层详情时不再带书签', async () => {
   const wrapper = await mountApp();
   api.GetVideosByIDs.mockResolvedValue([{ id: 9, name: '9.mp4' }]);
-  await openListsMenuPage(wrapper, 'viewing-notes');
+  await openListsTab(wrapper, 'viewing-notes');
   const resolution = { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 61_000, end_ms: 75_500 }, source_token: 'v3' };
-  wrapper.findComponent({ name: 'ViewingNotesPage' }).vm.$emit('open-bookmark', resolution); await flushPromises();
+  wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('open-bookmark', resolution); await flushPromises();
   const detail = () => wrapper.findComponent({ name: 'VideoDetailPage' });
   const passed = () => detail().vm.$.vnode.props;
   expect(passed()['start-at-ms']).toBe(61_000);
@@ -978,17 +1048,18 @@ it('观看笔记的书签把整段区间交给整页详情；返回到上一层�
 
 it('没有终点的书签区间 end_ms 为 null', async () => {
   const wrapper = await mountApp();
-  await openListsMenuPage(wrapper, 'viewing-notes');
-  wrapper.findComponent({ name: 'ViewingNotesPage' }).vm.$emit('open-bookmark', { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 5000 }, source_token: '' });
+  await openListsTab(wrapper, 'viewing-notes');
+  wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('open-bookmark', { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 5000 }, source_token: '' });
   await flushPromises();
   expect(wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$.vnode.props.bookmark).toEqual({ start_ms: 5000, end_ms: null, source_token: '' });
 });
 
-it('观看笔记首次进入才挂载，去原片核对再返回保留同一编辑宿主', async () => {
-  const wrapper = await mountApp(); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).exists()).toBe(false);
-  await openListsMenuPage(wrapper, 'viewing-notes'); const notes = wrapper.findComponent({ name: 'ViewingNotesPage' }).vm;
-  await wrapper.get('[data-test="nav-videos"]').trigger('click'); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).vm).toBe(notes); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).props('pageActive')).toBe(false);
-  await openListsMenuPage(wrapper, 'viewing-notes'); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).vm).toBe(notes);
+// 观看笔记本身「首次进入才挂载、之后只隐藏」由 ListsPage 管（viewer/ListsPage.test.js）；这里钉住它的宿主片单页同样只隐藏。
+it('观看笔记所在的片单页首次进入才挂载，去原片核对再返回保留同一编辑宿主', async () => {
+  const wrapper = await mountApp(); expect(wrapper.findComponent({ name: 'ListsPage' }).exists()).toBe(false);
+  await openListsTab(wrapper, 'viewing-notes'); const lists = wrapper.findComponent({ name: 'ListsPage' }).vm;
+  await wrapper.get('[data-test="nav-videos"]').trigger('click'); expect(wrapper.findComponent({ name: 'ListsPage' }).vm).toBe(lists); expect(wrapper.findComponent({ name: 'ListsPage' }).props('pageActive')).toBe(false);
+  await openListsTab(wrapper, 'viewing-notes'); expect(wrapper.findComponent({ name: 'ListsPage' }).vm).toBe(lists); expect(wrapper.findComponent({ name: 'ListsPage' }).props('tab')).toBe('viewing-notes');
 });
 
 // D-UI-07：场景检索属于观看区，命中进整页详情并从该时刻起播（openVideoAt）。
@@ -1133,7 +1204,7 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
 
   it.each([
     ['home', 'viewer'], ['videos', 'viewer'], ['people', 'viewer'], ['collections', 'viewer'], ['photos', 'viewer'],
-    ['watchlist', 'viewer'], ['movie-chart', 'viewer'], ['watched-movies', 'viewer'], ['viewing-notes', 'viewer'],
+    ['lists', 'viewer'],
     ['recap', 'viewer'], ['scenes', 'viewer'], ['video-detail', 'viewer'],
     ['manage-home', 'manage'], ['library-manage', 'manage'], ['photos-manage', 'manage'], ['downloads', 'manage'],
     ['video-workbench', 'manage'], ['insights', 'manage'], ['data-care', 'manage'], ['settings', 'manage']
@@ -1223,9 +1294,9 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
   const viewerCallers = [
     ['HomePage', 'home', 'open-video', 7],
     ['RecapPage', 'recap', 'open-video-id', 7],
-    ['ViewingNotesPage', 'viewing-notes', 'open-video-id', 7],
-    ['ViewingNotesPage', 'viewing-notes', 'open-video', { id: 7, name: 'a.mp4' }],
-    ['WatchedMoviesPage', 'watched-movies', 'open-video', { id: 7, name: 'a.mp4' }],
+    // 片单（D-P2-04）：想看「播放」、观看笔记、观影记录的事件经 ListsPage 转出来。
+    ['ListsPage', 'lists', 'open-video-id', 7],
+    ['ListsPage', 'lists', 'open-video', { id: 7, name: 'a.mp4' }],
     // I-3：人物与作品集页点视频不再开本页抽屉，交给 App 分流。
     ['EntityLibraryPage', 'people', 'open-video', { id: 7, name: 'a.mp4' }],
     ['EntityLibraryPage', 'collections', 'open-video', { id: 7, name: 'a.mp4' }],
@@ -1507,7 +1578,7 @@ describe('返回到重新挂载的页面时等内容长够再恢复滚动（I-2�
   }
 
   it.each([
-    ['watched-movies', 'WatchedMoviesPage', 'open-video', { id: 7 }],
+    ['lists', 'ListsPage', 'open-video', { id: 7 }],
     ['people', 'EntityLibraryPage', 'open-video', { id: 7 }],
     ['collections', 'EntityLibraryPage', 'open-video', { id: 7 }]
   ])('%s：内容长到够高才放回滚动位置', async (page, name, event, payload) => {
@@ -1527,8 +1598,8 @@ describe('返回到重新挂载的页面时等内容长够再恢复滚动（I-2�
   });
 
   it('最多等 3 秒，到点内容还不够就作罢，之后长高也不再滚', async () => {
-    const { wrapper, el, box } = await fromPage('watched-movies');
-    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name: 'WatchedMoviesPage' }).vm.$emit('open-video', { id: 7 }));
+    const { wrapper, el, box } = await fromPage('lists');
+    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('open-video', { id: 7 }));
     vi.advanceTimersByTime(3100);
     box.height = 5000;
     vi.advanceTimersByTime(500);
@@ -1536,8 +1607,8 @@ describe('返回到重新挂载的页面时等内容长够再恢复滚动（I-2�
   });
 
   it('等待中切到别的页面就取消，不把滚动位置放到新页面上', async () => {
-    const { wrapper, el, box } = await fromPage('watched-movies');
-    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name: 'WatchedMoviesPage' }).vm.$emit('open-video', { id: 7 }));
+    const { wrapper, el, box } = await fromPage('lists');
+    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name: 'ListsPage' }).vm.$emit('open-video', { id: 7 }));
     await wrapper.get('[data-test="nav-recap"]').trigger('click');
     box.height = 5000;
     vi.advanceTimersByTime(500);

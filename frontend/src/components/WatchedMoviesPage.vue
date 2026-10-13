@@ -1,7 +1,8 @@
 <template>
-  <section class="page-content watched-movies-page">
-    <!-- 改名「观影记录」（D-PC52）：原来的「已看」与片库的「已看」视图同名，被当成同一回事。 -->
-    <PageHeader title="观影记录" subtitle="你在年度榜单上标过「已看」的电影，按影片上映年份从新到旧分组。" />
+  <section :class="['watched-movies-page', embedded ? 'watched-movies-page--embedded' : 'page-content']">
+    <!-- 改名「观影记录」（D-PC52）：原来的「已看」与片库的「已看」视图同名，被当成同一回事。
+         embedded：嵌在片单页的「观影记录」标签里（D-P2-04），页头由片单页提供。 -->
+    <PageHeader v-if="!embedded" title="观影记录" subtitle="你在年度榜单上标过「已看」的电影，按影片上映年份从新到旧分组。" />
 
     <div class="watched-movies-toolbar">
       <span class="watched-movies-summary" data-test="watched-movies-summary">共 {{ total }} 部</span>
@@ -96,6 +97,10 @@ function libraryMatchKey(title, year) {
 export default {
   name: 'WatchedMoviesPage',
   components: { EmptyState, PageHeader, SkeletonBlock },
+  props: {
+    // 嵌在片单页里时不显示自己的页头，也不再套一层页面留白（片单页提供）。
+    embedded: { type: Boolean, default: false }
+  },
   emits: ['navigate', 'open-video'],
   data() {
     return {
@@ -282,6 +287,7 @@ export default {
 
 <style scoped>
 .watched-movies-page { max-width: 1000px; margin: 0 auto; padding: 24px 28px 40px; }
+.watched-movies-page--embedded { max-width: none; margin: 0; padding: 0; }
 .watched-movies-note { color: var(--text-secondary); font-size: var(--fs-secondary); }
 .watched-movies-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
 .watched-movies-summary { color: var(--text-secondary); font-size: var(--fs-secondary); }

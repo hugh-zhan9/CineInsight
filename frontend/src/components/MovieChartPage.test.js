@@ -68,8 +68,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function page() {
-  const wrapper = mount(MovieChartPage);
+async function page(props = {}) {
+  const wrapper = mount(MovieChartPage, { props });
   wrappers.push(wrapper);
   await flushPromises();
   return wrapper;
@@ -638,5 +638,19 @@ describe('刷新状态轮询', () => {
     await flushPromises();
 
     expect(api.ListMovieChart.mock.calls.length).toBe(reads);
+  });
+});
+
+describe('嵌在片单页里（D-P2-04）', () => {
+  it('embedded 时不显示自己的页头，挂载照样只报一次 OpenMovieChartYear；单独使用时页头还在', async () => {
+    const standalone = await page();
+    expect(standalone.get('h1').text()).toBe('年度榜单');
+    expect(standalone.classes()).toContain('page-content');
+    api.OpenMovieChartYear.mockClear();
+    const embedded = await page({ embedded: true });
+    expect(embedded.find('h1').exists()).toBe(false);
+    expect(embedded.classes()).not.toContain('page-content');
+    expect(embedded.find('[data-test="movie-chart-year"]').exists()).toBe(true);
+    expect(api.OpenMovieChartYear).toHaveBeenCalledTimes(1);
   });
 });
