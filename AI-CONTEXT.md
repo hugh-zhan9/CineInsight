@@ -201,6 +201,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 ### 2.10.3 下一集与待播队列（2026-10-10）
 - 全局一条持久队列（`playback_queue_states` 固定ID=1 + `playback_queue_entries`），条目可重复、冻结加入时的作品集顺序；结构/选择/设置修改带`expected_revision`做CAS，读取按`(position,id)`游标并在Revision变化时返回`queue_changed`。容量1万项、单次显式加入≤1000个ID，超限整次拒绝。重启把运行态标interrupted并保持暂停，不自行起播。
 - 播放器：系统默认（只支持手动下一项）、应用内`QueueInlinePlayer`（`/preview/queue/{32位hex token}`，以租用的文件描述符按Range服务并逐次复核源size/mtime，不暴露路径）、专用IINA进程（私有mpv IPC，keep-open=yes的`eof-reached`为结束事实，观察者每个进程只注册一次，复用进程时先读当前playlist entry再loadfile）。自动连播默认关，只有当前token/entry的可靠自然结束推进一次；暂停、停止、关闭、崩溃、加载失败、重复结束都不推进。**拖动到末尾不算自然结束**（seek后必须观察到越过落点的实际播放），返回`queue_end_ignored`且不记有效观看；迟到/重挂载的旧序号返回`queue_stale_event`，播放器暂停并提示重新播放。IINA的time-pos事件按最新值合并，其他事件保序，超过128条积压才停止控制。
+- 「加入待播」按钮（`QueueActionButton`，2026-10-13）：只针对一部视频（不替换队列）时是开关——这部已在队列里显示「移除待播」（`aria-pressed`），点了按同一 revision 读完整个队列、把它的每一条依次 `remove`（revision 逐条加一，中途 `queue_changed` 就按最新队列重来，最多 3 次）；不在就「加入待播」。打开时读一次，`playback-queue-state` 事件再读，晚到的旧结果丢掉；读不到时按钮保持原样。助手在 `utils/playbackQueue.js`（`findQueueEntriesForVideo` / `removeVideoFromPlaybackQueue`）。作品集、「从本集播放」「下一集」等整批或替换队列的按钮照旧只加。
 - 正式统计、有效观看与日记复用VideoService/viewEvents的context核心；维护与退出先关闭队列准入再立围栏。合同见[播放队列合同](docs/loopx/design/2026-10-10-media-workbench/播放队列合同.md)。真实IINA集成测试需`CINEINSIGHT_TEST_IINA=1`。
 
 ### 2.10.4 多版本聚合（2026-10-10）
