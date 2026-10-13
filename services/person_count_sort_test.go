@@ -105,3 +105,74 @@ func TestListPeopleByCountOrdersAndPaginatesWithTies(t *testing.T) {
 		t.Fatalf("关键词筛选: %+v %v", filtered, err)
 	}
 }
+
+// 复审 N-1：游标名原样用数据库算的 LOWER(display_name)。SQLite 的 LOWER 只转 ASCII，西里尔、带变音的拉丁字母与
+// 中文混排、同名同数、页大小 1 时翻页不重不漏；按名称（ListPeople）与按出现次数两种都测（两个后端）。
+func TestPeoplePagingWithMixedScriptNames(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := models.Video{Name: "v.mp4", Path: "/library/people-mixed/v.mp4", Directory: "/library/people-mixed"}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewPersonService(t.TempDir())
+	names := []string{"Анна", "Борис", "Вера", "Глеб", "Élodie", "Özge", "Øystein", "alice", "Bob", "张三", "Анна", "ÖZGE", "Élodie"}
+	for index, name := range names {
+		person, err := service.CreatePerson(name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index%2 == 0 {
+			if err := service.AddPersonVideos(person.ID, []uint{video.ID}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ids := func(items []PersonListItem) []uint {
+		out := make([]uint, 0, len(items))
+		for _, item := range items {
+			out = append(out, item.Person.ID)
+		}
+		return out
+	}
+	fullByName, err := service.ListPeople("", "", 0, 200)
+	if err != nil || len(fullByName) != len(names) {
+		t.Fatalf("按名称一次取完: %d %v", len(fullByName), err)
+	}
+	fullByCount, err := service.ListPeopleByCount("", 0, "", 0, 200)
+	if err != nil || len(fullByCount) != len(names) {
+		t.Fatalf("按次数一次取完: %d %v", len(fullByCount), err)
+	}
+	for _, limit := range []int{1, 2, 5} {
+		paged := []PersonListItem{}
+		cursorName, cursorID := "", uint(0)
+		for pages := 0; pages < 100; pages++ {
+			page, err := service.ListPeople("", cursorName, cursorID, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paged = append(paged, page...)
+			if len(page) < limit {
+				break
+			}
+			cursorName, cursorID = page[len(page)-1].CursorName, page[len(page)-1].Person.ID
+		}
+		requireUintSlice(t, fmt.Sprintf("按名称 limit=%d", limit), ids(paged), ids(fullByName))
+
+		paged = paged[:0]
+		cursorCount := 0
+		cursorName, cursorID = "", 0
+		for pages := 0; pages < 100; pages++ {
+			page, err := service.ListPeopleByCount("", cursorCount, cursorName, cursorID, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paged = append(paged, page...)
+			if len(page) < limit {
+				break
+			}
+			last := page[len(page)-1]
+			cursorCount, cursorName, cursorID = int(last.ActiveVideoCount), last.CursorName, last.Person.ID
+		}
+		requireUintSlice(t, fmt.Sprintf("按次数 limit=%d", limit), ids(paged), ids(fullByCount))
+	}
+}

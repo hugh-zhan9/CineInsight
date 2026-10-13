@@ -97,6 +97,10 @@ type watchlistChartLinker interface {
 	UnlinkMovieVideo(doubanID string, videoID uint) error
 }
 
+// ErrWatchlistChartLinkerUnavailable 表示豆瓣条目在片单页关联 / 解除时榜单服务没挂上：片单一侧已经写好，
+// 榜单一侧没同步。两步都是幂等的，重试即可补上。
+var ErrWatchlistChartLinkerUnavailable = errors.New("榜单服务不可用")
+
 type watchlistChartLinks struct {
 	mu     sync.RWMutex
 	linker watchlistChartLinker
@@ -462,10 +466,15 @@ func (s *WatchlistService) LinkVideo(entryID, videoID uint) error {
 	if err != nil {
 		return err
 	}
-	if linker := s.chartLinker(); doubanID != "" && linker != nil {
-		if err := linker.LinkMovieToVideo(doubanID, videoID); err != nil {
-			return fmt.Errorf("已在想看中关联，但同步到榜单失败: %w", err)
-		}
+	if doubanID == "" {
+		return nil
+	}
+	linker := s.chartLinker()
+	if linker == nil {
+		return fmt.Errorf("已在想看中关联，但%w，榜单上还没有这条关联；稍后重试即可", ErrWatchlistChartLinkerUnavailable)
+	}
+	if err := linker.LinkMovieToVideo(doubanID, videoID); err != nil {
+		return fmt.Errorf("已在想看中关联，但同步到榜单失败（稍后重试即可）: %w", err)
 	}
 	return nil
 }
@@ -490,10 +499,15 @@ func (s *WatchlistService) UnlinkVideo(entryID, videoID uint) error {
 	if err != nil {
 		return err
 	}
-	if linker := s.chartLinker(); doubanID != "" && linker != nil {
-		if err := linker.UnlinkMovieVideo(doubanID, videoID); err != nil {
-			return fmt.Errorf("已在想看中解除，但同步到榜单失败: %w", err)
-		}
+	if doubanID == "" {
+		return nil
+	}
+	linker := s.chartLinker()
+	if linker == nil {
+		return fmt.Errorf("已在想看中解除，但%w，榜单上的这条关联还在；稍后重试即可", ErrWatchlistChartLinkerUnavailable)
+	}
+	if err := linker.UnlinkMovieVideo(doubanID, videoID); err != nil {
+		return fmt.Errorf("已在想看中解除，但同步到榜单失败（稍后重试即可）: %w", err)
 	}
 	return nil
 }
@@ -522,10 +536,33 @@ func recordChartUnlinkDismissals(tx *gorm.DB, doubanID string, videoID uint) err
 	return nil
 }
 
+// clearChartLinkDismissals 是榜单页关联（LinkMovieToVideo）的另一半，与 recordChartUnlinkDismissals 对称：
+// 给此刻以这个豆瓣 ID 为来源的每个想看条目清掉这部作品（视频所在版本组的全部成员）的 dismissed。
+func clearChartLinkDismissals(tx *gorm.DB, doubanID string, videoID uint) error {
+	var entryIDs []uint
+	if err := tx.Model(&models.WatchlistEntry{}).
+		Where("source_name = ? AND source_item_id = ?", WatchlistMetadataSourceDouban, doubanID).
+		Order("id ASC").Pluck("id", &entryIDs).Error; err != nil {
+		return fmt.Errorf("读取想看片单失败: %w", err)
+	}
+	if len(entryIDs) == 0 {
+		return nil
+	}
+	members, err := workMembersOf(tx, videoID)
+	if err != nil {
+		return err
+	}
+	if err := tx.Where("watchlist_entry_id IN ? AND video_id IN ? AND origin = ?", entryIDs, members, models.WatchlistLinkOriginDismissed).
+		Delete(&models.WatchlistVideoLink{}).Error; err != nil {
+		return fmt.Errorf("清除解除记录失败: %w", err)
+	}
+	return nil
+}
+
 // --- 首页「想看的片片库里已有」 ---
 
 // ListInLibrary 返回首页「想看的片片库里已有」：每个条目取最近一次关联的未失效视频，映射到它所在版本组的代表；
-// 这部作品任一（活跃、未失效）版本看过就不列。按关联时间倒序，limit 默认 12、最大 50。
+// 这部作品任一（活跃的，含失效离线的）版本看过就不列。按关联时间倒序，limit 默认 12、最大 50。
 func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, error) {
 	if limit <= 0 {
 		limit = watchlistInLibraryDefaultLimit
@@ -598,7 +635,8 @@ type playableWork struct {
 }
 
 // loadPlayableWorks 把视频映射到它所在作品：代表 = 版本组里活跃、未失效的成员按 (版本顺序, 视频 ID) 第一个
-// （与 CollapseVersions 同一规则），不在组里就是它自己；watched = 这些成员里任一看过。没有可播成员的视频不在结果里。
+// （与 CollapseVersions 同一规则），不在组里就是它自己（须未失效）；watched = 组里任一活跃成员看过，失效（离线）的
+// 成员也算——看过就是看过，只是要播的代表必须在线。没有可播成员的视频不在结果里。
 func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, error) {
 	result := map[uint]playableWork{}
 	ids := uniqueUintIDs(videoIDs)
@@ -621,22 +659,29 @@ func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, err
 			DisplayTitle string
 			Name         string
 			IsWatched    bool
+			IsStale      bool
 		}
 		if err := db.Table("video_version_members AS vm").
-			Select("vm.group_id AS group_id, v.id AS id, v.display_title AS display_title, v.name AS name, v.is_watched AS is_watched").
-			Joins("JOIN videos v ON v.id = vm.video_id AND v.deleted_at IS NULL AND v.is_stale = ?", false).
+			Select("vm.group_id AS group_id, v.id AS id, v.display_title AS display_title, v.name AS name, v.is_watched AS is_watched, v.is_stale AS is_stale").
+			Joins("JOIN videos v ON v.id = vm.video_id AND v.deleted_at IS NULL").
 			Where("vm.group_id IN ?", uniqueUintIDs(groupIDs)).
 			Order("vm.group_id ASC").Order("vm.position ASC").Order("vm.video_id ASC").
 			Scan(&members).Error; err != nil {
 			return nil, fmt.Errorf("读取版本组成员失败: %w", err)
 		}
+		watchedGroups := map[uint]bool{}
 		for _, member := range members {
-			work, seen := byGroup[member.GroupID]
-			if !seen {
-				work.representative = watchlistLinkVideo{ID: member.ID, DisplayTitle: member.DisplayTitle, Name: member.Name, IsWatched: member.IsWatched}
+			watchedGroups[member.GroupID] = watchedGroups[member.GroupID] || member.IsWatched
+			if member.IsStale {
+				continue
 			}
-			work.watched = work.watched || member.IsWatched
-			byGroup[member.GroupID] = work
+			if _, seen := byGroup[member.GroupID]; !seen {
+				byGroup[member.GroupID] = playableWork{representative: watchlistLinkVideo{ID: member.ID, DisplayTitle: member.DisplayTitle, Name: member.Name, IsWatched: member.IsWatched}}
+			}
+		}
+		for group, work := range byGroup {
+			work.watched = watchedGroups[group]
+			byGroup[group] = work
 		}
 	}
 	var singles []watchlistLinkVideo

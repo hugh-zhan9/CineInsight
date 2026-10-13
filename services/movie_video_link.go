@@ -102,11 +102,14 @@ func (s *MovieChartService) LinkMovieToVideo(doubanID string, videoID uint) erro
 	}
 	// DoNothing 生成 ON CONFLICT DO NOTHING，两个后端行为一致；冲突目标是
 	// (douban_id, video_id) 唯一索引，批内没有重复行（单行插入），不会触发 21000。
+	// 同一事务里清掉以这个豆瓣 ID 为来源的想看条目对这部作品的「解除过」（与 UnlinkMovieVideo 对称，UI 二期 D-P2-03）。
 	link := models.MovieVideoLink{DoubanID: doubanID, VideoID: videoID}
-	if err := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&link).Error; err != nil {
-		return fmt.Errorf("关联视频失败: %w", err)
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&link).Error; err != nil {
+			return fmt.Errorf("关联视频失败: %w", err)
+		}
+		return clearChartLinkDismissals(tx, doubanID, videoID)
+	})
 }
 
 // UnlinkMovieVideo 解除关联，没有这条关联时是幂等的空操作。同一事务里给此刻以这个豆瓣 ID 为来源的想看条目
