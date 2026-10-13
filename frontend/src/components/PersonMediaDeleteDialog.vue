@@ -77,12 +77,13 @@ export default {
     close() { if (!this.busy) this.$emit('close'); },
     // 只在确认步骤里接管 Esc；其余阶段不拦别的弹窗与抽屉的 Esc。
     escape(event) { if (this.stage === 'confirm' && event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); this.close(); } },
-    // 每次都停在确认框，等用户点确认（confirm）；这里只把勾选恢复成设置里的默认值。
+    // 每次都停在确认框，等用户点确认（confirm）。「同时把原文件移到废纸篓」默认不勾：触发按钮写的是
+    // 「从片库移除… / 从图片库移除…」（只删记录，D-UD-08），框里默认要与它一致，移文件得用户自己勾。
     async start() {
       this.error = ''; this.undoToastID = null; this.stage = 'confirm';
       if (this.deleteOriginal === null) await this.loadSettings();
       if (this.disposed || this.busy) return;
-      this.deleteFile = this.deleteOriginal;
+      this.deleteFile = false;
     },
     // 与洞察、下载页同一处读设置（utils/trashConfirm.js）；读不出来时按默认值：不删原文件。
     async loadSettings() {

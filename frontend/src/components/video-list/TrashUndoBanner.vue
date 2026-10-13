@@ -69,7 +69,8 @@ function emptyOutcome(kind, deleteFile) {
 // RestoreTrashBatch 只恢复仍是已删除的条目：有项没回来时再试是安全的；一项都没恢复、也没有失败，
 // 说明这批已经在回收站里恢复过了（见 ALREADY_RESTORED_MESSAGE）。
 // 不依赖组件实例：人物页的删除对话框（PersonMediaDeleteDialog）关掉以后从「最近操作」撤销也走这一段。
-export const ALREADY_RESTORED_MESSAGE = '这批已经恢复过了';
+// 恢复 0 项、失败 0 项：这批已经不在回收站里——可能已从回收站恢复，也可能已永久删除或从回收站移除。
+export const ALREADY_RESTORED_MESSAGE = '这批已不在回收站（已恢复或已清除）';
 
 // 撤销有项没回来时抛出的原因（提示里是「撤销失败：恢复 N 项，M 项未恢复：…」）。
 export function partialRestoreError(restored, failures) {

@@ -3065,7 +3065,11 @@ export default {
       this.selectingAllMatching = true;
       const queryKey = this.virtualListQueryKey;
       const editSeq = this.selectionEditSeq;
-      const unchanged = () => this.virtualListQueryKey === queryKey && this.selectionEditSeq === editSeq;
+      // 勾选、取消选择与键盘移动会推 selectionEditSeq；批量动作做完直接清空选择的路径（导入本地资料、移动、
+      // 版本组、剪辑工程）不推，所以再比一次内容：选择变了就作废这次全选。
+      const startSelection = [...this.selectedVideoIds].sort((a, b) => a - b).join(',');
+      const sameSelection = () => [...this.selectedVideoIds].sort((a, b) => a - b).join(',') === startSelection;
+      const unchanged = () => this.virtualListQueryKey === queryKey && this.selectionEditSeq === editSeq && sameSelection();
       try {
         if (this.reloadPromise) await this.reloadPromise;
         await this.waitForLoadIdle();

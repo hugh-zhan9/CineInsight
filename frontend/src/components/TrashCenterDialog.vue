@@ -294,7 +294,7 @@ export function summarizeTrashFailures(items) {
 }
 
 function emptyEntryList() {
-  return { items: [], nextCursor: 0, hasMore: false, loading: false, loaded: false, error: '', selected: [], busy: false, notice: '', token: 0 };
+  return { items: [], nextCursor: 0, hasMore: false, loading: false, loaded: false, error: '', selected: [], busy: false, notice: '', token: 0, listFilter: null };
 }
 
 function emptyFilter() {
@@ -486,7 +486,10 @@ export default {
       const token = ++state.token;
       state.loading = true;
       state.error = '';
-      const filter = this.filters[kind];
+      // 往后翻页用这份列表第一页时的筛选：搜索框里打了字还没回车时，「加载更多」「全选当前结果」不能把新词的结果
+      // 拼到旧列表后面。重读（非 append）才换成当前筛选。
+      const filter = append && state.listFilter ? state.listFilter : { ...this.filters[kind] };
+      if (!append) state.listFilter = filter;
       try {
         const page = await ListTrashEntries({
           kind,
@@ -532,9 +535,9 @@ export default {
         state.selected = [];
         return;
       }
-      const filter = JSON.stringify(this.filters[kind]);
+      const listFilter = state.listFilter;
       let token = state.token;
-      const unchanged = () => state.token === token && this.visible && this.activeTab === kind && JSON.stringify(this.filters[kind]) === filter;
+      const unchanged = () => state.token === token && this.visible && this.activeTab === kind && state.listFilter === listFilter;
       while (state.hasMore && !state.error && unchanged()) {
         const before = state.items.length;
         await this.loadEntries(kind, { append: true });

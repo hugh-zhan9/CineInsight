@@ -207,7 +207,7 @@ describe('LIB-12 删除与撤销', () => {
   });
 
   // M-4：这批已经在回收站里恢复过了（恢复 0 项、也没有失败）：不再一直报错，记录移除并说一声。
-  it('这批已经从回收站恢复过：撤销时提示「这批已经恢复过了」，「最近操作」移除这一条', async () => {
+  it('这批已经从回收站恢复过：撤销时提示「这批已不在回收站（已恢复或已清除）」，「最近操作」移除这一条', async () => {
     api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 1, code: 'ok' }], 'b-done'));
     const afterRestore = vi.fn().mockResolvedValue();
     const wrapper = mountBanner({ afterRestore });
@@ -217,7 +217,7 @@ describe('LIB-12 删除与撤销', () => {
 
     api.RestoreTrashBatch.mockResolvedValueOnce(result([], 'b-done'));
     expect(await recentOperations.undo(operation.id)).toBe(true);
-    expect(feedback.notify).toHaveBeenCalledWith('这批已经恢复过了');
+    expect(feedback.notify).toHaveBeenCalledWith('这批已不在回收站（已恢复或已清除）');
     expect(feedbackState.toasts.filter(item => item.level === 'error')).toEqual([]);
     expect(recentOperations.list()).toEqual([]);
     expect(afterRestore).toHaveBeenCalledWith([], true);

@@ -108,7 +108,7 @@ describe('PersonMediaDeleteDialog', () => {
   });
 
   // M-4：这批已经在回收站里恢复过了（恢复 0 项、也没有失败）：记录移除并说一声，宿主以回收站为准重读。
-  it('这批已经从回收站恢复过：撤销时提示「这批已经恢复过了」，「最近操作」移除这一条', async () => {
+  it('这批已经从回收站恢复过：撤销时提示「这批已不在回收站（已恢复或已清除）」，「最近操作」移除这一条', async () => {
     api.DeleteImagesWithResult.mockResolvedValueOnce(okResult([11], 'batch-done'));
     api.RestoreTrashBatch.mockResolvedValueOnce({ items: [] });
     const onRestored = vi.fn();
@@ -120,7 +120,7 @@ describe('PersonMediaDeleteDialog', () => {
     const [entry] = recentOperations.list();
     expect(await recentOperations.undo(entry.id)).toBe(true);
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-done');
-    expect(notify).toHaveBeenCalledWith('这批已经恢复过了');
+    expect(notify).toHaveBeenCalledWith('这批已不在回收站（已恢复或已清除）');
     expect(onRestored.mock.calls).toEqual([[{ kind: 'image', ids: [] }]]);
     expect(recentOperations.list()).toEqual([]);
   });
@@ -140,13 +140,16 @@ describe('PersonMediaDeleteDialog', () => {
   });
 
   // I-2：人物页 / 抽屉里删媒体一律先确认，不看「删除前确认」开关（按钮容易被当成「从人物名下拿掉」）；
-  // 框里「同时把原文件移到废纸篓」默认取「删除原文件」的设置。
-  it('「删除前确认」关掉时仍弹确认框；用户确认之前不调删除，勾选默认取「删除原文件」', async () => {
+  // 框里「同时把原文件移到废纸篓」默认不勾（即使「删除原文件」开着）：触发按钮写的是「从片库移除… / 从图片库移除…」，
+  // 框里默认要与它一致；移文件得用户自己勾上，按钮随之改成「移到废纸篓」。
+  it('「删除前确认」关掉时仍弹确认框；用户确认之前不调删除，移原文件默认不勾、勾上才移到废纸篓', async () => {
     api.GetSettings.mockResolvedValue({ confirm_before_delete: false, delete_original_file: true });
     api.DeleteImagesWithResult.mockResolvedValueOnce({ batch_id: 'b9', items: [{ id: 11, code: 'ok' }] });
     const w = await mountLive();
     expect(body().get('[data-test="person-media-delete-dialog"]').text()).toContain('photo.jpg');
-    expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(true);
+    expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(false);
+    expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('从图片库移除');
+    await body().get('[data-test="person-media-delete-file"]').setValue(true);
     expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('移到废纸篓');
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
     expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();

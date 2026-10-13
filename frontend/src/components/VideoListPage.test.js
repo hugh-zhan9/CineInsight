@@ -920,6 +920,24 @@ describe('VideoListPage 工具栏接线', () => {
     wrapper.unmount();
   });
 
+  it('M-2 补取途中批量动作直接清空了选择（不经勾选路径）也让全选作废', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'a.mp4' }], next_cursor: { id: 1 } });
+    api.CountLibraryVideos.mockResolvedValue(2);
+    const wrapper = await mountPage({ directories: [{ path: '/v' }] });
+    let release;
+    api.SearchLibraryVideoPage.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ videos: [{ id: 2, name: 'b.mp4' }], next_cursor: null }); }));
+    wrapper.vm.toggleVideoSelection({ id: 1 }, true);
+    const selecting = wrapper.vm.selectAllMatching();
+    await flushPromises();
+    // 导入本地资料、移动、版本组、剪辑工程做完时直接 selectedVideoIds = []，不推 selectionEditSeq。
+    wrapper.vm.selectedVideoIds = [];
+    release();
+    await selecting;
+    await flushPromises();
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
   it('D-UD-10 补取剩余的页失败时不全选', async () => {
     api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'a.mp4' }], next_cursor: { id: 1 } });
     const wrapper = await mountPage({ directories: [{ path: '/v' }] });

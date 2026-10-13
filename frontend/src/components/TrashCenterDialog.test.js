@@ -143,7 +143,25 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     wrapper.unmount();
   });
 
-  it('M-1 补取途中改了筛选（还没应用）或换了页签也不选', async () => {
+  // 搜索框里打了字还没回车：列表仍是旧筛选的结果，补取也按列表当时的筛选取（不把新词的结果拼到后面），全选这份列表。
+  it('M-1 补取途中在搜索框打字（还没应用）：补取仍按列表的筛选取，全选这份列表', async () => {
+    let releaseAppend;
+    api.ListTrashEntries
+      .mockResolvedValueOnce(page([entry(1)], { hasMore: true, nextCursor: 1 }))
+      .mockImplementationOnce(() => new Promise(resolve => { releaseAppend = () => resolve(page([entry(2)])); }));
+    const wrapper = await mountDialog();
+    wrapper.vm.filters.video.query = '新的关键词';
+    const selecting = wrapper.vm.toggleSelectAll();
+    await flushPromises();
+    releaseAppend();
+    await selecting;
+    await flushPromises();
+    expect(api.ListTrashEntries).toHaveBeenLastCalledWith(expect.objectContaining({ query: '', cursor_id: 1 }));
+    expect(wrapper.vm.lists.video.selected).toEqual([1, 2]);
+    wrapper.unmount();
+  });
+
+  it('M-1 补取途中换了页签也不选', async () => {
     let releaseAppend;
     api.ListTrashEntries
       .mockResolvedValueOnce(page([entry(1)], { hasMore: true, nextCursor: 1 }))
@@ -151,7 +169,7 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     const wrapper = await mountDialog();
     const selecting = wrapper.vm.toggleSelectAll();
     await flushPromises();
-    wrapper.vm.filters.video.query = '新的关键词';
+    wrapper.vm.activeTab = 'image';
     releaseAppend();
     await selecting;
     await flushPromises();
