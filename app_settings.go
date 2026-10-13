@@ -521,6 +521,7 @@ func (a *App) rescanAddedDirectory(added models.ScanDirectory) {
 	if a.cleanupService != nil && (result.Added > 0 || result.Restored > 0 || result.Relocated > 0) {
 		a.cleanupService.InvalidateAnalysis()
 	}
+	a.triggerWatchlistLibraryMatch("directory-added", result.Added)
 	if a.ctx == nil {
 		return
 	}

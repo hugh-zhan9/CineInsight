@@ -49,7 +49,7 @@ func TestCleanupConsolidationReviewFreshDataAndExternalProtection(t *testing.T) 
 	if state.Status != "completed" {
 		t.Fatalf("%+v", state)
 	}
-	if err := database.DB.Model(&models.Video{}).Where("id = ?", a.ID).Updates(map[string]interface{}{"display_title": "new title", "is_favorite": true}).Error; err != nil {
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", a.ID).Updates(map[string]interface{}{"display_title": "new title", "title_sort_key": models.VideoTitleSortKey("new title", ""), "is_favorite": true}).Error; err != nil {
 		t.Fatal(err)
 	}
 	// 新实例完全没有内存分析，回读必须依赖持久快照恢复全部外部保护。

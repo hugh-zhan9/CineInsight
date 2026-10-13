@@ -903,6 +903,8 @@ func ensureCoreQueryIndexes(db *gorm.DB) {
 		`CREATE INDEX IF NOT EXISTS idx_videos_watched_active ON videos(is_watched, id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_videos_watch_progress_active ON videos(watch_position_seconds, id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_videos_last_played_active ON videos(last_played_at DESC, id DESC) WHERE deleted_at IS NULL AND last_played_at IS NOT NULL`,
+		// 片名排序（UI 二期 §2.3）：title_asc 按 (title_sort_key, id) 键集分页。
+		`CREATE INDEX IF NOT EXISTS idx_videos_title_sort_active ON videos(title_sort_key, id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_video_tags_tag_video ON video_tags(tag_id, video_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_video_tags_video_tag ON video_tags(video_id, tag_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_library_views_name_active ON saved_library_views(name) WHERE deleted_at IS NULL`,

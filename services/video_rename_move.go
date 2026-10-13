@@ -61,7 +61,8 @@ func (s *VideoService) relocateVideoRecord(db *gorm.DB, id uint, newPath string)
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
+		// 改了文件名：经 UpdateVideoTitleFields 一并写片名排序键（UI 二期 §2.3）。
+		result := UpdateVideoTitleFields(tx.Model(&models.Video{}).Where("id = ?", id), id, map[string]interface{}{
 			"path":         newPath,
 			"directory":    filepath.Dir(newPath),
 			"name":         filepath.Base(newPath),
@@ -165,7 +166,7 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 	}
 
 	// 更新数据库记录
-	if err := database.DB.Model(&video).Updates(map[string]interface{}{
+	if err := UpdateVideoTitleFields(database.DB.Model(&video), video.ID, map[string]interface{}{
 		"name": newName,
 		"path": newPath,
 	}).Error; err != nil {

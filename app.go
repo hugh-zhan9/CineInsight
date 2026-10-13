@@ -250,7 +250,7 @@ func (a *App) wireBrowserBridge() {
 				Concurrency: settings.BrowserDownloadConcurrency,
 			}, nil
 		},
-		ImportDirectory: services.BrowserDownloadImporterFromScan(a.videoService, a.directoryService.GetAllDirectories),
+		ImportDirectory: a.importDownloadAndMatchWatchlist(services.BrowserDownloadImporterFromScan(a.videoService, a.directoryService.GetAllDirectories)),
 		Tasks:           a.backgroundTasks,
 		// 下载完自动查重（D-DD-01..05）：判据沿用清理中心，新片指纹顺带写进同一张表。
 		CheckDuplicates: (&services.DownloadDuplicateChecker{PerceptualHash: a.perceptualHash}).Check,
@@ -452,6 +452,9 @@ func (a *App) startup(ctx context.Context) {
 	a.aiTaggingService.Start(ctx)
 	// 想看片单的在线补全：先把进程重启后残留的 running 刷回 pending，再起 worker。
 	a.watchlistService.StartEnrichment(ctx)
+	// UI 二期：后台补齐片名排序键（§2.3），再给全部未关联的想看条目跑一轮片库自动关联（D-P2-03）。
+	services.StartVideoTitleSortKeyBackfill(ctx)
+	a.watchlistService.TriggerLibraryMatch("startup")
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
 	go a.triggerImageAITaggingAuto("startup")
 	// 手机端服务的启停一律经生命周期锁，与设置页开关、数据库维护互斥；开关关着时不监听（D-PC45）。
@@ -559,6 +562,7 @@ func (a *App) wireStartupHooks(emit func(event string, data any)) {
 		if event.Result != nil && event.Result.Added > 0 {
 			// 自动唤醒经空闲门（D-030）；用户显式的 TriggerAITagging 不走这里。
 			go a.triggerAITaggingAuto("library-watch")
+			a.triggerWatchlistLibraryMatch("library-watch", event.Result.Added)
 		}
 		emit("library-watcher-reconciled", event)
 	})
@@ -727,6 +731,7 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.watchlistService != nil {
 		a.watchlistService.StopEnrichmentAndWait()
+		a.watchlistService.WaitLibraryMatch()
 	}
 	if svc := a.movieChartService(); svc != nil {
 		// 必须等它真的收摊：详情阶段是 1 次/秒的限速循环，不取消就会在退出途中

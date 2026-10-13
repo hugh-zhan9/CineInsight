@@ -71,11 +71,13 @@ type TagPersonConversion struct {
 
 // MovieVideoLink 是榜单条目（豆瓣 ID）与片库视频的关联（D-PC52）。
 // 按豆瓣 ID 字符串逻辑关联榜单缓存表，理由同 movie_chart.go：不建外键。
+// Origin 记关联怎么来的（UI 二期 D-P2-03）：空串 = 手动（含存量行），auto = 想看自动匹配（WatchlistLinkOriginAuto）。
 type MovieVideoLink struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
 	DoubanID  string    `gorm:"size:16;not null;uniqueIndex:idx_movie_video_links_pair,priority:1" json:"douban_id"`
 	VideoID   uint      `gorm:"not null;uniqueIndex:idx_movie_video_links_pair,priority:2;index" json:"video_id"`
 	Video     Video     `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	Origin    string    `gorm:"size:16;not null;default:''" json:"origin"`
 	CreatedAt time.Time `json:"created_at" ts_type:"string"`
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }

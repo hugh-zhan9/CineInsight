@@ -89,3 +89,30 @@ type WatchlistEntry struct {
 	CreatedAt time.Time `json:"created_at" ts_type:"string"`
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }
+
+// 想看条目与片库视频关联的来源（watchlist_video_links.origin，movie_video_links.origin，UI 二期 D-P2-03）。
+const (
+	// WatchlistLinkOriginAuto：片名与年份完全一致、只对上一部作品时自动建立。
+	WatchlistLinkOriginAuto = "auto"
+	// WatchlistLinkOriginManual：用户点「确认」建立。movie_video_links 上手动关联存空串（存量行同义）。
+	WatchlistLinkOriginManual = "manual"
+	// WatchlistLinkOriginDismissed：用户解除过这一对，之后不再自动关联（所有来源都记在 watchlist_video_links）。
+	WatchlistLinkOriginDismissed = "dismissed"
+)
+
+// WatchlistVideoLink 是非豆瓣来源想看条目与片库视频的关联（origin = auto / manual），以及所有来源的
+// 「解除过」记录（origin = dismissed）。豆瓣来源（source_name = douban 且 source_item_id 非空）的已关联
+// 仍存在 movie_video_links——榜单的已看同步依赖它；读一个条目的关联 = 对应那张表的已关联行减去这里的
+// dismissed 行（UI 二期详细设计 §2.2）。一对 (条目, 视频) 只有一行：解除就是把这一行改成 dismissed。
+//
+// Origin 不设 gorm default，创建时显式赋值（GORM 会把零值当未设置换成默认值，见 2026-09-02 那条禁令）。
+type WatchlistVideoLink struct {
+	ID               uint           `gorm:"primarykey" json:"id"`
+	WatchlistEntryID uint           `gorm:"not null;uniqueIndex:idx_watchlist_video_links_pair,priority:1" json:"watchlist_entry_id"`
+	VideoID          uint           `gorm:"not null;uniqueIndex:idx_watchlist_video_links_pair,priority:2;index" json:"video_id"`
+	Origin           string         `gorm:"size:16;not null" json:"origin"`
+	Entry            WatchlistEntry `gorm:"foreignKey:WatchlistEntryID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	Video            Video          `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	CreatedAt        time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt        time.Time      `json:"updated_at" ts_type:"string"`
+}

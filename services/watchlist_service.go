@@ -30,6 +30,8 @@ type WatchlistService struct {
 	// bind 是「条目被补全写回豆瓣 ID」的观察者槽位（D-PC52），由榜单服务在构造时
 	// 挂上。零值可用；片单一侧只认接口，不 import 榜单服务的具体类型。
 	bind watchlistDoubanBind
+	// match 是片库自动关联的单飞状态（UI 二期 D-P2-03），实现在 watchlist_library_match.go。零值可用。
+	match watchlistLibraryMatch
 }
 
 // NewWatchlistService 照 NewPersonService / NewCollectionService 的形态构造：
@@ -155,6 +157,9 @@ func (s *WatchlistService) Create(title, kind string) (*models.WatchlistEntry, e
 	// 时这是空操作。条目本身随返回值给到调用方，所以这里不额外发进度事件——
 	// pending 是初始状态，不是 §3.1 转换表里的落点。
 	s.TriggerEnrichment()
+	// 片库自动关联（D-P2-03）：手动新建的条目还没有年份，这一次通常连不上，补全成功后会再算一次。
+	// 榜单新建条目（EnsureChartEntry）不在这里算：它同样没有年份，又是在榜单的标记锁里调用的。
+	s.matchEntryToLibrary(entry.ID, "create")
 	return entry, nil
 }
 
@@ -228,6 +233,10 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	}
 	if result.RowsAffected == 0 {
 		return ErrWatchlistEntryNotFound
+	}
+	// 改名后按新片名做一次片库自动关联（D-P2-03），赶在进度事件之前，前端刷新这一行时就能看到。
+	if renamed {
+		s.matchEntryToLibrary(id, "rename")
 	}
 	// 状态落定就发一次进度。读不回来（这一瞬又被删了）就不发，编辑本身已经成功。
 	var entry models.WatchlistEntry
@@ -504,6 +513,8 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 	}
 	// 先按写回前的来源通知「来源变了」，再改 entry：观察者要拿旧、新两个豆瓣 ID 比。
 	s.notifySourceChanged(entry, detail)
+	// 用户挑定的补全结果同样算「在线补全成功」：带上年份后做一次片库自动关联（D-P2-03）。
+	s.matchEntryToLibrary(entry.ID, "apply-candidate")
 	entry.EnrichmentStatus = models.WatchlistEnrichmentManual
 	entry.EnrichmentError = ""
 	entry.SourceName = detail.SourceName

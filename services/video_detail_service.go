@@ -270,7 +270,7 @@ func (s *VideoDetailService) UpdateVideoDetails(input VideoDetailsUpdate) (*Vide
 		if err := validateDetailTargets(tx, input.PersonIDs, input.CollectionIDs); err != nil {
 			return err
 		}
-		if err := tx.Model(&video).Updates(map[string]any{
+		if err := UpdateVideoTitleFields(tx.Model(&video), video.ID, map[string]any{
 			"display_title":   input.DisplayTitle,
 			"original_title":  input.OriginalTitle,
 			"description":     input.Description,

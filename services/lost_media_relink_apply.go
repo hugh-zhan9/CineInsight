@@ -224,9 +224,9 @@ func (s *LostMediaService) relinkLocked(ctx context.Context, kind string, pair L
 func restoreLostRecord(ctx context.Context, kind string, row lostRow, newPath string) error {
 	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		if kind == LostMediaKindVideo {
-			result := tx.Unscoped().Model(&models.Video{}).
-				Where("id = ? AND deleted_at IS NOT NULL AND deleted_by = ?", row.ID, "scanner").
-				Updates(map[string]any{"deleted_at": nil, "is_stale": false, "stale_reason": "", "path": newPath,
+			result := UpdateVideoTitleFields(tx.Unscoped().Model(&models.Video{}).
+				Where("id = ? AND deleted_at IS NOT NULL AND deleted_by = ?", row.ID, "scanner"), row.ID,
+				map[string]any{"deleted_at": nil, "is_stale": false, "stale_reason": "", "path": newPath,
 					"directory": filepath.Dir(newPath), "name": filepath.Base(newPath)})
 			if result.Error != nil {
 				return result.Error

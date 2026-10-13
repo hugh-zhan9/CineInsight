@@ -36,6 +36,9 @@ func (a *App) RecheckVideos(ids []uint) (services.LibraryReconcileSummary, error
 	if err == nil && a.cleanupService != nil && (summary.Added > 0 || summary.Restored > 0 || summary.Relocated > 0) {
 		a.cleanupService.InvalidateAnalysis()
 	}
+	if err == nil {
+		a.triggerWatchlistLibraryMatch("recheck", summary.Added)
+	}
 	return summary, err
 }
 

@@ -3330,6 +3330,91 @@ export namespace services {
 		}
 	}
 	
+	export class CollectionProgressNext {
+	    video_id: number;
+	    title: string;
+	    work_index: number;
+	    resume: boolean;
+	    watch_position_seconds: number;
+	    duration: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionProgressNext(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.work_index = source["work_index"];
+	        this.resume = source["resume"];
+	        this.watch_position_seconds = source["watch_position_seconds"];
+	        this.duration = source["duration"];
+	    }
+	}
+	export class CollectionProgress {
+	    collection_id: number;
+	    name: string;
+	    has_cover: boolean;
+	    total_works: number;
+	    watched_works: number;
+	    in_progress_works: number;
+	    complete: boolean;
+	    next?: CollectionProgressNext;
+	    last_activity_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionProgress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.collection_id = source["collection_id"];
+	        this.name = source["name"];
+	        this.has_cover = source["has_cover"];
+	        this.total_works = source["total_works"];
+	        this.watched_works = source["watched_works"];
+	        this.in_progress_works = source["in_progress_works"];
+	        this.complete = source["complete"];
+	        this.next = this.convertValues(source["next"], CollectionProgressNext);
+	        this.last_activity_at = source["last_activity_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class CollectionProgressRequest {
+	    collection_ids: number[];
+	    continue_only: boolean;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionProgressRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.collection_ids = source["collection_ids"];
+	        this.continue_only = source["continue_only"];
+	        this.limit = source["limit"];
+	    }
+	}
 	export class CollectionSuggestionMemberView {
 	    video_id: number;
 	    name: string;
@@ -7580,6 +7665,10 @@ export namespace services {
 	    size: number;
 	    rating?: number;
 	    rating_is_null: boolean;
+	    created_at?: string;
+	    year?: number;
+	    year_is_null: boolean;
+	    title_key?: string;
 	    id: number;
 	
 	    static createFrom(source: any = {}) {
@@ -7593,6 +7682,10 @@ export namespace services {
 	        this.size = source["size"];
 	        this.rating = source["rating"];
 	        this.rating_is_null = source["rating_is_null"];
+	        this.created_at = source["created_at"];
+	        this.year = source["year"];
+	        this.year_is_null = source["year_is_null"];
+	        this.title_key = source["title_key"];
 	        this.id = source["id"];
 	    }
 	}
@@ -13929,6 +14022,34 @@ export namespace services {
 	        this.year = source["year"];
 	        this.overview = source["overview"];
 	        this.rating = source["rating"];
+	    }
+	}
+	export class WatchlistInLibraryItem {
+	    entry_id: number;
+	    entry_title: string;
+	    kind: string;
+	    year: number;
+	    has_poster: boolean;
+	    video_id: number;
+	    video_title: string;
+	    origin: string;
+	    linked_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WatchlistInLibraryItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entry_id = source["entry_id"];
+	        this.entry_title = source["entry_title"];
+	        this.kind = source["kind"];
+	        this.year = source["year"];
+	        this.has_poster = source["has_poster"];
+	        this.video_id = source["video_id"];
+	        this.video_title = source["video_title"];
+	        this.origin = source["origin"];
+	        this.linked_at = source["linked_at"];
 	    }
 	}
 	export class WatchlistMetadataProbeInput {

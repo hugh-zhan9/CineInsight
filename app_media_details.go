@@ -329,3 +329,8 @@ func (a *App) DismissCollectionSuggestion(suggestionID uint) error {
 	log.Printf("API DismissCollectionSuggestion id=%d err=%v", suggestionID, err)
 	return err
 }
+
+// ListCollectionProgress 返回作品集进度（UI 二期 D-P2-02）：首页、视频页的「追到哪了」与作品集页共用。
+func (a *App) ListCollectionProgress(request services.CollectionProgressRequest) ([]services.CollectionProgress, error) {
+	return a.collectionService.ListCollectionProgress(request)
+}

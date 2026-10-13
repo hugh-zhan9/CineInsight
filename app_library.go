@@ -152,6 +152,7 @@ func (a *App) SyncScanDirectories(trigger string) (*services.ScanSyncResult, err
 		trigger, result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors), aiWakeQueued)
 	a.emitLibraryScanSummary(trigger, result)
 	a.runPostScanAutomation(result)
+	a.triggerWatchlistLibraryMatch("scan", result.Added)
 	return result, nil
 }
 

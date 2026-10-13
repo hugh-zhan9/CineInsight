@@ -526,6 +526,8 @@ func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, 
 		}
 	}
 	s.notifySourceChanged(entry, detail)
+	// 补全写回了年份与来源：做一次片库自动关联（D-P2-03），赶在进度事件之前，前端刷新这一行时就能看到。
+	s.matchEntryToLibrary(entry.ID, "enrichment")
 	entry.EnrichmentStatus = models.WatchlistEnrichmentSucceeded
 	entry.EnrichmentError = ""
 	entry.SourceName = detail.SourceName

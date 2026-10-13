@@ -26,6 +26,10 @@ const (
 	LibrarySortBalanced       = "balanced"
 	LibrarySortRatingDesc     = "rating_desc"
 	LibrarySortRatingAsc      = "rating_asc"
+	// UI 二期海报墙的三种排序（§2.3）。Jellyfin 与手机端不传这几个值。
+	LibrarySortAddedDesc = "added_desc" // created_at DESC, id DESC
+	LibrarySortYearDesc  = "year_desc"  // year DESC NULLS LAST, id DESC
+	LibrarySortTitleAsc  = "title_asc"  // title_sort_key ASC, id ASC
 
 	LibraryViewAll              = ""
 	LibraryViewFavorites        = "favorites"
@@ -86,13 +90,20 @@ type LibraryFilter struct {
 }
 
 // LibraryVideoCursor is an opaque stable cursor for SearchLibraryVideoPage.
+// 每种排序只用自己的字段，其余字段必须为空（validateLibraryVideoCursor）：
+// balanced 用 Score/Size，rating_* 用 Rating/RatingIsNull，added_desc 用 CreatedAt，
+// year_desc 用 Year/YearIsNull，title_asc 用 TitleKey；ID 都要。
 type LibraryVideoCursor struct {
-	SortMode     string   `json:"sort_mode"`
-	Score        float64  `json:"score"`
-	Size         int64    `json:"size"`
-	Rating       *float64 `json:"rating,omitempty"`
-	RatingIsNull bool     `json:"rating_is_null"`
-	ID           uint     `json:"id"`
+	SortMode     string     `json:"sort_mode"`
+	Score        float64    `json:"score"`
+	Size         int64      `json:"size"`
+	Rating       *float64   `json:"rating,omitempty"`
+	RatingIsNull bool       `json:"rating_is_null"`
+	CreatedAt    *time.Time `json:"created_at,omitempty" ts_type:"string"`
+	Year         *int       `json:"year,omitempty"`
+	YearIsNull   bool       `json:"year_is_null"`
+	TitleKey     string     `json:"title_key,omitempty"`
+	ID           uint       `json:"id"`
 }
 
 type LibraryVideoPage struct {
@@ -231,7 +242,10 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 	if filter.SortMode == "" {
 		filter.SortMode = LibrarySortBalanced
 	}
-	if filter.SortMode != LibrarySortBalanced && filter.SortMode != LibrarySortRatingDesc && filter.SortMode != LibrarySortRatingAsc {
+	switch filter.SortMode {
+	case LibrarySortBalanced, LibrarySortRatingDesc, LibrarySortRatingAsc,
+		LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc:
+	default:
 		return LibraryFilter{}, fmt.Errorf("不支持的排序模式: %s", filter.SortMode)
 	}
 	if err := validateRatingValue(filter.MinRating); err != nil {
@@ -1079,6 +1093,9 @@ func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *Libr
 		}
 		return attachPageVersionGroups(page, normalized)
 	}
+	if isKeysetBrowseSort(normalized.SortMode) {
+		return s.searchLibraryBrowsePage(normalized, cursor, limit)
+	}
 
 	now := time.Now()
 	query := database.DB.Model(&models.Video{}).Preload("Tags")
@@ -1134,6 +1151,13 @@ func validateLibraryVideoCursor(sortMode string, cursor *LibraryVideoCursor) err
 	}
 	if cursor.ID == 0 {
 		return errors.New("片库游标 ID 无效")
+	}
+	if isKeysetBrowseSort(sortMode) {
+		return validateBrowseCursor(sortMode, cursor)
+	}
+	// 既有三种排序不带新排序的字段（§2.3）。
+	if cursor.CreatedAt != nil || cursor.Year != nil || cursor.YearIsNull || cursor.TitleKey != "" {
+		return fmt.Errorf("%s 游标包含其他排序的字段", sortMode)
 	}
 	if sortMode == LibrarySortBalanced {
 		if cursor.Rating != nil || cursor.RatingIsNull {

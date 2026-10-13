@@ -43,3 +43,43 @@ func (a *App) ListWatchlistCandidates(id uint) ([]services.WatchlistCandidateVie
 func (a *App) ApplyWatchlistCandidate(id uint, sourceItemID string) error {
 	return a.watchlistService.ApplyCandidate(id, sourceItemID)
 }
+
+// ListWatchlistLibraryState 返回这些想看条目的片库关联状态（UI 二期 D-P2-03），最多 200 条。
+func (a *App) ListWatchlistLibraryState(entryIDs []uint) (map[uint]services.WatchlistLibraryState, error) {
+	return a.watchlistService.ListLibraryState(entryIDs)
+}
+
+// LinkWatchlistEntryVideo 手动确认想看条目与片库视频的关联，并清掉这一对的「解除过」记录。
+func (a *App) LinkWatchlistEntryVideo(entryID, videoID uint) error {
+	return a.watchlistService.LinkVideo(entryID, videoID)
+}
+
+// UnlinkWatchlistEntryVideo 解除关联并记下「解除过」，之后不再自动关联这一对。
+func (a *App) UnlinkWatchlistEntryVideo(entryID, videoID uint) error {
+	return a.watchlistService.UnlinkVideo(entryID, videoID)
+}
+
+// ListWatchlistInLibrary 返回首页「想看的片片库里已有」：已关联且还没看过，按关联时间倒序。
+func (a *App) ListWatchlistInLibrary(limit int) ([]services.WatchlistInLibraryItem, error) {
+	return a.watchlistService.ListInLibrary(limit)
+}
+
+// triggerWatchlistLibraryMatch 在扫描入库了新视频之后，后台给全部未关联的想看条目跑一轮片库自动关联
+// （D-P2-03）。不过空闲门：开销与想看条数成正比，且只读片库、只写关联表。
+func (a *App) triggerWatchlistLibraryMatch(reason string, added int) {
+	if added <= 0 || a.watchlistService == nil {
+		return
+	}
+	a.watchlistService.TriggerLibraryMatch(reason)
+}
+
+// importDownloadAndMatchWatchlist 包一层浏览器下载入库：下载的片进了库，同样触发一轮想看自动关联。
+func (a *App) importDownloadAndMatchWatchlist(importer func(string, string) (uint, error)) func(string, string) (uint, error) {
+	return func(directory, outputPath string) (uint, error) {
+		videoID, err := importer(directory, outputPath)
+		if err == nil && videoID > 0 {
+			a.triggerWatchlistLibraryMatch("download", 1)
+		}
+		return videoID, err
+	}
+}

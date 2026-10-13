@@ -11,6 +11,7 @@ type Video struct {
 	Name                   string         `json:"name"`                                               // 文件名
 	DisplayTitle           string         `gorm:"size:255;not null;default:''" json:"display_title"`  // 用户维护的显示标题
 	OriginalTitle          string         `gorm:"size:255;not null;default:''" json:"original_title"` // 用户维护的原始标题
+	TitleSortKey           string         `gorm:"size:512;not null;default:''" json:"-"`              // 片名排序键（UI 二期 §2.3），维护规则见 video_title_sort.go；空串＝待补齐
 	Description            string         `gorm:"type:text;not null;default:''" json:"description"`
 	PosterPath             string         `gorm:"type:text;not null;default:''" json:"-"`
 	FanartPath             string         `gorm:"type:text;not null;default:''" json:"-"`

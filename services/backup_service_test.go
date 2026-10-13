@@ -869,7 +869,7 @@ func TestAPP01SQLiteBackupModifyRestoreReturnsToBackupPoint(t *testing.T) {
 	directory := filepath.Join(dataDir, "backups")
 
 	// 修改：改名并新增一条，恢复后两处都应回到备份点。
-	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Update("name", "renamed.mp4").Error; err != nil {
+	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Updates(map[string]any{"name": "renamed.mp4", "title_sort_key": models.VideoTitleSortKey("", "renamed.mp4")}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&models.Video{Name: "extra.mp4", Path: filepath.Join(dataDir, "extra.mp4"), Directory: dataDir}).Error; err != nil {
@@ -1037,7 +1037,7 @@ func TestAPP01SQLiteRestoreCopyFailureLeavesLiveLibraryIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("备份失败: %v", err)
 	}
-	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Update("name", "renamed.mp4").Error; err != nil {
+	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Updates(map[string]any{"name": "renamed.mp4", "title_sort_key": models.VideoTitleSortKey("", "renamed.mp4")}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -1126,7 +1126,7 @@ func TestAPP01SQLiteRestorePreparesTempLibraryBeforeClosingHandle(t *testing.T) 
 	if err != nil {
 		t.Fatalf("备份失败: %v", err)
 	}
-	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Update("name", "renamed.mp4").Error; err != nil {
+	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Updates(map[string]any{"name": "renamed.mp4", "title_sort_key": models.VideoTitleSortKey("", "renamed.mp4")}).Error; err != nil {
 		t.Fatal(err)
 	}
 	livePath := database.SQLitePath(dataDir)

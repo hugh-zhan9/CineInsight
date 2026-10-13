@@ -176,7 +176,7 @@ func TestResolveDownloadDuplicateViewsDropsGoneVideos(t *testing.T) {
 	dir := t.TempDir()
 	kept := downloadTestVideo(t, dir, "kept.mp4", []byte("kept"), 1920, 1080, 60)
 	gone := downloadTestVideo(t, dir, "gone.mp4", []byte("gone"), 1280, 720, 60)
-	if err := database.DB.Model(&models.Video{}).Where("id = ?", kept.ID).Update("display_title", "保留的片").Error; err != nil {
+	if err := UpdateVideoTitleFields(database.DB.Model(&models.Video{}).Where("id = ?", kept.ID), kept.ID, map[string]any{"display_title": "保留的片"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := database.DB.Delete(&models.Video{}, gone.ID).Error; err != nil {

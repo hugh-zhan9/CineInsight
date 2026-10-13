@@ -465,11 +465,15 @@ export function LinkFaceCluster(arg1:number,arg2:number):Promise<services.FaceCl
 
 export function LinkMovieToVideo(arg1:string,arg2:number):Promise<void>;
 
+export function LinkWatchlistEntryVideo(arg1:number,arg2:number):Promise<void>;
+
 export function ListAITagCandidatePage(arg1:number,arg2:string,arg3:string,arg4:number,arg5:number):Promise<services.AITagCandidatePage>;
 
 export function ListAutomationRules():Promise<Array<services.AutomationRuleView>>;
 
 export function ListCleanupDismissals(arg1:string,arg2:number,arg3:number):Promise<services.CleanupDismissalPage>;
+
+export function ListCollectionProgress(arg1:services.CollectionProgressRequest):Promise<Array<services.CollectionProgress>>;
 
 export function ListCollectionSuggestions():Promise<Array<services.CollectionSuggestionView>>;
 
@@ -542,6 +546,10 @@ export function ListWatchedMovies():Promise<Array<services.WatchedMovieYearGroup
 export function ListWatchlist(arg1:string,arg2:number,arg3:number):Promise<services.WatchlistPage>;
 
 export function ListWatchlistCandidates(arg1:number):Promise<Array<services.WatchlistCandidateView>>;
+
+export function ListWatchlistInLibrary(arg1:number):Promise<Array<services.WatchlistInLibraryItem>>;
+
+export function ListWatchlistLibraryState(arg1:Array<number>):Promise<Record<number, services.WatchlistLibraryState>>;
 
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
@@ -882,6 +890,8 @@ export function UndoTagPersonConversion(arg1:number):Promise<services.TagPersonC
 export function UnlinkFaceCluster(arg1:number,arg2:boolean):Promise<services.FaceClusterView>;
 
 export function UnlinkMovieVideo(arg1:string,arg2:number):Promise<void>;
+
+export function UnlinkWatchlistEntryVideo(arg1:number,arg2:number):Promise<void>;
 
 export function UnlockShortFeedLogin():Promise<void>;
 

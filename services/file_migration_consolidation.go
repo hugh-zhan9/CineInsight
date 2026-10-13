@@ -269,7 +269,7 @@ func (s *VideoService) executeConsolidationItem(ctx context.Context, e *consolid
 	}
 	e.task.Completed++
 	err = database.Transaction(func(tx *gorm.DB) error {
-		changed := tx.Model(&models.Video{}).Where("id = ? AND path = ? AND is_stale = ?", item.VideoID, item.SourcePath, false).Updates(map[string]interface{}{"path": item.DestinationPath, "directory": filepath.Dir(item.DestinationPath), "name": filepath.Base(item.DestinationPath), "is_stale": false, "stale_reason": ""})
+		changed := UpdateVideoTitleFields(tx.Model(&models.Video{}).Where("id = ? AND path = ? AND is_stale = ?", item.VideoID, item.SourcePath, false), item.VideoID, map[string]interface{}{"path": item.DestinationPath, "directory": filepath.Dir(item.DestinationPath), "name": filepath.Base(item.DestinationPath), "is_stale": false, "stale_reason": ""})
 		if changed.Error != nil {
 			return changed.Error
 		}

@@ -191,7 +191,7 @@ func (s *LocalMetadataService) apply(request LocalMetadataApplyRequest, batch *l
 			appliedFields = append(appliedFields, "fanart")
 		}
 		if len(updates) > 0 {
-			if err := tx.Model(&video).Updates(updates).Error; err != nil {
+			if err := UpdateVideoTitleFields(tx.Model(&video), video.ID, updates).Error; err != nil {
 				return err
 			}
 		}

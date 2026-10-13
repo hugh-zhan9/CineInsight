@@ -43,7 +43,7 @@
   "movie_chart_entries": ["card_subtitle","cast","countries","created_at","detail_claim","detail_error","detail_fetched_at","detail_status","directors","douban_id","genres","id","is_released","list_fetched_at","original_title","overview","poster_path","poster_url","rating","rating_count","release_date","release_pubdate","release_scope","title","updated_at","year"],
   "movie_chart_marks": ["created_at","douban_id","id","mark","marked_at","poster_url","release_year","title","updated_at","watchlist_entry_id","watchlist_entry_origin"],
   "movie_chart_year_states": ["created_at","id","last_attempt_at","last_failure","last_refreshed_at","updated_at","year"],
-  "movie_video_links": ["created_at","douban_id","id","updated_at","video_id"],
+  "movie_video_links": ["created_at","douban_id","id","origin","updated_at","video_id"],
   "near_duplicate_dismissals": ["created_at","fingerprint_a","fingerprint_b","id","video_high_id","video_low_id"],
   "people": ["avatar_path","created_at","display_name","id","original_name","updated_at"],
   "play_events": ["created_at","id","played_at","source","video_id"],
@@ -86,7 +86,8 @@
   "video_version_members": ["created_at","group_id","label","position","video_id"],
   "video_version_suggestion_dismissals": ["created_at","id","video_high_id","video_low_id"],
   "video_visual_fingerprints": ["algorithm_version","content_fingerprint","created_at","duration","frame_hashes_json","id","sample_count","updated_at","video_id"],
-  "videos": ["created_at","deleted_at","deleted_by","description","directory","display_title","duration","fanart_path","favorited_at","height","id","is_favorite","is_liked","is_stale","is_watched","last_played_at","name","original_title","path","personal_rating","play_count","poster_path","random_play_count","resolution","size","stale_reason","updated_at","watch_position_seconds","watch_progress_updated_at","watched_at","width","year"],
+  "videos": ["created_at","deleted_at","deleted_by","description","directory","display_title","duration","fanart_path","favorited_at","height","id","is_favorite","is_liked","is_stale","is_watched","last_played_at","name","original_title","path","personal_rating","play_count","poster_path","random_play_count","resolution","size","stale_reason","title_sort_key","updated_at","watch_position_seconds","watch_progress_updated_at","watched_at","width","year"],
   "viewing_diary_entries": ["created_at","date_basis","deleted_at","id","note","origin","rating","recorded_at","revision","source","source_play_event_id","source_session_key","title","updated_at","utc_offset_seconds","video_id","watched_on"],
-  "watchlist_entries": ["created_at","credits","enriched_at","enrichment_claim","enrichment_error","enrichment_status","genres","id","kind","overview","poster_path","rating","source_fields","source_item_id","source_name","source_title","title","updated_at","year"]
+  "watchlist_entries": ["created_at","credits","enriched_at","enrichment_claim","enrichment_error","enrichment_status","genres","id","kind","overview","poster_path","rating","source_fields","source_item_id","source_name","source_title","title","updated_at","year"],
+  "watchlist_video_links": ["created_at","id","origin","updated_at","video_id","watchlist_entry_id"]
 }

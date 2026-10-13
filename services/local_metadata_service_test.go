@@ -366,7 +366,7 @@ func TestVideoServiceAutoAppliesNewLocalMetadataButOnlyObservesLaterChanges(t *t
 	if video.DisplayTitle != "Initial local title" {
 		t.Fatalf("new video title = %q", video.DisplayTitle)
 	}
-	if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("display_title", "Manual title").Error; err != nil {
+	if err := UpdateVideoTitleFields(database.DB.Model(&models.Video{}).Where("id = ?", video.ID), video.ID, map[string]any{"display_title": "Manual title"}).Error; err != nil {
 		t.Fatalf("set manual title: %v", err)
 	}
 	if err := os.WriteFile(nfoPath, []byte(`<movie><title>Changed local title</title></movie>`), 0644); err != nil {

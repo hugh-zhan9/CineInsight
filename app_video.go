@@ -59,6 +59,7 @@ func (a *App) SyncDirectoryWithProgress(dir, requestID string) *services.ScanSyn
 		go a.triggerAITaggingAuto("scan")
 	}
 	a.runPostScanAutomation(result)
+	a.triggerWatchlistLibraryMatch("scan", result.Added)
 	return result
 }
 

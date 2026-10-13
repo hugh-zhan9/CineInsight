@@ -922,6 +922,10 @@ export function LinkMovieToVideo(arg1, arg2) {
   return window['go']['main']['App']['LinkMovieToVideo'](arg1, arg2);
 }
 
+export function LinkWatchlistEntryVideo(arg1, arg2) {
+  return window['go']['main']['App']['LinkWatchlistEntryVideo'](arg1, arg2);
+}
+
 export function ListAITagCandidatePage(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ListAITagCandidatePage'](arg1, arg2, arg3, arg4, arg5);
 }
@@ -932,6 +936,10 @@ export function ListAutomationRules() {
 
 export function ListCleanupDismissals(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListCleanupDismissals'](arg1, arg2, arg3);
+}
+
+export function ListCollectionProgress(arg1) {
+  return window['go']['main']['App']['ListCollectionProgress'](arg1);
 }
 
 export function ListCollectionSuggestions() {
@@ -1076,6 +1084,14 @@ export function ListWatchlist(arg1, arg2, arg3) {
 
 export function ListWatchlistCandidates(arg1) {
   return window['go']['main']['App']['ListWatchlistCandidates'](arg1);
+}
+
+export function ListWatchlistInLibrary(arg1) {
+  return window['go']['main']['App']['ListWatchlistInLibrary'](arg1);
+}
+
+export function ListWatchlistLibraryState(arg1) {
+  return window['go']['main']['App']['ListWatchlistLibraryState'](arg1);
 }
 
 export function LogFrontend(arg1, arg2, arg3) {
@@ -1756,6 +1772,10 @@ export function UnlinkFaceCluster(arg1, arg2) {
 
 export function UnlinkMovieVideo(arg1, arg2) {
   return window['go']['main']['App']['UnlinkMovieVideo'](arg1, arg2);
+}
+
+export function UnlinkWatchlistEntryVideo(arg1, arg2) {
+  return window['go']['main']['App']['UnlinkWatchlistEntryVideo'](arg1, arg2);
 }
 
 export function UnlockShortFeedLogin() {
