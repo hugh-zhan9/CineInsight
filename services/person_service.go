@@ -113,7 +113,9 @@ func (s *PersonService) ListPeople(keyword, cursorName string, cursorID uint, li
 		pattern := "%" + strings.ToLower(escapeSQLLike(keyword)) + "%"
 		query = query.Where("(LOWER(display_name) LIKE ? ESCAPE '\\' OR LOWER(original_name) LIKE ? ESCAPE '\\')", pattern, pattern)
 	}
-	if cursorName = strings.ToLower(strings.TrimSpace(cursorName)); cursorName != "" || cursorID != 0 {
+	// 游标名是上一页最后一项的 cursor_name，即数据库自己算的 LOWER(display_name)，原样比较：不能在 Go 里再转小写——
+	// SQLite 的 LOWER 只转 ASCII，「Анна」「Özge」在库里与在 Go 里小写化的结果不同，翻页会跳过人（UI 二期复审 N-1）。
+	if cursorName != "" || cursorID != 0 {
 		query = query.Where("(LOWER(display_name) > ? OR (LOWER(display_name) = ? AND id > ?))", cursorName, cursorName, cursorID)
 	}
 	var rows []struct {
@@ -147,8 +149,8 @@ func (s *PersonService) ListPeople(keyword, cursorName string, cursorID uint, li
 
 // ListPeopleByCount 是观看侧头像墙「按出现次数」的排序（UI 二期 D-P2-06）：按 active_video_count（可见视频数，
 // 与 PersonListItem.ActiveVideoCount、人物卡片上的「N 部作品」同一口径，版本不合并、不含图片）倒序，同数按
-// LOWER(display_name) 升序、再按 id 升序。键集分页：下一页传上一页最后一项的 active_video_count、cursor_name
-// 与 person.id；cursorID 为 0 取首页。ListPeople（按名称）不变。
+// LOWER(display_name) 升序、再按 id 升序。键集分页：下一页原样传回上一页最后一项的 active_video_count、cursor_name
+// （数据库算的 LOWER(display_name)，不要在调用方或这里再转换）与 person.id；cursorID 为 0 取首页。
 func (s *PersonService) ListPeopleByCount(keyword string, cursorCount int, cursorName string, cursorID uint, limit int) ([]PersonListItem, error) {
 	limit = normalizeEntityPageLimit(limit)
 	videos, err := visiblePersonVideos()
@@ -164,7 +166,6 @@ func (s *PersonService) ListPeopleByCount(keyword string, cursorCount int, curso
 		query = query.Where("(LOWER(people.display_name) LIKE ? ESCAPE '\\' OR LOWER(people.original_name) LIKE ? ESCAPE '\\')", pattern, pattern)
 	}
 	if cursorID != 0 {
-		cursorName = strings.ToLower(strings.TrimSpace(cursorName))
 		query = query.Where("("+countExpr+" < ? OR ("+countExpr+" = ? AND ("+nameExpr+" > ? OR ("+nameExpr+" = ? AND people.id > ?))))",
 			cursorCount, cursorCount, cursorName, cursorName, cursorID)
 	}

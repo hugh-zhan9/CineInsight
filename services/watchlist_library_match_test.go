@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -408,6 +409,26 @@ func TestWatchlistInLibraryTreatsWorkWatchedIfAnyVersionWatched(t *testing.T) {
 	if items, err := f.service.ListInLibrary(0); err != nil || len(items) != 1 || items[0].VideoID != rep.ID {
 		t.Fatalf("都没看过时应列出并播代表: %+v %v", items, err)
 	}
+	// 看过的那个版本离线（失效）了：看过仍是看过，不列；要播的代表在线就够了。
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", other.ID).Updates(map[string]any{"is_watched": true, "is_stale": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if items, err := f.service.ListInLibrary(0); err != nil || len(items) != 0 {
+		t.Fatalf("离线版本看过也算看过: %+v %v", items, err)
+	}
+	// 代表离线、另一个版本在线且没看过：播在线的那个。
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", other.ID).Updates(map[string]any{"is_watched": false, "is_stale": false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", rep.ID).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.LinkVideo(entry.ID, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if items, err := f.service.ListInLibrary(0); err != nil || len(items) != 1 || items[0].VideoID != other.ID {
+		t.Fatalf("代表离线时播在线的版本: %+v %v", items, err)
+	}
 }
 
 func TestWatchlistLibraryStateAndInLibraryList(t *testing.T) {
@@ -547,7 +568,10 @@ func TestWatchlistMetadataChangesTriggerDebouncedRound(t *testing.T) {
 	f := newWatchlistMatchFixture(t)
 	f.service.match.delay = 500 * time.Millisecond
 	SetLibraryMatchInputListener(f.service.TriggerLibraryMatchSoon)
-	t.Cleanup(func() { SetLibraryMatchInputListener(nil) })
+	t.Cleanup(func() {
+		SetLibraryMatchInputListener(nil)
+		f.service.StopLibraryMatch() // 防抖中的计时器不能在用例结束后再触发
+	})
 	waitLinked := func(label string, entryID uint, want ...uint) {
 		t.Helper()
 		deadline := time.Now().Add(20 * time.Second)
@@ -721,4 +745,107 @@ func TestWatchlistSingleEntryMatchDoesNotWaitForFullRound(t *testing.T) {
 		t.Fatal("单条匹配被全量轮挡住了")
 	}
 	f.requireLinked("单条匹配", entry.ID, video.ID)
+}
+
+// 复审 minor 1：豆瓣条目在片单页关联 / 解除时榜单服务没挂上，片单一侧写好、报出「榜单没同步」，重试补上。
+func TestWatchlistDoubanLinkWithoutChartLinkerReportsAndRetries(t *testing.T) {
+	f := newWatchlistMatchFixture(t)
+	entry := f.entry("沙丘", 2021, "3001114")
+	video := f.video("Dune remux", intPtr(2021), nil)
+	chart := &MovieChartService{db: database.DB} // 只用来造榜单页的关联，不挂到片单服务上
+	if err := chart.LinkMovieToVideo("3001114", video.ID); err != nil {
+		t.Fatal(err)
+	}
+	err := f.service.UnlinkVideo(entry.ID, video.ID)
+	if !errors.Is(err, ErrWatchlistChartLinkerUnavailable) {
+		t.Fatalf("没挂榜单服务时解除豆瓣条目应报错: %v", err)
+	}
+	f.requireLinked("片单一侧已解除", entry.ID)
+	if n := countLinkRows(t, &models.MovieVideoLink{}, "douban_id = ? AND video_id = ?", "3001114", video.ID); n != 1 {
+		t.Fatalf("榜单那一行还在（等重试）: %d", n)
+	}
+	f.service.SetChartLinker(chart)
+	if err := f.service.UnlinkVideo(entry.ID, video.ID); err != nil {
+		t.Fatalf("挂上之后重试应成功: %v", err)
+	}
+	if n := countLinkRows(t, &models.MovieVideoLink{}, "douban_id = ?", "3001114"); n != 0 {
+		t.Fatalf("重试后榜单那一行应删掉: %d", n)
+	}
+	f.service.SetChartLinker(nil)
+	if err := f.service.LinkVideo(entry.ID, video.ID); !errors.Is(err, ErrWatchlistChartLinkerUnavailable) {
+		t.Fatalf("没挂榜单服务时关联豆瓣条目也应报出没同步: %v", err)
+	}
+	f.requireLinked("片单一侧已关联", entry.ID, video.ID)
+	plain := f.entry("降临", 2016, "")
+	if err := f.service.LinkVideo(plain.ID, video.ID); err != nil {
+		t.Fatalf("非豆瓣条目不需要榜单服务: %v", err)
+	}
+}
+
+// 复审 minor 2：榜单页重新关联清掉想看一侧对这部作品的「解除过」（与榜单页解除对称）。
+func TestChartRelinkClearsWatchlistDismissal(t *testing.T) {
+	f := newWatchlistMatchFixture(t)
+	chart := f.withChart()
+	entry := f.entry("沙丘", 2021, "3001114")
+	other := f.entry("沙丘", 2021, "")
+	imax := f.video("沙丘 IMAX", nil, nil)
+	alt := f.video("沙丘 IMAX 3D", nil, nil)
+	if _, err := NewVersionGroupService().Create(context.Background(), []uint{imax.ID, alt.ID}, "沙丘 IMAX"); err != nil {
+		t.Fatal(err)
+	}
+	if err := chart.LinkMovieToVideo("3001114", imax.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := chart.UnlinkMovieVideo("3001114", imax.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.UnlinkVideo(other.ID, alt.ID); err != nil { // 别的条目自己的解除不受影响
+		t.Fatal(err)
+	}
+	f.requireLinked("榜单解除后", entry.ID)
+	// 重新关联同一部作品的另一个版本：整部作品的解除都清掉。
+	if err := chart.LinkMovieToVideo("3001114", alt.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.requireLinked("榜单重新关联后", entry.ID, alt.ID)
+	if got := f.dismissed(entry.ID); len(got) != 0 {
+		t.Fatalf("重新关联应清掉这部作品的解除: %v", got)
+	}
+	requireUintSlice(t, "非豆瓣条目的解除不动", f.dismissed(other.ID), []uint{imax.ID, alt.ID})
+}
+
+// 复审 minor 4：条目改名删掉旧片名带来的自动关联（手动的留着），并按新片名重新匹配。
+func TestWatchlistRenameDropsAutoLinksAndRematches(t *testing.T) {
+	f := newWatchlistMatchFixture(t)
+	entry := f.entry("沙丘", 2021, "")
+	dune := f.video("沙丘", intPtr(2021), nil)
+	arrival := f.video("降临", intPtr(2021), nil)
+	f.matchAll()
+	f.requireLinked("改名前", entry.ID, dune.ID)
+	if err := f.service.Update(entry.ID, "降临"); err != nil {
+		t.Fatal(err)
+	}
+	linked := f.requireLinked("改名后按新片名", entry.ID, arrival.ID)
+	if linked[0].Origin != models.WatchlistLinkOriginAuto {
+		t.Fatalf("新关联应是自动的: %+v", linked)
+	}
+
+	manual := f.entry("银翼杀手", 2017, "")
+	remux := f.video("Blade Runner remux", intPtr(2017), nil)
+	auto := f.video("银翼杀手", intPtr(2017), nil)
+	if err := f.service.LinkVideo(manual.ID, remux.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.WatchlistVideoLink{WatchlistEntryID: manual.ID, VideoID: auto.ID, Origin: models.WatchlistLinkOriginAuto}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Update(manual.ID, "银翼杀手 2049"); err != nil {
+		t.Fatal(err)
+	}
+	f.requireLinked("手动关联留着、自动关联删掉", manual.ID, remux.ID)
+	// 只改大小写之外什么都不变的保存（片名没变）不动关联。
+	if err := f.service.Update(manual.ID, "银翼杀手 2049"); err != nil {
+		t.Fatal(err)
+	}
+	f.requireLinked("片名没变", manual.ID, remux.ID)
 }

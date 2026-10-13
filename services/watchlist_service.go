@@ -223,8 +223,18 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	var result *gorm.DB
 	err = database.Transaction(func(tx *gorm.DB) error {
 		result = tx.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(fields)
-		if result.Error != nil || result.RowsAffected == 0 || !releaseReuse {
+		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
+		}
+		if renamed {
+			// 改名后旧片名带来的自动关联失去依据（D-P2-03）：删掉，手动确认的与解除记录留着；提交后按新片名重新匹配。
+			if err := tx.Where("watchlist_entry_id = ? AND origin = ?", id, models.WatchlistLinkOriginAuto).
+				Delete(&models.WatchlistVideoLink{}).Error; err != nil {
+				return err
+			}
+		}
+		if !releaseReuse {
+			return nil
 		}
 		return releaseReuseChartWantsForEntry(tx, id)
 	})
