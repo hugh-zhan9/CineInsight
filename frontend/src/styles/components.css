@@ -54,20 +54,11 @@
 }
 
 /* 按钮（统一设计 D-UD-06，详细设计 §2）：.btn + 外观 .btn--primary / --secondary / --ghost / --danger
-   + 尺寸 .btn--sm；文字链接 .btn-link；只有图标的 .btn-icon（必须带 aria-label）。
-   旧类与新类同用下面的规则（页面标记暂不改）：btn-primary → btn--primary，btn-secondary / btn-random /
-   row-btn / toolbar-btn → btn--secondary，btn-danger → btn--danger，btn-danger-outline → btn--danger，
-   btn-compact / row-btn → btn--sm，link-btn → btn-link。B 组逐页换成新类，第 0 步 C 组删掉旧类与
-   本节末尾的「旧类差异」。 */
+   + 尺寸 .btn--sm；文字链接 .btn-link；只有图标的 .btn-icon（必须带 aria-label）；整块可点区域 .btn-plain。
+   旧类（btn-primary、btn-secondary、btn-compact、row-btn、toolbar-btn、btn-danger、btn-danger-outline、
+   link-btn、btn-random）已在第 0 步全部换成新类并删除，按钮守卫（unstyledControls）不再认可它们。 */
 .btn,
-.btn-primary,
-.btn-random,
-.btn-secondary,
-.btn-danger,
-.btn-danger-outline,
-.btn-icon,
-.row-btn,
-.toolbar-btn {
+.btn-icon {
   height: var(--h-unit);
   padding: 0 14px;
   border: 1px solid transparent;
@@ -99,33 +90,21 @@
 }
 .btn-icon:hover:not(:disabled) { background: var(--control-hover-bg); color: var(--text-primary); }
 
-.btn--primary,
-.btn-primary {
+.btn--primary {
   background: var(--accent-color);
   color: var(--accent-on);
 }
-.btn--primary:hover:not(:disabled),
-.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
 
-.btn--secondary,
-.btn-secondary,
-.btn-random,
-.btn-danger-outline,
-.row-btn,
-.toolbar-btn {
+.btn--secondary {
   background: var(--control-bg);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
-.btn--secondary:hover:not(:disabled),
-.btn-secondary:hover:not(:disabled),
-.btn-random:hover:not(:disabled) {
+.btn--secondary:hover:not(:disabled) {
   background: var(--control-hover-bg);
   border-color: var(--border-strong);
 }
-/* 行内与工具栏按钮的悬停保持原来的优先级：后面的 --primary / .active / --on 修饰在悬停时仍然生效。 */
-.row-btn:hover { background: var(--control-hover-bg); border-color: var(--border-strong); }
-.toolbar-btn:hover:not(:disabled) { background: var(--control-hover-bg); }
 
 .btn--ghost {
   background: transparent;
@@ -133,53 +112,37 @@
 }
 .btn--ghost:hover:not(:disabled) { background: var(--control-hover-bg); color: var(--text-primary); }
 
-.btn--danger,
-.btn-danger {
+.btn--danger {
   background: var(--danger-soft);
   border-color: var(--danger-border);
   color: var(--danger-text);
 }
-.btn--danger:hover:not(:disabled),
-.btn-danger:hover:not(:disabled) { border-color: var(--danger-color); }
+.btn--danger:hover:not(:disabled) { border-color: var(--danger-color); }
 
-/* 有底色的三种外观悬停时上浮 1px（沿用旧按钮的手感）；幽灵、图标、行内与工具栏按钮不浮。 */
+/* 有底色的三种外观悬停时上浮 1px；幽灵与图标按钮不浮。 */
 .btn--primary:hover:not(:disabled),
 .btn--secondary:hover:not(:disabled),
-.btn--danger:hover:not(:disabled),
-.btn-primary:hover:not(:disabled),
-.btn-random:hover:not(:disabled),
-.btn-secondary:hover:not(:disabled),
-.btn-danger:hover:not(:disabled) {
+.btn--danger:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 .btn-icon:hover:not(:disabled) { transform: none; }
 
 .btn:disabled,
 .btn-icon:disabled,
-.btn-link:disabled,
-.btn-primary:disabled,
-.btn-secondary:disabled,
-.btn-random:disabled,
-.btn-danger:disabled,
-.btn-danger-outline:disabled,
-.row-btn:disabled,
-.toolbar-btn:disabled {
+.btn-link:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }
 
-.btn--sm,
-.btn-compact,
-.row-btn {
+.btn--sm {
   height: var(--h-compact);
   padding: 0 10px;
   font-size: var(--fs-caption);
 }
 .btn-icon.btn--sm { width: var(--h-compact); padding: 0; }
 
-.btn-link,
-.link-btn {
+.btn-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -193,48 +156,7 @@
   font-weight: var(--fw-medium);
   cursor: pointer;
 }
-.btn-link:hover:not(:disabled),
-.link-btn:hover:not(:disabled) { text-decoration: underline; }
-
-/* 旧类差异（第 0 步 C 组随旧类一起删）：这些旧类原有的字色、边框与尺寸，换装前保持原样。 */
-.btn-random { color: var(--accent-text); }
-.btn-danger-outline { border-color: var(--danger-color); color: var(--danger-color); }
-.row-btn { padding: 0 11px; border-color: var(--hairline); font-weight: var(--fw-regular); }
-.toolbar-btn {
-  flex: none;
-  gap: 7px;
-  padding: 0 12px;
-  border-color: var(--hairline);
-  font-weight: var(--fw-regular);
-  justify-content: flex-start;
-}
-.toolbar-btn--strong { font-weight: 600; }
-
-.toolbar-btn--on {
-  border-color: var(--accent-color);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-
-.toolbar-btn--compact {
-  height: 26px;
-  padding: 0 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.toolbar-btn__badge {
-  padding: 0 6px;
-  border-radius: 9px;
-  background: var(--accent-color);
-  color: var(--accent-on);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-.toolbar-btn__caret { color: var(--text-muted); }
-.toolbar-btn--on .toolbar-btn__caret { color: var(--accent-text); }
+.btn-link:hover:not(:disabled) { text-decoration: underline; }
 
 /* 整张卡片、海报、头像这类可点区域（统一设计 D-UD-15 按钮守卫认可的第四种按钮类）：只清掉浏览器按钮外观，
    外形完全由组件自己的类决定。重置用 :where() 压到零优先级，组件类不论先后都能覆盖它；
@@ -255,9 +177,6 @@
   outline-offset: 2px;
 }
 
-.merge-type-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }
-.merge-type-switch button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
-.merge-type-switch button.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
 
 .page-content {
   width: 100%;
@@ -597,11 +516,6 @@ input:checked + .slider::before {
 }
 
 .video-actions { flex: none; display: flex; align-items: center; gap: 4px; }
-.row-btn--icon { width: 32px; padding: 0; font-size: var(--fs-secondary); color: var(--text-secondary); }
-.row-btn--primary { border-color: var(--accent-color); background: var(--accent-color); color: var(--accent-on); font-weight: 600; }
-.row-btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.row-btn--fav { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger-text); }
-.row-btn.active { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 
 /* 网格卡（原型 A3）：元信息压在缩略图上，标题两行，底部四个动作 */
 .virtual-video-list--grid .virtual-video-list__items {

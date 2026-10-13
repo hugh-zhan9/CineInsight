@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { loadPendingLists, ratchetFailures } from '../../scripts/design-system-ratchet.mjs';
 
-// 表单控件必须接入项目的样式原语（.btn-* / .row-btn / .toolbar-btn / .text-input / .select-input /
+// 表单控件必须接入项目的样式原语（.btn / .btn-link / .btn-icon / .btn-plain / .text-input / .select-input /
 // .number-input / .search-input 等）、组件自己的类，或本组件样式里不带属性限定的标签规则；否则在 WKWebView 里就是浏览器
 // 原生外观。2026-10-11 观看笔记、待播队列、今晚看什么等新页面就是这样“样式丢失”的。
 const SRC = join(process.cwd(), 'src');
@@ -50,7 +50,7 @@ describe('form controls use the shared style primitives', () => {
 // 统一设计守卫（D-UD-15，详细设计 §5 末段）：按钮必须带 .btn / .btn-link / .btn-icon 之一，整张卡片、海报、头像这类
 // 可点区域带 .btn-plain（components.css：只清掉浏览器按钮外观、给焦点环，外形由组件自己的类决定），
 // 或是 components/ui 组件内部已登记的例外（下面 INTERNAL_BUTTONS，按「文件:类名」登记）。旧按钮类（btn-primary、row-btn、toolbar-btn…）
-// 换装前暂由 scripts/design-system-pending/*.json 的 buttons 清单放行。清单按文件记「还剩几个不合规按钮」，
+// 已在第 0 步全部换掉并从 components.css 删除；scripts/design-system-pending/*.json 的 buttons 清单随之清零。清单按文件记「还剩几个不合规按钮」，
 // 是棘轮（与 design-system.test.mjs 共用 scripts/design-system-ratchet.mjs）：不在清单里的文件出现不合规按钮、
 // 或个数比清单多都会失败；个数比清单少会失败并提示把数字改小，清零了提示把这一项删掉。手机端 short-feed/ 不查。
 const BUTTON_CLASSES = new Set(['btn', 'btn-link', 'btn-icon', 'btn-plain']);

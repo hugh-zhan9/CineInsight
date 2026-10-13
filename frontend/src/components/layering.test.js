@@ -154,10 +154,11 @@ describe('层级刻度（D-UD-05）', () => {
     return (block.match(/z-index:\s*([^;]+);/) || [])[1];
   }
 
-  it('从低到高：吸顶 < 菜单 < 抽屉 < 对话框与查看器 < 全局提示 < 关键遮罩', () => {
+  // 菜单与浮层（teleport 到 body）可能从抽屉或对话框里点开，所以排在对话框之上、全局提示之下。
+  it('从低到高：吸顶 < 抽屉 < 对话框与查看器 < 菜单与浮层 < 全局提示 < 关键遮罩', () => {
     const tokens = read('styles/tokens.css');
     const value = name => Number((tokens.match(new RegExp(`${name}:\\s*(\\d+);`)) || [])[1]);
-    const scale = ['--z-sticky', '--z-menu', '--z-drawer', '--z-modal', '--z-toast', '--z-critical'].map(value);
+    const scale = ['--z-sticky', '--z-drawer', '--z-modal', '--z-menu', '--z-toast', '--z-critical'].map(value);
     expect(scale.every(Number.isFinite)).toBe(true);
     expect([...scale].sort((a, b) => a - b)).toEqual(scale);
     expect(new Set(scale).size).toBe(scale.length);
