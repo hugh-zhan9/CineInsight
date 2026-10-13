@@ -21,12 +21,13 @@ struct LegacySpeech: SpeechEngine {
     /// Languages written without spaces between words: no space is inserted where chunks join.
     static let unspaced: Set<String>=["zh", "ja", "yue", "wuu", "th", "lo", "km", "my"]
 
-    /// A denied or restricted permission is an error, not an unsupported device: the app then shows where to allow it.
+    /// A denied or restricted permission is reported with its code (the app shows where to allow it), not as an
+    /// unsupported device; the language lists still come back so translation stays usable.
     func status() async throws -> Response {
         let authorization=SFSpeechRecognizer.authorizationStatus()
-        if authorization == .denied || authorization == .restricted { try fail("apple_speech_permission_denied") }
         let locales=SFSpeechRecognizer.supportedLocales().sorted { $0.identifier < $1.identifier }
         let langs=locales.map { Language(code:$0.identifier,name:displayLanguage($0.identifier),installed:SFSpeechRecognizer(locale:$0)?.supportsOnDeviceRecognition ?? false) }
+        if authorization == .denied || authorization == .restricted { return Response(error:"apple_speech_permission_denied",supported:false,languages:langs) }
         return Response(supported:!locales.isEmpty,languages:langs)
     }
     func locale(for code: String) async throws -> Locale {
@@ -131,17 +132,17 @@ extension LegacySpeech {
         }
         request.endAudio()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[[Piece]], Error>) in
-            let once=Once(), state=SnapshotState()
-            let utterances={ state.accumulator.snapshots.map { filledDurations($0,chunkEnd:chunkEnd) } }
+            let once=Once(), state=SnapshotState(origin:offset)
+            let utterances={ state.accumulator.utterances(chunkEnd:chunkEnd) }
             // Callbacks arrive on the recognizer's serial queue.
             let task=recognizer.recognitionTask(with:request) { result, error in
                 if let result { state.accumulator.add(pieces(result.bestTranscription,offset:offset)) }
                 if result?.isFinal == true {
                     if once.claim() { continuation.resume(returning:utterances()) }
                 } else if let error, once.claim() {
-                    // Silence or music ends the chunk with an assistant-domain error; keep what was heard.
-                    let authorized=SFSpeechRecognizer.authorizationStatus() == .authorized
-                    if let code=chunkFailure(domain:(error as NSError).domain,authorized:authorized) { continuation.resume(throwing:Failure(code:code)) }
+                    // A silent chunk ends with "no speech detected"; any other error fails the whole transcription.
+                    let authorized=SFSpeechRecognizer.authorizationStatus() == .authorized, error=error as NSError
+                    if let code=chunkFailure(domain:error.domain,code:error.code,authorized:authorized) { continuation.resume(throwing:Failure(code:code)) }
                     else { continuation.resume(returning:utterances()) }
                 }
             }
@@ -164,4 +165,7 @@ extension LegacySpeech {
     }
 }
 /// Snapshots of one recognition request, touched only from the recognizer's serial callback queue.
-final class SnapshotState: @unchecked Sendable { var accumulator=SnapshotAccumulator() }
+final class SnapshotState: @unchecked Sendable {
+    var accumulator: SnapshotAccumulator
+    init(origin: Double) { accumulator=SnapshotAccumulator(origin:origin) }
+}

@@ -14,6 +14,9 @@ def request(env=None, **value):
     result = subprocess.run([str(HELPER)], input=json.dumps(value), text=True, capture_output=True, timeout=90, check=True, env=env)
     return json.loads(result.stdout)
 
+# Pure Swift logic first: it needs no permission, language resource or built helper.
+subprocess.run(['bash', str(ROOT / 'scripts/test_apple_ai_logic.sh')], check=True, timeout=300)
+
 status = request(operation='status')
 assert status.get('supported'), status
 installed = {entry['code'].split('_')[0] for entry in status['languages'] if entry['installed']}

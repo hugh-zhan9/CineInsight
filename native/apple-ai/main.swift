@@ -1,30 +1,6 @@
 import Foundation
 import NaturalLanguage
 
-struct Request: Decodable {
-    var operation: String
-    var path: String?
-    var source: String?
-    var target: String?
-    var texts: [String]?
-}
-struct Segment: Codable { var start: Double; var end: Double; var text: String }
-struct Language: Encodable { var code: String; var name: String; var installed: Bool }
-struct Candidate: Encodable { var language: String; var confidence: Double }
-struct Response: Encodable {
-    var error: String?
-    var supported: Bool?
-    var languages: [Language]?
-    var translationLanguages: [Language]?
-    var language: String?
-    var segments: [Segment]?
-    var translations: [String]?
-    var candidates: [Candidate]?
-}
-struct Failure: Error { let code: String }
-/// `confidence` is nil when the recognizer reported none (the macOS 15 recognizer may not).
-struct Transcript { var segments: [Segment]; var confidence: Double? }
-
 /// Test hook: CINEINSIGHT_APPLE_AI_LEGACY=1 runs the macOS 15 paths (on-device SFSpeechRecognizer and the
 /// hidden-window translation session) on macOS 26+, so they can be exercised on a newer Mac.
 let legacyForced = ProcessInfo.processInfo.environment["CINEINSIGHT_APPLE_AI_LEGACY"] == "1"
@@ -53,8 +29,9 @@ func speechEngine() -> any SpeechEngine {
     return LegacySpeech()
 }
 
-func detect(_ path: String, engine: any SpeechEngine) async throws -> [Candidate] {
-    var candidates=[Candidate]()
+/// Candidates best first. `calibrated` is false when any was ranked without a transcription confidence.
+func detect(_ path: String, engine: any SpeechEngine) async throws -> (candidates: [Candidate], calibrated: Bool) {
+    var candidates=[Candidate](), calibrated=true
     for locale in try await engine.detectionLocales() {
         try Task.checkCancellation()
         let transcript=try await engine.transcribe(path,locale:locale)
@@ -66,16 +43,10 @@ func detect(_ path: String, engine: any SpeechEngine) async throws -> [Candidate
         let consistency=hypotheses.filter { languageKey(Locale(identifier:$0.key.rawValue))==key }.map(\.value).max() ?? 0
         if let score=candidateScore(confidence:transcript.confidence,consistency:consistency) {
             candidates.append(Candidate(language:locale.identifier,confidence:score))
+            if transcript.confidence == nil { calibrated=false }
         }
     }
-    return candidates.sorted { $0.confidence > $1.confidence }
-}
-/// Confidence alone is not calibrated across languages, so text inconsistent with its recognizer is rejected.
-/// Without a transcription confidence the language consistency decides alone; the selection gap rules still apply.
-func candidateScore(confidence: Double?, consistency: Double) -> Double? {
-    guard consistency >= 0.6 else { return nil }
-    guard let confidence else { return consistency }
-    return confidence >= 0.65 ? confidence*consistency : nil
+    return (candidates.sorted { $0.confidence > $1.confidence },calibrated)
 }
 
 @main struct AppleAI {
@@ -102,11 +73,11 @@ func candidateScore(confidence: Double?, consistency: Double) -> Double? {
                 emit(Response(supported:true))
             case "detect":
                 guard let path=request.path else { try fail("apple_invalid_request") }
-                let candidates=try await detect(path,engine:speech)
-                guard let first=candidates.first, first.confidence >= 0.7, candidates.count==1 || first.confidence-candidates[1].confidence >= 0.1 else {
-                    emit(Response(error:"apple_language_uncertain",candidates:candidates)); return
+                let detection=try await detect(path,engine:speech)
+                guard let language=detectedLanguage(detection.candidates,calibrated:detection.calibrated) else {
+                    emit(Response(error:"apple_language_uncertain",candidates:detection.candidates)); return
                 }
-                emit(Response(language:first.language,candidates:candidates))
+                emit(Response(language:language,candidates:detection.candidates))
             case "transcribe":
                 guard let path=request.path else { try fail("apple_invalid_request") }
                 let locale=try await speech.locale(for:request.source ?? "")

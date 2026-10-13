@@ -239,21 +239,37 @@ func TestAppleErrorMessagesForMacOS15Paths(t *testing.T) {
 	}
 }
 
-// A denied speech permission on macOS 15 is reported as an error by the helper's status, so settings, engine
-// preparation and generation all show where to allow it instead of calling the device unsupported.
+// On macOS 15 a denied speech permission comes back as a status carrying the permission code, supported:false
+// and the language lists. Settings, engine preparation and generation show where to allow it (not "device not
+// supported"), and system translation languages stay available.
 func TestAppleSpeechPermissionDeniedShowsSystemSettingsGuidance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
 	const guidance = "「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策"
+	helper := filepath.Join(t.TempDir(), "helper")
+	status := `{"error":"apple_speech_permission_denied","supported":false,"languages":[{"code":"en-US","name":"英语（美国）","installed":true}],` +
+		`"translationLanguages":[{"code":"en","name":"英语","installed":false},{"code":"zh","name":"中文","installed":false}]}`
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\ncat >/dev/null\nprintf '%s' '"+status+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	s := NewSubtitleService(t.TempDir())
-	s.appleRunner = func(_ context.Context, request appleAIRequest) (appleAIResponse, error) {
+	s.appleRunner = func(ctx context.Context, request appleAIRequest) (appleAIResponse, error) {
 		if request.Operation != "status" {
 			t.Errorf("unexpected helper call %q", request.Operation)
 		}
-		return appleAIResponse{}, appleAIError("apple_speech_permission_denied")
+		return runAppleAIProcess(ctx, helper, request)
 	}
 	statuses, err := s.GetEngineStatuses()
 	if err != nil || len(statuses) != 1 || statuses[0].Supported || statuses[0].Available ||
 		!strings.Contains(statuses[0].ReasonMessage, guidance) || strings.Contains(statuses[0].ReasonMessage, "不支持") {
 		t.Fatalf("status: %+v %v", statuses, err)
+	}
+	if got := statuses[0].TranslationLanguages; len(got) != 2 || got[0].Code != "en" || got[1].Code != "zh" {
+		t.Fatalf("translation languages lost with the permission code: %+v", got)
+	}
+	if got := statuses[0].Languages; len(got) != 1 || got[0].Code != "en-US" || !got[0].Installed {
+		t.Fatalf("speech languages: %+v", got)
 	}
 	if err := s.PrepareEngine(SubtitleEngineApple); err == nil || !strings.Contains(err.Error(), guidance) {
 		t.Fatalf("prepare: %v", err)

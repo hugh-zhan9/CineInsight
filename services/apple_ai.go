@@ -294,8 +294,12 @@ func (s *SubtitleService) getAppleStatus() SubtitleEngineStatus {
 	defer cancel()
 	result, err := s.callAppleAI(ctx, appleAIRequest{Operation: "status"})
 	if err != nil {
+		// A status can carry a code and still list languages: on macOS 15 a denied speech permission blocks
+		// recognition (shown with its guidance) but not system translation.
 		status.ReasonMessage = err.Error()
 		status.ReasonCode = SubtitleReasonMissingRuntime
+		status.Languages = result.Languages
+		status.TranslationLanguages = result.TranslationLanguages
 		return status
 	}
 	status.Supported = result.Supported

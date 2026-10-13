@@ -53,6 +53,22 @@ describe('字幕引擎状态与准备（D-PC22）', () => {
     expect(wrapper.findAll('.subtitle-engine-row')).toHaveLength(1);
   });
 
+  it('macOS 15 语音识别权限被拒时显示去系统设置的说明，系统翻译语言仍可准备', async () => {
+    const guidance = 'apple_speech_permission_denied: 请在「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策后重试';
+    api.GetSubtitleEngineStatuses.mockResolvedValue([apple({
+      supported: false, needs_prepare: false, reason_message: guidance,
+      translation_languages: [{ code: 'en', name: '英语', installed: false }, { code: 'zh', name: '中文', installed: false }]
+    })]);
+    api.PrepareAppleSubtitleLanguage.mockResolvedValue(undefined);
+    const wrapper = await mountSection();
+    expect(wrapper.get('[data-test="subtitle-engine-apple"]').text()).toContain('「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策');
+    expect(wrapper.get('[data-test="subtitle-engine-apple"]').text()).not.toContain('不支持');
+    expect(wrapper.findAll('[data-test="apple-translation-source"] option').map(option => option.attributes('value'))).toEqual(['en', 'zh']);
+    await wrapper.get('[data-test="apple-translation-prepare"]').trigger('click');
+    await flushPromises();
+    expect(api.PrepareAppleSubtitleLanguage).toHaveBeenCalledWith('en', 'zh', true);
+  });
+
   it('D-004 说明 macOS 15 起可用，以及 macOS 15 上的较早识别引擎与听写语言下载', async () => {
     const wrapper = await mountSection();
     const text = wrapper.text();
