@@ -1,7 +1,7 @@
 <template>
   <div v-if="technicalBackfill.running || technicalBackfill.completed || technicalBackfill.cancelled || technicalBackfill.failed || technicalWaitingText" :class="['scan-sync-status', barStateClass(technicalBackfill)]" :role="technicalBackfill.failed ? 'alert' : 'status'">
     <span v-if="!technicalBackfill.running && !technicalBackfill.completed && !technicalBackfill.cancelled && !technicalBackfill.failed">{{ labels.technical }}</span>
-    <span v-else-if="technicalBackfill.preparing">正在统计待补全视频...</span>
+    <span v-else-if="technicalBackfill.preparing">正在统计待补全视频…</span>
     <span v-else-if="technicalBackfill.completed && technicalBackfill.total === 0 && !technicalBackfill.failed">{{ labels.technical }}无需补全（已是最新状态）。</span>
     <span v-else-if="technicalBackfill.running">{{ labels.technical }} {{ technicalBackfill.processed }}/{{ technicalBackfill.total }}</span>
     <span v-else>
@@ -13,11 +13,12 @@
     <button
       v-if="technicalWaitingText"
       type="button"
-      class="btn-secondary btn-compact status-run-now"
+      class="btn btn--secondary btn--sm status-run-now"
       data-test="technical-run-now"
       @click="runGatedTaskNow('technical')"
     >忽略空闲立即运行</button>
-    <button v-if="technicalBackfill.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelTechnicalBackfill">取消</button>
+    <button v-if="technicalBackfill.running" type="button" class="btn btn--secondary btn--sm status-cancel" @click="cancelTechnicalBackfill">取消</button>
+    <ProgressBar v-if="technicalBackfill.running && !technicalBackfill.preparing" class="status-progress" :value="ratio(technicalBackfill)" />
     <TaskFailureList :failures="technicalBackfill.failures || []" key-prefix="technical-" data-test="technical-backfill-failures" />
   </div>
 
@@ -34,11 +35,12 @@
     <button
       v-if="perceptualHashWaitingText"
       type="button"
-      class="btn-secondary btn-compact status-run-now"
+      class="btn btn--secondary btn--sm status-run-now"
       data-test="phash-run-now"
       @click="runGatedTaskNow('phash')"
     >忽略空闲立即运行</button>
-    <button v-if="perceptualHash.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelPerceptualHashBackfill">取消</button>
+    <button v-if="perceptualHash.running" type="button" class="btn btn--secondary btn--sm status-cancel" @click="cancelPerceptualHashBackfill">取消</button>
+    <ProgressBar v-if="perceptualHash.running" class="status-progress" :value="ratio(perceptualHash)" />
     <span class="phash-status-help">指纹用于后续查找近重复视频，候选结果请在清理中心查看。</span>
     <span v-if="perceptualHash.failed" class="phash-status-help">处理失败表示未能生成指纹，部分视频仍可播放；具体原因见下方。</span>
     <TaskFailureList :failures="perceptualHash.failures || []" key-prefix="phash-" data-test="phash-failures" />
@@ -46,7 +48,7 @@
 
   <div v-if="frameHash.running || frameHash.completed || frameHash.cancelled || frameHash.failed || frameHashWaitingText" :class="['scan-sync-status', barStateClass(frameHash)]" :role="frameHash.failed ? 'alert' : 'status'">
     <span v-if="!frameHash.running && !frameHash.completed && !frameHash.cancelled && !frameHash.failed">{{ labels.frame_hash }}</span>
-    <span v-else-if="frameHash.preparing">正在统计待补全帧哈希的视频...</span>
+    <span v-else-if="frameHash.preparing">正在统计待补全帧哈希的视频…</span>
     <span v-else-if="frameHash.completed && frameHash.total === 0 && !frameHash.failed">{{ labels.frame_hash }}无需补全（已是最新状态）。</span>
     <span v-else-if="frameHash.running">{{ labels.frame_hash }} {{ frameHash.processed }}/{{ frameHash.total }}</span>
     <span v-else>
@@ -57,11 +59,12 @@
     <button
       v-if="frameHashWaitingText"
       type="button"
-      class="btn-secondary btn-compact status-run-now"
+      class="btn btn--secondary btn--sm status-run-now"
       data-test="frame-hash-run-now"
       @click="runGatedTaskNow('frame_hash')"
     >忽略空闲立即运行</button>
-    <button v-if="frameHash.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelFrameHashBackfill">取消</button>
+    <button v-if="frameHash.running" type="button" class="btn btn--secondary btn--sm status-cancel" @click="cancelFrameHashBackfill">取消</button>
+    <ProgressBar v-if="frameHash.running && !frameHash.preparing" class="status-progress" :value="ratio(frameHash)" />
     <TaskFailureList :failures="frameHash.failures || []" key-prefix="frame-hash-" data-test="frame-hash-failures" />
   </div>
 
@@ -71,7 +74,8 @@
       {{ labels.local_metadata }}：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
       <span v-if="localMetadataBackfill.cancelled">（已取消）</span><span v-else-if="localMetadataBackfill.completed">（已完成）</span>
     </span>
-    <button v-if="localMetadataBackfill.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelLocalMetadataBackfill">取消</button>
+    <button v-if="localMetadataBackfill.running" type="button" class="btn btn--secondary btn--sm status-cancel" @click="cancelLocalMetadataBackfill">取消</button>
+    <ProgressBar v-if="localMetadataBackfill.running" class="status-progress" :value="ratio(localMetadataBackfill)" />
   </div>
 	<div v-if="localMetadataExport.running || localMetadataExport.completed" :class="['scan-sync-status', barStateClass(localMetadataExport)]" :role="localMetadataExport.failed ? 'alert' : 'status'">
 	  <span v-if="localMetadataExport.running">写出 NFO {{ localMetadataExport.processed }}/{{ localMetadataExport.total }}</span>
@@ -79,7 +83,8 @@
 	    NFO 写出：成功 {{ localMetadataExport.succeeded }}，失败 {{ localMetadataExport.failed }}
 	    <span v-if="localMetadataExport.cancelled">（已取消）</span><span v-else-if="localMetadataExport.completed">（已完成）</span>
 	  </span>
-	  <button v-if="localMetadataExport.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelLocalMetadataExport">取消</button>
+	  <button v-if="localMetadataExport.running" type="button" class="btn btn--secondary btn--sm status-cancel" @click="cancelLocalMetadataExport">取消</button>
+	  <ProgressBar v-if="localMetadataExport.running" class="status-progress" :value="ratio(localMetadataExport)" />
 	</div>
 </template>
 
@@ -89,8 +94,11 @@ import { confirmAction, notify, notifyError } from '../../utils/feedback.js';
 import { logFrontend } from '../../utils/frontendLog.js';
 import { BACKGROUND_TASK_LABELS, idleGateWaitingText, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
+import ProgressBar from '../ui/ProgressBar.vue';
 import TaskFailureList from './TaskFailureList.vue';
 
+// 统一设计 D-UD-11 要把这几条收进任务中心；任务中心的快照目前缺本条上的几项（跳过数、已取消、复用 / 移出范围、
+// NFO 写出的取消），在补齐之前先留在片库页，换成统一的按钮与进度条（第 0 步 B1a，缺口已报 B3）。
 // 五条常驻的后台任务状态条：技术信息、近重复指纹、帧哈希、本地资料补全、NFO 写出。
 // 任务名与任务中心、命令面板同一份（utils/idleScheduling.js 的 BACKGROUND_TASK_LABELS，D-PC18）。
 // 全部后台任务的状态、上一轮结果与动作在顶栏的任务中心里；这里只保留片库页最常看的这几条。
@@ -98,7 +106,7 @@ import TaskFailureList from './TaskFailureList.vue';
 // 五份状态再镜像回去，菜单项的进度文案与清理面板的两个补全按钮才有数据可读。
 export default {
   name: 'BackgroundTaskStatusBars',
-  components: { TaskFailureList },
+  components: { ProgressBar, TaskFailureList },
   mixins: [runtimeEventsMixin],
   emits: ['state-change', 'library-changed'],
   data() {
@@ -175,6 +183,11 @@ export default {
     }
   },
   methods: {
+    // 进度条的比例：总数还不知道（准备阶段）时不传，进度条显示为不确定。
+    ratio(state) {
+      const total = Number(state?.total || 0);
+      return total > 0 ? Number(state?.processed || 0) / total : null;
+    },
     // 跑着的用强边框，跑完有失败的用警示色；成功不上色，免得五条常驻条一片绿。
     barStateClass(state) {
       return {
@@ -342,23 +355,25 @@ export default {
 </script>
 
 <style scoped>
-.status-cancel { margin-left: 10px; }
+.status-cancel { margin-left: var(--space-3); }
 
-.status-waiting-idle { margin-left: 10px; color: var(--warning-color); }
+.status-waiting-idle { margin-left: var(--space-3); color: var(--warning-text); }
 
-.status-run-now { margin-left: 8px; }
+.status-run-now { margin-left: var(--space-2); }
+
+.status-progress { flex-basis: 100%; margin-top: var(--space-2); }
 
 .scan-sync-status {
-  margin: 10px 0 0;
+  margin: var(--space-3) 0 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .scan-sync-status--running {
@@ -367,26 +382,11 @@ export default {
 
 .phash-status-help {
   flex-basis: 100%;
-  margin-top: 4px;
-}
-
-.scan-sync-status--success {
-  border-color: var(--accent-border);
-  color: var(--accent-color);
+  margin-top: var(--space-1);
 }
 
 .scan-sync-status--warning {
   border-color: var(--warning-border);
-  color: var(--warning-color);
-}
-
-.scan-sync-status--error {
-  border-color: var(--danger-border);
-  color: var(--danger-color);
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+  color: var(--warning-text);
 }
 </style>

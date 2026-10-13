@@ -47,12 +47,12 @@
         <button
           ref="filterTrigger"
           type="button"
-          :class="['toolbar-btn', { 'toolbar-btn--on': activeFilterCount > 0 }]"
+          :class="['btn', 'btn--secondary', 'toolbar-trigger', { 'toolbar-trigger--on': activeFilterCount > 0 }]"
           @click="toggleToolbarMenu('filter', 'filterTrigger')"
         >
           筛选
-          <span v-if="activeFilterCount > 0" class="toolbar-btn__badge">{{ activeFilterCount }}</span>
-          <span class="toolbar-btn__caret">▾</span>
+          <AppBadge v-if="activeFilterCount > 0" tone="accent" :count="activeFilterCount" />
+          <AppIcon class="toolbar-trigger__caret" name="chevron-down" :size="16" />
         </button>
 
         <select v-model="sortModeModel" @change="$emit('search', true)" class="select-input toolbar-control" aria-label="排序方式">
@@ -66,7 +66,7 @@
         <div class="split-btn">
           <button
             type="button"
-            class="split-btn__main"
+            class="btn btn--ghost split-btn__main"
             data-test="random-play-main"
             :disabled="randomDisabled"
             :title="randomDisabled ? randomDisabledReason : '在当前片库筛选内按随机条件立即播放一部，播放越少越容易被抽到'"
@@ -76,41 +76,37 @@
           <button
             ref="randomTrigger"
             type="button"
-            class="split-btn__caret"
+            class="btn-icon split-btn__caret"
             aria-label="随机选项"
             @click="toggleToolbarMenu('random', 'randomTrigger')"
-          >▾</button>
+          ><AppIcon name="chevron-down" :size="16" /></button>
         </div>
 
-        <button type="button" class="toolbar-btn" data-test="toolbar-search-scenes" title="带上当前筛选条件进入场景检索（语义搜索词不带入）" @click="$emit('search-scenes')">在当前筛选中搜场景</button>
+        <button type="button" class="btn btn--secondary toolbar-trigger" data-test="toolbar-search-scenes" title="带上当前筛选条件进入场景检索（语义搜索词不带入）" @click="$emit('search-scenes')">在当前筛选中搜场景</button>
 
         <button
           ref="viewTrigger"
           type="button"
-          :class="['toolbar-btn', { 'toolbar-btn--on': selectedSavedViewID > 0 }]"
+          :class="['btn', 'btn--secondary', 'toolbar-trigger', { 'toolbar-trigger--on': selectedSavedViewID > 0 }]"
           @click="toggleToolbarMenu('view', 'viewTrigger')"
-        >{{ selectedSavedViewName || '视图' }}<span class="toolbar-btn__caret">▾</span></button>
+        >{{ selectedSavedViewName || '视图' }}<AppIcon class="toolbar-trigger__caret" name="chevron-down" :size="16" /></button>
 
-        <div class="segmented" role="group" aria-label="片库布局">
-          <button type="button" :class="['segmented__btn', { active: viewMode === 'list' }]" data-test="library-layout-list" @click="setViewMode('list')">列表</button>
-          <button type="button" :class="['segmented__btn', { active: viewMode === 'grid' }]" data-test="library-layout-grid" @click="setViewMode('grid')">网格</button>
-          <button
-            type="button"
-            :class="['segmented__btn', { active: viewMode === 'wall' }]"
-            title="只显示缩略图的紧凑平铺，标题悬停可见，点一下打开预览"
-            data-test="library-layout-wall"
-            @click="setViewMode('wall')"
-          >缩略图墙</button>
-        </div>
+        <SegmentedControl
+          label="片库布局"
+          :options="layoutOptions"
+          :model-value="viewMode"
+          data-test="library-layout"
+          @update:model-value="setViewMode"
+        />
 
         <button
           ref="manageTrigger"
           type="button"
-          class="toolbar-btn toolbar-btn--strong"
+          class="btn btn--secondary toolbar-trigger toolbar-trigger--strong"
           @click="toggleToolbarMenu('manage', 'manageTrigger')"
         >
           管理
-          <span class="toolbar-btn__caret">▾</span>
+          <AppIcon class="toolbar-trigger__caret" name="chevron-down" :size="16" />
         </button>
       </div>
 
@@ -118,20 +114,18 @@
         <div class="tag-browser">
           <div class="tags-wrap">
             <span class="toolbar-row__label">标签</span>
-            <button
-              type="button"
-              @click="$emit('clear-tags')"
-              :class="['tag-chip', { active: selectedTags.length === 0 }]"
-            >全部</button>
+            <FilterChip class="tag-all-chip" label="全部" :active="selectedTags.length === 0" data-test="tag-filter-all" @toggle="$emit('clear-tags')" />
             <span v-if="tagGroups.length === 0" class="tag-browser__empty">暂无可选标签</span>
             <div class="tag-browser__actions">
-              <button type="button" class="toolbar-btn toolbar-btn--compact" @click="$emit('open-tag-manager')">标签管理</button>
+              <button type="button" class="btn btn--secondary btn--sm" @click="$emit('open-tag-manager')">标签管理</button>
+              <!-- 选择（D-UD-10）：「全选当前结果」选中整个筛选结果（未加载的也先取回来），全选之后同一个位置是「取消选择」。 -->
               <button
                 type="button"
-                class="toolbar-btn toolbar-btn--compact"
+                class="btn btn--secondary btn--sm"
+                data-test="toolbar-select-all-matching"
                 :disabled="videos.length === 0"
                 @click="$emit('toggle-select-all')"
-              >{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
+              >{{ allMatchingSelected ? '取消选择' : '全选当前结果' }}</button>
             </div>
           </div>
           <!-- 人物筛选（D-PC33、META-02）：多选取交集，选中项与标签一样点一下取消；筛选条件归片库页持有，
@@ -142,18 +136,17 @@
               <span v-if="selectedPeople.length" class="person-filter-label__count">已选 {{ selectedPeople.length }}</span>
             </div>
             <div class="tags-wrap">
-              <button
+              <!-- 已选人物（D-UD-06 筛选芯片）：点芯片或 × 都取消这个人物的筛选。 -->
+              <FilterChip
                 v-for="person in selectedPeople"
                 :key="person.id"
-                type="button"
-                class="tag-chip tag-chip-wrap active"
-                :aria-label="`取消人物筛选 ${personName(person)}`"
+                :label="personName(person)"
+                active
+                removable
                 :data-test="`person-filter-chip-${person.id}`"
-                @click="removePersonFilter(person.id)"
-              >
-                <span class="tag-chip-name">{{ personName(person) }}</span>
-                <span class="tag-chip-check">✓</span>
-              </button>
+                @toggle="removePersonFilter(person.id)"
+                @remove="removePersonFilter(person.id)"
+              />
               <div class="person-filter-combobox">
                 <input
                   v-model="personKeyword"
@@ -178,7 +171,7 @@
                     type="button"
                     role="option"
                     :aria-selected="index === personActiveIndex"
-                    :class="['person-filter-option', { active: index === personActiveIndex }]"
+                    :class="['btn-link', 'person-filter-option', { active: index === personActiveIndex }]"
                     :data-test="`person-filter-option-${item.person.id}`"
                     @mouseenter="personActiveIndex = index"
                     @mousedown.prevent="addPersonFilter(item)"
@@ -203,7 +196,7 @@
                 @click="$emit('toggle-tag', tag.id)"
               >
                 <span class="tag-chip-name">{{ tag.name }}</span>
-                <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
+                <AppIcon v-if="isTagSelected(tag.id)" class="tag-chip-check" name="check" :size="16" />
               </div>
             </div>
           </div>
@@ -211,8 +204,9 @@
       </div>
     </div>
 
-    <!-- 结果条：筛选命中数、生效条件回显、一键清除与行高档位 -->
-    <div v-if="selectedVideoIds.length === 0" class="result-bar">
+    <!-- 结果条：筛选命中数、生效条件回显、一键清除与行高档位。批量操作条（D-UD-10）浮在内容区底部，由片库页放置，
+         有选中时结果条照常显示。 -->
+    <div class="result-bar">
       <span class="result-bar__count">
         筛选出 <b>{{ filteredCountText }}</b>
         <span v-if="libraryTotalCount !== null"> / {{ formatCount(libraryTotalCount) }}</span>
@@ -220,7 +214,7 @@
       <template v-if="activeConditionLabels.length > 0">
         <span class="result-bar__sep">|</span>
         <span class="result-bar__conditions">条件：{{ activeConditionLabels.join(' · ') }}</span>
-        <button type="button" class="result-bar__clear" @click="$emit('clear-conditions')">清除</button>
+        <button type="button" class="btn-link result-bar__clear" @click="$emit('clear-conditions')">清除</button>
       </template>
       <span v-else class="result-bar__conditions">未设置筛选条件</span>
       <div class="result-bar__spacer"></div>
@@ -230,33 +224,15 @@
         合并版本
       </label>
       <span class="result-bar__label">行高</span>
-      <div class="segmented segmented--mini" role="group" aria-label="行高">
-        <button type="button" :class="['segmented__btn', { active: rowDensity === 'compact' }]" @click="setRowDensity('compact')">紧凑</button>
-        <button type="button" :class="['segmented__btn', { active: rowDensity === 'comfortable' }]" @click="setRowDensity('comfortable')">舒适</button>
-      </div>
+      <SegmentedControl
+        class="result-bar__density"
+        label="行高"
+        :options="densityOptions"
+        :model-value="rowDensity"
+        data-test="row-density"
+        @update:model-value="setRowDensity"
+      />
     </div>
-
-    <BatchActionBar
-      v-else
-      :selected-count="selectedVideoIds.length"
-      :selected-total-size-text="selectedTotalSizeText"
-      :migration-running="migrationRunning"
-      :all-visible-selected="allVisibleSelected"
-      @batch-playback-queue="$emit('batch-playback-queue')"
-      @batch-add-tag="$emit('batch-add-tag')"
-      @batch-metadata-edit="$emit('batch-metadata-edit')"
-      @batch-move="$emit('batch-move')"
-      @batch-local-metadata="$emit('batch-local-metadata')"
-      @batch-playback-proxy="$emit('batch-playback-proxy')"
-      @batch-subtitle="$emit('batch-subtitle')"
-      @batch-version-group="$emit('batch-version-group')"
-      @batch-compare="$emit('batch-compare')"
-      @batch-delete="$emit('batch-delete')"
-      @batch-edit-merge="$emit('batch-edit-merge')"
-      @batch-edit-trim="$emit('batch-edit-trim')"
-      @toggle-select-all="$emit('toggle-select-all')"
-      @clear-selection="$emit('clear-selection')"
-    />
     </div>
 
     <!-- 筛选浮层：区间类条件先改草稿，「应用」才提交，按钮上的数字是草稿的预览计数 -->
@@ -270,7 +246,7 @@
       <div class="filter-popover__head">
         <strong>筛选条件</strong>
         <div class="filter-popover__spacer"></div>
-        <button type="button" class="link-btn" @click="clearFilterDraft">全部清除</button>
+        <button type="button" class="btn-link" @click="clearFilterDraft">全部清除</button>
       </div>
       <label class="filter-popover__field">
         <span>体积区间</span>
@@ -296,8 +272,8 @@
       </div>
       <div class="filter-popover__divider"></div>
       <div class="filter-popover__actions">
-        <button type="button" class="btn-secondary" @click="$emit('open-save-view')">存为视图</button>
-        <button type="button" class="btn-primary" @click="applyFilterDraft">应用{{ filterPreviewText }}</button>
+        <button type="button" class="btn btn--secondary" @click="$emit('open-save-view')">存为视图</button>
+        <button type="button" class="btn btn--primary" @click="applyFilterDraft">应用{{ filterPreviewText }}</button>
       </div>
     </BasePopover>
 
@@ -342,9 +318,12 @@
 
 <script>
 import { CountLibraryVideos, ListPeople } from '../../../wailsjs/go/main/App';
+import AppBadge from '../ui/AppBadge.vue';
+import AppIcon from '../ui/AppIcon.vue';
 import BaseMenu from '../ui/BaseMenu.vue';
 import BasePopover from '../ui/BasePopover.vue';
-import BatchActionBar from './BatchActionBar.vue';
+import FilterChip from '../ui/FilterChip.vue';
+import SegmentedControl from '../ui/SegmentedControl.vue';
 import CollectionSuggestionPanel from '../CollectionSuggestionPanel.vue';
 import { GetCollectionSuggestionStatus } from '../../../wailsjs/go/main/App';
 import { runtimeEventsMixin } from './runtimeEvents.js';
@@ -358,17 +337,18 @@ import { VIDEO_MISSING_OPTIONS } from '../../utils/metadataCompleteness.js';
 // 人物组合框一次最多列出的候选数。
 const PERSON_OPTION_LIMIT = 20;
 
-// 吸顶的片库工具栏：三层控件、标签行、结果条与批量操作栏，外加筛选浮层与三个下拉菜单。
+// 吸顶的片库工具栏：三层控件、标签行与结果条，外加筛选浮层与三个下拉菜单（批量操作条在片库页的内容区底部）。
 // 查询条件本身仍归 VideoListPage 持有，这里只负责呈现与把动作发回去；
 // 浮层里的区间草稿是纯 UI 状态，留在本组件内，「应用」时才把结果 emit 出去。
 export default {
   name: 'LibraryToolbar',
-  components: { BaseMenu, BasePopover, BatchActionBar, CollectionSuggestionPanel },
+  components: { AppBadge, AppIcon, BaseMenu, BasePopover, CollectionSuggestionPanel, FilterChip, SegmentedControl },
   mixins: [runtimeEventsMixin],
   props: {
     tags: { type: Array, default: () => [] },
     videos: { type: Array, default: () => [] },
-    selectedVideoIds: { type: Array, default: () => [] },
+    // 当前结果是否已全选（D-UD-10）：决定标签行那个选择按钮写「全选当前结果」还是「取消选择」。
+    allMatchingSelected: { type: Boolean, default: false },
     searchKeyword: { type: String, default: '' },
     searchMode: { type: String, default: 'file' },
     smartView: { type: String, default: '' },
@@ -420,10 +400,9 @@ export default {
     'update:searchKeyword', 'update:smartView', 'update:missing', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
-    'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
+    'toggle-select-all', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
-    'batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete',
-    'update:collapseVersions', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim'
+    'update:collapseVersions'
   ],
   data() {
     return {
@@ -447,6 +426,15 @@ export default {
         { label: '路径失效', value: 'stale' }
       ],
       missingOptions: VIDEO_MISSING_OPTIONS,
+      layoutOptions: [
+        { value: 'list', label: '列表' },
+        { value: 'grid', label: '网格' },
+        { value: 'wall', label: '缩略图墙', title: '只显示缩略图的紧凑平铺，标题悬停可见，点一下打开预览' }
+      ],
+      densityOptions: [
+        { value: 'compact', label: '紧凑' },
+        { value: 'comfortable', label: '舒适' }
+      ],
       toolbarMenu: null,
       toolbarMenuAnchor: null,
       filterDraft: { sizeRange: 'all', resRange: 'all', minRating: '', maxRating: '' },
@@ -589,17 +577,6 @@ export default {
       }
       return labels;
     },
-    selectedTotalSizeText() {
-      const ids = new Set(this.selectedVideoIds);
-      // 只能合计当前已加载的行；跨页选中的条目没有 size 可用，宁可不显示也不猜。
-      const loaded = this.videos.filter(video => ids.has(video.id));
-      if (loaded.length !== ids.size || loaded.length === 0) return '';
-      const bytes = loaded.reduce((total, video) => total + Number(video.size || 0), 0);
-      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const index = bytes > 0 ? Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024))) : 0;
-      const value = bytes / Math.pow(1024, index);
-      return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
-    },
     filteredCountText() {
       // 语义搜索的命中数由检索接口决定，不能用结构化筛选计数冒充。
       if (this.searchMode === 'semantic') return `${this.formatCount(this.videos.length)}${this.hasMore ? '+' : ''}`;
@@ -716,10 +693,6 @@ export default {
     personOptions() {
       const selected = new Set(this.selectedPeople.map(person => Number(person.id)));
       return this.personCandidates.filter(item => item?.person?.id && !selected.has(Number(item.person.id)));
-    },
-    allVisibleSelected() {
-      const ids = this.videos.map(video => video.id);
-      return ids.length > 0 && ids.every(id => this.selectedVideoIds.includes(id));
     },
   },
   methods: {
@@ -898,14 +871,14 @@ export default {
 .library-chrome {
   position: sticky;
   top: 0;
-  z-index: 90;
-  margin-bottom: 10px;
+  z-index: var(--z-sticky);
+  margin-bottom: var(--space-3);
 }
 
 .toolbar {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0 -20px 0;
   padding: 10px 20px;
   border-bottom: 1px solid var(--hairline);
@@ -915,7 +888,7 @@ export default {
 .toolbar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -929,10 +902,18 @@ export default {
 .toolbar-row__label {
   flex: none;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .toolbar-row--tags .toolbar-row__label { line-height: 26px; }
+
+/* 工具栏里的触发按钮（筛选、视图、管理、搜场景）：统一的次要按钮，常规字重；有生效条件时用强调色。 */
+.toolbar-trigger { flex: none; gap: 6px; padding: 0 var(--space-3); font-weight: var(--fw-regular); }
+.toolbar-trigger--strong { font-weight: var(--fw-semibold); }
+.toolbar-trigger--on,
+.toolbar-trigger--on:hover:not(:disabled) { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.toolbar-trigger__caret { color: var(--text-muted); }
+.toolbar-trigger--on .toolbar-trigger__caret { color: var(--accent-text); }
 
 .tags-wrap {
   display: flex;
@@ -943,13 +924,16 @@ export default {
   align-items: center;
 }
 
+/* 用户标签沿用全局 .tag-chip（带各自的底色）；「全部」与已选人物是筛选芯片（FilterChip）。 */
+.tag-chip-check { flex: none; }
+
 .tag-browser { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; }
-.tag-browser__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.tag-browser__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-left: auto; }
 .tag-category-row {
   /* WebKit 会在宽度变化后保留嵌套换行 flex 的旧 grid 行高。 */
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-3);
   padding-top: 6px;
   border-top: 1px solid var(--hairline-faint);
 }
@@ -957,7 +941,7 @@ export default {
 .person-filter-row {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-3);
   padding-top: 6px;
   border-top: 1px solid var(--hairline-faint);
 }
@@ -969,43 +953,46 @@ export default {
   flex-wrap: wrap;
   align-items: baseline;
   column-gap: 6px;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.4;
 }
-.person-filter-label__name { font-weight: 600; }
-.person-filter-label__count { color: var(--text-muted); font-size: 11px; }
+.person-filter-label__name { font-weight: var(--fw-semibold); }
+.person-filter-label__count { color: var(--text-muted); font-size: var(--fs-caption); }
 .person-filter-combobox { position: relative; width: 200px; }
-.person-filter-input { height: 26px; font-size: 12px; }
+.person-filter-input { height: 26px; font-size: var(--fs-caption); }
+/* 候选浮层在工具栏自己的叠放上下文里（.library-chrome 吸顶），压过下面的分类行即可。 */
 .person-filter-options {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: 3;
   max-height: 220px;
   overflow-y: auto;
-  padding: 4px;
+  padding: var(--space-1);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--panel-bg);
   box-shadow: var(--shadow-modal);
 }
 .person-filter-option {
   display: block;
   width: 100%;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-regular);
   text-align: left;
   cursor: pointer;
 }
+.person-filter-option:hover:not(:disabled) { text-decoration: none; }
 .person-filter-option.active { background: var(--accent-soft); color: var(--accent-text); }
-.person-filter-options__empty { display: block; padding: 8px; color: var(--text-muted); font-size: 12px; }
+.person-filter-options__empty { display: block; padding: var(--space-2); color: var(--text-muted); font-size: var(--fs-caption); }
 /* 名称与计数同一行，名称过长才折行：分类行在标签只有一行时不被计数撑高。 */
 .tag-category-label {
   display: flex;
@@ -1013,54 +1000,48 @@ export default {
   flex-wrap: wrap;
   align-items: baseline;
   column-gap: 6px;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
-.tag-category-label__name { font-weight: 600; }
-.tag-category-label__count { color: var(--text-muted); font-size: 11px; }
-.tag-browser__empty { color: var(--text-muted); font-size: 11px; }
+.tag-category-label__name { font-weight: var(--fw-semibold); }
+.tag-category-label__count { color: var(--text-muted); font-size: var(--fs-caption); }
+.tag-browser__empty { color: var(--text-muted); font-size: var(--fs-caption); }
 
-/* 分段器：搜索模式、列表/网格/缩略图墙、行高共用 */
+/* 搜索模式分段器：每个选项带 data-test（search-mode-* 在 data-test 基线里），统一的 SegmentedControl
+   还不能逐项带 data-test，先保留这一份、外观与它一致（缺口已报，C 组加透传后换掉）。布局与行高已用 SegmentedControl。 */
 .segmented {
   display: inline-flex;
   flex: none;
   height: var(--h-unit);
-  padding: 3px;
+  padding: 2px;
   gap: 2px;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  background: var(--panel-muted-bg);
+  background: var(--control-bg);
 }
 
 .segmented__btn {
-  padding: 0 11px;
+  padding: 0 var(--space-3);
   border: 0;
-  border-radius: 6px;
+  border-radius: calc(var(--radius-sm) - 2px);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
   cursor: pointer;
   white-space: nowrap;
 }
+.segmented__btn:hover:not(:disabled) { color: var(--text-primary); }
+.segmented__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.segmented__btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 
 .segmented__btn.active {
-  background: var(--panel-bg);
-  color: var(--text-primary);
-  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: var(--fw-semibold);
   box-shadow: var(--shadow-segment);
-}
-
-.segmented--mini {
-  height: 22px;
-  padding: 2px;
-}
-
-.segmented--mini .segmented__btn {
-  padding: 0 8px;
-  font-size: 11.5px;
 }
 
 .search-field {
@@ -1070,7 +1051,7 @@ export default {
   align-items: center;
   min-width: 240px;
   height: var(--h-unit);
-  padding: 0 10px 0 12px;
+  padding: 0 10px 0 var(--space-3);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--input-bg);
@@ -1087,7 +1068,7 @@ export default {
   border: 0;
   background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   outline: none;
 }
 
@@ -1095,10 +1076,10 @@ export default {
   flex: none;
   padding: 1px 5px;
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .toolbar-control {
@@ -1107,13 +1088,13 @@ export default {
   flex: none;
 }
 
-/* 随机拆分按钮：主键直接随机，▾ 里选模式或改抽十部 */
+/* 随机拆分按钮：主键直接随机，▾ 里选模式或改抽十部。两半是无底色的统一按钮，外框由容器给。 */
 .split-btn {
   display: inline-flex;
   flex: none;
   align-items: stretch;
   height: var(--h-unit);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   overflow: hidden;
@@ -1121,30 +1102,26 @@ export default {
 
 .split-btn__main,
 .split-btn__caret {
+  height: 100%;
   border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
+  border-radius: 0;
 }
 
-.split-btn__main { padding: 0 12px; }
-.split-btn__caret { padding: 0 9px; color: var(--text-muted); }
-.split-btn__main:hover:not(:disabled),
-.split-btn__caret:hover { background: var(--control-hover-bg); }
-.split-btn__main:disabled { color: var(--text-muted); cursor: not-allowed; }
+.split-btn__main { padding: 0 var(--space-3); color: var(--text-primary); font-weight: var(--fw-regular); }
+.split-btn__caret { width: 30px; color: var(--text-muted); }
+.split-btn__main:disabled { color: var(--text-muted); }
 .split-btn__divider { width: 1px; background: var(--hairline); }
 
-/* 结果条与批量栏占同一个位置、同一个高度，互斥出现（批量栏的那一份在 BatchActionBar 里） */
+/* 结果条：筛选命中数与条件回显，常驻在工具栏下沿。 */
 .result-bar {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 32px;
+  min-height: 36px;
   margin: 0 -20px;
   padding: 0 20px;
   border-bottom: 1px solid var(--hairline-soft);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   background: var(--bg-color);
   color: var(--text-secondary);
 }
@@ -1157,7 +1134,10 @@ export default {
 .result-bar__sep { color: var(--hairline); }
 .result-bar__spacer { flex: 1; }
 .result-bar__label { color: var(--text-muted); }
-.result-bar__toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.result-bar__toggle { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.result-bar__clear { flex: none; font-size: var(--fs-caption); }
+/* 行高分段器压在 36px 的结果条里，用紧凑高度。 */
+.result-bar__density :deep(.ui-segmented__option) { height: calc(var(--h-compact) - 6px); padding: 0 var(--space-2); font-size: var(--fs-caption); }
 
 .result-bar__conditions {
   min-width: 0;
@@ -1166,60 +1146,23 @@ export default {
   white-space: nowrap;
 }
 
-.result-bar__clear,
-.link-btn {
-  flex: none;
-  border: 0;
-  background: transparent;
-  color: var(--accent-text);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-
 /* 筛选浮层 */
-.filter-popover__head { display: flex; align-items: center; font-size: 13px; font-weight: 700; }
+.filter-popover__head { display: flex; align-items: center; font-size: var(--fs-secondary); font-weight: var(--fw-bold); }
 .filter-popover__spacer { flex: 1; }
 
 .filter-popover__field {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-caption);
   color: var(--text-muted);
 }
 
-.filter-popover__range { display: flex; align-items: center; gap: 8px; }
+.filter-popover__range { display: flex; align-items: center; gap: var(--space-2); }
 .filter-popover__range .text-input { flex: 1; }
 .filter-popover__dash { color: var(--text-muted); }
 .filter-popover__divider { height: 1px; background: var(--hairline-faint); }
 
-.filter-popover__actions { display: flex; gap: 8px; }
+.filter-popover__actions { display: flex; gap: var(--space-2); }
 .filter-popover__actions > * { flex: 1; }
-
-.ai-review-badge {
-  display: inline-flex;
-  min-width: 18px;
-  height: 18px;
-  margin-left: 6px;
-  padding: 0 5px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--danger-color);
-  color: var(--accent-on);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-@media (max-width: 920px) {
-  .selection-toolbar {
-    flex-wrap: wrap;
-  }
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
 </style>

@@ -22,7 +22,7 @@
     <button
       v-if="layoutMode === 'wall'"
       type="button"
-      class="video-thumbnail video-wall-tile"
+      class="btn-link video-thumbnail video-wall-tile"
       :class="{ 'video-thumbnail--failed': thumbnailFailed }"
       :title="wallLabel"
       :aria-label="wallLabel"
@@ -30,7 +30,7 @@
       @click="$emit('preview', video)"
     >
       <img v-if="!thumbnailFailed" :src="thumbnailURL" alt="" loading="lazy" @error="thumbnailFailed = true" />
-      <span v-else aria-hidden="true">▶</span>
+      <AppIcon v-else name="play" :size="24" />
       <span v-if="video.is_stale" class="video-badge video-badge--danger video-wall-tile__stale" aria-hidden="true" data-test="wall-stale-reason">失效</span>
     </button>
     <div v-else class="video-thumbnail" :class="{ 'video-thumbnail--failed': thumbnailFailed }">
@@ -41,7 +41,7 @@
         loading="lazy"
         @error="thumbnailFailed = true"
       />
-      <span v-else aria-hidden="true">▶</span>
+      <AppIcon v-else name="play" :size="24" />
       <span v-if="video.duration" class="video-thumbnail__duration">{{ formatDuration(video.duration) }}</span>
       <span v-if="layoutMode === 'grid' && video._semanticScore !== null && video._semanticScore !== undefined" class="video-thumbnail__score">
         {{ formatSemanticScore(video._semanticScore) }}
@@ -106,14 +106,20 @@
               title="这个自动标签是你手动调整的，自动规则不再动它；可在「+ 标签」里恢复自动"
               data-test="row-tag-manual"
             >手动</span>
-            <button v-if="!tag.automatic_kind || ['short_video', 'low_resolution'].includes(tag.automatic_kind)" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
+            <button
+              v-if="!tag.automatic_kind || ['short_video', 'low_resolution'].includes(tag.automatic_kind)"
+              type="button"
+              class="btn-icon tag-remove video-tag-remove"
+              :aria-label="`移除标签 ${tag.name}`"
+              @click="$emit('remove-tag', video, tag)"
+            ><AppIcon name="close" :size="16" /></button>
           </span>
         </div>
-        <button @click="$emit('open-add-tag', video)" class="btn-add-tag">+ 标签</button>
+        <button type="button" class="btn btn-add-tag" @click="$emit('open-add-tag', video)">+ 标签</button>
         <button
           v-if="video._subtitleMatchText"
           type="button"
-          class="video-subtitle-hit"
+          class="btn-link video-subtitle-hit"
           @click="$emit('preview', video)"
         >{{ formatTimestamp(video._subtitleMatchStartMs) }} 「{{ video._subtitleMatchText }}」</button>
       </div>
@@ -123,20 +129,20 @@
          鼠标扫过时整列按钮闪烁反而更难扫读。
          多选态下整排隐去（不留占位文案，批量操作条已经说明了当前处境）。 -->
     <div v-if="!actionsSuspended && layoutMode !== 'wall'" class="video-actions">
-      <button v-if="!narrow" type="button" class="row-btn" @click="$emit('preview', video)">预览</button>
-      <button type="button" class="row-btn row-btn--primary" @click="$emit('play', video.id)">播放</button>
+      <button v-if="!narrow" type="button" class="btn btn--secondary btn--sm video-row-btn" @click="$emit('preview', video)">预览</button>
+      <button type="button" class="btn btn--primary btn--sm video-row-btn" @click="$emit('play', video.id)">播放</button>
       <button
         type="button"
-        :class="['row-btn', 'row-btn--icon', { 'row-btn--fav': video.is_favorite }]"
+        :class="['btn-icon', 'btn--secondary', 'btn--sm', 'video-row-btn', 'video-row-btn--icon', { 'video-row-btn--fav': video.is_favorite }]"
         :aria-pressed="!!video.is_favorite"
         :aria-label="video.is_favorite ? '取消收藏' : '收藏'"
         @click="$emit('toggle-favorite', video)"
-      >♥</button>
+      ><AppIcon name="heart" :size="16" /></button>
       <!-- 点赞（D-PC40、PLAY-02）：窄行与网格卡放不下，只留在 ⋯ 菜单里。 -->
       <button
         v-if="!narrow && layoutMode !== 'grid'"
         type="button"
-        :class="['row-btn', 'row-btn--icon', { active: video.is_liked }]"
+        :class="['btn', 'btn--secondary', 'btn--sm', 'video-row-btn', 'video-row-btn--icon', { 'video-row-btn--on': video.is_liked }]"
         :aria-pressed="!!video.is_liked"
         :aria-label="video.is_liked ? '取消点赞' : '点赞'"
         data-test="row-like"
@@ -145,18 +151,18 @@
       <!-- 「已看」在抽屉打开时的窄行里同样保留（D-PC47、PLAY-14）：边预览边标记是最常见的用法。 -->
       <button
         type="button"
-        :class="['row-btn', { active: video.is_watched }]"
+        :class="['btn', 'btn--secondary', 'btn--sm', 'video-row-btn', { 'video-row-btn--on': video.is_watched }]"
         :aria-pressed="!!video.is_watched"
         data-test="row-watched"
         @click="$emit('toggle-watched', video)"
       >已看</button>
       <button
         type="button"
-        class="row-btn row-btn--icon"
+        class="btn-icon btn--secondary btn--sm video-row-btn video-row-btn--icon"
         aria-label="更多操作"
         aria-haspopup="menu"
         @click="$emit('open-row-menu', video, $event.currentTarget)"
-      >⋯</button>
+      ><AppIcon name="more" :size="16" /></button>
     </div>
   </div>
 </template>
@@ -165,6 +171,7 @@
 import { tagBackgroundColor } from '../utils/tagColor.js';
 import { resumePosition } from '../utils/watchState.js';
 import VersionGroupBadge from './video-list/VersionGroupBadge.vue';
+import AppIcon from './ui/AppIcon.vue';
 
 // 失效原因（videos.stale_reason，D-PC06）的中文名。片库页的「路径失效」分组复用同一份。
 // unknown 是后端 ListStaleReasonCounts 对空原因（历史失效行）的归类。
@@ -197,7 +204,7 @@ export function staleReasonLabel(reason) {
 
 export default {
   name: 'VideoListRow',
-  components: { VersionGroupBadge },
+  components: { AppIcon, VersionGroupBadge },
   props: {
     video: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
@@ -328,3 +335,27 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+/* 行内动作（统一按钮 .btn--sm）：外观来自全局按钮类，这里只管行里的尺寸与开关态。
+   收藏、点赞、已看是开关：开着时用强调色（收藏用危险色），悬停时保持开着的样子。 */
+.video-row-btn--icon { width: var(--h-compact); padding: 0; color: var(--text-secondary); }
+.video-row-btn--on,
+.video-row-btn--on:hover:not(:disabled) { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.video-row-btn--fav,
+.video-row-btn--fav:hover:not(:disabled) { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger-text); }
+/* 网格卡底部一行四个动作平分宽度，图标按钮固定宽。 */
+.video-item--grid .video-row-btn { flex: 1; padding: 0; }
+.video-item--grid .video-row-btn--icon { flex: 0 0 var(--h-compact); }
+
+/* 标签上的 ×：嵌在 22px 高的标签里，不要图标按钮的 34px 方块。 */
+.video-tag-remove { width: 16px; height: 16px; border-radius: var(--radius-sm); }
+.video-tag-remove:hover:not(:disabled) { background: transparent; opacity: 1; }
+
+/* 字幕命中片段是一段可点的引文（.btn-link），单行省略。 */
+.video-subtitle-hit { display: inline-block; }
+.video-subtitle-hit:hover:not(:disabled) { text-decoration: none; border-color: var(--accent-color); }
+
+/* 缩略图墙的格子整块可点（.btn-link），不要链接的下划线。 */
+.video-wall-tile:hover:not(:disabled) { text-decoration: none; }
+</style>

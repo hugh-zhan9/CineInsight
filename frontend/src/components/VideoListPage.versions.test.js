@@ -244,7 +244,7 @@ describe('版本对比入口', () => {
   it('批量栏「对比播放」：正好两个时按选中顺序打开，不清空选择；其他数量不打开', async () => {
     const wrapper = await mountPage();
     wrapper.vm.selectedVideoIds = [4, 1];
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-compare');
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-compare');
     expect(versionCompareState).toMatchObject({ open: true, leftVideoID: 4, rightVideoID: 1 });
     expect(wrapper.vm.selectedVideoIds).toEqual([4, 1]);
     closeVersionCompare();

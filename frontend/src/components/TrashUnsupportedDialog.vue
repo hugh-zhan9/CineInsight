@@ -1,55 +1,80 @@
 <template>
   <!-- 删除往往是从另一个弹窗（确认框、清理审阅）发起的：这一层要压在它们上面，但让开应用确认框（1500）。 -->
   <div v-if="visible" class="trash-unsupported-layer">
-  <BaseModal stop-modal-clicks class="trash-unsupported-modal" aria-labelledby="trash-unsupported-title" @close="handleClose">
-    <template v-if="step === 'choose'">
-      <h2 id="trash-unsupported-title">该磁盘不支持废纸篓</h2>
-      <p>下面 {{ items.length }} {{ unit }}所在的磁盘（例如网络共享盘、部分 exFAT 移动硬盘）不支持移到废纸篓。它们仍在{{ libraryName }}里，没有做任何改动。请选择如何处理：</p>
-      <ul class="trash-unsupported-names" data-test="trash-unsupported-names">
-        <li v-for="item in previewItems" :key="item.id">{{ item.name }}</li>
-        <li v-if="items.length > previewItems.length">等 {{ items.length }} 项</li>
-      </ul>
-      <div class="trash-unsupported-options">
-        <div class="trash-unsupported-option">
-          <button type="button" class="btn-danger" :disabled="busy" data-test="trash-unsupported-permanent" @click="step = 'confirm'">永久删除文件…</button>
-          <p>直接删除磁盘上的文件和记录，不经过废纸篓，无法恢复。下一步会再确认一次。</p>
+    <DialogShell
+      :title="step === 'choose' ? '该磁盘不支持废纸篓' : '确认永久删除'"
+      size="md"
+      :busy="busy"
+      :close-on-overlay="false"
+      class="trash-unsupported-modal"
+      @close="handleClose"
+    >
+      <template v-if="step === 'choose'">
+        <p>下面 {{ items.length }} {{ unit }}所在的磁盘（例如网络共享盘、部分 exFAT 移动硬盘）不支持移到废纸篓。它们仍在{{ libraryName }}里，没有做任何改动。请选择如何处理：</p>
+        <ul class="trash-unsupported-names" data-test="trash-unsupported-names">
+          <li v-for="item in previewItems" :key="item.id">{{ item.name }}</li>
+          <li v-if="items.length > previewItems.length">等 {{ items.length }} 项</li>
+        </ul>
+        <div class="trash-unsupported-options">
+          <div class="trash-unsupported-option">
+            <button type="button" class="btn btn--danger" :disabled="busy" data-test="trash-unsupported-permanent" @click="step = 'confirm'">永久删除…</button>
+            <p>直接删除磁盘上的文件和记录，不经过废纸篓，无法恢复。下一步会再确认一次。</p>
+          </div>
+          <div class="trash-unsupported-option">
+            <button type="button" class="btn btn--secondary" :disabled="busy" data-test="trash-unsupported-record-only" @click="$emit('record-only')">{{ busy ? '处理中…' : `从${libraryName}移除` }}</button>
+            <p>文件保留在磁盘上，不做任何改动。以后扫描到同一个文件不会再收录，可在回收站「允许重新收录」。</p>
+          </div>
         </div>
-        <div class="trash-unsupported-option">
-          <button type="button" class="btn-secondary" :disabled="busy" data-test="trash-unsupported-record-only" @click="$emit('record-only')">{{ busy ? '处理中...' : '只删记录' }}</button>
-          <p>文件保留在磁盘上。以后扫描到同一个文件不会再收录，可在回收站「允许重新收录」。</p>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" :disabled="busy" data-test="trash-unsupported-cancel" @click="cancel">暂不处理</button>
-      </div>
-    </template>
+      </template>
 
-    <template v-else>
-      <h2 id="trash-unsupported-title">确认永久删除</h2>
-      <p class="trash-unsupported-warning">将永久删除以下 {{ items.length }} 个文件及其记录。它们不会进入废纸篓，删除后无法恢复。</p>
-      <ul class="trash-unsupported-names" data-test="trash-unsupported-confirm-names">
-        <li v-for="item in confirmItems" :key="item.id">{{ item.name }}</li>
-        <li v-if="items.length > confirmItems.length">等 {{ items.length }} 项</li>
-      </ul>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" :disabled="busy" data-test="trash-unsupported-back" @click="step = 'choose'">返回</button>
-        <button type="button" class="btn-danger" :disabled="busy" data-test="trash-unsupported-permanent-confirm" @click="$emit('permanent-delete')">
-          {{ busy ? '正在删除...' : `永久删除 ${items.length} 个文件` }}
-        </button>
-      </div>
-    </template>
-  </BaseModal>
+      <template v-else>
+        <p class="trash-unsupported-warning">将永久删除以下 {{ items.length }} 个文件及其记录。它们不会进入废纸篓，删除后无法恢复。</p>
+        <ul class="trash-unsupported-names" data-test="trash-unsupported-confirm-names">
+          <li v-for="item in confirmItems" :key="item.id">{{ item.name }}</li>
+          <li v-if="items.length > confirmItems.length">等 {{ items.length }} 项</li>
+        </ul>
+        <!-- 不可逆（D-UD-07 第 3 级）：输入的就是按钮上的文字。 -->
+        <label class="trash-unsupported-typed">
+          <span>输入「{{ confirmWord }}」以确认，此操作无法撤销</span>
+          <input
+            v-model="typed"
+            type="text"
+            class="text-input"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="busy"
+            data-test="trash-unsupported-confirm-input"
+          >
+        </label>
+      </template>
+
+      <template #footer>
+        <template v-if="step === 'choose'">
+          <button type="button" class="btn btn--secondary" :disabled="busy" data-test="trash-unsupported-cancel" @click="cancel">暂不处理</button>
+        </template>
+        <template v-else>
+          <button type="button" class="btn btn--secondary" :disabled="busy" data-test="trash-unsupported-back" @click="step = 'choose'">返回</button>
+          <button type="button" class="btn btn--danger" :disabled="busy || !typedMatches" data-test="trash-unsupported-permanent-confirm" @click="confirmPermanent">
+            {{ busy ? '正在删除…' : confirmWord }}
+          </button>
+        </template>
+      </template>
+    </DialogShell>
   </div>
 </template>
 
 <script>
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
+import { confirmTextMatches } from '../utils/feedback.js';
 
-// 卷不支持废纸篓（D-PC02）时让用户二选一：永久删除（列出文件名并二次确认），或只删记录。
+// 永久删除这一步要原样输入的文字：就是按钮上的字（D-UD-07 第 3 级，全站同一规则）。
+const PERMANENT_CONFIRM_WORD = '永久删除';
+
+// 卷不支持废纸篓（D-PC02）时让用户二选一：永久删除（列出文件名，输入确认词后才能点），或从片库移除（只删记录）。
 // 这里只收集选择，真正的删除由宿主（TrashUndoBanner）调用；取消即什么都不做，记录保持原样。
 export default {
   name: 'TrashUnsupportedDialog',
-  components: { BaseModal },
+  components: { DialogShell },
   props: {
     visible: { type: Boolean, default: false },
     kind: { type: String, default: 'video' },
@@ -59,7 +84,7 @@ export default {
   },
   emits: ['permanent-delete', 'record-only', 'cancel'],
   data() {
-    return { step: 'choose' };
+    return { step: 'choose', typed: '', confirmWord: PERMANENT_CONFIRM_WORD };
   },
   computed: {
     unit() {
@@ -73,14 +98,25 @@ export default {
     },
     confirmItems() {
       return this.items.slice(0, 30);
+    },
+    typedMatches() {
+      return confirmTextMatches({ requiredText: this.confirmWord }, this.typed);
     }
   },
   watch: {
     visible(value) {
       if (value) this.step = 'choose';
+    },
+    // 每次进确认页都从空的输入框开始。
+    step() {
+      this.typed = '';
     }
   },
   methods: {
+    confirmPermanent() {
+      if (this.busy || !this.typedMatches) return;
+      this.$emit('permanent-delete');
+    },
     cancel() {
       if (this.busy) return;
       this.$emit('cancel');
@@ -103,38 +139,41 @@ export default {
   z-index: 1100;
 }
 
-:deep(.trash-unsupported-modal) {
-  max-width: 540px;
-}
-
 .trash-unsupported-names {
   max-height: 180px;
   overflow-y: auto;
-  margin: 10px 0 14px;
+  margin: var(--space-3) 0;
   padding-left: 18px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   word-break: break-all;
 }
 
 .trash-unsupported-options {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .trash-unsupported-option {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   justify-items: start;
 }
 
 .trash-unsupported-option p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .trash-unsupported-warning {
-  color: var(--danger-color);
+  color: var(--danger-text);
+}
+
+.trash-unsupported-typed {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
 }
 </style>

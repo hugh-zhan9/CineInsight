@@ -59,7 +59,7 @@ describe('视频工作台入口', () => {
   it('「合并为新视频」按选中顺序建合并项目，交给宿主打开并清掉选择', async () => {
     const wrapper = await mountPage();
     await wrapper.setData({ selectedVideoIds: [7, 1, 4] });
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-edit-merge');
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-edit-merge');
     await flushPromises();
     expect(api.CreateEditProject).toHaveBeenCalledWith({ kind: 'merge', title: '', video_ids: [7, 1, 4] });
     expect(wrapper.emitted('open-video-edit')).toEqual([[42]]);
@@ -69,11 +69,11 @@ describe('视频工作台入口', () => {
   it('合并少于 2 个不建项目；批量去片头 1 个即可', async () => {
     const wrapper = await mountPage();
     await wrapper.setData({ selectedVideoIds: [4] });
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-edit-merge');
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-edit-merge');
     await flushPromises();
     expect(api.CreateEditProject).not.toHaveBeenCalled();
     expect(feedback.notifyError).toHaveBeenCalledWith('合并为新视频需要选择 2–50 个视频');
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-edit-trim');
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-edit-trim');
     await flushPromises();
     expect(api.CreateEditProject).toHaveBeenCalledWith({ kind: 'trim_intro', title: '', video_ids: [4] });
   });
@@ -82,7 +82,7 @@ describe('视频工作台入口', () => {
     api.CreateEditProject.mockRejectedValue(new Error('source_missing: 视频 4 不存在或已删除'));
     const wrapper = await mountPage();
     await wrapper.setData({ selectedVideoIds: [4] });
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-edit-trim');
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-edit-trim');
     await flushPromises();
     expect(feedback.notifyError).toHaveBeenCalledWith('创建编辑项目失败：视频 4 不存在或已删除');
     expect(wrapper.emitted('open-video-edit')).toBeUndefined();

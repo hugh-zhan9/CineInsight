@@ -3,11 +3,13 @@
     :class="['page-content', { 'page-content--with-preview': previewOpen }]"
     @wheel="forwardWheelToScrollOwner"
   >
+    <!-- 页头（D-UD-06）：观看侧「视频」与管理侧「片库管理」共用本页，标题跟着当前入口走。 -->
+    <PageHeader class="library-page-header" :title="pageTitle" />
     <LibraryToolbar
       ref="libraryToolbar"
       :tags="tags"
       :videos="videos"
-      :selected-video-ids="selectedVideoIds"
+      :all-matching-selected="allMatchingSelected"
       :search-keyword="searchKeyword"
       :search-mode="searchMode"
       :smart-view="smartView"
@@ -47,8 +49,6 @@
       :collapse-versions="collapseVersions"
       :filter-batch-edit-available="metadataBatchFilterUsable"
       @update:collapse-versions="setCollapseVersions"
-      @batch-version-group="mergeSelectedAsVersionGroup"
-      @batch-compare="compareSelectedVideos"
       @update:search-keyword="searchKeyword = $event"
       @update:smart-view="smartView = $event"
       @update:missing="missingFilter = $event"
@@ -63,24 +63,13 @@
       @clear-tags="clearTagFilter"
       @update:selected-people="updateSelectedPeople"
       @open-tag-manager="showTagManagerDialog = true"
-      @toggle-select-all="toggleSelectAllVisible"
-      @clear-selection="clearSelection"
+      @toggle-select-all="toggleSelectAllMatching"
       @clear-conditions="clearAllConditions"
       @apply-filter="applyFilterConditions"
       @open-save-view="openSaveViewDialog"
       @manage-select="onManageSelect"
       @view-select="onViewSelect"
       @random-select="onRandomSelect"
-      @batch-playback-queue="addVideosToPlaybackQueue(selectedVideoIds)"
-      @batch-add-tag="openBatchAddTagDialog"
-      @batch-metadata-edit="openMetadataBatchEdit"
-      @batch-move="moveSelectedVideos"
-      @batch-local-metadata="openLocalMetadataDialog(selectedVideoIds)"
-      @batch-playback-proxy="createProxiesForSelected"
-      @batch-subtitle="generateSubtitlesForSelected"
-      @batch-delete="confirmBatchDelete"
-      @batch-edit-merge="createEditProjectFromSelection('merge')"
-      @batch-edit-trim="createEditProjectFromSelection('trim_intro')"
     />
     <MetadataBatchEditDialog
       v-if="metadataBatchEdit"
@@ -116,23 +105,18 @@
     <!-- 「路径失效」按原因分组（D-PC06、LIB-10）：标题与计数来自 ListStaleReasonCounts，点一组只看这一组。 -->
     <div v-if="smartView === 'stale'" class="library-notice stale-reason-bar" role="group" aria-label="按失效原因筛选" data-test="stale-reason-bar">
       <span class="library-notice__title">按原因</span>
-      <button
-        type="button"
-        :class="['tag-chip', { active: !staleReasonFilter }]"
-        data-test="stale-reason-all"
-        @click="setStaleReasonFilter('')"
-      >全部 {{ staleReasonTotal }}</button>
-      <button
+      <FilterChip :label="`全部 ${staleReasonTotal}`" :active="!staleReasonFilter" data-test="stale-reason-all" @toggle="setStaleReasonFilter('')" />
+      <FilterChip
         v-for="group in staleReasonGroups"
         :key="group.reason"
-        type="button"
-        :class="['tag-chip', { active: staleReasonFilter === group.reason }]"
+        :label="`${group.label} ${group.count}`"
+        :active="staleReasonFilter === group.reason"
         :data-test="`stale-reason-${group.reason}`"
-        @click="setStaleReasonFilter(group.reason)"
-      >{{ group.label }} {{ group.count }}</button>
+        @toggle="setStaleReasonFilter(group.reason)"
+      />
       <button
         type="button"
-        class="btn-secondary btn-compact library-notice__action"
+        class="btn btn--secondary btn--sm library-notice__action"
         :disabled="selectedVideoIds.length === 0 || recheckingStale"
         data-test="stale-recheck-selected"
         @click="recheckSelectedStale"
@@ -144,7 +128,7 @@
       <span data-test="subtitle-index-sync-text">{{ subtitleIndexSyncText }}</span>
       <button
         type="button"
-        class="btn-secondary btn-compact library-notice__action"
+        class="btn btn--secondary btn--sm library-notice__action"
         :disabled="subtitleIndexSyncBusy"
         data-test="subtitle-index-sync-now"
         @click="syncSubtitleIndexNow"
@@ -152,19 +136,34 @@
     </div>
 
     <!-- 播放失败（D-PC11、PLAY-12）：那一行就地标成失效，这里说明原因并给下一步，不整页重载。 -->
-    <div v-if="playFailureNotice" class="library-notice library-notice--warning" role="alert" data-test="play-failure-notice">
-      <span>{{ playFailureNotice.text }}</span>
-      <button type="button" class="btn-secondary btn-compact" :disabled="recheckingStale" data-test="play-failure-recheck" @click="recheckVideos([playFailureNotice.videoID])">重新检查</button>
-      <button type="button" class="btn-secondary btn-compact" data-test="play-failure-open-stale" @click="openStaleView(playFailureNotice.staleReason)">查看路径失效</button>
-      <button type="button" class="library-notice__close" aria-label="关闭提示" @click="playFailureNotice = null">×</button>
-    </div>
+    <AppBanner
+      v-if="playFailureNotice"
+      class="library-banner"
+      tone="warning"
+      role="alert"
+      :title="playFailureNotice.text"
+      data-test="play-failure-notice"
+    >
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" :disabled="recheckingStale" data-test="play-failure-recheck" @click="recheckVideos([playFailureNotice.videoID])">重新检查</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="play-failure-open-stale" @click="openStaleView(playFailureNotice.staleReason)">查看路径失效</button>
+        <button type="button" class="btn-icon btn--sm" aria-label="关闭提示" @click="playFailureNotice = null"><AppIcon name="close" :size="16" /></button>
+      </template>
+    </AppBanner>
 
     <!-- 保存视图引用的标签或人物已被删除（D-PC35、LIB-15）：照常应用其余条件，并说清少了几个。 -->
-    <div v-if="savedViewNotice" class="library-notice library-notice--warning" role="status" data-test="saved-view-notice">
-      <span>保存视图「{{ savedViewNotice.name }}」有 {{ savedViewNotice.dropped }} 个条件已失效（引用的标签或人物已删除），已忽略。</span>
-      <button type="button" class="btn-secondary btn-compact" data-test="saved-view-notice-update" @click="openSaveViewDialog('update')">用当前条件更新视图</button>
-      <button type="button" class="library-notice__close" aria-label="关闭提示" @click="savedViewNotice = null">×</button>
-    </div>
+    <AppBanner
+      v-if="savedViewNotice"
+      class="library-banner"
+      tone="warning"
+      :title="`保存视图「${savedViewNotice.name}」有 ${savedViewNotice.dropped} 个条件已失效（引用的标签或人物已删除），已忽略。`"
+      data-test="saved-view-notice"
+    >
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="saved-view-notice-update" @click="openSaveViewDialog('update')">用当前条件更新视图</button>
+        <button type="button" class="btn-icon btn--sm" aria-label="关闭提示" @click="savedViewNotice = null"><AppIcon name="close" :size="16" /></button>
+      </template>
+    </AppBanner>
 
     <BackgroundTaskStatusBars
       ref="taskBars"
@@ -179,6 +178,7 @@
       :semantic-coverage="semanticCoverage"
     />
 
+    <!-- 删除宿主：撤销走全局提示与任务中心「最近操作」（D-UD-07/09）。 -->
     <TrashUndoBanner
       ref="trashUndo"
       kind="video"
@@ -210,23 +210,19 @@
 
     <div class="video-list" ref="videoList">
       <!-- 三种空状态（D-PC58、APP-10）：没配目录、筛选没命中、目录里确实没有视频，各配一个能点的下一步。 -->
-      <div v-if="videos.length === 0 && !loading" class="empty-state" :data-test="`library-empty-${emptyStateKind}`">
-        <template v-if="emptyStateKind === 'no-directories'">
-          <p>还没有扫描目录。添加一个存放视频的文件夹，就能开始整理片库。</p>
-          <button type="button" class="btn-primary" data-test="library-empty-add-directory" @click="showScanDialog = true">添加扫描目录</button>
+      <EmptyState
+        v-if="videos.length === 0 && !loading"
+        :icon="emptyStateCopy.icon"
+        :title="emptyStateCopy.title"
+        :message="emptyStateCopy.message"
+        :data-test="`library-empty-${emptyStateKind}`"
+      >
+        <template v-if="emptyStateKind !== 'semantic-idle'" #actions>
+          <button v-if="emptyStateKind === 'no-directories'" type="button" class="btn btn--primary" data-test="library-empty-add-directory" @click="showScanDialog = true">添加扫描目录</button>
+          <button v-else-if="emptyStateKind === 'no-match'" type="button" class="btn btn--secondary" data-test="library-empty-clear-conditions" @click="clearAllConditions">清除条件</button>
+          <button v-else type="button" class="btn btn--secondary" :disabled="migrationRunning || incrementalScan.running" data-test="library-empty-rescan" @click="runIncrementalScan">重新扫描</button>
         </template>
-        <template v-else-if="emptyStateKind === 'semantic-idle'">
-          <p>用一句话描述想找的画面或情节，回车开始语义搜索。</p>
-        </template>
-        <template v-else-if="emptyStateKind === 'no-match'">
-          <p>没有符合条件的视频</p>
-          <button type="button" class="btn-secondary" data-test="library-empty-clear-conditions" @click="clearAllConditions">清除条件</button>
-        </template>
-        <template v-else>
-          <p>扫描目录里还没有找到视频</p>
-          <button type="button" class="btn-secondary" :disabled="migrationRunning || incrementalScan.running" data-test="library-empty-rescan" @click="runIncrementalScan">重新扫描</button>
-        </template>
-      </div>
+      </EmptyState>
       <VirtualVideoList
         v-else-if="videos.length > 0"
         ref="virtualList"
@@ -242,7 +238,7 @@
         :estimate-height="estimateVideoHeight"
         :item-version="videoVisualVersion"
         :range-engine="rangeEngine"
-        @load-more="loadVideos"
+        @load-more="loadVideos()"
       >
         <template #default="{ item: video }">
           <VideoListRow
@@ -285,14 +281,42 @@
         </template>
       </VirtualVideoList>
 
-      <!-- 加载更多指示器 -->
-      <div v-if="loading" class="loading-indicator">
-        <p>加载中...</p>
+      <!-- 首次加载占住列表的位置；触底加载更多时只在末尾转圈。 -->
+      <div v-if="loading && videos.length === 0" class="library-skeleton" aria-busy="true" aria-label="正在读取片库" data-test="library-loading">
+        <SkeletonBlock v-for="index in 4" :key="index" shape="line" :lines="2" />
+      </div>
+      <div v-else-if="loading" class="loading-indicator" role="status">
+        <AppSpinner :size="16" />
+        <span>加载中…</span>
       </div>
       <div v-if="!hasMore && videos.length > 0" class="no-more-indicator">
         <p>没有更多视频了</p>
       </div>
     </div>
+
+    <!-- 选择操作条（D-UD-10）：有选中时才浮在内容区底部；放在列表之后，吸底靠 position: sticky。 -->
+    <BatchActionBar
+      :selected-count="selectedVideoIds.length"
+      :total-matching="matchingTotal"
+      :all-matching-selected="allMatchingSelected"
+      :selected-total-size-text="selectedTotalSizeText"
+      :migration-running="migrationRunning"
+      :delete-label="deleteActionLabel"
+      @batch-playback-queue="addVideosToPlaybackQueue(selectedVideoIds)"
+      @batch-add-tag="openBatchAddTagDialog"
+      @batch-metadata-edit="openMetadataBatchEdit"
+      @batch-move="moveSelectedVideos"
+      @batch-local-metadata="openLocalMetadataDialog(selectedVideoIds)"
+      @batch-playback-proxy="createProxiesForSelected"
+      @batch-subtitle="generateSubtitlesForSelected"
+      @batch-version-group="mergeSelectedAsVersionGroup"
+      @batch-compare="compareSelectedVideos"
+      @batch-delete="confirmBatchDelete"
+      @batch-edit-merge="createEditProjectFromSelection('merge')"
+      @batch-edit-trim="createEditProjectFromSelection('trim_intro')"
+      @select-all-matching="selectAllMatching"
+      @clear-selection="clearSelection"
+    />
 
     <PreviewDrawer
       ref="previewDrawer"
@@ -386,18 +410,17 @@
     />
 
     <!-- 迁移到扫描目录之外（D-PC10、LIB-09）：先说清迁完会从片库里消失，可顺手把目标加进扫描目录。 -->
-    <BaseModal v-if="moveTargetConfirm.show" close-on-overlay stop-modal-clicks aria-label="确认迁移目标" data-test="move-target-confirm" @close="resolveMoveTargetConfirm(false)">
-      <h2>目标不在扫描目录中</h2>
+    <DialogShell v-if="moveTargetConfirm.show" title="目标不在扫描目录中" size="sm" stop-modal-clicks data-test="move-target-confirm" @close="resolveMoveTargetConfirm(false)">
       <p>「{{ moveTargetConfirm.targetLabel }}」不在任何扫描目录里。迁移后，{{ moveTargetConfirm.subject }}会从片库列表中消失，记录进入「路径失效 · 不在任何扫描目录」。</p>
-      <label class="checkbox-label">
+      <label class="checkbox-label move-target-add-root">
         <input v-model="moveTargetConfirm.addToRoots" type="checkbox" data-test="move-target-add-root" />
         <span>同时把目标加入扫描目录</span>
       </label>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" @click="resolveMoveTargetConfirm(false)">取消</button>
-        <button type="button" class="btn-primary" data-test="move-target-continue" @click="resolveMoveTargetConfirm(true)">继续迁移</button>
-      </div>
-    </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="resolveMoveTargetConfirm(false)">取消</button>
+        <button type="button" class="btn btn--primary" data-test="move-target-continue" @click="resolveMoveTargetConfirm(true)">继续迁移</button>
+      </template>
+    </DialogShell>
 
     <!-- 弹窗组件 -->
     <ScanDialog
@@ -476,71 +499,46 @@
 </template>
 
 <style scoped>
-
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-.video-subtitle-hit {
-  display: block;
-  width: 100%;
-  margin: 8px 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-deep);
-  cursor: pointer;
-  font-size: 13px;
-  text-align: left;
-}
-.video-stale {
-  color: var(--warning-strong);
-  font-weight: 600;
-}
+.library-page-header { margin: var(--space-1) 0 var(--space-3); }
 
 .loading-indicator,
 .no-more-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   padding: 14px 0;
   text-align: center;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .loading-indicator p,
 .no-more-indicator p { margin: 0; }
 
-.empty-state .btn-primary,
-.empty-state .btn-secondary { margin-top: 10px; }
+.library-skeleton { display: grid; gap: var(--space-4); padding: var(--space-3) 0; }
 
-/* 片库页的就地提示条：失效分组、播放失败、保存视图失效条件。与增量扫描状态条同一视觉。 */
+/* 页级横幅（播放失败、保存视图条件失效）与就地提示条（失效分组、字幕索引同步）之间的间距一致。 */
+.library-banner { margin-top: var(--space-3); }
+
+/* 片库页的就地提示条：失效分组、字幕索引同步。 */
 .library-notice {
-  margin: 10px 0 0;
+  margin: var(--space-3) 0 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
-  padding: 8px 10px;
+  gap: 6px var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
-.library-notice--warning {
-  border-color: var(--warning-border);
-  color: var(--warning-color);
-}
-.library-notice__title { font-weight: 600; color: var(--text-primary); }
+.library-notice__title { font-weight: var(--fw-semibold); color: var(--text-primary); }
 .library-notice__action { margin-left: auto; }
-.library-notice__close {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 18px;
-}
+
+.move-target-add-root { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
 </style>
 
 <script>
@@ -566,6 +564,7 @@ import RandomPickBanner from './video-list/RandomPickBanner.vue';
 import RenameDialogs from './video-list/RenameDialogs.vue';
 import SemanticNoticeBar from './video-list/SemanticNoticeBar.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
+import BatchActionBar, { selectedSizeText } from './video-list/BatchActionBar.vue';
 import { wheelForwardingMixin } from './video-list/wheelForwarding.js';
 import SaveViewDialog, { parseSavedViewIDs } from './video-list/SaveViewDialog.vue';
 import SubtitlePreviewModal from './video-list/SubtitlePreviewModal.vue';
@@ -581,8 +580,16 @@ import { videoEditEntryMixin } from './video-list/videoEditEntryMixin.js';
 import HDReplacePickerDialog from './video-workbench/HDReplacePickerDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight, estimateVideoWallHeight, normalizeLibraryLayout } from '../utils/virtualList.js';
+import AppBanner from './ui/AppBanner.vue';
+import AppIcon from './ui/AppIcon.vue';
+import AppSpinner from './ui/AppSpinner.vue';
 import BaseMenu from './ui/BaseMenu.vue';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
+import EmptyState from './ui/EmptyState.vue';
+import FilterChip from './ui/FilterChip.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
+import { tagBackgroundColor } from '../utils/tagColor.js';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
 import { VIDEO_MISSING_OPTIONS } from '../utils/metadataCompleteness.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
@@ -638,7 +645,7 @@ function relocateErrorText(err) {
 export default {
   name: 'VideoListPage',
   mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin],
-  components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, BaseModal },
+  components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -744,6 +751,8 @@ export default {
       loadIdleResolvers: [],
       addTagDialog: { show: false, video: null, videoIds: [], mode: 'single' },
       selectedVideoIds: [],
+      // 「全选当前结果」正在补取剩余的页（D-UD-10）。
+      selectingAllMatching: false,
 	  keyboardFocusVideoID: 0,
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
@@ -1012,7 +1021,7 @@ export default {
       return [
         { id: 'playback-queue', label: '加入待播队列' },
         { heading: '文件' },
-        { id: 'directory', label: '打开目录' },
+        { id: 'directory', label: '在访达中显示' },
         { id: 'rename', label: '重命名' },
         { id: 'move', label: '迁移', disabled: this.migrationRunning },
         { id: 'export-nfo', label: '写出 NFO' },
@@ -1034,7 +1043,7 @@ export default {
         // 只有预览自动代理在跑（auto_only）时不置灰：手动请求照常加入或接管（2026-10-13）。
         { id: 'playback-proxy', label: '生成播放代理', disabled: !!this.playbackProxy.running && !this.playbackProxy.auto_only },
         { divider: true },
-        { id: 'delete', label: '删除', danger: true, disabled: this.deletingIds.includes(video.id) }
+        { id: 'delete', label: this.deleteActionLabel, danger: true, disabled: this.deletingIds.includes(video.id) }
       ];
     },
     // 空状态三分（D-PC58、APP-10）；语义模式还没输入描述时单独提示，不算「筛选没命中」。
@@ -1061,9 +1070,44 @@ export default {
       if (!this.selectedPreviewVideoId) return null;
       return this.videos.find(video => video.id === this.selectedPreviewVideoId) || this.previewVideoSnapshot;
     },
-    allVisibleSelected() {
-      const ids = this.videos.map(video => video.id);
-      return ids.length > 0 && ids.every(id => this.selectedVideoIds.includes(id));
+    // 页头标题：观看侧「视频」与管理侧「片库管理」共用本页实例，App 只在「片库管理」上传 cleanupHotkey（见 props 说明），
+    // 标题据此与顶栏的入口名一致。
+    pageTitle() {
+      return this.cleanupHotkey ? '片库管理' : '视频';
+    },
+    // 三种空状态（D-PC58、APP-10）的文案与图标；下一步按钮在模板里。
+    emptyStateCopy() {
+      switch (this.emptyStateKind) {
+        case 'no-directories':
+          return { icon: 'folder', title: '还没有扫描目录', message: '添加一个存放视频的文件夹，就能开始整理片库。' };
+        case 'semantic-idle':
+          return { icon: 'search', title: '用一句话描述想找的画面或情节', message: '在上方搜索框输入描述，回车开始语义搜索。' };
+        case 'no-match':
+          return { icon: 'filter', title: '没有符合条件的视频', message: '换一组条件，或清除条件看全部视频。' };
+        default:
+          return { icon: 'videos', title: '扫描目录里还没有找到视频', message: '把视频放进扫描目录后重新扫描。' };
+      }
+    },
+    // 选择（D-UD-10）：「全选当前结果（N）」的 N 是当前结果的真实总数。结果已全部加载时就是已加载的条数；
+    // 还没加载完时用筛选命中数（语义检索、随机批次等没有命中数时不提供「全选当前结果」）。
+    matchingTotal() {
+      if (!this.hasMore) return this.videos.length;
+      if (this.searchMode === 'semantic' || this.randomPick.active || this.semanticSimilarVideoID) return null;
+      return Number.isFinite(this.filteredCount) ? this.filteredCount : null;
+    },
+    // 当前结果已全部选中：结果加载完了，且每一条都在选中里。
+    allMatchingSelected() {
+      if (this.hasMore || this.videos.length === 0) return false;
+      const selected = new Set(this.selectedVideoIds);
+      return this.videos.every(video => selected.has(video.id));
+    },
+    selectedTotalSizeText() {
+      return selectedSizeText(this.videos, this.selectedVideoIds);
+    },
+    // 删除用三个词之一（D-UD-08）：按设置里的默认方式写「移到废纸篓」或「从片库移除」；会先弹确认框时带「…」。
+    deleteActionLabel() {
+      const label = this.settings.delete_original_file ? '移到废纸篓' : '从片库移除';
+      return this.settings.confirm_before_delete ? `${label}…` : label;
     },
     virtualListQueryKey() {
       return JSON.stringify({
@@ -1979,7 +2023,8 @@ export default {
         };
       });
     },
-    async loadVideos() {
+    // limit：一页取多少条，触底加载用 pageSize；「全选当前结果」补齐剩余结果时一次取得多一些（与原地刷新同一上限）。
+    async loadVideos(limit = this.pageSize) {
       if (this.loading || this.refreshingInPlace || !this.hasMore) return;
       this.loading = true;
       try {
@@ -1995,7 +2040,7 @@ export default {
           existingVideos: this.videos.length
         });
 
-        const page = await this.fetchNextVideoPage(this.pageSize, this.videos.length);
+        const page = await this.fetchNextVideoPage(limit, this.videos.length);
         const newVideos = page.videos;
 
         this.debugLog('loadVideos query resolved', {
@@ -2405,12 +2450,9 @@ export default {
         return tagMatched && sizeMatched && resMatched && ratingMatched;
       });
     },
+    // 标签底色与列表行同一份换算（utils/tagColor.js）。
     tagBgColor(hex) {
-      if (!hex || !hex.startsWith('#')) return hex;
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
-      return `rgba(${r},${g},${b},0.35)`;
+      return tagBackgroundColor(hex);
     },
     isTagSelected(tagID) {
       return this.selectedTags.includes(Number(tagID));
@@ -2869,8 +2911,8 @@ export default {
       try {
         await OpenDirectory(id);
       } catch (err) {
-        console.error('打开目录失败:', err);
-        notifyError('打开目录失败: ' + err);
+        console.error('在访达中显示失败:', err);
+        notifyError('在访达中显示失败: ' + err);
       }
     },
     confirmDelete(video) {
@@ -2971,12 +3013,32 @@ export default {
         this.selectedVideoIds = this.selectedVideoIds.filter(id => id !== video.id);
       }
     },
-    toggleSelectAllVisible() {
-      const visibleIds = this.videos.map(video => video.id);
-      if (this.allVisibleSelected) {
-        this.selectedVideoIds = this.selectedVideoIds.filter(id => !visibleIds.includes(id));
-      } else {
-        this.selectedVideoIds = [...new Set([...this.selectedVideoIds, ...visibleIds])];
+    // 工具栏的「全选当前结果 / 取消选择」：已全选时清空，否则选中整个当前结果。
+    toggleSelectAllMatching() {
+      if (this.allMatchingSelected) {
+        this.clearSelection();
+        return undefined;
+      }
+      return this.selectAllMatching();
+    },
+    // 「全选当前结果（N）」（D-UD-10）：作用于整个筛选结果，所以先把还没加载的页按当前条件取回来，再全部选中。
+    // 取的途中条件变了、或某一页取失败（已提示），就不选，免得只选中一部分却显示成「全部」。
+    async selectAllMatching() {
+      if (this.selectingAllMatching) return;
+      this.selectingAllMatching = true;
+      const queryKey = this.virtualListQueryKey;
+      try {
+        if (this.reloadPromise) await this.reloadPromise;
+        await this.waitForLoadIdle();
+        while (this.hasMore && this.virtualListQueryKey === queryKey) {
+          const before = this.videos.length;
+          await this.loadVideos(IN_PLACE_REFRESH_PAGE_LIMIT);
+          if (this.videos.length === before) break;
+        }
+        if (this.hasMore || this.virtualListQueryKey !== queryKey) return;
+        this.selectedVideoIds = this.videos.map(video => video.id);
+      } finally {
+        this.selectingAllMatching = false;
       }
     },
     // 「批量编辑…」：所选条目，或当前筛选的全部结果。语义检索、随机批次与相似视频列出的不是筛选结果，

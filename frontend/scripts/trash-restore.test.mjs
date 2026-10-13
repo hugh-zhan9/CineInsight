@@ -15,8 +15,10 @@ assert.match(trashUndoSource, /<TrashCenterDialog\b/, 'the undo banner should ho
 assert.match(trashUndoSource, /<TrashUnsupportedDialog\b/, 'deletions on volumes without a trash should ask the user (D-PC02)');
 assert.match(trashUndoSource, /RestoreTrashBatch\(/, 'undo should restore the whole delete batch (LIB-12)');
 assert.match(trashUndoSource, /CancelBatchDelete\(/, 'batch deletion should be cancellable (IMG-12)');
-assert.match(trashUndoSource, /undo-delete-banner/, 'successful deletion should expose an undo banner');
-assert.match(trashUndoSource, /if \(!notice \|\| this\.undoing\) return/, 'immediate undo should reject duplicate submissions');
+// 统一设计 D-UD-07/09：删除成功后的「撤销」是全局提示，同时记进任务中心「最近操作」（同一条记录，只执行一次）。
+assert.match(trashUndoSource, /notifyUndoable\(text, \(\) => this\.undoFromToast\(notice\)\)/, 'successful deletion should offer undo through the global toast and recent operations');
+assert.doesNotMatch(trashUndoSource, /undo-delete-banner/, 'the in-page undo strip is gone');
+assert.match(trashUndoSource, /throw new Error\(trashErrorText\(err\)\)/, 'a failed undo should surface the reason and keep the record for retry');
 assert.match(videoListSource, /runDelete\(\{ ids, deleteFile/, 'library deletion should go through the result-coded delete flow');
 assert.match(videoListSource, /runDelete\(\{ ids: selectedIDs, deleteFile: true/, 'cleanup deletion should use the result-coded delete flow');
 assert.match(videoListSource, /showDeleteNotice\(outcome, \{ reportFailures: false \}\)/, 'cleanup deletion should report every successfully recoverable result');

@@ -24,6 +24,13 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import TrashUndoBanner from './TrashUndoBanner.vue';
+import { feedbackState, resetFeedback, runToastAction } from '../../utils/feedback.js';
+import * as recentOperations from '../../utils/recentOperations.js';
+
+// 删除结果的全局提示（D-UD-07/09）：可撤销的经 notifyUndoable 进提示列表并带「撤销」；没有可撤销项的只走 notifySuccess。
+const undoToast = () => feedbackState.toasts.find(toast => toast.action?.label === '撤销');
+const noticeText = () => undoToast()?.message ?? String(feedback.notifySuccess.mock.calls.at(-1)?.[0] ?? '');
+const undoNow = () => runToastAction(undoToast().id);
 
 function result(items, batchID = 'batch-1') {
   const ok = items.filter(item => item.code === 'ok' || item.code === 'file_missing').length;
@@ -42,10 +49,88 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
   delete window.runtime;
+  resetFeedback();
+  recentOperations.clear();
 });
 
-describe('LIB-12 删除与撤销条', () => {
-  it('LIB-12 批量删除成功后给「撤销本次删除（N 项）」，撤销按批次调用 RestoreTrashBatch', async () => {
+// 统一设计 D-UD-07/09：undo-toast 的宿主（片库页）删除成功后不出页内条，改出全局提示「撤销」，
+// 并记进任务中心「最近操作」；两处是同一条记录，撤销走既有的 RestoreTrashBatch。
+describe('D-UD-07/09 撤销改为全局提示（undo-toast）', () => {
+  it('可撤销的删除出带「撤销」的提示并进「最近操作」；点撤销按批次恢复，记录随之移除', async () => {
+    api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 1, code: 'ok' }, { id: 2, code: 'ok' }], 'b-t1'));
+    const afterRestore = vi.fn().mockResolvedValue();
+    const wrapper = mountBanner({ afterRestore });
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [1, 2], deleteFile: true }));
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    expect(feedbackState.toasts).toHaveLength(1);
+    const toast = feedbackState.toasts[0];
+    expect(toast.message).toContain('已移到废纸篓 2 个视频');
+    expect(toast.action.label).toBe('撤销');
+    expect(recentOperations.list().map(item => item.label)).toEqual([toast.message]);
+
+    api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 11, code: 'ok' }, { id: 12, code: 'ok' }], 'b-t1'));
+    expect(await runToastAction(toast.id)).toBe(true);
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'b-t1');
+    expect(afterRestore).toHaveBeenCalledWith([1, 2], false);
+    expect(recentOperations.list()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('没有可撤销的项（文件本就不在）时只报结果，不给「撤销」也不进「最近操作」', async () => {
+    api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 3, code: 'file_missing' }], 'b-t2'));
+    const wrapper = mountBanner();
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [3], deleteFile: true }));
+    await flushPromises();
+
+    expect(feedback.notifySuccess).toHaveBeenCalledWith(expect.stringContaining('文件已不在原处'));
+    expect(feedbackState.toasts).toEqual([]);
+    expect(recentOperations.list()).toEqual([]);
+    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('宿主接口不变：撤销进行中 undoing 为真（洞察页据此锁住切页），dismissNotice 仍可调用', async () => {
+    api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 5, code: 'ok' }], 'b-t4'));
+    const wrapper = mountBanner();
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [5], deleteFile: true }));
+    await flushPromises();
+    expect(() => wrapper.vm.dismissNotice()).not.toThrow();
+    expect(undoToast()).toBeDefined();
+
+    let finishRestore;
+    api.RestoreTrashBatch.mockImplementationOnce(() => new Promise(resolve => { finishRestore = resolve; }));
+    const undoing = undoNow();
+    await flushPromises();
+    expect(wrapper.vm.undoing).toBe(true);
+    finishRestore(result([{ id: 50, code: 'ok' }], 'b-t4'));
+    expect(await undoing).toBe(true);
+    expect(wrapper.vm.undoing).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('恢复调用失败时提示「撤销失败」，记录留在「最近操作」里可再试', async () => {
+    api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 4, code: 'ok' }], 'b-t3'));
+    const afterRestore = vi.fn().mockResolvedValue();
+    const wrapper = mountBanner({ afterRestore });
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [4], deleteFile: true }));
+    await flushPromises();
+    const toast = feedbackState.toasts[0];
+
+    api.RestoreTrashBatch.mockRejectedValueOnce(new Error('database is in maintenance mode'));
+    expect(await runToastAction(toast.id)).toBe(false);
+    // runToastAction 在 feedback.js 内部出错误提示（不经过被替换的 notifyError），直接看提示列表。
+    const errors = feedbackState.toasts.filter(item => item.level === 'error');
+    expect(errors.map(item => item.message)).toEqual([expect.stringMatching(/^撤销失败：数据库正在维护/)]);
+    expect(afterRestore).not.toHaveBeenCalled();
+    expect(recentOperations.list()).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
+describe('LIB-12 删除与撤销', () => {
+  it('LIB-12 批量删除成功后给「撤销」，撤销按批次调用 RestoreTrashBatch', async () => {
     api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 1, code: 'ok' }, { id: 2, code: 'ok' }], 'b-1'));
     const afterRestore = vi.fn().mockResolvedValue();
     const wrapper = mountBanner({ afterRestore });
@@ -56,17 +141,18 @@ describe('LIB-12 删除与撤销条', () => {
 
     expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([1, 2], true, expect.stringMatching(/^[0-9a-f]{32}$/));
     expect(outcome.removedIDs).toEqual([1, 2]);
-    const banner = wrapper.get('[data-test="delete-undo-banner"]');
-    expect(banner.text()).toContain('已移到废纸篓 2 个视频');
-    expect(banner.get('[data-test="delete-undo"]').text()).toBe('撤销本次删除（2 项）');
+    expect(noticeText()).toContain('已移到废纸篓 2 个视频');
+    expect(undoToast().action.label).toBe('撤销');
+    expect(recentOperations.list()).toHaveLength(1);
 
     api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 11, code: 'ok' }, { id: 12, code: 'ok' }], 'b-1'));
-    await banner.get('[data-test="delete-undo"]').trigger('click');
+    expect(await undoNow()).toBe(true);
     await flushPromises();
 
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'b-1');
     expect(afterRestore).toHaveBeenCalledWith([1, 2], false);
-    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    expect(undoToast()).toBeUndefined();
+    expect(recentOperations.list()).toEqual([]);
     wrapper.unmount();
   });
 
@@ -78,7 +164,7 @@ describe('LIB-12 删除与撤销条', () => {
     await flushPromises();
 
     api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 11, code: 'ok' }, { id: 12, code: 'path_occupied', message: '原位置已收录了新文件' }], 'b-2'));
-    await wrapper.vm.undoLastDelete();
+    await undoNow();
 
     expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('原位置已收录了新文件'));
     expect(afterRestore).toHaveBeenCalledWith([], true);
@@ -91,7 +177,7 @@ describe('LIB-12 删除与撤销条', () => {
     wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [3], deleteFile: false }));
     await flushPromises();
 
-    const text = wrapper.get('[data-test="delete-undo-banner"]').text();
+    const text = noticeText();
     expect(text).toContain('已从片库移除 1 个视频（文件保留）');
     expect(text).not.toContain('废纸篓 1');
     wrapper.unmount();
@@ -112,7 +198,9 @@ describe('LIB-12 删除与撤销条', () => {
     expect(api.DeleteVideosWithResult).toHaveBeenCalledTimes(1);
     expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('所在磁盘未连接或不可访问'));
     expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('没有权限'));
-    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    expect(undoToast()).toBeUndefined();
+    expect(feedback.notifySuccess).not.toHaveBeenCalled();
+    expect(recentOperations.list()).toEqual([]);
     wrapper.unmount();
   });
 
@@ -124,9 +212,11 @@ describe('LIB-12 删除与撤销条', () => {
     await flushPromises();
 
     expect(outcome.removedIDs).toEqual([1, 2]);
-    const banner = wrapper.get('[data-test="delete-undo-banner"]');
-    expect(banner.text()).toContain('1 个视频的文件已不在原处，只移除了记录');
-    expect(banner.get('[data-test="delete-undo"]').text()).toBe('撤销本次删除（1 项）');
+    expect(noticeText()).toContain('1 个视频的文件已不在原处，只移除了记录');
+    // 只有移到废纸篓的那一项能撤销。
+    api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 11, code: 'ok' }], 'batch-1'));
+    expect(await undoNow()).toBe(true);
+    expect(wrapper.props('afterRestore')).toHaveBeenCalledWith([1], false);
     wrapper.unmount();
   });
 
@@ -150,16 +240,16 @@ describe('LIB-12 删除与撤销条', () => {
     wrapper.unmount();
   });
 
-  it('IMG-02 图片页的撤销条走图片接口', async () => {
+  it('IMG-02 图片页的撤销走图片接口', async () => {
     api.DeleteImagesWithResult.mockResolvedValueOnce(result([{ id: 5, code: 'ok' }], 'img-b'));
     const wrapper = mountBanner({ kind: 'image' });
     wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [5], deleteFile: false }));
     await flushPromises();
 
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([5], false, expect.any(String));
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已从图片库移除 1 张图片（文件保留）');
+    expect(noticeText()).toContain('已从图片库移除 1 张图片（文件保留）');
     api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 50, code: 'ok' }], 'img-b'));
-    await wrapper.vm.undoLastDelete();
+    await undoNow();
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'img-b');
     wrapper.unmount();
   });
@@ -181,12 +271,12 @@ describe('IMG-12 批量删除的进度与取消', () => {
     const pending = wrapper.vm.runDelete({ ids: [1, 2, 3], deleteFile: true });
     await flushPromises();
     const requestID = api.DeleteVideosWithResult.mock.calls[0][2];
-    expect(wrapper.get('[data-test="delete-progress"]').text()).toContain('正在删除 0/3');
+    expect(wrapper.get('[data-test="delete-progress"]').text()).toContain('正在移到废纸篓 0/3 个视频…');
 
     listeners['batch-delete-progress']({ request_id: 'someone-else', done: 3, total: 3 });
     listeners['batch-delete-progress']({ request_id: requestID, done: 1, total: 3 });
     await wrapper.vm.$nextTick();
-    expect(wrapper.get('[data-test="delete-progress"]').text()).toContain('正在删除 1/3');
+    expect(wrapper.get('[data-test="delete-progress"]').text()).toContain('正在移到废纸篓 1/3 个视频…');
 
     await wrapper.get('[data-test="delete-progress-cancel"]').trigger('click');
     expect(api.CancelBatchDelete).toHaveBeenCalledWith(requestID);
@@ -199,7 +289,7 @@ describe('IMG-12 批量删除的进度与取消', () => {
     expect(wrapper.find('[data-test="delete-progress"]').exists()).toBe(false);
     expect(listeners['batch-delete-progress']).toBeUndefined();
     expect(outcome.cancelled).toEqual([2, 3]);
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已取消，2 个视频未处理');
+    expect(noticeText()).toContain('已取消，2 个视频未处理');
     wrapper.unmount();
   });
 
@@ -256,7 +346,7 @@ describe('LIB-04 D-PC02 磁盘不支持废纸篓', () => {
     expect(outcome.removedIDs).toEqual([3]);
     wrapper.vm.showDeleteNotice(outcome);
     await flushPromises();
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('2 个视频未删除（所在磁盘不支持废纸篓）');
+    expect(noticeText()).toContain('2 个视频未删除（所在磁盘不支持废纸篓）');
     wrapper.unmount();
   });
 
@@ -267,7 +357,17 @@ describe('LIB-04 D-PC02 磁盘不支持废纸篓', () => {
     api.PermanentlyDeleteVideos.mockResolvedValueOnce(result([{ id: 1, code: 'ok' }, { id: 2, code: 'ok' }], ''));
 
     await wrapper.get('[data-test="trash-unsupported-permanent"]').trigger('click');
-    await wrapper.get('[data-test="trash-unsupported-permanent-confirm"]').trigger('click');
+    // 不可逆（D-UD-07 第 3 级）：没输入按钮上的文字之前点不了，也不会删。
+    const confirmButton = () => wrapper.get('[data-test="trash-unsupported-permanent-confirm"]');
+    expect(confirmButton().text()).toBe('永久删除');
+    expect(confirmButton().element.disabled).toBe(true);
+    await confirmButton().trigger('click');
+    expect(api.PermanentlyDeleteVideos).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="trash-unsupported-confirm-input"]').setValue('永久');
+    expect(confirmButton().element.disabled).toBe(true);
+    await wrapper.get('[data-test="trash-unsupported-confirm-input"]').setValue('永久删除');
+    expect(confirmButton().element.disabled).toBe(false);
+    await confirmButton().trigger('click');
     const outcome = await pending;
 
     expect(api.PermanentlyDeleteVideos).toHaveBeenCalledWith([1, 2]);
@@ -275,9 +375,11 @@ describe('LIB-04 D-PC02 磁盘不支持废纸篓', () => {
     expect(outcome.removedIDs).toEqual([3, 1, 2]);
     wrapper.vm.showDeleteNotice(outcome);
     await flushPromises();
-    const banner = wrapper.get('[data-test="delete-undo-banner"]');
-    expect(banner.text()).toContain('已永久删除 2 个视频');
-    expect(banner.get('[data-test="delete-undo"]').text()).toBe('撤销本次删除（1 项）');
+    expect(noticeText()).toContain('已永久删除 2 个视频');
+    // 永久删除的两项没有回收站条目，撤销只恢复移到废纸篓的那一项。
+    api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 30, code: 'ok' }], 'b-u'));
+    expect(await undoNow()).toBe(true);
+    expect(wrapper.props('afterRestore')).toHaveBeenCalledWith([3], false);
     wrapper.unmount();
   });
 
@@ -296,12 +398,14 @@ describe('LIB-04 D-PC02 磁盘不支持废纸篓', () => {
     expect(outcome.batchIDs).toEqual(['b-u', 'b-r']);
     wrapper.vm.showDeleteNotice(outcome);
     await flushPromises();
-    expect(wrapper.get('[data-test="delete-undo"]').text()).toBe('撤销本次删除（3 项）');
+    expect(undoToast().action.label).toBe('撤销');
 
     api.RestoreTrashBatch.mockResolvedValue(result([{ id: 1, code: 'ok' }]));
-    await wrapper.vm.undoLastDelete();
+    await undoNow();
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'b-u');
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'b-r');
+    // 三项（两个批次）一起交回宿主。
+    expect(wrapper.props('afterRestore')).toHaveBeenCalledWith([3, 1, 2], false);
     wrapper.unmount();
   });
 

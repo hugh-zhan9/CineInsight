@@ -1,74 +1,20 @@
 {
   "owner": "B1a 片库页主体与视频清理（VideoListPage、VideoListRow、video-list 的状态条/选择条/工具栏/清理/回收站、删除确认、回收站对话框）",
   "pending": {
-    "colors": {
-      "components/VideoListPage.vue": 1
-    },
-    "font-scale": {
-      "components/CleanupThumbnail.vue": 2,
-      "components/DeleteConfirmDialog.vue": 1,
-      "components/TrashCenterDialog.vue": 6,
-      "components/TrashUnsupportedDialog.vue": 2,
-      "components/VideoListPage.vue": 5,
-      "components/video-list/BackgroundTaskStatusBars.vue": 2,
-      "components/video-list/BatchActionBar.vue": 6,
-      "components/video-list/CleanupReviewPanel.vue": 40,
-      "components/video-list/IncrementalScanBar.vue": 3,
-      "components/video-list/LibraryToolbar.vue": 20,
-      "components/video-list/RandomPickBanner.vue": 2,
-      "components/video-list/SemanticNoticeBar.vue": 1,
-      "components/video-list/TaskFailureList.vue": 2,
-      "components/video-list/TrashUndoBanner.vue": 4,
-      "components/video-list/VersionGroupBadge.vue": 3,
-      "components/video-list/VersionGroupMembers.vue": 5
-    },
+    "colors": {},
+    "font-scale": {},
     "z-index": {
       "components/TrashUnsupportedDialog.vue": 1,
-      "components/video-list/LibraryToolbar.vue": 2,
       "components/video-list/TrashUndoBanner.vue": 1
     },
     "vars": {},
-    "dialogs": {
-      "components/DeleteConfirmDialog.vue": 1,
-      "components/TrashCenterDialog.vue": 2,
-      "components/TrashUnsupportedDialog.vue": 1,
-      "components/VideoListPage.vue": 1,
-      "components/video-list/CleanupConsolidationDialog.vue": 1,
-      "components/video-list/CleanupReviewPanel.vue": 2
-    },
-    "page-header": {
-      "components/VideoListPage.vue": 1
-    },
-    "wording": {
-      "components/TrashCenterDialog.vue": 14,
-      "components/TrashUnsupportedDialog.vue": 3,
-      "components/VideoListPage.vue": 1,
-      "components/video-list/BackgroundTaskStatusBars.vue": 2,
-      "components/video-list/BatchActionBar.vue": 3,
-      "components/video-list/CleanupConsolidationDialog.vue": 1,
-      "components/video-list/CleanupReviewPanel.vue": 7,
-      "components/video-list/LibraryToolbar.vue": 1,
-      "components/video-list/RandomPickBanner.vue": 2,
-      "components/video-list/TrashUndoBanner.vue": 2
-    },
+    "dialogs": {},
+    "page-header": {},
+    "wording": {},
     "buttons": {
-      "components/CleanupThumbnail.vue": 1,
-      "components/DeleteConfirmDialog.vue": 2,
-      "components/TrashCenterDialog.vue": 19,
-      "components/TrashUnsupportedDialog.vue": 5,
-      "components/VideoListPage.vue": 14,
-      "components/VideoListRow.vue": 10,
-      "components/video-list/BackgroundTaskStatusBars.vue": 8,
-      "components/video-list/BatchActionBar.vue": 14,
-      "components/video-list/CleanupConsolidationDialog.vue": 12,
-      "components/video-list/CleanupReviewPanel.vue": 39,
-      "components/video-list/IncrementalScanBar.vue": 1,
-      "components/video-list/LibraryToolbar.vue": 21,
-      "components/video-list/RandomPickBanner.vue": 4,
-      "components/video-list/TaskFailureList.vue": 1,
-      "components/video-list/TrashUndoBanner.vue": 4,
-      "components/video-list/VersionGroupBadge.vue": 1,
-      "components/video-list/VersionGroupMembers.vue": 6
+      "components/TrashCenterDialog.vue": 1,
+      "components/video-list/CleanupReviewPanel.vue": 2,
+      "components/video-list/LibraryToolbar.vue": 1
     }
   }
 }

@@ -51,9 +51,14 @@ describe('增量扫描状态条', () => {
     expect(wrapper.vm.incrementalScan.state).toBe('warning');
     expect(wrapper.text()).toContain('/x：permission denied');
 
+    expect(wrapper.get('.ui-banner').classes()).toContain('ui-banner--warning');
+
     api.SyncScanDirectories.mockRejectedValueOnce(new Error('磁盘不可用'));
     await wrapper.vm.runIncrementalScan();
     expect(wrapper.vm.incrementalScan.state).toBe('error');
+    // 失败是页级横幅（D-UD-12），危险色调、读屏按 alert 读出。
+    expect(wrapper.get('.ui-banner').classes()).toContain('ui-banner--danger');
+    expect(wrapper.get('.ui-banner').attributes('role')).toBe('alert');
     expect(wrapper.vm.incrementalScan.message).toContain('增量扫描失败');
     expect(wrapper.text()).not.toContain('permission denied');
     wrapper.unmount();
@@ -113,7 +118,8 @@ describe('扫描摘要（D-PC09）', () => {
     expect(wrapper.text()).toContain('扫描目录变更后的扫描完成：扫描 1 个文件');
 
     await wrapper.get('[data-test="scan-summary-close"]').trigger('click');
-    expect(wrapper.find('.scan-sync-status').exists()).toBe(false);
+    expect(wrapper.find('[data-test="scan-result"]').exists()).toBe(false);
+    expect(wrapper.find('.ui-banner').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -122,8 +128,12 @@ describe('扫描摘要（D-PC09）', () => {
     api.SyncScanDirectories.mockImplementation(() => new Promise(resolve => { resolveScan = resolve; }));
     const wrapper = mountBar();
     const running = wrapper.vm.runIncrementalScan();
+    await wrapper.vm.$nextTick();
+    // 扫描进行中只出统一的进度条（D-UD-11），没有结果横幅。
+    expect(wrapper.find('[data-test="scan-progress"] [role="progressbar"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="scan-result"]').exists()).toBe(false);
     wrapper.vm.showSummary({ trigger: 'startup', result: { scanned: 99, errors: [] } });
-    expect(wrapper.vm.incrementalScan.message).toBe('正在扫描已配置目录...');
+    expect(wrapper.vm.incrementalScan.message).toBe('正在扫描已配置目录…');
     resolveScan({ scanned: 1, errors: [] });
     await running;
     expect(wrapper.vm.incrementalScan.message).toContain('增量扫描完成');

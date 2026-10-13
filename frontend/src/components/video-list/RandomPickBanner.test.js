@@ -36,7 +36,7 @@ describe('随机批次状态条', () => {
     const busy = wrapper.findAll('.random-pick-banner__actions button');
     expect(busy[0].attributes('disabled')).toBeDefined();
     expect(busy[1].attributes('disabled')).toBeDefined();
-    expect(busy[0].text()).toBe('抽取中...');
+    expect(busy[0].text()).toBe('抽取中…');
     wrapper.unmount();
   });
 
@@ -67,7 +67,7 @@ describe('随机批次状态条', () => {
 
     await wrapper.setProps({ randomPlay: { active: true, videoName: 'a.mp4', reason: '', rerollable: true, loading: true } });
     expect(wrapper.find('[data-test="random-play-reroll"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.find('[data-test="random-play-reroll"]').text()).toBe('换一个中...');
+    expect(wrapper.find('[data-test="random-play-reroll"]').text()).toBe('换一个中…');
     wrapper.unmount();
   });
 });

@@ -1,96 +1,71 @@
 <template>
-    <div class="selection-toolbar">
-      <span class="selection-toolbar__check" aria-hidden="true">✓</span>
-      <strong>已选 {{ selectedCount }} 个</strong>
+  <SelectionBar
+    class="selection-toolbar"
+    :count="selectedCount"
+    :total-matching="totalMatching"
+    :all-matching-selected="allMatchingSelected"
+    @select-all-matching="$emit('select-all-matching')"
+    @clear="$emit('clear-selection')"
+  >
+    <template #actions>
       <span v-if="selectedTotalSizeText" class="selection-toolbar__size">共 {{ selectedTotalSizeText }}</span>
-      <span class="selection-toolbar__divider"></span>
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-playback-queue" @click="$emit('batch-playback-queue')">加入待播队列</button>
-      <button @click="$emit('batch-add-tag')" class="btn-secondary btn-compact">批量标签编辑</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-playback-queue" @click="$emit('batch-playback-queue')">加入待播队列</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-add-tag" @click="$emit('batch-add-tag')">批量标签编辑</button>
       <!-- 元数据批量编辑（D-MC-04）：年份、评分、标签、人物、作品集，作用于所选或当前筛选的全部结果，可撤销。 -->
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-metadata-edit" @click="$emit('batch-metadata-edit')">批量编辑…</button>
-      <button @click="$emit('batch-move')" class="btn-secondary btn-compact" :disabled="migrationRunning">批量迁移</button>
-      <button type="button" class="btn-secondary btn-compact" @click="$emit('batch-local-metadata')">导入本地资料</button>
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-playback-proxy" @click="$emit('batch-playback-proxy')">为选中生成代理</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-metadata-edit" @click="$emit('batch-metadata-edit')">批量编辑…</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-move" :disabled="migrationRunning" @click="$emit('batch-move')">批量迁移</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-local-metadata" @click="$emit('batch-local-metadata')">导入本地资料</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-playback-proxy" @click="$emit('batch-playback-proxy')">为选中生成代理</button>
       <!-- 批量生成字幕（D-PC23、MEDIA-14）：逐个排进字幕队列，确认与汇总由片库页的字幕弹窗负责。 -->
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-subtitle" @click="$emit('batch-subtitle')">批量生成字幕</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-subtitle" @click="$emit('batch-subtitle')">批量生成字幕</button>
       <!-- 多版本聚合（D-MW-VERSIONS）：选中 2–20 个视频合并为一个版本组。 -->
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-version-group" :disabled="selectedCount < 2" @click="$emit('batch-version-group')">合并为版本组</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-version-group" :disabled="selectedCount < 2" @click="$emit('batch-version-group')">合并为版本组</button>
       <!-- 版本对比播放：正好选中两个时出现，按选中顺序左右同步播放比画质。 -->
-      <button v-if="selectedCount === 2" type="button" class="btn-secondary btn-compact" data-test="batch-compare-play" @click="$emit('batch-compare')">对比播放</button>
+      <button v-if="selectedCount === 2" type="button" class="btn btn--secondary btn--sm" data-test="batch-compare-play" @click="$emit('batch-compare')">对比播放</button>
       <!-- 视频工作台（视频编辑合同「入口」）：按选中顺序合并为新视频（2 个以上）、批量去片头。 -->
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-edit-merge" :disabled="selectedCount < 2" @click="$emit('batch-edit-merge')">合并为新视频</button>
-      <button type="button" class="btn-secondary btn-compact" data-test="batch-edit-trim" :disabled="selectedCount < 1" @click="$emit('batch-edit-trim')">批量去片头</button>
-      <button @click="$emit('batch-delete')" class="btn-danger btn-compact">批量删除</button>
-      <div class="selection-toolbar__spacer"></div>
-      <button type="button" class="link-btn" @click="$emit('toggle-select-all')">{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
-      <button type="button" class="link-btn" @click="$emit('clear-selection')">清除选择 <kbd>Esc</kbd></button>
-    </div>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-edit-merge" :disabled="selectedCount < 2" @click="$emit('batch-edit-merge')">合并为新视频</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-edit-trim" :disabled="selectedCount < 1" @click="$emit('batch-edit-trim')">批量去片头</button>
+      <!-- 删除用三个词之一（D-UD-08）：按设置里的默认方式写「移到废纸篓」或「从片库移除」，要先确认时带「…」。 -->
+      <button type="button" class="btn btn--danger btn--sm" data-test="batch-delete" @click="$emit('batch-delete')">{{ deleteLabel }}</button>
+    </template>
+  </SelectionBar>
 </template>
 
 <script>
-// 选中若干视频后顶替结果条出现的批量操作栏。状态与动作都在片库页，这里只呈现与转发。
+import SelectionBar from '../ui/SelectionBar.vue';
+
+// 选中条目的合计体积（「共 3.0 GB」）。只能合计已加载的行；有选中的条目不在已加载的行里时没有 size 可用，
+// 宁可不显示也不显示一个偏小的数，返回空串。
+export function selectedSizeText(videos, selectedIDs) {
+  const ids = new Set(selectedIDs || []);
+  const loaded = (videos || []).filter(video => ids.has(video.id));
+  if (loaded.length !== ids.size || loaded.length === 0) return '';
+  const bytes = loaded.reduce((total, video) => total + Number(video.size || 0), 0);
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = bytes > 0 ? Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024))) : 0;
+  const value = bytes / Math.pow(1024, index);
+  return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+// 选中若干视频后浮在内容区底部的批量操作条（统一设计 D-UD-10，全站同一个 SelectionBar）：没选中时不出现，
+// 默认只作用于勾选的条目；要作用于整个筛选结果，必须先点「全选当前结果（N）」。「取消选择」与 Esc 清空。
+// 状态与动作都在片库页，这里只呈现与转发。
 export default {
   name: 'BatchActionBar',
+  components: { SelectionBar },
   props: {
     selectedCount: { type: Number, default: 0 },
+    // 当前结果的真实总数（筛选命中数，结果全部加载完时就是已加载条数）；不知道时为 null，不出「全选当前结果」。
+    totalMatching: { type: Number, default: null },
+    allMatchingSelected: { type: Boolean, default: false },
     selectedTotalSizeText: { type: String, default: '' },
     migrationRunning: { type: Boolean, default: false },
-    allVisibleSelected: { type: Boolean, default: false }
+    deleteLabel: { type: String, default: '移到废纸篓' }
   },
-  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'toggle-select-all', 'clear-selection']
+  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'select-all-matching', 'clear-selection']
 };
 </script>
 
 <style scoped>
-/* 结果条与批量栏占同一个位置、同一个高度，互斥出现；这里是批量栏那一份。 */
-.selection-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 -20px;
-  padding: 0 20px;
-  height: 44px;
-  border-bottom: 1px solid var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-size: 12px;
-  font-weight: 650;
-}
-.selection-toolbar__check {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: var(--accent-color);
-  color: var(--accent-on);
-  font-size: 11px;
-}
-
-.selection-toolbar__size { font-weight: 400; color: var(--text-secondary); }
-.selection-toolbar__divider { width: 1px; height: 20px; background: var(--accent-border); }
-.selection-toolbar__spacer { flex: 1; }
-.selection-toolbar kbd {
-  padding: 0 4px;
-  border: 1px solid var(--accent-border);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  opacity: 0.8;
-}
-.link-btn {
-  flex: none;
-  border: 0;
-  background: transparent;
-  color: var(--accent-text);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
+.selection-toolbar__size { color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
 </style>

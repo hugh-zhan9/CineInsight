@@ -114,7 +114,8 @@ describe('窄行的已看切换（D-PC47）', () => {
     await watched.trigger('click');
     expect(narrow.emitted('toggle-watched')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
     // 窄行里「预览」仍然让位（抽屉已经开着）。
-    expect(narrow.findAll('.row-btn').map(button => button.text())).not.toContain('预览');
+    expect(narrow.findAll('.video-row-btn').map(button => button.text())).toContain('播放');
+    expect(narrow.findAll('.video-row-btn').map(button => button.text())).not.toContain('预览');
     narrow.unmount();
   });
 });
@@ -161,7 +162,7 @@ describe('缩略图墙', () => {
     tileRow.unmount();
 
     const gridRow = row({ display_title: '某部电影', tags: [{ id: 3, name: '动作' }] }, { layoutMode: 'grid' });
-    await gridRow.findAll('.row-btn').find(button => button.text() === '预览').trigger('click');
+    await gridRow.findAll('.video-row-btn').find(button => button.text() === '预览').trigger('click');
     const fromGrid = gridRow.emitted('preview');
     gridRow.unmount();
 

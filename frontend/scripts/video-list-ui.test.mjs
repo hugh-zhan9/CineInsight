@@ -28,7 +28,10 @@ assert.match(appSource, /class="app-shell glass-app-shell"/, 'app shell should u
 // 菜单分四组。下面钉的是新结构，以及"收进去之后一个都不能少"。
 assert.match(toolbarSource, /class="toolbar-row"/, 'toolbar should have a query row of always-on controls');
 assert.match(toolbarSource, /class="toolbar-row toolbar-row--tags"/, 'tag filtering and selection should live on their own row');
-assert.match(toolbarSource, /class="segmented"/, 'search mode and layout should use segmented controls');
+// 统一设计（D-UD-06）：布局与行高用统一的 SegmentedControl；搜索模式带基线 data-test，暂留同外观的本地分段器。
+assert.match(toolbarSource, /class="segmented" role="group" aria-label="搜索模式"/, 'search mode should stay a segmented control');
+assert.match(toolbarSource, /<SegmentedControl\s+label="片库布局"/, 'layout should use the shared SegmentedControl');
+assert.match(toolbarSource, /<SegmentedControl[\s\S]*?label="行高"/, 'row density should use the shared SegmentedControl');
 assert.match(toolbarSource, /class="split-btn"/, 'random play should be one split button, not a select plus two buttons');
 assert.match(toolbarSource, /toggleToolbarMenu\('filter', 'filterTrigger'\)/, 'range conditions should collapse into a filter popover');
 assert.match(toolbarSource, /toggleToolbarMenu\('manage', 'manageTrigger'\)/, 'library maintenance should collapse into a manage menu');
@@ -67,16 +70,24 @@ assert.match(taskBarsSource, /\{\{ labels\.technical \}\} \{\{ technicalBackfill
 assert.match(taskBarsSource, /@click="cancelTechnicalBackfill"/, 'the status banner should carry the cancel action');
 assert.match(taskBarsSource, /@click="cancelPerceptualHashBackfill"/, 'the status banner should carry the phash cancel action');
 assert.match(taskBarsSource, /@click="cancelLocalMetadataExport"/, 'the status banner should carry the NFO export cancel action');
+// 运行中的进度条用统一的 ProgressBar（D-UD-06）。
+assert.match(taskBarsSource, /<ProgressBar v-if="technicalBackfill\.running/, 'running backfills should show the shared progress bar');
 
 // 结果条是新工具栏的回显机制：条件折叠进浮层后，靠它让用户知道还开着什么。
 assert.match(toolbarSource, /class="result-bar"/, 'a result bar should echo the active conditions');
 assert.match(toolbarSource, /activeConditionLabels/, 'the result bar should spell out active conditions in Chinese');
 assert.match(videoListSource, /CountLibraryVideos/, 'the result bar count should come from the backend filter count');
-assert.match(toolbarSource, /selection-toolbar/, 'batch actions should live in a contextual selection toolbar');
+// 选择操作条（D-UD-10）：批量动作只在有选中时出现，用全站同一个 SelectionBar，由片库页放在内容区底部。
+assert.match(batchBarSource, /<SelectionBar\s+class="selection-toolbar"/, 'batch actions should live in the shared selection bar');
+assert.match(videoListSource, /<BatchActionBar\b[\s\S]*?:total-matching="matchingTotal"[\s\S]*?@select-all-matching="selectAllMatching"/, 'the library page hosts the selection bar with the real result count');
+assert.doesNotMatch(toolbarSource, /<BatchActionBar\b/, 'the sticky toolbar no longer carries batch actions');
 assert.match(videoListSource, /@click="runIncrementalScan"|case 'scan-incremental': this\.runIncrementalScan\(\)/, 'video list should expose a manual incremental scan action');
 assert.match(incrementalScanSource, /SyncScanDirectories/, 'manual incremental scan should reuse the backend sync API');
 assert.match(incrementalScanSource, /增量扫描完成：\$\{summary\.join\('，'\)\}/, 'manual incremental scan should report its result counts');
 assert.match(incrementalScanSource, /scan-sync-status--\$\{incrementalScan\.state\}/, 'manual incremental scan should expose success, warning, and error states');
+// 本页正在做的那一件（D-UD-11）：扫描进行中用统一的进度条，结果用页级横幅。
+assert.match(incrementalScanSource, /<ProgressBar\s+v-if="incrementalScan\.running"/, 'a running incremental scan should show the shared progress bar');
+assert.match(incrementalScanSource, /<AppBanner\b/, 'the scan result should be a page banner');
 // 行内 11 个动作 2026-09-01 起降到常驻 4 个（预览·播放·收藏·已看）加一个 ⋯，
 // 七个次级动作与右键菜单共用同一份定义。四个常驻动作不做"悬停才出现"。
 assert.match(videoRowSource, /class="video-actions"/, 'video rows keep an always-visible action rail');
@@ -152,33 +163,25 @@ assert.match(cleanupPanelSource, /GetCleanupStatus/, 'cleanup dialog should reop
 assert.match(cleanupPanelSource, /@click="reanalyzeCleanupCandidates"/, 'cleanup reanalysis should bypass completed background status');
 assert.match(cleanupPanelSource, /后台继续分析/, 'cleanup dialog should allow closing while analysis continues');
 
-// 批量操作栏必须随吸顶工具栏一起常驻：选中项后向下滚动时若按钮被滚走，
-// 用户就得滚回顶部才能操作。用「selection-toolbar 出现在 .toolbar 闭合之前」
-// 来钉住它的嵌套位置，避免被挪回流内。
-// 非贪婪正则会停在工具栏自己的闭合上，改用两个稳定锚点之间的切片。
+// 批量操作条必须一直看得见：选中项后向下滚动时若按钮被滚走，用户就得滚回去才能操作。
+// 统一设计 D-UD-10 起它是全站同一个 SelectionBar，浮在内容区底部（position: sticky; bottom），
+// 由片库页放在列表之后（滚动内容的末尾，吸底才有效）；结果条留在吸顶的工具栏里。
+const selectionBarSource = readFileSync(new URL('../src/components/ui/SelectionBar.vue', import.meta.url), 'utf8');
+assert.match(selectionBarSource, /\.ui-selection-bar\s*{[^}]*position:\s*sticky;[^}]*bottom:/s, 'the selection bar sticks to the bottom of the content area');
+assert.match(batchBarSource, /<SelectionBar\b/, 'the batch action bar is the shared selection bar');
+const listEnd = videoListSource.indexOf('<div v-if="!hasMore && videos.length > 0" class="no-more-indicator">');
+const batchBarAt = videoListSource.indexOf('<BatchActionBar');
+const drawerAt = videoListSource.indexOf('<PreviewDrawer');
+assert.ok(listEnd > 0 && batchBarAt > listEnd && batchBarAt < drawerAt, 'the selection bar sits right after the video list, at the end of the scrolled content');
 const chromeStart = toolbarSource.indexOf('<div class="library-chrome">');
 const chromeEnd = toolbarSource.indexOf('<!-- 筛选浮层');
 assert.ok(chromeStart > 0 && chromeEnd > chromeStart, 'sticky library chrome block should be locatable');
 const chromeBlock = toolbarSource.slice(chromeStart, chromeEnd);
-assert.match(
-  chromeBlock,
-  /<BatchActionBar/,
-  'batch action bar must live inside the sticky chrome so it stays visible while scrolling'
-);
-assert.match(
-  batchBarSource,
-  /class="selection-toolbar"/,
-  'the batch action bar is the selection toolbar'
-);
-assert.match(
-  chromeBlock,
-  /class="result-bar"/,
-  'the result bar shares the sticky slot with the batch bar'
-);
+assert.match(chromeBlock, /class="result-bar"/, 'the result bar stays in the sticky chrome');
 assert.match(
   toolbarSource,
   /\.library-chrome\s*{[^}]*position:\s*sticky;/s,
-  'the chrome that hosts the batch action bar must stay sticky'
+  'the toolbar chrome must stay sticky'
 );
 
 // 网格卡：信息区下内边距为 0，动作行必须自己撑开间距，否则标签行和按钮行贴在一起。

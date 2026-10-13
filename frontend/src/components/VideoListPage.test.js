@@ -63,10 +63,16 @@ function deleteOutcome({ trashed = [], recordOnly = [], fileMissing = [], perman
   };
 }
 
+// 浅渲染时统一组件（components/ui）照常渲染：横幅、空状态、对话框骨架与筛选芯片里的文字和按钮是本页用例要查的内容。
+// 调用方传的 global.stubs 叠在上面（同名以调用方为准）。
+const RENDERED_UI = { AppBanner: false, AppIcon: false, AppSpinner: false, DialogShell: false, BaseModal: false, EmptyState: false, FilterChip: false, PageHeader: false, SkeletonBlock: false };
+
 async function mountPage(extraProps = {}, extraOptions = {}) {
+  const { global: extraGlobal = {}, ...rest } = extraOptions;
   const wrapper = shallowMount(VideoListPage, {
     props: { tags: [], settings: {}, directories: [], ...extraProps },
-    ...extraOptions
+    global: { ...extraGlobal, stubs: { ...RENDERED_UI, ...(extraGlobal.stubs || {}) } },
+    ...rest
   });
   await flushPromises();
   return wrapper;
@@ -172,7 +178,7 @@ it('D-MC-04 批量栏「批量编辑…」带上所选与当前筛选打开对�
   const wrapper = await mountPage();
   wrapper.vm.selectedVideoIds = [3, 4];
   wrapper.vm.searchKeyword = '海';
-  wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-metadata-edit');
+  wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-metadata-edit');
   await flushPromises();
   const dialog = wrapper.findComponent({ name: 'MetadataBatchEditDialog' });
   expect(dialog.props('selectedIds')).toEqual([3, 4]);
@@ -707,6 +713,37 @@ describe('VideoListPage random pick of 10', () => {
   });
 });
 
+// 统一设计第 0 步（B1a）：页头、删除用词、在访达中显示。
+describe('统一设计：页头与用词', () => {
+  it('页头标题跟着入口走：观看侧「视频」，管理侧「片库管理」', async () => {
+    const viewer = await mountPage({ cleanupHotkey: false });
+    expect(viewer.get('.ui-page-header__title').text()).toBe('视频');
+    viewer.unmount();
+    const manage = await mountPage({ cleanupHotkey: true });
+    expect(manage.get('.ui-page-header__title').text()).toBe('片库管理');
+    manage.unmount();
+  });
+
+  it('D-UD-08 删除只用三个词：按设置写「移到废纸篓」或「从片库移除」，会先确认时带「…」；行菜单「在访达中显示」', async () => {
+    const cases = [
+      [{ delete_original_file: true, confirm_before_delete: false }, '移到废纸篓'],
+      [{ delete_original_file: true, confirm_before_delete: true }, '移到废纸篓…'],
+      [{ delete_original_file: false, confirm_before_delete: false }, '从片库移除'],
+      [{ delete_original_file: false, confirm_before_delete: true }, '从片库移除…']
+    ];
+    for (const [settings, label] of cases) {
+      const wrapper = await mountPage({ settings });
+      expect(wrapper.findComponent({ name: 'BatchActionBar' }).props('deleteLabel')).toBe(label);
+      wrapper.vm.rowMenu = { video: { id: 1, name: 'a.mp4' }, anchor: null, position: null };
+      const items = wrapper.vm.rowMenuItems;
+      expect(items.find(item => item.id === 'delete').label).toBe(label);
+      expect(items.find(item => item.id === 'directory').label).toBe('在访达中显示');
+      expect(items.map(item => item.label).filter(Boolean)).not.toContain('删除');
+      wrapper.unmount();
+    }
+  });
+});
+
 describe('VideoListPage 工具栏接线', () => {
   // 工具栏本体已抽成 video-list/LibraryToolbar.vue，其用例见同目录的 LibraryToolbar.test.js。
   // 这两条钉的是「工具栏发回来的动作，片库页这一侧真的能执行完」——
@@ -727,16 +764,63 @@ describe('VideoListPage 工具栏接线', () => {
     wrapper.unmount();
   });
 
-  it('「选择本页」在全选状态下必须能取消，而不是又选一遍', async () => {
+  it('「全选当前结果」在全选状态下必须能取消，而不是又选一遍', async () => {
     const wrapper = await mountPage();
     wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
+    wrapper.vm.hasMore = false;
     await wrapper.vm.$nextTick();
 
-    wrapper.vm.toggleSelectAllVisible();
+    await wrapper.vm.toggleSelectAllMatching();
     expect(wrapper.vm.selectedVideoIds).toEqual([1, 2]);
+    expect(wrapper.vm.allMatchingSelected).toBe(true);
 
-    wrapper.vm.toggleSelectAllVisible();
+    await wrapper.vm.toggleSelectAllMatching();
     expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  // D-UD-10：「全选当前结果（N）」作用于整个筛选结果——N 是筛选命中数，点了先把没加载的页按当前条件取回来再全选；
+  // 没选中时页面上没有批量动作；取的途中失败就不选（不把一部分说成全部）。
+  it('D-UD-10「全选当前结果（N）」先补取剩余的页再全选，N 是筛选命中数', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }], next_cursor: { id: 2 } });
+    api.CountLibraryVideos.mockResolvedValue(5);
+    const wrapper = await mountPage({ directories: [{ path: '/v' }] });
+    const bar = () => wrapper.findComponent({ name: 'BatchActionBar' });
+    expect(wrapper.vm.hasMore).toBe(true);
+    expect(bar().props('selectedCount')).toBe(0);
+    expect(bar().props('totalMatching')).toBe(5);
+
+    wrapper.vm.toggleVideoSelection({ id: 1 }, true);
+    await wrapper.vm.$nextTick();
+    expect(bar().props('selectedCount')).toBe(1);
+    expect(bar().props('allMatchingSelected')).toBe(false);
+
+    api.SearchLibraryVideoPage.mockClear();
+    api.SearchLibraryVideoPage
+      .mockResolvedValueOnce({ videos: [{ id: 3, name: 'c.mp4' }, { id: 4, name: 'd.mp4' }], next_cursor: { id: 4 } })
+      .mockResolvedValueOnce({ videos: [{ id: 5, name: 'e.mp4' }], next_cursor: null });
+    bar().vm.$emit('select-all-matching');
+    await flushPromises();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(2);
+    // 补取用原地刷新同一上限的大页，游标接着已加载的往后翻。
+    expect(api.SearchLibraryVideoPage.mock.calls[0][0]).toEqual(expect.objectContaining({ limit: 100, cursor: { id: 2 } }));
+    expect(wrapper.vm.selectedVideoIds).toEqual([1, 2, 3, 4, 5]);
+    expect(bar().props('allMatchingSelected')).toBe(true);
+    expect(bar().props('totalMatching')).toBe(5);
+
+    bar().vm.$emit('clear-selection');
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('D-UD-10 补取剩余的页失败时不全选', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'a.mp4' }], next_cursor: { id: 1 } });
+    const wrapper = await mountPage({ directories: [{ path: '/v' }] });
+    api.SearchLibraryVideoPage.mockRejectedValueOnce(new Error('数据库繁忙'));
+    await wrapper.vm.selectAllMatching();
+    await flushPromises();
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('加载视频失败'));
     wrapper.unmount();
   });
 
@@ -1717,7 +1801,7 @@ describe('P-034 路径失效：分组、重新检查、加回目录', () => {
     expect(bar.find('[data-test="stale-reason-missing_file"]').exists()).toBe(false);
 
     api.SearchLibraryVideoPage.mockClear();
-    await bar.get('[data-test="stale-reason-removed_root"]').trigger('click');
+    await bar.get('[data-test="stale-reason-removed_root"] .ui-filter-chip__toggle').trigger('click');
     await flushPromises();
     expect(api.SearchLibraryVideoPage).toHaveBeenLastCalledWith(expect.objectContaining({ filter: expect.objectContaining({ smart_view: 'stale', stale_reason: 'removed_root' }) }));
 
@@ -2336,7 +2420,7 @@ describe('P-036 批量生成字幕与字幕索引同步', () => {
     });
     wrapper.vm.videos = [{ id: 1, name: 'a.mp4', tags: [] }];
     wrapper.vm.selectedVideoIds = [1, 9];
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-subtitle');
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-subtitle');
     await flushPromises();
     expect(generateBatch).toHaveBeenCalledWith([
       expect.objectContaining({ id: 1, name: 'a.mp4' }),
@@ -2399,6 +2483,8 @@ describe('P-032 评审 I-3 的父组件用例', () => {
     expect(confirmNames).toContain('far-away.mp4');
     expect(confirmNames).not.toContain('编号');
 
+    // 永久删除是不可逆的第 3 级确认（D-UD-07）：输入按钮上的文字才能点。
+    await wrapper.find('[data-test="trash-unsupported-confirm-input"]').setValue('永久删除');
     await wrapper.find('[data-test="trash-unsupported-permanent-confirm"]').trigger('click');
     const outcome = await pending;
     expect(api.PermanentlyDeleteVideos).toHaveBeenCalledWith([7]);

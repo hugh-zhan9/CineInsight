@@ -3,7 +3,7 @@
     <div class="version-members__head">
       <span class="version-members__title">{{ groupTitle }}</span>
       <span class="version-members__hint">各版本的已看、进度、评分独立保存</span>
-      <button type="button" class="version-members__manage" data-test="version-members-manage" @click="$emit('manage')">管理版本组…</button>
+      <button type="button" class="btn-link version-members__manage" data-test="version-members-manage" @click="$emit('manage')">管理版本组…</button>
     </div>
     <ol class="version-members__list">
       <li
@@ -22,12 +22,12 @@
           <div class="version-member__facts">{{ facts(member) }}</div>
         </div>
         <div class="version-member__actions">
-          <button type="button" class="row-btn row-btn--primary" :disabled="busy" data-test="version-member-play" @click="$emit('play', member.video_id)">播放</button>
-          <button type="button" class="row-btn" :disabled="busy" data-test="version-member-preview" @click="$emit('preview', member.video_id)">预览</button>
+          <button type="button" class="btn btn--primary btn--sm" :disabled="busy" data-test="version-member-play" @click="$emit('play', member.video_id)">播放</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="version-member-preview" @click="$emit('preview', member.video_id)">预览</button>
           <!-- 与主版本并排同步播放比画质；主版本自己那一行没有。 -->
-          <button v-if="index > 0" type="button" class="row-btn" :disabled="busy" data-test="version-member-compare" @click="$emit('compare', member.video_id)">对比画质</button>
-          <button v-if="index > 0" type="button" class="row-btn" :disabled="busy" data-test="version-member-primary" @click="$emit('set-primary', member.video_id)">设为主版本</button>
-          <button type="button" class="row-btn" :disabled="busy" data-test="version-member-remove" @click="$emit('remove', member.video_id)">移出组</button>
+          <button v-if="index > 0" type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="version-member-compare" @click="$emit('compare', member.video_id)">对比画质</button>
+          <button v-if="index > 0" type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="version-member-primary" @click="$emit('set-primary', member.video_id)">设为主版本</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="version-member-remove" @click="$emit('remove', member.video_id)">移出组</button>
         </div>
       </li>
     </ol>
@@ -65,15 +65,15 @@ export default {
 
 <style scoped>
 .version-members {
-  margin: 4px 0 8px;
-  padding: 8px 12px;
+  margin: var(--space-1) 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--panel-subtle-bg);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
-.version-members__head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
-.version-members__title { font-weight: 650; }
+.version-members__head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; flex-wrap: wrap; }
+.version-members__title { font-weight: var(--fw-semibold); }
 .version-members__hint { color: var(--text-muted); flex: 1; min-width: 0; }
 .version-members__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .version-member { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--border-color); }
@@ -81,11 +81,11 @@ export default {
 .version-member--current .version-member__label { color: var(--accent-text); }
 .version-member__info { flex: 1; min-width: 0; }
 .version-member__name { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.version-member__label { font-weight: 650; white-space: nowrap; }
-.version-member__tag { padding: 0 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; white-space: nowrap; }
+.version-member__label { font-weight: var(--fw-semibold); white-space: nowrap; }
+.version-member__tag { padding: 0 6px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-caption); white-space: nowrap; }
 .version-member__tag--danger { background: var(--danger-soft); color: var(--danger-text); }
 .version-member__file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
 .version-member__facts { color: var(--text-muted); margin-top: 2px; }
 .version-member__actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.version-members__manage { flex: none; border: 0; background: transparent; color: var(--accent-text); font-size: 12px; cursor: pointer; padding: 0; }
+.version-members__manage { flex: none; font-size: var(--fs-caption); }
 </style>
