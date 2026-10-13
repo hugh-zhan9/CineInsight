@@ -172,6 +172,7 @@
         kind="person"
         :page-active="currentPage === 'people'"
         :focus-entity="entityFocus.person"
+        :keyword-request="entityKeywordRequests.person"
         @open-video="openVideoByID($event, { from: 'people' })"
         @play-video="openVideoByID($event.id, { from: 'people', startAtMs: $event.startAtMs })"
         @open-image="openPhotoImage"
@@ -185,6 +186,7 @@
         kind="collection"
         :page-active="currentPage === 'collections'"
         :focus-entity="entityFocus.collection"
+        :keyword-request="entityKeywordRequests.collection"
         @open-video="openVideoByID($event, { from: 'collections' })"
         @play-video="openVideoByID($event.id, { from: 'collections', startAtMs: $event.startAtMs })"
         @open-image="openPhotoImage"
@@ -409,6 +411,8 @@ export default {
       scenesMounted: false,
       // 片库带过来的场景检索范围：{ filter, token }；为空表示全部视频。
       scenesScope: null,
+      // 带关键词进人物 / 作品集观看页（命令面板「查看全部」）：{ keyword, token }，离开那一页时清空。
+      entityKeywordRequests: { person: null, collection: null },
       workbenchMounted: false,
       // 要视频工作台打开的项目：{ projectID, token }（片库新建、任务中心「在工作台中打开」）。
       workbenchRequest: null,
@@ -538,6 +542,10 @@ export default {
     currentPage: {
       immediate: true,
       handler(page, previous) {
+        const leftEntityKind = { people: 'person', collections: 'collection' }[previous];
+        if (leftEntityKind && this.entityKeywordRequests[leftEntityKind]) {
+          this.entityKeywordRequests = { ...this.entityKeywordRequests, [leftEntityKind]: null };
+        }
         // 从管理侧「人物与作品集」离开：那里可能改过、删过、合并过人物或作品集，观看侧两页卸掉，下次进入重新取数。
         if (previous === 'entities-manage') {
           this.peopleMounted = false;
@@ -689,9 +697,24 @@ export default {
       this.applyPageParams(page, params);
       this.currentPage = page;
     },
-    // 页面参数落到页面状态上：片单的标签（认不出的标签忽略，留在原来的标签上）。
+    // 页面参数落到页面状态上：
+    // - 片单的标签（认不出的标签忽略，留在原来的标签上）；
+    // - 人物 / 作品集的 { keyword }：页面回到列表并按它搜（每次交接换 token，同一个词再交一次也会重搜）；
+    // - 场景检索的 { query, mode } 或 { image: { dataURL, name } }：范围是全部视频，页面直接检索（ScenesPage 的 scopeRequest）。
     applyPageParams(page, params) {
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
+      const entityKind = { people: 'person', collections: 'collection' }[page];
+      if (entityKind && typeof params?.keyword === 'string') this.requestEntityKeyword(entityKind, params.keyword);
+      if (page === 'scenes' && params && (typeof params.query === 'string' || params.mode || params.image?.dataURL)) {
+        this._handOffSeq = (this._handOffSeq || 0) + 1;
+        this.scenesScope = { filter: null, ...params, token: this._handOffSeq };
+      }
+    },
+    // 关键词请求：页面已挂载时由它的监听接住（每次是新对象），首次挂载时在挂载那一拍读到。离开这一页时清空
+    // （currentPage 的监听），免得之后重新挂载（离开管理侧之后）把旧关键词再搜一遍。
+    requestEntityKeyword(kind, keyword) {
+      this._handOffSeq = (this._handOffSeq || 0) + 1;
+      this.entityKeywordRequests = { ...this.entityKeywordRequests, [kind]: { keyword, token: this._handOffSeq } };
     },
     // 当前页面的参数（整页详情返回栈记下来源时用）。
     currentPageParams() {

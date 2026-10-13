@@ -263,9 +263,10 @@ export default {
       brokenPosters: [], kindOptions: KIND_OPTIONS,
       origins: {},
       // 片库里的对应情况（D-P2-03），按条目 ID：linked = ListWatchlistLibraryState 的已关联视频，
-      // suggestions = SuggestLibraryMatchesBatch 的建议；没有这个键表示还没读到（或第一次就没读出来）。
+      // dismissed = 同一接口给的解除过的视频 ID（含整部作品的全部版本），suggestions = SuggestLibraryMatchesBatch 的建议；
+      // 没有这个键表示还没读到（或第一次就没读出来）。
       // libraryLoading 是正在读的条目 ID；libraryError 是最近一次读失败的原因（横幅 + 重试）。
-      linked: {}, suggestions: {}, libraryLoading: {}, libraryError: ''
+      linked: {}, dismissed: {}, suggestions: {}, libraryLoading: {}, libraryError: ''
     };
   },
   computed: {
@@ -488,6 +489,7 @@ export default {
     resetLibrary() {
       this._libraryTokens = new Map();
       this.linked = {};
+      this.dismissed = {};
       this.suggestions = {};
       this.libraryLoading = {};
       this.libraryError = '';
@@ -510,19 +512,24 @@ export default {
       const mine = targets.filter(current);
       if (!mine.length) return;
       const linked = { ...this.linked };
+      const dismissed = { ...this.dismissed };
       const suggested = { ...this.suggestions };
       const loading = { ...this.libraryLoading };
       // 读失败的那一样保留上一次读到的（第一次就失败则仍是「没读到」，这一行不显示片库情况）。
       for (const entry of mine) {
         delete loading[entry.id];
         // 没在结果里的条目（刚被删掉）按没有关联算。
-        if (states.ok) linked[entry.id] = Array.isArray(states.value[entry.id]?.linked) ? states.value[entry.id].linked : [];
+        if (states.ok) {
+          linked[entry.id] = Array.isArray(states.value[entry.id]?.linked) ? states.value[entry.id].linked : [];
+          dismissed[entry.id] = Array.isArray(states.value[entry.id]?.dismissed) ? states.value[entry.id].dismissed.map(Number) : [];
+        }
         if (suggestions.ok) {
           const list = suggestions.value[libraryMatchKey(entry.title, entry.year)];
           suggested[entry.id] = Array.isArray(list) ? list : [];
         }
       }
       this.linked = linked;
+      this.dismissed = dismissed;
       this.suggestions = suggested;
       this.libraryLoading = loading;
       const failure = !states.ok ? states.error : (!suggestions.ok ? suggestions.error : null);
@@ -543,9 +550,10 @@ export default {
       return this.linked[entry.id] || [];
     },
     // 每条最多列 SUGGESTION_LIMIT 部。只在没有任何关联时才显示（已在库优先，见模板），所以已关联的不会出现在这里；
-    // 解除过的那一对后端没有返回给前端，会照常列出，再点「确认」就关联回来。
+    // 这个条目解除过的视频（dismissed，含整部作品的各个版本）不再建议——解除就是「不是这部」；要关联回来用解除提示里的「撤销」。
     suggestionsOf(entry) {
-      return (this.suggestions[entry.id] || []).slice(0, SUGGESTION_LIMIT);
+      const dismissed = new Set(this.dismissed[entry.id] || []);
+      return (this.suggestions[entry.id] || []).filter(item => !dismissed.has(Number(item.video_id))).slice(0, SUGGESTION_LIMIT);
     },
     // 「不在库」只在两样都读到了、既没有关联也没有建议时才说；没读出来时什么都不说。
     notInLibrary(entry) {
@@ -578,6 +586,8 @@ export default {
       try {
         await UnlinkWatchlistEntryVideo(entry.id, video.video_id);
         this.linked = { ...this.linked, [entry.id]: this.linkedOf(entry).filter(item => item.video_id !== video.video_id) };
+        // 重读回来之前先记下这一部解除过，免得它在「可能已有」里闪一下（重读会带回整部作品的各个版本）。
+        this.dismissed = { ...this.dismissed, [entry.id]: [...new Set([...(this.dismissed[entry.id] || []), Number(video.video_id)])] };
         notifyUndo(`已解除「${entry.title}」与「${video.title}」的关联`, () => this.relinkVideo(entry.id, video.video_id));
         this.error = '';
       } catch (err) {

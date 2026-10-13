@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   ListPeople: vi.fn(),
+  ListPeopleByCount: vi.fn(),
   ListCollections: vi.fn(),
   ListCollectionProgress: vi.fn(),
   GetPersonDetail: vi.fn(),
@@ -16,7 +17,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import EntityBrowsePage, {
-  collectionProgressText, collectionWorks, ENTITY_PAGE_SIZE, needsVersionGroups, nextWorkKey, playNextRequest, SEARCH_DEBOUNCE_MS, watchStateOf
+  collectionProgressText, collectionWorkRows, ENTITY_PAGE_SIZE, nextWorkKey, playNextRequest, SEARCH_DEBOUNCE_MS, watchStateOf
 } from './EntityBrowsePage.vue';
 
 enableAutoUnmount(afterEach);
@@ -32,9 +33,15 @@ const video = (id, extra = {}) => ({
   is_watched: false, watch_position_seconds: 0, is_stale: false, ...extra
 });
 const member = (id, position, extra = {}) => ({ video: video(id, extra), position });
+const work = (index, ids, state = 'unwatched', extra = {}) => ({
+  work_index: index, video_ids: ids, representative_video_id: ids[0], state, resume_video_id: 0, ...extra
+});
+// 默认的作品集 5：成员 1（看过）、2、4（离线）、3，逐部明细与 GetCollectionDetail 的默认成员一致。
 const progressOf = (id, extra = {}) => ({
   collection_id: id, name: `作品集${id}`, has_cover: false, total_works: 3, watched_works: 1, in_progress_works: 0, complete: false,
   next: { video_id: 2, title: '第2部', work_index: 2, resume: false, watch_position_seconds: 0, duration: 3600 },
+  works: [work(1, [1], 'watched'), work(2, [2]), work(3, [3])],
+  offline_video_ids: [4],
   ...extra
 });
 
@@ -42,6 +49,7 @@ beforeEach(() => {
   vi.useRealTimers();
   for (const fn of Object.values(api)) fn.mockReset();
   api.ListPeople.mockResolvedValue([person(1), person(2, { avatar_url: '/preview/person-avatar/2' })]);
+  api.ListPeopleByCount.mockResolvedValue([person(2, { avatar_url: '/preview/person-avatar/2', active_video_count: 9 }), person(1)]);
   api.ListCollections.mockResolvedValue([collection(5), collection(6)]);
   api.ListCollectionProgress.mockImplementation(({ collection_ids: ids }) => Promise.resolve(ids.map(id => progressOf(id))));
   api.GetPersonDetail.mockResolvedValue({ person: person(8, { active_video_count: 12, active_image_count: 4 }), videos: [], images: [] });
@@ -86,100 +94,170 @@ describe('pure helpers', () => {
     expect(playNextRequest(null)).toBeNull();
   });
 
-  it('needsVersionGroups：在线成员比总部数多才需要查版本组（离线的不算）', () => {
-    const members = [member(1, 1), member(2, 2), member(3, 3, { is_stale: true })];
-    expect(needsVersionGroups(members, progressOf(5, { total_works: 2 }))).toBe(false);
-    expect(needsVersionGroups(members, progressOf(5, { total_works: 1 }))).toBe(true);
-    expect(needsVersionGroups(members, null)).toBe(false);
-  });
-
-  it('collectionWorks：离线成员单列不编号；同一版本组合成一部（位置取最先出现的），代表取组内顺序第一位', () => {
+  it('collectionWorkRows：结构来自逐部明细；离线成员按作品集位置插回原处、不编号；版本合成一部；在看那一部打开有断点的成员', () => {
     const members = [
       member(10, 1, { is_watched: true }),
       member(12, 2),
       member(30, 3, { is_stale: true }),
       member(20, 4),
-      member(11, 5, { watch_position_seconds: 90, watch_progress_updated_at: '2026-10-10T10:00:00Z' })
+      member(11, 5, { watch_position_seconds: 90 })
     ];
-    // 12 与 11 同组，组内顺序 11 在前（主版本）。
-    const groups = { 12: { groupID: 7, order: 1 }, 11: { groupID: 7, order: 0 } };
-    const rows = collectionWorks(members, groups);
+    // 12 与 11 是同一部的两个版本（11 是主版本，组的位置取最先出现的 12 那里）；11 有断点。
+    const progress = {
+      works: [
+        work(1, [10], 'watched'),
+        work(2, [11, 12], 'in_progress', { representative_video_id: 11, resume_video_id: 11 }),
+        work(3, [20])
+      ],
+      offline_video_ids: [30],
+      next: { video_id: 11, work_index: 2, resume: true }
+    };
+    const rows = collectionWorkRows(progress, members);
     expect(rows.map(row => [row.index, row.offline, row.videos.map(item => item.id), row.state])).toEqual([
       [1, false, [10], 'watched'],
       [2, false, [11, 12], 'in-progress'],
       [0, true, [30], 'offline'],
       [3, false, [20], 'unwatched']
     ]);
-    expect(rows[1].representative.id).toBe(11);
-    // 在看那一部打开有续播位置的那个文件。
+    expect(rows[1].representative.display_title).toBe('第11部');
     expect(rows[1].openID).toBe(11);
+    expect(rows[1].resumeVideo.id).toBe(11);
     expect(rows[3].openID).toBe(20);
-    expect(nextWorkKey(rows, { next: { video_id: 12 } })).toBe(rows[1].key);
+    expect(nextWorkKey(rows, progress)).toBe(rows[1].key);
     expect(nextWorkKey(rows, { next: { video_id: 30 } })).toBe('');
     expect(nextWorkKey(rows, null)).toBe('');
   });
 
-  it('collectionWorks：同一部里有多个版本都有续播位置时，打开进度最近更新的那个', () => {
-    const members = [
-      member(1, 1, { watch_position_seconds: 10, watch_progress_updated_at: '2026-10-01T00:00:00Z' }),
-      member(2, 2, { watch_position_seconds: 20, watch_progress_updated_at: '2026-10-05T00:00:00Z' })
-    ];
-    const [row] = collectionWorks(members, { 1: { groupID: 3, order: 0 }, 2: { groupID: 3, order: 1 } });
-    expect(row.representative.id).toBe(1);
-    expect(row.openID).toBe(2);
+  it('collectionWorkRows：在看那一部的断点在非主版本上时打开那个版本；作品集详情里没有的成员排在最后、保留接口顺序', () => {
+    const members = [member(1, 1), member(2, 2, { watch_position_seconds: 20 })];
+    const rows = collectionWorkRows({
+      works: [work(1, [1, 2], 'in_progress', { resume_video_id: 2 }), work(2, [7])],
+      offline_video_ids: [8]
+    }, members);
+    expect(rows.map(row => [row.key, row.openID])).toEqual([['work-1', 2], ['work-2', 7], ['offline-8', 8]]);
+    expect(rows[1].representative).toEqual({ id: 7 });
+    expect(collectionWorkRows(null, members)).toEqual([]);
   });
 });
 
 describe('人物观看页', () => {
-  it('头像墙：ListPeople 按名称分页，卡片写作品数；骨架只在首次加载时出现', async () => {
+  it('头像墙默认按出现次数（ListPeopleByCount），卡片写作品数；骨架只在首次加载时出现', async () => {
     let resolve;
-    api.ListPeople.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    api.ListPeopleByCount.mockReturnValueOnce(new Promise(done => { resolve = done; }));
     const wrapper = mount(EntityBrowsePage, { props: { kind: 'person' } });
     await flushPromises();
     expect(wrapper.find('[data-test="entity-browse-list-loading"]').exists()).toBe(true);
-    resolve([person(1), person(2)]);
+    resolve([person(2, { active_video_count: 9 }), person(1)]);
     await flushPromises();
-    expect(api.ListPeople).toHaveBeenCalledWith('', '', 0, ENTITY_PAGE_SIZE);
+    expect(api.ListPeopleByCount).toHaveBeenCalledWith('', 0, '', 0, ENTITY_PAGE_SIZE);
+    expect(api.ListPeople).not.toHaveBeenCalled();
     expect(wrapper.find('[data-test="entity-browse-list-loading"]').exists()).toBe(false);
-    expect(wrapper.get('[data-test="entity-browse-person-1"]').text()).toContain('人物1');
+    expect(wrapper.findAll('.entity-browse__person strong').map(item => item.text())).toEqual(['人物2', '人物1']);
     expect(wrapper.get('[data-test="entity-browse-person-1"]').text()).toContain('3 部视频 · 2 张图片');
+    expect(wrapper.get('[data-test="entity-browse-sort-count"]').attributes('aria-checked')).toBe('true');
     expect(wrapper.find('h1').text()).toBe('人物');
   });
 
-  it('满一批才有下一批：按最后一项的名称与 ID 续读', async () => {
-    const page = Array.from({ length: ENTITY_PAGE_SIZE }, (_, index) => person(index + 1));
-    api.ListPeople.mockResolvedValueOnce(page).mockResolvedValueOnce([person(99)]);
+  it('按出现次数满一批才有下一批：游标是最后一项的（次数, 名称, ID）', async () => {
+    const page = Array.from({ length: ENTITY_PAGE_SIZE }, (_, index) => person(index + 1, { active_video_count: 100 - index }));
+    api.ListPeopleByCount.mockResolvedValueOnce(page).mockResolvedValueOnce([person(99, { active_video_count: 1 })]);
     const wrapper = await mountPage({ kind: 'person' });
     await wrapper.get('[data-test="entity-browse-list-more"]').trigger('click');
     await flushPromises();
-    expect(api.ListPeople).toHaveBeenLastCalledWith('', `人物${ENTITY_PAGE_SIZE}`, ENTITY_PAGE_SIZE, ENTITY_PAGE_SIZE);
+    expect(api.ListPeopleByCount).toHaveBeenLastCalledWith('', 100 - ENTITY_PAGE_SIZE + 1, `人物${ENTITY_PAGE_SIZE}`, ENTITY_PAGE_SIZE, ENTITY_PAGE_SIZE);
     expect(wrapper.find('[data-test="entity-browse-person-99"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="entity-browse-list-more"]').exists()).toBe(false);
   });
 
-  it('搜索去抖后按关键词重取；没有结果给「清空搜索」', async () => {
+  it('切到「名称」改用 ListPeople（名称游标续读），切回「出现次数」从头按次数重取', async () => {
+    const wrapper = await mountPage({ kind: 'person' });
+    const page = Array.from({ length: ENTITY_PAGE_SIZE }, (_, index) => person(index + 1));
+    api.ListPeople.mockResolvedValueOnce(page).mockResolvedValueOnce([person(99)]);
+    await wrapper.get('[data-test="entity-browse-sort-name"]').trigger('click');
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenCalledWith('', '', 0, ENTITY_PAGE_SIZE);
+    expect(wrapper.findAll('.entity-browse__person')).toHaveLength(ENTITY_PAGE_SIZE);
+    expect(wrapper.get('[data-test="entity-browse-list"]').text()).toContain('按名称排列');
+    await wrapper.get('[data-test="entity-browse-list-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenLastCalledWith('', `人物${ENTITY_PAGE_SIZE}`, ENTITY_PAGE_SIZE, ENTITY_PAGE_SIZE);
+
+    api.ListPeopleByCount.mockClear();
+    await wrapper.get('[data-test="entity-browse-sort-count"]').trigger('click');
+    await flushPromises();
+    expect(api.ListPeopleByCount).toHaveBeenCalledWith('', 0, '', 0, ENTITY_PAGE_SIZE);
+    expect(wrapper.findAll('.entity-browse__person strong').map(item => item.text())).toEqual(['人物2', '人物1']);
+  });
+
+  it('换排序时上一种排序晚到的那一批丢掉', async () => {
+    let resolveSlow;
+    api.ListPeopleByCount.mockReturnValueOnce(new Promise(done => { resolveSlow = done; }));
+    const wrapper = mount(EntityBrowsePage, { props: { kind: 'person' } });
+    await flushPromises();
+    api.ListPeople.mockResolvedValueOnce([person(5)]);
+    await wrapper.get('[data-test="entity-browse-sort-name"]').trigger('click');
+    await flushPromises();
+    resolveSlow([person(77)]);
+    await flushPromises();
+    expect(wrapper.find('[data-test="entity-browse-person-77"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="entity-browse-person-5"]').exists()).toBe(true);
+  });
+
+  it('搜索去抖后按关键词重取（沿用当前排序）；没有结果给「清空搜索」', async () => {
     vi.useFakeTimers();
     const wrapper = mount(EntityBrowsePage, { props: { kind: 'person' } });
     await flushPromises();
-    api.ListPeople.mockResolvedValue([]);
+    api.ListPeopleByCount.mockResolvedValue([]);
     await wrapper.get('[data-test="entity-browse-search"]').setValue('甲');
     await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS - 10);
-    expect(api.ListPeople).toHaveBeenCalledTimes(1);
+    expect(api.ListPeopleByCount).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(20);
     await flushPromises();
-    expect(api.ListPeople).toHaveBeenLastCalledWith('甲', '', 0, ENTITY_PAGE_SIZE);
+    expect(api.ListPeopleByCount).toHaveBeenLastCalledWith('甲', 0, '', 0, ENTITY_PAGE_SIZE);
+    expect(api.ListPeopleByCount).toHaveBeenCalledTimes(2);
     const empty = wrapper.get('[data-test="entity-browse-list-empty"]');
     expect(empty.text()).toContain('没有找到「甲」');
-    api.ListPeople.mockResolvedValue([person(1)]);
+    api.ListPeopleByCount.mockResolvedValue([person(1)]);
     await wrapper.get('[data-test="entity-browse-clear-search"]').trigger('click');
+    await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS + 10);
     await flushPromises();
-    expect(api.ListPeople).toHaveBeenLastCalledWith('', '', 0, ENTITY_PAGE_SIZE);
+    expect(api.ListPeopleByCount).toHaveBeenLastCalledWith('', 0, '', 0, ENTITY_PAGE_SIZE);
+    // 清空后去抖到点不再重复取一次。
+    expect(api.ListPeopleByCount).toHaveBeenCalledTimes(3);
     expect(wrapper.find('[data-test="entity-browse-person-1"]').exists()).toBe(true);
     vi.useRealTimers();
   });
 
+  it('关键词交接（命令面板「查看全部」）：挂载时直接按它搜；停在人物页时回到列表再搜；同一个词再交一次也重搜', async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(EntityBrowsePage, { props: { kind: 'person', keywordRequest: { keyword: '梁', token: 1 } } });
+    await flushPromises();
+    expect(api.ListPeopleByCount).toHaveBeenCalledTimes(1);
+    expect(api.ListPeopleByCount).toHaveBeenCalledWith('梁', 0, '', 0, ENTITY_PAGE_SIZE);
+    expect(wrapper.get('[data-test="entity-browse-search"]').element.value).toBe('梁');
+
+    await wrapper.get('[data-test="entity-browse-person-2"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="entity-person-hero"]').exists()).toBe(true);
+
+    await wrapper.setProps({ keywordRequest: { keyword: '张', token: 2 } });
+    await flushPromises();
+    expect(wrapper.find('[data-test="entity-person-hero"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="entity-browse-list"]').isVisible()).toBe(true);
+    expect(api.ListPeopleByCount).toHaveBeenLastCalledWith('张', 0, '', 0, ENTITY_PAGE_SIZE);
+    expect(wrapper.get('[data-test="entity-browse-search"]').element.value).toBe('张');
+
+    await wrapper.setProps({ keywordRequest: null });
+    await wrapper.setProps({ keywordRequest: { keyword: '张', token: 3 } });
+    await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS + 10);
+    await flushPromises();
+    // 每次交接各搜一次（共 3 次），去抖不再多发。
+    expect(api.ListPeopleByCount).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
   it('一个人物都没有：空状态的下一步去管理侧', async () => {
-    api.ListPeople.mockResolvedValue([]);
+    api.ListPeopleByCount.mockResolvedValue([]);
     const wrapper = await mountPage({ kind: 'person' });
     expect(wrapper.get('[data-test="entity-browse-list-empty"]').text()).toContain('还没有人物');
     await wrapper.get('[data-test="entity-browse-go-manage"]').trigger('click');
@@ -187,7 +265,7 @@ describe('人物观看页', () => {
   });
 
   it('列表读取失败：横幅 + 重试', async () => {
-    api.ListPeople.mockRejectedValueOnce(new Error('后端不可用'));
+    api.ListPeopleByCount.mockRejectedValueOnce(new Error('后端不可用'));
     const wrapper = await mountPage({ kind: 'person' });
     expect(wrapper.get('[data-test="entity-browse-list-error"]').text()).toContain('读取人物失败：后端不可用');
     expect(wrapper.find('[data-test="entity-browse-list-empty"]').exists()).toBe(false);
@@ -342,8 +420,8 @@ describe('作品集观看页', () => {
     await flushPromises();
 
     expect(api.GetCollectionDetail).toHaveBeenCalledWith(5);
-    expect(api.ListCollectionProgress).toHaveBeenLastCalledWith({ collection_ids: [5] });
-    // 在线成员 3 个 = 3 部：不需要查版本组。
+    expect(api.ListCollectionProgress).toHaveBeenLastCalledWith({ collection_ids: [5], include_works: true });
+    // 各部的结构一次取到，不再逐个成员查版本组。
     expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="entity-collection-name"]').text()).toBe('三部曲');
     expect(wrapper.get('[data-test="entity-collection-progress-text"]').text()).toBe('第 2 / 3 部 · 下一部《第2部》');
@@ -368,7 +446,9 @@ describe('作品集观看页', () => {
   it('「从下一部播放」：在看的那一部带续播位置；「全部加入待播」走 append_collection', async () => {
     api.ListCollectionProgress.mockResolvedValue([progressOf(5, {
       watched_works: 1, in_progress_works: 1,
-      next: { video_id: 2, title: '第2部', work_index: 2, resume: true, watch_position_seconds: 754, duration: 3600 }
+      next: { video_id: 2, title: '第2部', work_index: 2, resume: true, watch_position_seconds: 754, duration: 3600 },
+      works: [work(1, [1], 'watched'), work(2, [2], 'in_progress', { resume_video_id: 2 }), work(3, [3])],
+      offline_video_ids: []
     })]);
     api.GetCollectionDetail.mockResolvedValue({ collection: collection(5), videos: [member(1, 1, { is_watched: true }), member(2, 2, { watch_position_seconds: 754 }), member(3, 3)] });
     const wrapper = await mountPage({ kind: 'collection', focusEntity: { id: 5, name: '三部曲' } });
@@ -391,50 +471,45 @@ describe('作品集观看页', () => {
     expect(wrapper.find('[data-test="entity-collection-next-badge"]').exists()).toBe(false);
   });
 
-  it('有版本组合成一部（在线成员多于部数）：按成员路径查版本组再合并，编号与进度接口一致', async () => {
+  it('同一部的多个版本合成一行（逐部明细），在看那一部点开的是有断点的那个版本', async () => {
     api.GetCollectionDetail.mockResolvedValue({
       collection: collection(5),
-      videos: [member(1, 1, { is_watched: true }), member(2, 2), member(3, 3), member(9, 4)]
+      videos: [member(1, 1, { is_watched: true }), member(2, 2, { watch_position_seconds: 300 }), member(3, 3), member(9, 4)]
     });
-    api.ListCollectionProgress.mockResolvedValue([progressOf(5, { total_works: 3, next: { video_id: 3, title: '第3部', work_index: 2, resume: false } })]);
-    // 2 与 3 是同一部的两个版本，3 是主版本。
-    const group = { group_id: 4, member_count: 2, members: [{ video_id: 3, position: 0 }, { video_id: 2, position: 1 }] };
-    api.SearchLibraryVideoPage.mockImplementation(({ filter }) => {
-      const id = Number(filter.path_prefix.match(/v(\d+)\.mp4/)[1]);
-      return Promise.resolve({ videos: [video(id)], version_groups: id === 2 || id === 3 ? { [id]: group } : {} });
-    });
+    // 2 与 3 是同一部的两个版本，3 是主版本，断点在 2 上。
+    api.ListCollectionProgress.mockResolvedValue([progressOf(5, {
+      total_works: 3, in_progress_works: 1,
+      next: { video_id: 2, title: '第2部', work_index: 2, resume: true, watch_position_seconds: 300 },
+      works: [work(1, [1], 'watched'), work(2, [3, 2], 'in_progress', { resume_video_id: 2 }), work(3, [9])],
+      offline_video_ids: []
+    })]);
     const wrapper = await mountPage({ kind: 'collection', focusEntity: { id: 5, name: '三部曲' } });
-    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(4);
-    expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith({ filter: { path_prefix: '/m/v2.mp4', collapse_versions: true }, limit: 1 });
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
     const rows = wrapper.findAll('.entity-browse__work');
     expect(rows.map(row => row.get('.entity-browse__work-index').text())).toEqual(['1', '2', '3']);
     const merged = wrapper.get('[data-test="entity-collection-work-3"]');
+    expect(merged.get('.entity-browse__work-copy strong').text()).toBe('第3部');
     expect(merged.text()).toContain('2 个版本');
+    expect(merged.text()).toContain('看到 05:00');
     expect(merged.classes()).toContain('entity-browse__work--next');
+    expect(wrapper.get('[data-test="entity-collection-state-3"]').text()).toBe('在看');
+    await merged.trigger('click');
+    expect(wrapper.emitted('open-video')).toEqual([[2]]);
   });
 
-  it('版本组查询失败：列表区出错误横幅，重试整页重取', async () => {
-    api.GetCollectionDetail.mockResolvedValue({ collection: collection(5), videos: [member(1, 1), member(2, 2)] });
-    api.ListCollectionProgress.mockResolvedValue([progressOf(5, { total_works: 1, next: { video_id: 1, work_index: 1 } })]);
-    api.SearchLibraryVideoPage.mockRejectedValueOnce(new Error('查询失败'));
-    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], version_groups: {} });
-    const wrapper = await mountPage({ kind: 'collection', focusEntity: { id: 5, name: '三部曲' } });
-    expect(wrapper.get('[data-test="entity-collection-works-error"]').text()).toContain('读取版本信息失败：查询失败');
-    await wrapper.get('[data-test="entity-collection-works-retry"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.find('[data-test="entity-collection-works-error"]').exists()).toBe(false);
-  });
-
-  it('进度读取失败只影响头部的进度：列表照常显示（没有下一部高亮），重试补上', async () => {
+  it('进度（逐部明细）读取失败：头部写原因，各部列表出横幅；重试补上', async () => {
     api.ListCollectionProgress.mockRejectedValueOnce(new Error('忙'));
     const wrapper = await mountPage({ kind: 'collection', focusEntity: { id: 5, name: '三部曲' } });
     expect(wrapper.get('[data-test="entity-collection-progress"]').text()).toContain('读取观看进度失败：忙');
-    expect(wrapper.findAll('.entity-browse__work')).toHaveLength(4);
-    expect(wrapper.find('[data-test="entity-collection-next-badge"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="entity-collection-works-error"]').text()).toContain('读取观看进度失败：忙');
+    expect(wrapper.findAll('.entity-browse__work')).toHaveLength(0);
+    expect(wrapper.find('[data-test="entity-collection-works-empty"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="entity-collection-play-next"]').exists()).toBe(false);
     await wrapper.get('[data-test="entity-collection-progress-retry"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-test="entity-collection-progress-text"]').text()).toContain('第 2 / 3 部');
+    expect(wrapper.find('[data-test="entity-collection-works-error"]').exists()).toBe(false);
+    expect(wrapper.findAll('.entity-browse__work')).toHaveLength(4);
     expect(wrapper.find('[data-test="entity-collection-next-badge"]').exists()).toBe(true);
   });
 
@@ -443,7 +518,7 @@ describe('作品集观看页', () => {
     const wrapper = await mountPage({ kind: 'collection', focusEntity: { id: 5, name: '三部曲' } });
     expect(wrapper.get('[data-test="entity-collection-works-error"]').text()).toContain('读取作品集失败');
     api.GetCollectionDetail.mockResolvedValue({ collection: collection(5), videos: [] });
-    api.ListCollectionProgress.mockResolvedValue([progressOf(5, { total_works: 0, watched_works: 0, next: undefined })]);
+    api.ListCollectionProgress.mockResolvedValue([progressOf(5, { total_works: 0, watched_works: 0, next: undefined, works: [], offline_video_ids: [] })]);
     await wrapper.get('[data-test="entity-collection-works-retry"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-test="entity-collection-works-empty"]').text()).toContain('这个作品集还没有作品');

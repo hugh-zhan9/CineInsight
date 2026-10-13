@@ -5,6 +5,14 @@
     <div v-show="!selected" class="entity-browse__list" data-test="entity-browse-list">
       <PageHeader :title="noun" :subtitle="listSubtitle">
         <template #actions>
+          <SegmentedControl
+            v-if="isPeople"
+            :options="peopleSorts"
+            :model-value="peopleSort"
+            label="人物排序"
+            data-test="entity-browse-sort"
+            @update:model-value="changePeopleSort"
+          />
           <label class="entity-browse__search">
             <AppIcon name="search" />
             <input
@@ -14,7 +22,7 @@
               :placeholder="isPeople ? '搜索姓名' : '搜索作品集名称或简介'"
               :aria-label="`搜索${noun}`"
               data-test="entity-browse-search"
-              @keydown.enter="searchNow"
+              @keydown.enter="searchNow({ force: true })"
             />
           </label>
         </template>
@@ -250,12 +258,12 @@
             <h3><AppIcon name="videos" /> 各部</h3>
             <small>按作品集顺序；同一部的多个版本算一部{{ offlineCount ? `；${offlineCount} 个离线的不计入` : '' }}</small>
           </header>
-          <AppBanner v-if="detail.error || groups.error" tone="danger" :title="detail.error || groups.error" data-test="entity-collection-works-error">
+          <AppBanner v-if="worksError" tone="danger" :title="worksError" data-test="entity-collection-works-error">
             <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="entity-collection-works-retry" @click="loadCollection()">重试</button></template>
           </AppBanner>
           <SkeletonBlock v-if="worksPending" :lines="6" data-test="entity-collection-works-loading" />
           <EmptyState
-            v-else-if="detail.data && !collectionRows.length"
+            v-else-if="detail.data && progress.data && !collectionRows.length"
             icon="collection"
             title="这个作品集还没有作品"
             message="在管理中编辑这个作品集，可以把视频加进来并排好顺序。"
@@ -263,7 +271,7 @@
           >
             <template #actions><button type="button" class="btn btn--secondary" @click="editInManage(selected)">在管理中编辑</button></template>
           </EmptyState>
-          <ol v-else-if="detail.data" class="entity-browse__works">
+          <ol v-else-if="collectionRows.length" class="entity-browse__works">
             <li v-for="row in collectionRows" :key="row.key">
               <button
                 type="button"
@@ -294,7 +302,8 @@
 
 <script>
 import {
-  GetCollectionDetail, GetPersonDetail, GetPersonImages, ListCollectionProgress, ListCollections, ListPeople, SearchLibraryVideoPage
+  GetCollectionDetail, GetPersonDetail, GetPersonImages, ListCollectionProgress, ListCollections, ListPeople, ListPeopleByCount,
+  SearchLibraryVideoPage
 } from '../../../wailsjs/go/main/App';
 import QueueActionButton from '../QueueActionButton.vue';
 import RecapBackdrop from '../recap/RecapBackdrop.vue';
@@ -306,12 +315,14 @@ import EmptyState from '../ui/EmptyState.vue';
 import HeroHeader from '../ui/HeroHeader.vue';
 import PageHeader from '../ui/PageHeader.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
+import SegmentedControl from '../ui/SegmentedControl.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import { translateBackendError } from '../../utils/feedback.js';
 import { formatDuration } from '../../utils/mediaDetails.js';
 import { videoArtwork, videoThumbnail } from '../../utils/recap.js';
 
-// 列表每批取多少（ListPeople / ListCollections 按名称游标翻页）；作品集卡片的进度按这一批一起取。
+// 列表每批取多少（人物按出现次数 ListPeopleByCount 或名称 ListPeople、作品集按名称 ListCollections，都是游标翻页）；
+// 作品集卡片的进度按这一批一起取。
 export const ENTITY_PAGE_SIZE = 60;
 // 人物作品海报墙每批（SearchLibraryVideoPage，人物筛选 + 合并版本 + 年份从新到旧）。
 export const PERSON_WORKS_PAGE_SIZE = 60;
@@ -321,6 +332,13 @@ export const PROGRESS_BATCH_LIMIT = 200;
 export const SEARCH_DEBOUNCE_MS = 250;
 
 const NOUNS = { person: '人物', collection: '作品集' };
+// 人物头像墙的排序（D-P2-06）：出现次数（可见视频数，即卡片上的「N 部视频」）多的在前、同数按名称；或只按名称。
+export const PEOPLE_SORTS = [
+  { value: 'count', label: '出现次数', dataTest: 'entity-browse-sort-count' },
+  { value: 'name', label: '名称', dataTest: 'entity-browse-sort-name' }
+];
+// 进度接口逐部明细的状态 → 页面上的状态名。
+const WORK_STATES = { watched: 'watched', in_progress: 'in-progress', unwatched: 'unwatched' };
 const STATE_LABELS = { watched: '看过', 'in-progress': '在看', unwatched: '没看', offline: '离线' };
 // 「下一部」用主色徽标；在看用琥珀色（进行中），离线那一行整行压暗，徽标不再另加颜色。
 const STATE_TONES = { watched: 'success', 'in-progress': 'warning', unwatched: 'neutral', offline: 'neutral' };
@@ -376,51 +394,52 @@ export function playNextRequest(progress) {
   return { id, startAtMs: next.resume && position > 0 ? Math.round(position * 1000) : 0 };
 }
 
-// 在线成员比进度接口算出的部数多，说明有版本组合成了一部：这时才去查各成员所属的版本组。
-export function needsVersionGroups(members, progress) {
-  if (!progress) return false;
-  const online = (members || []).filter(item => item?.video && !item.video.is_stale).length;
-  return online > Number(progress.total_works || 0);
-}
-
-// 作品集页的各部（D-P2-02）。members 是 GetCollectionDetail 的成员（已按 position 排好）；
-// groups 是「视频 ID → { groupID, order }」，不在表里的就不在版本组里。
-// - 离线（失效）成员单列一行、不编号、不计入部数（进度接口只算在线成员）；
-// - 同一版本组的在线成员合成一部，位置取组里最先出现的那个；代表取组内版本顺序第一位（同序取 ID 小的）；
-// - 状态按整部算；在看那一部打开有续播位置的那个文件（进度最近更新的一个），否则打开代表。
-export function collectionWorks(members, groups = {}) {
-  const rows = [];
-  const byGroup = new Map();
-  let index = 0;
-  for (const member of members || []) {
-    const video = member?.video;
-    const id = Number(video?.id || 0);
-    if (!id) continue;
-    if (video.is_stale) {
-      rows.push({ key: `offline-${id}`, index: 0, offline: true, videos: [video] });
-      continue;
-    }
-    const group = groups[id];
-    if (group && byGroup.has(group.groupID)) {
-      byGroup.get(group.groupID).videos.push(video);
-      continue;
-    }
-    index += 1;
-    const row = { key: `work-${id}`, index, offline: false, videos: [video] };
-    rows.push(row);
-    if (group) byGroup.set(group.groupID, row);
-  }
-  return rows.map(row => {
-    const order = video => Number(groups[Number(video.id)]?.order || 0);
-    const videos = [...row.videos].sort((a, b) => order(a) - order(b) || Number(a.id) - Number(b.id));
-    const state = row.offline ? 'offline' : watchStateOf(videos);
-    const resume = state === 'in-progress'
-      ? videos.filter(video => Number(video.watch_position_seconds) > 0)
-        .reduce((best, video) => (!best || timeOf(video.watch_progress_updated_at) > timeOf(best.watch_progress_updated_at) ? video : best), null)
-      : null;
-    const representative = videos[0];
-    return { ...row, videos, representative, state, resumeVideo: resume, openID: Number((resume || representative).id) };
+// 作品集页的各部（D-P2-02）：结构全来自进度接口的逐部明细（ListCollectionProgress 的 include_works）——
+// 第几部、每部的成员（代表在最前）、状态、在看那一部有断点的成员，以及不计入任何一部的离线成员；
+// GetCollectionDetail 的成员只用来补片名、年份、时长与作品集里的位置（离线成员按位置插回原处）。
+// - 离线成员单列一行、不编号；
+// - 在看那一部打开有续播位置的那个文件（resume_video_id），否则打开代表。
+export function collectionWorkRows(progress, members) {
+  const videos = new Map();
+  const order = new Map();
+  (members || []).forEach((member, index) => {
+    const id = Number(member?.video?.id || 0);
+    if (!id) return;
+    videos.set(id, member.video);
+    order.set(id, [Number(member.position) || 0, index]);
   });
+  const videoOf = id => videos.get(Number(id)) || { id: Number(id) };
+  // 一行在作品集里的位置：成员里最靠前的那个；作品集详情里没有的（两次读取之间变了）排在最后、保持接口顺序。
+  const placeOf = ids => ids.map(id => order.get(Number(id))).filter(Boolean)
+    .reduce((best, place) => (!best || place[0] < best[0] || (place[0] === best[0] && place[1] < best[1]) ? place : best), null);
+  const rows = [];
+  for (const work of progress?.works || []) {
+    const ids = (work.video_ids || []).map(Number).filter(Boolean);
+    const representativeID = Number(work.representative_video_id || ids[0] || 0);
+    if (!representativeID) continue;
+    const resumeID = Number(work.resume_video_id || 0);
+    rows.push({
+      key: `work-${work.work_index}`,
+      index: Number(work.work_index) || 0,
+      offline: false,
+      videos: (ids.length ? ids : [representativeID]).map(videoOf),
+      representative: videoOf(representativeID),
+      state: WORK_STATES[work.state] || 'unwatched',
+      resumeVideo: resumeID ? videoOf(resumeID) : null,
+      openID: resumeID || representativeID,
+      place: placeOf(ids.length ? ids : [representativeID])
+    });
+  }
+  for (const value of progress?.offline_video_ids || []) {
+    const id = Number(value);
+    if (!id) continue;
+    rows.push({ key: `offline-${id}`, index: 0, offline: true, videos: [videoOf(id)], representative: videoOf(id), state: 'offline', resumeVideo: null, openID: id, place: placeOf([id]) });
+  }
+  const rank = row => (row.place ? row.place : [Infinity, Infinity]);
+  return rows
+    .map((row, position) => ({ row, position }))
+    .sort((a, b) => rank(a.row)[0] - rank(b.row)[0] || rank(a.row)[1] - rank(b.row)[1] || a.position - b.position)
+    .map(({ row }) => row);
 }
 
 // 下一部在列表里是哪一行：包含 next.video_id 的那一部。
@@ -432,14 +451,19 @@ export function nextWorkKey(rows, progress) {
 
 export default {
   name: 'EntityBrowsePage',
-  components: { AppBadge, AppBanner, AppIcon, EmptyState, HeroHeader, PageHeader, ProgressBar, QueueActionButton, RecapBackdrop, RecapMediaCard, SkeletonBlock },
+  components: {
+    AppBadge, AppBanner, AppIcon, EmptyState, HeroHeader, PageHeader, ProgressBar, QueueActionButton, RecapBackdrop, RecapMediaCard,
+    SegmentedControl, SkeletonBlock
+  },
   props: {
     // person | collection：同一个组件挂两次（人物页、作品集页），各自一份状态。
     kind: { type: String, required: true, validator: kind => kind === 'person' || kind === 'collection' },
     // 宿主切回本页时为 true：作品集的进度可能在别处看过片后变了，回来时重取（保留现有内容，不闪骨架）。
     pageActive: { type: Boolean, default: true },
     // 命令面板、首页、整页详情、回顾指定要打开的对象：{ id, name }，置一次即消费。
-    focusEntity: { type: Object, default: null }
+    focusEntity: { type: Object, default: null },
+    // 带关键词进来（命令面板「查看全部」）：{ keyword, token }。每次交接是新的对象（token 递增），回到列表并按它搜索。
+    keywordRequest: { type: Object, default: null }
   },
   // open-video(id)：进整页详情；play-video({ id, startAtMs })：进整页详情并在应用内从这一刻起播；
   // open-image(image)：去图片页看这一张；edit-in-manage({ kind, id?, name? })：去管理侧「人物与作品集」，带 id 时定位到它；
@@ -447,9 +471,12 @@ export default {
   emits: ['open-video', 'play-video', 'open-image', 'edit-in-manage', 'navigate'],
   data() {
     return {
-      keyword: '',
+      // 外部带进来的关键词（命令面板「查看全部」）在挂载时就生效，不等去抖。
+      keyword: String(this.keywordRequest?.keyword || ''),
       searchedKeyword: '',
-      list: { items: [], loading: false, error: '', hasMore: true, cursorName: '', cursorID: 0 },
+      peopleSort: 'count',
+      peopleSorts: PEOPLE_SORTS,
+      list: { items: [], loading: false, error: '', hasMore: true, cursorName: '', cursorID: 0, cursorCount: 0 },
       // 作品集卡片的进度：collection_id → { state: loading | ready | error, data }。
       cardProgress: {},
       brokenImages: {},
@@ -460,8 +487,7 @@ export default {
       works: { loading: false, error: '', items: [], cursor: null, groups: {}, loaded: false },
       images: { loading: false, error: '', items: [], cursor: 0, loaded: false },
       detail: { loading: false, error: '', data: null },
-      progress: { loading: false, error: '', data: null },
-      groups: { loading: false, error: '', map: {}, ready: false }
+      progress: { loading: false, error: '', data: null }
     };
   },
   computed: {
@@ -469,7 +495,8 @@ export default {
     noun() { return NOUNS[this.kind]; },
     gridClass() { return this.isPeople ? 'entity-browse__people' : 'entity-browse__collections'; },
     listSubtitle() {
-      return this.isPeople ? '按名称排列；点一位看 TA 的作品与图片。' : '按名称排列；卡片上是追到哪一部。';
+      if (!this.isPeople) return '按名称排列；卡片上是追到哪一部。';
+      return `${this.peopleSort === 'count' ? '作品多的在前' : '按名称排列'}；点一位看 TA 的作品与图片。`;
     },
     emptyListMessage() {
       return this.isPeople
@@ -501,9 +528,14 @@ export default {
     collectionItem() { return this.detail.data?.collection || this.selected?.item || null; },
     collectionCover() { return String(this.collectionItem?.cover_url || ''); },
     collectionDescription() { return String(this.collectionItem?.collection?.description || ''); },
-    collectionRows() { return collectionWorks(this.detail.data?.videos, this.groups.map); },
-    onlineWorkCount() { return this.collectionRows.filter(row => !row.offline).length; },
-    offlineCount() { return this.collectionRows.filter(row => row.offline).length; },
+    // 各部要两样都读到：结构来自进度接口，片名与位置来自作品集详情。
+    collectionRows() {
+      if (!this.detail.data || !this.progress.data) return [];
+      return collectionWorkRows(this.progress.data, this.detail.data.videos);
+    },
+    onlineWorkCount() { return Number(this.progress.data?.total_works || 0); },
+    offlineCount() { return (this.progress.data?.offline_video_ids || []).length; },
+    worksError() { return this.detail.error || this.progress.error; },
     nextRowKey() { return nextWorkKey(this.collectionRows, this.progress.data); },
     nextRequest() { return playNextRequest(this.progress.data); },
     // 头部进度：「第 N / M 部」+ 下一部是哪一部（在看的写看到哪）。
@@ -515,10 +547,9 @@ export default {
       const where = next.resume && Number(next.watch_position_seconds) > 0 ? ` · 看到 ${formatDuration(next.watch_position_seconds)}` : '';
       return `${base} · 下一部《${next.title || '未命名视频'}》${where}`;
     },
-    // 列表区第一次加载（含需要的版本组查询）时出骨架；之后的刷新保留现有内容。
+    // 列表区第一次加载时出骨架；之后的刷新保留现有内容。
     worksPending() {
-      if (!this.detail.data) return this.detail.loading;
-      return this.groups.loading && !this.groups.ready;
+      return (this.detail.loading && !this.detail.data) || (this.progress.loading && !this.progress.data);
     }
   },
   watch: {
@@ -527,6 +558,7 @@ export default {
       this._searchTimer = setTimeout(() => this.searchNow(), SEARCH_DEBOUNCE_MS);
     },
     focusEntity(focus) { this.applyFocus(focus); },
+    keywordRequest(request) { if (request) this.applyKeywordRequest(request); },
     pageActive(active) { if (active) this.refreshOnReturn(); }
   },
   created() {
@@ -563,39 +595,57 @@ export default {
     scroller() { return this.$el?.closest?.('.main-view') || null; },
 
     // ===== 列表 =====
-    searchNow() {
+    // 去抖到点或按回车：关键词没变就不重取（回车照样重取，等于刷新）。
+    searchNow({ force = false } = {}) {
       clearTimeout(this._searchTimer);
-      if (this.keyword.trim() === this.searchedKeyword && this.list.items.length) return undefined;
+      if (!force && this.keyword.trim() === this.searchedKeyword) return undefined;
       return this.reloadList();
     },
     clearSearch() {
       this.keyword = '';
-      return this.searchNow();
+      return this.reloadList();
+    },
+    // 命令面板「查看全部」带关键词进来：停在对象页上时先回列表，再立刻按它搜（不等去抖）。
+    applyKeywordRequest(request) {
+      if (this.selected) this.closeEntity();
+      this.keyword = String(request?.keyword || '');
+      return this.reloadList();
+    },
+    changePeopleSort(sort) {
+      if (sort === this.peopleSort) return undefined;
+      this.peopleSort = sort;
+      return this.reloadList();
     },
     reloadList() {
       this._listToken += 1;
       this.searchedKeyword = this.keyword.trim();
-      this.list = { items: [], loading: false, error: '', hasMore: true, cursorName: '', cursorID: 0 };
+      clearTimeout(this._searchTimer);
+      this.list = { items: [], loading: false, error: '', hasMore: true, cursorName: '', cursorID: 0, cursorCount: 0 };
       return this.loadMore();
     },
     async loadMore() {
       const token = this._listToken;
       if (this.list.loading || !this.list.hasMore) return;
-      const { cursorName, cursorID } = this.list;
+      const { cursorName, cursorID, cursorCount } = this.list;
       const keyword = this.searchedKeyword;
+      const byCount = this.isPeople && this.peopleSort === 'count';
       this.list.loading = true;
       this.list.error = '';
       try {
-        const page = (this.isPeople
-          ? await ListPeople(keyword, cursorName, cursorID, ENTITY_PAGE_SIZE)
-          : await ListCollections(keyword, cursorName, cursorID, ENTITY_PAGE_SIZE)) || [];
+        let page;
+        if (!this.isPeople) page = await ListCollections(keyword, cursorName, cursorID, ENTITY_PAGE_SIZE);
+        else if (byCount) page = await ListPeopleByCount(keyword, cursorCount, cursorName, cursorID, ENTITY_PAGE_SIZE);
+        else page = await ListPeople(keyword, cursorName, cursorID, ENTITY_PAGE_SIZE);
+        page = page || [];
         if (token !== this._listToken) return;
         this.list.items.push(...page);
         this.list.hasMore = page.length === ENTITY_PAGE_SIZE;
         if (page.length) {
+          // 游标：按出现次数时是 (次数, 名称, ID)，次数就是卡片上的 active_video_count；按名称时是 (名称, ID)。
           const last = page[page.length - 1];
           this.list.cursorName = last.cursor_name;
           this.list.cursorID = this.itemID(last);
+          this.list.cursorCount = Number(last.active_video_count || 0);
         }
         if (!this.isPeople) this.loadCardProgress(page.map(item => this.itemID(item)));
       } catch (err) {
@@ -680,7 +730,6 @@ export default {
       this.images = { loading: false, error: '', items: [], cursor: 0, loaded: false };
       this.detail = { loading: false, error: '', data: null };
       this.progress = { loading: false, error: '', data: null };
-      this.groups = { loading: false, error: '', map: {}, ready: false };
       const token = this.entityToken;
       if (this.isPeople) {
         this.loadPersonHero(token);
@@ -793,12 +842,11 @@ export default {
     },
 
     // ===== 作品集页 =====
-    // 作品集（成员与资料）与进度两路并行，各自出错；都回来后，若有版本组合成一部（在线成员多于总部数），再查版本组。
+    // 作品集详情（片名、封面、简介、成员位置）与带逐部明细的进度两路并行，各自出错；各部列表两样都要。
     async loadCollection() {
       const token = this.entityToken;
       if (!this.selected) return;
       await Promise.all([this.loadCollectionDetail(token), this.loadCollectionProgress(token)]);
-      if (token === this.entityToken) await this.loadVersionGroups(token);
     },
     async loadCollectionDetail(token) {
       const id = this.selected.id;
@@ -814,40 +862,14 @@ export default {
       const id = this.selected.id;
       this.progress = { ...this.progress, loading: true, error: '' };
       try {
-        const result = await ListCollectionProgress({ collection_ids: [id] });
+        const result = await ListCollectionProgress({ collection_ids: [id], include_works: true });
         if (token === this.entityToken) this.progress = { loading: false, error: '', data: (result || []).find(item => Number(item.collection_id) === id) || null };
       } catch (err) {
         if (token === this.entityToken) this.progress = { ...this.progress, loading: false, error: `读取观看进度失败：${errorText(err)}` };
       }
     },
-    async retryProgress() {
-      const token = this.entityToken;
-      await this.loadCollectionProgress(token);
-      if (token === this.entityToken) await this.loadVersionGroups(token);
-    },
-    // 版本组：按成员的文件路径精确筛选并打开合并版本（与整页详情的「版本」同一做法），读出它所属的组与组内顺序。
-    async loadVersionGroups(token) {
-      const members = this.detail.data?.videos || [];
-      if (!needsVersionGroups(members, this.progress.data)) {
-        this.groups = { loading: false, error: '', map: {}, ready: true };
-        return;
-      }
-      const online = members.map(member => member.video).filter(video => video && !video.is_stale && video.path);
-      this.groups = { ...this.groups, loading: true, error: '' };
-      try {
-        const pages = await Promise.all(online.map(video => SearchLibraryVideoPage({ filter: { path_prefix: video.path, collapse_versions: true }, limit: 1 })));
-        if (token !== this.entityToken) return;
-        const map = {};
-        online.forEach((video, index) => {
-          const group = pages[index]?.version_groups?.[video.id];
-          if (!group || Number(group.member_count) < 2) return;
-          const member = (group.members || []).find(item => Number(item.video_id) === Number(video.id));
-          map[Number(video.id)] = { groupID: Number(group.group_id), order: Number(member?.position || 0) };
-        });
-        this.groups = { loading: false, error: '', map, ready: true };
-      } catch (err) {
-        if (token === this.entityToken) this.groups = { ...this.groups, loading: false, error: `读取版本信息失败：${errorText(err)}` };
-      }
+    retryProgress() {
+      return this.loadCollectionProgress(this.entityToken);
     },
     workFacts(row) {
       const video = row.representative;
@@ -869,7 +891,8 @@ export default {
 .entity-browse__list { display: grid; gap: var(--space-4); align-content: start; }
 .entity-browse__list :deep(.ui-page-header) { margin-bottom: 0; }
 .entity-browse__nav { display: flex; align-items: center; gap: var(--space-3); }
-.entity-browse__search { position: relative; display: flex; align-items: center; width: min(320px, 100%); color: var(--text-muted); }
+/* 排序与搜索同一行：搜索框定宽（页头的动作区按内容算宽度，百分比宽度会把它挤到下一行）。 */
+.entity-browse__search { position: relative; display: flex; flex: none; align-items: center; width: 300px; max-width: 100%; color: var(--text-muted); }
 .entity-browse__search .ui-icon { position: absolute; left: 10px; pointer-events: none; }
 .entity-browse__search .search-input { padding-left: 32px; }
 .entity-browse__muted { color: var(--text-muted); }

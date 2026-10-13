@@ -644,7 +644,7 @@ describe('想看片单与片库、榜单的闭环（D-PC52）', () => {
 
 describe('想看已在库（D-P2-03）', () => {
   const linkedVideo = (videoID, title, origin = 'auto', extra = {}) => ({ video_id: videoID, title, origin, is_watched: false, ...extra });
-  const stateOf = map => ids => Promise.resolve(Object.fromEntries(ids.map(id => [id, { linked: map[id] || [] }])));
+  const stateOf = (map, dismissedMap = {}) => ids => Promise.resolve(Object.fromEntries(ids.map(id => [id, { linked: map[id] || [], dismissed: dismissedMap[id] || [] }])));
 
   it('一页条目批量读关联状态；已在库显示「播放」「解除」，自动连上的带「自动匹配」', async () => {
     api.ListWatchlist.mockResolvedValue({ entries: [entry(3, '沙丘', { year: 2021 }), entry(2, '星际穿越', { year: 2014 }), entry(1, '没入库的片')], next_id: 0 });
@@ -670,32 +670,62 @@ describe('想看已在库（D-P2-03）', () => {
     expect(wrapper.emitted('open-video-id')).toEqual([[30]]);
   });
 
-  it('「解除」不弹确认，提示里的「撤销」把它确认回来；解除后这部回到「可能已有」可再确认', async () => {
+  it('「解除」不弹确认，提示里的「撤销」把它确认回来；解除过的这部不再列在「可能已有」里', async () => {
     api.ListWatchlist.mockResolvedValue({ entries: [entry(3, '沙丘', { year: 2021 })], next_id: 0 });
     api.SuggestLibraryMatchesBatch.mockResolvedValue({ '沙丘|2021': [{ video_id: 30, name: 'Dune.mkv', display_title: '沙丘 (2021)' }] });
     const linked = { 3: [linkedVideo(30, '沙丘 (2021)')] };
-    api.ListWatchlistLibraryState.mockImplementation(ids => stateOf(linked)(ids));
+    const dismissed = {};
+    api.ListWatchlistLibraryState.mockImplementation(ids => stateOf(linked, dismissed)(ids));
     const wrapper = await page();
     // 已关联的那部不再列在「可能已有」里。
     expect(wrapper.find('[data-test="watchlist-suggestions-3"]').exists()).toBe(false);
 
-    api.UnlinkWatchlistEntryVideo.mockImplementation(async () => { linked[3] = []; });
+    // 后端记下这部作品解除过（dismissed 含它的各个版本）。
+    let resolveReload;
+    api.UnlinkWatchlistEntryVideo.mockImplementation(async () => { linked[3] = []; dismissed[3] = [30, 31]; });
+    api.ListWatchlistLibraryState.mockImplementationOnce(ids => new Promise(done => { resolveReload = () => done(stateOf(linked, dismissed)(ids)); }));
     await find(wrapper, 'unlink-3-30').trigger('click');
+    await flushPromises();
+    // 重读还没回来时也不闪出「可能已有」。
+    expect(wrapper.find('[data-test="watchlist-suggestions-3"]').exists()).toBe(false);
+    resolveReload();
     await flushPromises();
     expect(feedback.confirmAction).not.toHaveBeenCalled();
     expect(api.UnlinkWatchlistEntryVideo).toHaveBeenCalledWith(3, 30);
     expect(wrapper.find('[data-test="watchlist-linked-3"]').exists()).toBe(false);
-    expect(find(wrapper, 'link-3-30').text()).toBe('确认');
+    expect(wrapper.find('[data-test="watchlist-suggestions-3"]').exists()).toBe(false);
+    expect(find(wrapper, 'not-in-library-3').text()).toBe('不在库');
     expect(feedback.notifyUndo).toHaveBeenCalledTimes(1);
     const [message, undo] = feedback.notifyUndo.mock.calls[0];
     expect(message).toContain('已解除「沙丘」与「沙丘 (2021)」的关联');
 
-    api.LinkWatchlistEntryVideo.mockImplementation(async () => { linked[3] = [linkedVideo(30, '沙丘 (2021)', 'manual')]; });
+    // 撤销 = 重新确认这一对；后端同时清掉这部作品的解除记录。
+    api.LinkWatchlistEntryVideo.mockImplementation(async () => { linked[3] = [linkedVideo(30, '沙丘 (2021)', 'manual')]; dismissed[3] = []; });
     await undo();
     await flushPromises();
     expect(api.LinkWatchlistEntryVideo).toHaveBeenCalledWith(3, 30);
     expect(find(wrapper, 'linked-3').text()).toContain('沙丘 (2021)');
     expect(wrapper.find('[data-test="watchlist-auto-3-30"]').exists()).toBe(false);
+  });
+
+  it('「片库中可能已有」滤掉这个条目解除过的视频（其余建议照常列出）', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [entry(3, '沙丘', { year: 2021 }), entry(4, '沙丘', { year: 2021 })], next_id: 0 });
+    api.SuggestLibraryMatchesBatch.mockResolvedValue({
+      '沙丘|2021': [{ video_id: 30, name: 'Dune.mkv', display_title: '沙丘 (2021)' }, { video_id: 33, name: 'Dune.Remux.mkv', display_title: '沙丘 Remux' }]
+    });
+    api.ListWatchlistLibraryState.mockImplementation(stateOf({}, { 3: [30] }));
+    const wrapper = await page();
+    expect(wrapper.find('[data-test="watchlist-suggestion-3-30"]').exists()).toBe(false);
+    expect(find(wrapper, 'suggestion-3-33').text()).toContain('沙丘 Remux');
+    // 解除记录按条目：另一个条目照常建议这部。
+    expect(find(wrapper, 'suggestion-4-30').exists()).toBe(true);
+
+    // 全被解除过时不再有「可能已有」，读全了就是「不在库」。
+    api.ListWatchlistLibraryState.mockImplementation(stateOf({}, { 3: [30, 33] }));
+    await wrapper.vm.loadLibrary([wrapper.vm.entries[0]]);
+    await flushPromises();
+    expect(wrapper.find('[data-test="watchlist-suggestions-3"]').exists()).toBe(false);
+    expect(find(wrapper, 'not-in-library-3').text()).toBe('不在库');
   });
 
   it('解除或确认失败：报错并保持原状，不出撤销提示', async () => {

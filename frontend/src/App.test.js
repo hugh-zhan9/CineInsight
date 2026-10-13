@@ -1430,6 +1430,101 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
   });
 });
 
+describe('页面参数交接：人物 / 作品集的关键词、场景检索的查询（命令面板「查看全部」）', () => {
+  const browsePage = (wrapper, kind) => wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(page => page.props('kind') === kind);
+
+  it('navigateTo(people|collections, { keyword })：首次进入时挂载那一拍就带着关键词；离开这一页时清空', async () => {
+    const wrapper = await mountApp();
+    const result = wrapper.vm.navigateTo('people', { keyword: '梁' });
+    expect(result).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('people');
+    expect(wrapper.vm.entityKeywordRequests.person).toEqual({ keyword: '梁', token: expect.any(Number) });
+    await flushPromises();
+    // 挂载时拿到的就是这份请求。
+    expect(browsePage(wrapper, 'person').vm.$.vnode.props['keyword-request']).toEqual({ keyword: '梁', token: expect.any(Number) });
+
+    wrapper.vm.navigateTo('collections', { keyword: '指环' });
+    await flushPromises();
+    expect(wrapper.vm.entityKeywordRequests.collection).toEqual({ keyword: '指环', token: expect.any(Number) });
+    expect(browsePage(wrapper, 'collection').vm.$.vnode.props['keyword-request']).toMatchObject({ keyword: '指环' });
+    // 离开人物页时它的请求清空：之后重新挂载（离开管理侧后换代）不会把旧关键词再搜一遍。
+    expect(wrapper.vm.entityKeywordRequests.person).toBeNull();
+    await wrapper.setData({ currentPage: 'entities-manage' });
+    await wrapper.setData({ currentPage: 'people' });
+    expect(browsePage(wrapper, 'person').vm.$.vnode.props['keyword-request']).toBeNull();
+  });
+
+  it('已在人物页上再交一次（同一个词也算）：换一份新请求交给同一个页面', async () => {
+    const wrapper = await mountApp();
+    wrapper.vm.navigateTo('people', { keyword: '梁' });
+    await flushPromises();
+    const page = browsePage(wrapper, 'person');
+    const seen = [];
+    const stop = page.vm.$watch(() => page.vm.$props.keywordRequest, value => { if (value) seen.push(value); });
+
+    wrapper.vm.navigateTo('people', { keyword: '梁' });
+    await flushPromises();
+    wrapper.vm.navigateTo('people', { keyword: '梁' });
+    await flushPromises();
+    stop();
+    expect(seen).toHaveLength(2);
+    expect(seen[0].token).not.toBe(seen[1].token);
+    expect(seen.map(item => item.keyword)).toEqual(['梁', '梁']);
+    expect(browsePage(wrapper, 'person').vm).toBe(page.vm);
+  });
+
+  it('不带关键词进人物页不发请求；别的参数不认', async () => {
+    const wrapper = await mountApp();
+    wrapper.vm.navigateTo('people');
+    wrapper.vm.navigateTo('collections', { tab: 'x' });
+    expect(wrapper.vm.entityKeywordRequests).toEqual({ person: null, collection: null });
+  });
+
+  it('navigateTo(scenes, { query, mode } | { image })：场景检索按全部视频直接检索，每次交接 token 递增', async () => {
+    const wrapper = await mountApp();
+    wrapper.vm.navigateTo('scenes', { query: '你好', mode: 'dialogue' });
+    expect(wrapper.vm.currentPage).toBe('scenes');
+    const first = wrapper.vm.scenesScope;
+    expect(first).toEqual({ filter: null, query: '你好', mode: 'dialogue', token: expect.any(Number) });
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'ScenesPage' }).props('scopeRequest')).toEqual(first);
+
+    const image = { dataURL: 'data:image/jpeg;base64,AAAA', name: 'a.jpg' };
+    wrapper.vm.navigateTo('scenes', { image });
+    const second = wrapper.vm.scenesScope;
+    expect(second).toEqual({ filter: null, image, token: expect.any(Number) });
+    expect(second.token).toBeGreaterThan(first.token);
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'ScenesPage' }).props('scopeRequest')).toEqual(second);
+
+    // 同样的查询再交一次也是新的一份（页面据此重新检索）。
+    wrapper.vm.navigateTo('scenes', { query: '你好', mode: 'dialogue' });
+    expect(wrapper.vm.scenesScope).not.toBe(first);
+    expect(wrapper.vm.scenesScope.token).toBeGreaterThan(second.token);
+  });
+
+  it('不带查询进场景检索（顶栏、片库「在当前筛选中搜场景」）不动现有范围', async () => {
+    const wrapper = await mountApp();
+    const filter = { tag_ids: [3] };
+    wrapper.vm.openScenesWithFilter(filter);
+    const scope = wrapper.vm.scenesScope;
+    await wrapper.setData({ currentPage: 'home' });
+    wrapper.vm.navigateTo('scenes');
+    wrapper.vm.navigateTo('scenes', { unrelated: true });
+    expect(wrapper.vm.scenesScope).toBe(scope);
+  });
+
+  it('命令面板「查看全部」经 navigate 落到对应页面', async () => {
+    const wrapper = await mountApp();
+    const navigate = wrapper.findComponent({ name: 'CommandPalette' }).props('navigate');
+    navigate('collections', { keyword: '指环' });
+    expect(wrapper.vm.currentPage).toBe('collections');
+    expect(wrapper.vm.entityKeywordRequests.collection.keyword).toBe('指环');
+    navigate('scenes', { query: '画面', mode: 'visual' });
+    expect(wrapper.vm.scenesScope).toMatchObject({ filter: null, query: '画面', mode: 'visual' });
+  });
+});
+
 describe('人物与作品集：观看页只看、编辑去管理侧（D-P2-06）', () => {
   it('人物、作品集观看页首次进入才挂载，之后只隐藏：切走再回来还是同一个实例，pageActive 跟着走', async () => {
     const wrapper = await mountApp();
