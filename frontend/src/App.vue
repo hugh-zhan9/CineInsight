@@ -105,13 +105,14 @@
         @open-task-center="openTaskCenter"
       />
       <!-- 待处理（D-P3-01）：管理侧页面，每次进来重新读；页内处理人脸、建议作品集与本地资料更新，其余按固定命令 ID
-           进专门工具（runPendingCommand）。它读到新的摘要时同步顶栏角标。 -->
+           进专门工具（runPendingCommand）。它读到新的摘要时同步顶栏角标；本地资料应用成功后片库管理重取。 -->
       <PendingWorkPage
         v-if="currentPage === 'pending-work'"
         @navigate="navigateTo"
         @run-command="runPendingCommand"
         @open-task-center="openTaskCenter"
         @badge-change="setPendingWorkTotal"
+        @videos-changed="handleVideosChangedElsewhere"
       />
       <!-- 视频海报墙（D-P2-01）：观看侧「视频」，只做浏览，筛选状态与片库管理各自独立。首次进入才挂载，之后只隐藏，
            切走再回来筛选、已加载的卡片与滚动位置都在。navigateTo('videos', { keyword | watch | tagId }) 带来的参数经 pageRequests 交给它。 -->
@@ -130,7 +131,6 @@
         ref="videoListPage"
         v-show="libraryPageVisible"
         :page-active="libraryPageVisible"
-        :cleanup-hotkey="currentPage === 'library-manage'"
         :tags="tags"
         :settings="settings"
         :directories="directories"
@@ -143,6 +143,7 @@
         @open-video-edit="openVideoEditProject"
         @open-cleanup="openCleanupCenter({ ...$event, tab: 'video', open: true })"
         @trash-restored="handleLibraryTrashRestored"
+        @open-task-center="openTaskCenter"
       />
 
       <!-- 观看回顾：首次进入才挂载，之后只隐藏；不可见时停掉实时刷新。 -->
@@ -214,18 +215,17 @@
         @edit-in-manage="openEntityInManage"
         @navigate="navigateTo"
       />
-      <!-- 管理侧「人物与作品集」（过渡期，D-P3-04 之前）：原样挂现有 EntityLibraryPage（新建、合并、删除、关联、人脸审阅都在这里），
-           它一次只管一种实体，上面的页签切换人物 / 作品集；三期改成「人物 · 作品集 · 人脸审阅」三个标签的管理页。
-           点视频按管理区分流（切到片库管理 + 详情抽屉）。 -->
-      <div v-if="currentPage === 'entities-manage'" class="entities-manage" data-test="entities-manage">
-        <AppTabs class="entities-manage__tabs" :tabs="entitiesManageTabs" :model-value="entitiesManageKind" @update:model-value="entitiesManageKind = $event" />
-        <EntityLibraryPage
-          :key="entitiesManageKind"
-          :entity-type="entitiesManageKind"
-          :focus-entity="entitiesManageFocus"
-          @open-video="openVideo($event, { from: 'entities-manage' })"
-        />
-      </div>
+      <!-- 管理侧「人物与作品集」（D-P3-04）：EntityLibraryPage 是管理页，三个标签 人物 · 作品集 · 人脸审阅（新建、改名、合并、
+           删除、关联、人脸审阅都在这里）。当前标签是页面参数 entitiesManageTab（navigateTo('entities-manage', { tab })）；
+           focus-entity 是观看页「在管理中编辑」要打开的对象。点视频按管理区分流（切到片库管理 + 详情抽屉）。 -->
+      <EntityLibraryPage
+        v-if="currentPage === 'entities-manage'"
+        data-test="entities-manage"
+        :tab="entitiesManageTab"
+        :focus-entity="entitiesManageFocus"
+        @update:tab="navigateTo('entities-manage', { tab: $event })"
+        @open-video="openVideo($event, { from: 'entities-manage' })"
+      />
       <!-- 清理中心（D-P3-02）：视频 · 图片两个标签。首次进入才挂载，之后只隐藏：视频这一侧的审阅进度（勾选、保留项、
            已移到废纸篓的标记）在页面里，删除宿主（撤销提示、「最近操作」的撤销回调）也一直在。当前标签是页面参数
            cleanupTab；request 是「打开清理审阅」、定位同源对、打开集中整理任务这类一次性请求。删除确认框开着或删除进行中
@@ -379,14 +379,14 @@ import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
 import DialogShell from './components/ui/DialogShell.vue';
 import AppBadge from './components/ui/AppBadge.vue';
 import AppSpinner from './components/ui/AppSpinner.vue';
-import AppTabs from './components/ui/AppTabs.vue';
 import SystemHealthPanel from './components/SystemHealthPanel.vue';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import {
-  appCommandsMixin, CLEANUP_PAGE, DEFAULT_CLEANUP_TAB, DEFAULT_LIST_TAB, isCleanupTab, isListTab, isNavPageVisible, LISTS_PAGE,
-  MANAGE_NAV_GROUPS, pageArea, resolvePageRoute, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
+  appCommandsMixin, CLEANUP_BUSY_NOTICE, CLEANUP_PAGE, cleanupParamsChangePage, DEFAULT_CLEANUP_TAB, DEFAULT_LIST_TAB,
+  ENTITIES_MANAGE_PAGE, isCleanupTab, isEntitiesManageTab, isListTab, isNavPageVisible, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea,
+  resolvePageRoute, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
 } from './utils/appCommands.js';
 import { findCommand } from './utils/commandRegistry.js';
 import { opensVideoDetail, popDetailReturn, pushDetailReturn, restoreScrollWhenReachable } from './utils/viewerNavigation.js';
@@ -397,12 +397,6 @@ import { closeVersionCompare, versionCompareState } from './utils/versionCompare
 function scanRootKey(dirs) {
   return (dirs || []).map(dir => String(dir?.path || '')).sort().join('\n');
 }
-
-// 管理侧「人物与作品集」过渡期的页签（三期改成人物 · 作品集 · 人脸审阅）：key 就是 EntityLibraryPage 的 entity-type。
-const ENTITIES_MANAGE_TABS = [
-  { key: 'person', label: '人物', dataTest: 'entities-manage-tab-person' },
-  { key: 'collection', label: '作品集', dataTest: 'entities-manage-tab-collection' }
-];
 
 // 顶栏「管理」与管理导航「待处理」角标的刷新周期（原待处理工作台的做法）：数量来自好几个面板背后的计数查询，
 // 不跟每个进度事件走；待处理页读到新的摘要时另外同步一次。
@@ -421,7 +415,7 @@ export default {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
-    HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs, CleanupCenterPage
+    HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
   data() {
     return {
@@ -617,9 +611,6 @@ export default {
     }
   },
   computed: {
-    entitiesManageTabs() {
-      return ENTITIES_MANAGE_TABS;
-    },
     // 任务指示的读屏文字（接在导航名后面）：按钮上只看得到转圈、数字和红点。
     taskIndicatorStatus() {
       const { running, failed } = this.taskCenterBadge;
@@ -712,6 +703,12 @@ export default {
       const { page, params } = resolvePageRoute(target, targetParams);
       if (!page) return true;
       if (page === this.currentPage) {
+        // 清理中心删除流程中换标签或接新请求（命令面板「清理中心 · 视频 / 图片」、打开集中整理任务……）与离开同样拦下：
+        // 另一个标签一挂上 / 卸下会打断正在进行的删除（D-P3-02，见 CLEANUP_BUSY_NOTICE）。
+        if (page === CLEANUP_PAGE && this.cleanupBusy && cleanupParamsChangePage(params, this.cleanupTab)) {
+          notify(CLEANUP_BUSY_NOTICE);
+          return false;
+        }
         this.applyPageParams(page, params);
         return true;
       }
@@ -723,7 +720,7 @@ export default {
       }
       // 清理中心同理（D-P3-02）：删除进度、「不支持废纸篓」二选一与删除确认框都在那一页上。
       if (this.currentPage === CLEANUP_PAGE && this.cleanupBusy) {
-        notify('正在移到废纸篓，完成后再离开清理中心。');
+        notify(CLEANUP_BUSY_NOTICE);
         return false;
       }
       if (this.currentPage === 'settings' && this.settingsDirty) {
@@ -758,11 +755,13 @@ export default {
     // - 片单的标签（认不出的标签忽略，留在原来的标签上）；
     // - 人物 / 作品集的 { keyword }：页面回到列表并按它搜（每次交接换 token，同一个词再交一次也会重搜）；
     // - 场景检索的 { query, mode } 或 { image: { dataURL, name } }：范围是全部视频，页面直接检索（ScenesPage 的 scopeRequest）；
-    // - 清理中心的 { tab }（认不出的忽略）与落在视频标签上的请求 { open | relationId | consolidationTaskID }。
+    // - 清理中心的 { tab }（认不出的忽略）与落在视频标签上的请求 { open | relationId | consolidationTaskID }；
+    // - 人物与作品集的 { tab }（人物 · 作品集 · 人脸审阅，认不出的忽略）。
     applyPageParams(page, params) {
       if (page === 'videos') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       if (page === CLEANUP_PAGE) this.applyCleanupParams(params);
+      if (page === ENTITIES_MANAGE_PAGE && isEntitiesManageTab(params?.tab)) this.entitiesManageTab = params.tab;
       const entityKind = { people: 'person', collections: 'collection' }[page];
       if (entityKind && typeof params?.keyword === 'string') this.requestEntityKeyword(entityKind, params.keyword);
       if (page === 'scenes' && params && (typeof params.query === 'string' || params.mode || params.image?.dataURL)) {
@@ -1315,8 +1314,6 @@ export default {
 }
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
-/* 管理侧「人物与作品集」过渡期的页签：与下面 EntityLibraryPage 的左右留白对齐。 */
-.entities-manage__tabs { margin: 14px 18px 0; }
 .relaunch-overlay {
   position: fixed;
   inset: 0;

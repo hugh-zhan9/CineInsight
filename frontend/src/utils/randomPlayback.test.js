@@ -188,6 +188,51 @@ describe('randomPlaybackMixin 的宿主契约', () => {
     wrapper.unmount();
   });
 
+  // 原在 VideoListPage.test.js 的「P-036 随机播放：换一个」三条（片库管理三期拿掉了随机，D-P3-03）：「换一个」是混入的
+  // 共用流程，搬到这里对着宿主契约测，海报墙与任何宿主都一样。
+  it('PLAY-08 30 秒内「换一个」走 RerollRandom，新结果接管结果条，不再另起一次普通随机', async () => {
+    const wrapper = mount(Host);
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5, 'tok-a'));
+    await wrapper.vm.playRandom();
+    api.RerollRandom.mockResolvedValueOnce(played(6, 'tok-b'));
+    await wrapper.vm.rerollRandomPlay();
+    await flushPromises();
+    expect(api.RerollRandom).toHaveBeenCalledWith('tok-a');
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.randomPlay).toEqual(expect.objectContaining({ token: 'tok-b', rerollable: true }));
+    expect(wrapper.vm.randomPlayBanner.videoName).toBe('v6.mp4');
+    expect(wrapper.vm.recentRandomVideoIDs).toEqual([5, 6]);
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 后端答 reroll_expired（已提交）时改为普通的再随机一次，排除刚才那一部', async () => {
+    const wrapper = mount(Host);
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5, 'tok-a'));
+    await wrapper.vm.playRandom();
+    api.RerollRandom.mockResolvedValueOnce({ dispatch_succeeded: false, reason_code: 'reroll_expired', user_message: '「换一个」已失效' });
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(8, 'tok-c'));
+    await wrapper.vm.rerollRandomPlay();
+    await flushPromises();
+    expect(api.RerollRandom).toHaveBeenCalledWith('tok-a');
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledTimes(2);
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [5] }));
+    expect(feedback.notifyError).not.toHaveBeenCalled();
+    expect(wrapper.vm.randomPlay.token).toBe('tok-c');
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 过了 30 秒「换一个」直接普通随机，不再拿旧令牌', async () => {
+    const wrapper = mount(Host);
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5, 'tok-a'));
+    await wrapper.vm.playRandom();
+    wrapper.vm.randomPlay = { ...wrapper.vm.randomPlay, startedAt: Date.now() - 31_000 };
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(9));
+    await wrapper.vm.rerollRandomPlay();
+    expect(api.RerollRandom).not.toHaveBeenCalled();
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
   it('条件开关回写存储；页面切回来时读回另一页存下的条件与排除表', async () => {
     const wrapper = mount(Host);
     expect(wrapper.vm.applyRandomConditionItem('favorites')).toBe(true);

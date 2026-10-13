@@ -85,9 +85,9 @@ import PageHeader from '../ui/PageHeader.vue';
 import CleanupReviewPanel from '../video-list/CleanupReviewPanel.vue';
 import TrashUndoBanner from '../video-list/TrashUndoBanner.vue';
 import { runtimeEventsMixin } from '../video-list/runtimeEvents.js';
-import { CLEANUP_TABS, DEFAULT_CLEANUP_TAB, isCleanupTab } from '../../utils/appCommands.js';
+import { CLEANUP_BUSY_NOTICE, CLEANUP_TABS, DEFAULT_CLEANUP_TAB, isCleanupTab } from '../../utils/appCommands.js';
 import { registerCommands, unregisterCommands } from '../../utils/commandRegistry.js';
-import { notifyError } from '../../utils/feedback.js';
+import { notify, notifyError } from '../../utils/feedback.js';
 import { photoCleanupStore } from '../../utils/photoCleanupStore.js';
 import { formatLocalTime } from '../../utils/subtitleTools.js';
 
@@ -240,7 +240,12 @@ export default {
       this.$emit('update:tab', tab);
     },
     // 命令（宿主页已由 App 切到这一页、这个标签）：视频按「打开清理审阅」处理；图片标签挂上时自己读状态。
+    // 删除流程中（busy）一律不动：换标签会卸下另一个标签上正在删除的面板，同一标签再「打开」也不该在删除中途重读。
     openFromCommand(tab) {
+      if (this.busy) {
+        notify(CLEANUP_BUSY_NOTICE);
+        return false;
+      }
       if (this.activeTab !== tab) this.$emit('update:tab', tab);
       if (tab !== 'video') return true;
       this.pendingVideoRequest = { open: true };

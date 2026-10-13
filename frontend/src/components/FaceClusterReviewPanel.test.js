@@ -1,4 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
@@ -12,6 +14,8 @@ const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(() => Promise.resolve(
 vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
 
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
+import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
 
 const cluster = (overrides = {}) => ({
   id: 1,
@@ -46,6 +50,8 @@ let handlers = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearToasts();
+  recentOperations.clear();
   handlers = {};
   window.runtime = {
     EventsOn: (name, callback) => {
@@ -171,7 +177,10 @@ describe('FaceClusterReviewPanel', () => {
     await flushPromises();
     expect(api.IgnoreFaceCluster).toHaveBeenCalledWith(1);
     expect(wrapper.find('[data-test="face-cluster-card-1"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="face-cluster-review-notice"]').text()).toContain('可在「已忽略」中恢复');
+    // D-P3-06：说明从面板里的一行挪到带「撤销」的全局提示上（同时记进「最近操作」）。
+    expect(feedbackState.toasts.at(-1).message).toContain('可在「已忽略」中恢复');
+    expect(feedbackState.toasts.at(-1).action.label).toBe('撤销');
+    expect(wrapper.find('[data-test="face-cluster-review-notice"]').exists()).toBe(false);
   });
 
   it('confirms and dismisses append candidates on a named cluster', async () => {
@@ -550,5 +559,60 @@ describe('FaceClusterReviewPanel META-04 可逆操作', () => {
     expect(wrapper.get('[data-test="face-cluster-append-summary-3"]').text()).toContain('b.jpg');
     expect(wrapper.get('[data-test="face-cluster-append-summary-3"]').text()).not.toContain('movie.mp4');
     expect(wrapper.get('[data-test="face-cluster-review-notice"]').text()).toContain('其余继续等待确认');
+  });
+});
+
+// D-P3-06：人脸组「忽略」进任务中心「最近操作」，提示与「最近操作」里都能撤销（RestoreFaceCluster）。
+describe('FaceClusterReviewPanel D-P3-06 忽略可撤销', () => {
+  it('忽略后撤销：恢复这一组，就地回到「待处理」，不整表重拉', async () => {
+    setClusters({ unnamed: [cluster(), cluster({ id: 2, observation_count: 3 })] });
+    api.IgnoreFaceCluster.mockResolvedValue();
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+    await wrapper.get('[data-test="face-cluster-ignore-1"]').trigger('click');
+    await flushPromises();
+    expect(recentOperations.list().map(item => item.label)).toEqual(['忽略人脸组（4 次出现 · 1 个视频 · 2 张图片）']);
+    const calls = api.ListFaceClusterPage.mock.calls.length;
+
+    api.RestoreFaceCluster.mockResolvedValue();
+    expect(await runToastAction(feedbackState.toasts.at(-1).id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreFaceCluster).toHaveBeenCalledWith(1);
+    expect(wrapper.find('[data-test="face-cluster-card-1"]').exists()).toBe(true);
+    expect(api.ListFaceClusterPage.mock.calls.length).toBe(calls);
+    expect(wrapper.emitted('changed').length).toBe(2);
+    expect(recentOperations.list()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('面板卸下以后从「最近操作」撤销照样恢复；已在「已忽略」里恢复过的说一声；其余失败给中文原因、记录留着', async () => {
+    setClusters({ unnamed: [cluster()] });
+    api.IgnoreFaceCluster.mockResolvedValue();
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+    await wrapper.get('[data-test="face-cluster-ignore-1"]').trigger('click');
+    await flushPromises();
+    const [operation] = recentOperations.list();
+    wrapper.unmount();
+
+    api.RestoreFaceCluster.mockRejectedValueOnce(new Error('cluster_not_found'));
+    await expect(recentOperations.undo(operation.id)).rejects.toThrow('这一簇已经不在了');
+    expect(recentOperations.list()).toHaveLength(1);
+
+    api.RestoreFaceCluster.mockRejectedValueOnce(new Error('cluster_not_ignored'));
+    expect(await recentOperations.undo(operation.id)).toBe(true);
+    expect(feedbackState.toasts.at(-1).message).toBe('这组人脸已经不在「已忽略」里了（可能已经恢复过），不用再撤销。');
+    expect(recentOperations.list()).toEqual([]);
+  });
+
+  it('「查看来源详情」不被纵向卡片拉满宽度', async () => {
+    setClusters({ unnamed: [cluster()] });
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+    expect(wrapper.get('[data-test="face-cluster-detail-1"]').classes()).toContain('face-review__detail');
+    // vitest 的根就是 frontend/（jsdom 下 import.meta.url 不是 file: 协议）。
+    const source = readFileSync(resolve(process.cwd(), 'src/components/FaceClusterReviewPanel.vue'), 'utf8');
+    expect(source).toMatch(/\.face-review__detail \{\s*align-self: flex-start;/);
+    wrapper.unmount();
   });
 });

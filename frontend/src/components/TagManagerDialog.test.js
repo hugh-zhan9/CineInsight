@@ -32,6 +32,8 @@ const api = vi.hoisted(() => ({
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import TagManagerDialog from './TagManagerDialog.vue';
+import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
 
 const tags = [
   { id: 1, name: '旅行', color: '#111111', is_system: false, automatic_kind: '' },
@@ -450,5 +452,61 @@ describe('TagManagerDialog META-02 最近转换与撤销', () => {
     expect(wrapper.get('.tag-conversion-history').text()).toContain('已经撤销过了');
     expect(api.ListTagPersonConversions).toHaveBeenCalledTimes(2);
     expect(wrapper.get('[data-test="tag-conversion-4"]').text()).toContain('已撤销');
+  });
+});
+
+// D-P3-06：标签转人物进任务中心「最近操作」，转换后的提示与「最近操作」里都能撤销（UndoTagPersonConversion，不再确认）；
+// 「最近转换」列表里的撤销照旧先确认。
+describe('D-P3-06 标签转人物可撤销', () => {
+  const personTags = tags.map(tag => ({ ...tag, namespace: tag.id === 1 ? '人物' : '' }));
+  beforeEach(() => {
+    clearToasts();
+    recentOperations.clear();
+    api.ConvertTagToPerson.mockResolvedValue({ conversion_id: 12, person: { id: 7, display_name: '旅行' }, video_count: 2, image_count: 1 });
+  });
+
+  async function convert() {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: personTags } });
+    await wrapper.findAll('.tag-edit-row')[0].findAll('button').find(button => button.text() === '转为人物').trigger('click');
+    await flushPromises();
+    await wrapper.get('.tag-person-conversion .btn--primary').trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('转换成功：提示带「撤销」并记进「最近操作」；撤销不再确认，恢复原标签并通知宿主重读', async () => {
+    const wrapper = await convert();
+    const toast = feedbackState.toasts.at(-1);
+    expect(toast.message).toBe('已转为人物「旅行」，关联 2 部视频、1 张图片，原标签已删除。');
+    expect(toast.action.label).toBe('撤销');
+    expect(recentOperations.list().map(item => item.label)).toEqual(['标签「旅行」转为人物']);
+    expect(wrapper.emitted('person-converted')[0][0]).toMatchObject({ conversion_id: 12, tag_name: '旅行' });
+
+    // 关掉对话框以后撤销也照样通知宿主（对话框组件常挂载在片库页里，只是不显示）。
+    await wrapper.setProps({ visible: false });
+    api.UndoTagPersonConversion.mockResolvedValue({ conversion_id: 12, tag: { id: 1, name: '旅行' }, video_count: 2, image_count: 1, person_deleted: true });
+    expect(await runToastAction(toast.id)).toBe(true);
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.UndoTagPersonConversion).toHaveBeenCalledWith(12);
+    expect(feedback.notify).toHaveBeenCalledWith('已撤销：恢复标签「旅行」，2 部视频、1 张图片，这次新建的人物已删除。');
+    expect(wrapper.emitted('tags-changed')).toHaveLength(2);
+    expect(wrapper.emitted('conversion-undone')[0][0]).toMatchObject({ conversion_id: 12 });
+    expect(recentOperations.list()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('已经在「最近转换」里撤销过：按撤销完成处理、说一声；原标签名被占用时抛出中文原因，记录留着可再试', async () => {
+    const wrapper = await convert();
+    const [operation] = recentOperations.list();
+    api.UndoTagPersonConversion.mockRejectedValueOnce(new Error('tag_name_taken'));
+    await expect(recentOperations.undo(operation.id)).rejects.toThrow('已经有同名的标签');
+    expect(recentOperations.list()).toHaveLength(1);
+
+    api.UndoTagPersonConversion.mockRejectedValueOnce('conversion_not_applied');
+    expect(await recentOperations.undo(operation.id)).toBe(true);
+    expect(feedback.notify).toHaveBeenCalledWith('这次转换已经撤销过了。');
+    expect(recentOperations.list()).toEqual([]);
+    expect(wrapper.emitted('conversion-undone')).toBeUndefined();
+    wrapper.unmount();
   });
 });

@@ -57,27 +57,6 @@
           <option value="rating_asc">评分从低到高</option>
         </select>
 
-        <!-- 随机与「今晚看什么」合并（2026-10-11）：主键按当前随机条件立即播放一部，▾ 里打开今晚看什么、
-             随机 N 部和条件开关；主键带上生效的条件（PLAY-08）。语义模式下随机会忽略搜索词、从全库抽，所以禁用并说明原因。 -->
-        <div class="split-btn">
-          <button
-            type="button"
-            class="btn btn--ghost split-btn__main"
-            data-test="random-play-main"
-            :disabled="randomDisabled"
-            :title="randomDisabled ? randomDisabledReason : '在当前片库筛选内按随机条件立即播放一部，播放越少越容易被抽到'"
-            @click="$emit('play-random')"
-          >{{ randomButtonLabel }}</button>
-          <span class="split-btn__divider" aria-hidden="true"></span>
-          <button
-            ref="randomTrigger"
-            type="button"
-            class="btn-icon split-btn__caret"
-            aria-label="随机选项"
-            @click="toggleToolbarMenu('random', 'randomTrigger')"
-          ><AppIcon name="chevron-down" :size="16" /></button>
-        </div>
-
         <button type="button" class="btn btn--secondary toolbar-trigger" data-test="toolbar-search-scenes" title="带上当前筛选条件进入场景检索（语义搜索词不带入）" @click="$emit('search-scenes')">在当前筛选中搜场景</button>
 
         <button
@@ -293,16 +272,6 @@
       @select="$emit('view-select', $event)"
       @close="closeToolbarMenu"
     />
-    <BaseMenu
-      v-if="toolbarMenu === 'random'"
-      :anchor="toolbarMenuAnchor"
-      :items="randomMenuItems"
-      :min-width="200"
-      align="end"
-      label="随机选项"
-      @select="$emit('random-select', $event)"
-      @close="closeToolbarMenu"
-    />
 
     <!-- 建议作品集面板与清理审阅同级：入口在管理菜单里，面板本身由工具栏持有
          （它已经持有若干浮层），片库页不用为它加一份状态。 -->
@@ -328,14 +297,14 @@ import { runtimeEventsMixin } from './runtimeEvents.js';
 import { logFrontend } from '../../utils/frontendLog.js';
 import { registerCommands, unregisterCommands } from '../../utils/commandRegistry.js';
 
-import { normalizeRandomConditions, randomConditionTags } from '../../utils/randomPlayback.js';
 import { normalizeLibraryLayout } from '../../utils/virtualList.js';
 import { VIDEO_MISSING_OPTIONS } from '../../utils/metadataCompleteness.js';
 
 // 人物组合框一次最多列出的候选数。
 const PERSON_OPTION_LIMIT = 20;
 
-// 吸顶的片库工具栏：三层控件、标签行与结果条，外加筛选浮层与三个下拉菜单（批量操作条在片库页的内容区底部）。
+// 吸顶的片库工具栏：三层控件、标签行与结果条，外加筛选浮层与两个下拉菜单（管理、保存视图；批量操作条在片库页的内容区底部）。
+// 三期（D-P3-03）片库管理只留管理：随机播放与今晚看什么、缩略图墙、观看向的智能视图都已拿掉（去处在观看侧「视频」）。
 // 查询条件本身仍归 VideoListPage 持有，这里只负责呈现与把动作发回去；
 // 浮层里的区间草稿是纯 UI 状态，留在本组件内，「应用」时才把结果 emit 出去。
 export default {
@@ -370,10 +339,6 @@ export default {
     resOptions: { type: Array, default: () => [] },
     savedViews: { type: Array, default: () => [] },
     selectedSavedViewID: { type: [Number, String], default: 0 },
-    // 随机播放、随机 N 部与今晚看什么共用的条件：{ watchState, favoritesOnly, maxMinutes }。
-    randomConditions: { type: Object, default: () => ({}) },
-    randomPickLoading: { type: Boolean, default: false },
-    randomPickSize: { type: Number, default: 10 },
     semanticAvailable: { type: Boolean, default: true },
     semanticUnavailableNotice: { type: String, default: '' },
     filteredCount: { type: Number, default: null },
@@ -401,9 +366,9 @@ export default {
     'search-scenes',
     'update:searchKeyword', 'update:smartView', 'update:missing', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
-    'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
+    'search', 'set-search-mode', 'toggle-tag', 'clear-tags', 'open-tag-manager',
     'toggle-select-all', 'clear-conditions', 'apply-filter', 'open-save-view',
-    'manage-select', 'view-select', 'random-select',
+    'manage-select', 'view-select',
     'update:collapseVersions'
   ],
   data() {
@@ -413,25 +378,20 @@ export default {
         { label: '字幕', value: 'subtitle' },
         { label: '语义', value: 'semantic' }
       ],
+      // 片库管理只留管理向的智能视图（D-P3-03）：继续观看、收藏、点赞、最近播放、未看、已看、最近添加这些观看向的
+      // 视图在观看侧「视频」海报墙上（命令面板的同名命令改指向那里，见 utils/appCommands.js 的 smartViewTarget）。
       smartViewOptions: [
         { label: '全部视频', value: '' },
-        { label: '继续观看', value: 'continue_watching' },
-        { label: '收藏', value: 'favorites' },
-        { label: '点赞', value: 'liked' },
-        { label: '最近播放', value: 'recently_played' },
-        { label: '未看', value: 'unwatched' },
-        { label: '已看', value: 'watched' },
-        { label: '最近添加', value: 'recently_added' },
         { label: '未打标签', value: 'untagged' },
         { label: '无字幕', value: 'no_subtitle' },
         { label: '本地资料有更新', value: 'local_metadata_updated' },
         { label: '路径失效', value: 'stale' }
       ],
       missingOptions: VIDEO_MISSING_OPTIONS,
+      // 列表与网格（D-P3-03 拿掉了缩略图墙：浏览海报去观看侧「视频」）。
       layoutOptions: [
         { value: 'list', label: '列表' },
-        { value: 'grid', label: '网格' },
-        { value: 'wall', label: '缩略图墙', title: '只显示缩略图的紧凑平铺，标题悬停可见，点一下打开预览' }
+        { value: 'grid', label: '网格' }
       ],
       densityOptions: [
         { value: 'compact', label: '紧凑' },
@@ -675,38 +635,6 @@ export default {
       items.push({ id: 'rename-current', label: '重命名该视图', disabled: !this.selectedSavedViewID });
       items.push({ id: 'delete-current', label: '删除该视图', danger: true, disabled: !this.selectedSavedViewID });
       return items;
-    },
-    // 观看状态与「仅收藏」是硬过滤（不是「优先」，PLAY-08）；时长上限在今晚看什么里设，这里只能取消。
-    randomMenuItems() {
-      const conditions = normalizeRandomConditions(this.randomConditions);
-      const items = [
-        { id: 'tonight', label: '今晚看什么…', disabled: this.tonightDisabled },
-        { id: 'pick-ten', label: `随机 ${this.randomPickSize} 部`, disabled: this.randomPickLoading || this.randomDisabled },
-        { divider: true },
-        { heading: '观看状态' },
-        { id: 'watch:unwatched', label: '探索 · 只抽没看过的', checked: conditions.watchState === 'unwatched' },
-        { id: 'watch:any', label: '不限', checked: conditions.watchState === 'any' },
-        { id: 'watch:watched', label: '重温 · 只抽看过的', checked: conditions.watchState === 'watched' },
-        { divider: true },
-        { id: 'favorites', label: '仅收藏', checked: conditions.favoritesOnly }
-      ];
-      if (conditions.maxMinutes > 0) {
-        items.push({ id: 'duration:clear', label: `取消时长上限（≤${conditions.maxMinutes} 分钟）` });
-      }
-      return items;
-    },
-    randomButtonLabel() {
-      return ['随机播放', ...randomConditionTags(this.randomConditions)].join(' · ');
-    },
-    // 今晚看什么沿用原入口的禁用条件：语义搜索没有可复用的筛选边界，迁移与增量扫描期间不选片。
-    tonightDisabled() {
-      return this.searchMode === 'semantic' || this.migrationRunning || Boolean(this.incrementalScan?.running);
-    },
-    randomDisabled() {
-      return this.searchMode === 'semantic';
-    },
-    randomDisabledReason() {
-      return '语义搜索模式下无法按当前条件随机（随机会忽略搜索词、从全库抽取），请切回文件或字幕搜索';
     },
     personOptions() {
       const selected = new Set(this.selectedPeople.map(person => Number(person.id)));
@@ -1072,30 +1000,6 @@ export default {
   min-width: 116px;
   flex: none;
 }
-
-/* 随机拆分按钮：主键直接随机，▾ 里选模式或改抽十部。两半是无底色的统一按钮，外框由容器给。 */
-.split-btn {
-  display: inline-flex;
-  flex: none;
-  align-items: stretch;
-  height: var(--h-unit);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-  overflow: hidden;
-}
-
-.split-btn__main,
-.split-btn__caret {
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-}
-
-.split-btn__main { padding: 0 var(--space-3); color: var(--text-primary); font-weight: var(--fw-regular); }
-.split-btn__caret { width: 30px; color: var(--text-muted); }
-.split-btn__main:disabled { color: var(--text-muted); }
-.split-btn__divider { width: 1px; background: var(--hairline); }
 
 /* 结果条：筛选命中数与条件回显，常驻在工具栏下沿。 */
 .result-bar {

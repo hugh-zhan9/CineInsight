@@ -190,7 +190,7 @@ describe('工具栏三层重排', () => {
   it('条件回显把智能视图、标签和三类区间都写成中文', async () => {
     const wrapper = mountToolbar({
       tags: [{ id: 3, name: '科幻' }],
-      smartView: 'unwatched',
+      smartView: 'untagged',
       selectedTags: [3],
       selectedSizeRange: { min: 2 * 1024 ** 3, max: 4 * 1024 ** 3 },
       minRating: '6'
@@ -198,7 +198,7 @@ describe('工具栏三层重排', () => {
     await wrapper.vm.$nextTick();
 
     const labels = wrapper.vm.activeConditionLabels;
-    expect(labels[0]).toBe('未看');
+    expect(labels[0]).toBe('未打标签');
     expect(labels).toContain('标签 科幻');
     expect(labels.some(text => text.startsWith('体积'))).toBe(true);
     expect(labels).toContain('评分 6–10');
@@ -206,7 +206,7 @@ describe('工具栏三层重排', () => {
   });
 
   it('清除条件按钮把复位交给片库页', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ smartView: 'unwatched' }) });
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ smartView: 'no_subtitle' }) });
     await wrapper.vm.$nextTick();
     await wrapper.find('.result-bar__clear').trigger('click');
     expect(wrapper.emitted('clear-conditions')).toHaveLength(1);
@@ -217,7 +217,7 @@ describe('工具栏三层重排', () => {
     const wrapper = mountToolbar();
     expect(wrapper.vm.activeFilterCount).toBe(0);
     // 智能视图有自己的常驻控件，不该算进徽标，否则徽标和浮层内容对不上。
-    await wrapper.setProps({ smartView: 'unwatched' });
+    await wrapper.setProps({ smartView: 'stale' });
     expect(wrapper.vm.activeFilterCount).toBe(0);
     await wrapper.setProps({ selectedResRange: { min: 2160, max: 0 }, maxRating: '8' });
     expect(wrapper.vm.activeFilterCount).toBe(2);
@@ -321,60 +321,22 @@ describe('工具栏三层重排', () => {
     wrapper.unmount();
   });
 
-  it('随机与今晚看什么合并：▾ 菜单里有今晚看什么、随机 10 部与条件开关，主键立即随机播放', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ randomPickSize: 10 }) });
-    const ids = wrapper.vm.randomMenuItems.filter(item => item.id).map(item => item.id);
-    expect(ids).toEqual(['tonight', 'pick-ten', 'watch:unwatched', 'watch:any', 'watch:watched', 'favorites']);
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'watch:any').checked).toBe(true);
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'pick-ten').label).toBe('随机 10 部');
-    // 独立的「今晚看什么」按钮已并进随机菜单。
-    expect(wrapper.find('[data-test="tonight-open"]').exists()).toBe(false);
-
-    const main = wrapper.get('[data-test="random-play-main"]');
-    expect(main.text()).toBe('随机播放');
-    await main.trigger('click');
-    expect(wrapper.emitted('play-random')).toHaveLength(1);
-    wrapper.unmount();
-  });
-
-  it('PLAY-08 随机按钮列出生效的硬条件（探索/重温、收藏、时长上限），菜单勾选与之对应', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ randomConditions: { watchState: 'unwatched', favoritesOnly: false, maxMinutes: 0 } }) });
-    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('随机播放 · 探索');
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'watch:unwatched').checked).toBe(true);
-    expect(wrapper.vm.randomMenuItems.some(item => item.id === 'duration:clear')).toBe(false);
-
-    await wrapper.setProps({ randomConditions: { watchState: 'watched', favoritesOnly: true, maxMinutes: 90 } });
-    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('随机播放 · 重温 · 收藏 · ≤90分钟');
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'favorites').checked).toBe(true);
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'duration:clear').label).toBe('取消时长上限（≤90 分钟）');
-    wrapper.unmount();
-  });
-
-  it('今晚看什么沿用原入口的禁用条件：语义搜索、迁移或增量扫描期间不可选', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ migrationRunning: true }) });
-    const tonight = () => wrapper.vm.randomMenuItems.find(item => item.id === 'tonight');
-    expect(tonight().disabled).toBe(true);
-    await wrapper.setProps({ migrationRunning: false, incrementalScan: { running: true } });
-    expect(tonight().disabled).toBe(true);
-    await wrapper.setProps({ incrementalScan: { running: false } });
-    expect(tonight().disabled).toBe(false);
-    await wrapper.setProps({ searchMode: 'semantic' });
-    expect(tonight().disabled).toBe(true);
-    wrapper.unmount();
-  });
-
-  it('PLAY-08 语义搜索模式下禁用随机并说明原因（语义模式会忽略搜索词、抽全库）', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ searchMode: 'semantic' }) });
-    const main = wrapper.get('[data-test="random-play-main"]');
-    expect(main.attributes('disabled')).toBeDefined();
-    expect(main.attributes('title')).toContain('语义搜索模式下无法按当前条件随机');
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'pick-ten').disabled).toBe(true);
-
-    await main.trigger('click');
-    expect(wrapper.emitted('play-random')).toBeUndefined();
-
-    await wrapper.setProps({ searchMode: 'file' });
-    expect(wrapper.get('[data-test="random-play-main"]').attributes('disabled')).toBeUndefined();
+  // D-P3-03：片库管理只留管理。随机播放（含随机 N 部）与今晚看什么、观看向的智能视图都拿掉了（去处在观看侧「视频」）。
+  it('D-P3-03 没有随机拆分按钮与今晚看什么；智能视图只剩管理向的五个', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps() });
+    expect(wrapper.find('[data-test="random-play-main"]').exists()).toBe(false);
+    expect(wrapper.find('.split-btn').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('随机播放');
+    expect(wrapper.text()).not.toContain('今晚看什么');
+    const select = wrapper.get('select[aria-label="智能视图"]');
+    expect(select.findAll('option').map(option => [option.element.value, option.text()])).toEqual([
+      ['', '全部视频'], ['untagged', '未打标签'], ['no_subtitle', '无字幕'], ['local_metadata_updated', '本地资料有更新'], ['stale', '路径失效']
+    ]);
+    for (const removed of ['continue_watching', 'favorites', 'liked', 'recently_played', 'unwatched', 'watched', 'recently_added']) {
+      expect(wrapper.vm.smartViewOptions.some(option => option.value === removed), removed).toBe(false);
+    }
+    // 「缺少…」照旧。
+    expect(wrapper.find('[data-test="library-missing-filter"]').exists()).toBe(true);
     wrapper.unmount();
   });
 
@@ -546,7 +508,7 @@ describe('场景检索入口（P-007）', () => {
   });
 });
 
-// 2026-10-12 用户裁决「只要一个紧凑的缩略图墙」：布局分段器加第三段，偏好仍记在同一个键里。
+// D-P3-03：片库管理的布局只有列表与网格（缩略图墙拿掉了，浏览海报去观看侧「视频」），偏好仍记在同一个键里。
 describe('片库布局切换', () => {
   let store;
   let original;
@@ -563,26 +525,23 @@ describe('片库布局切换', () => {
     else delete window.localStorage;
   });
 
-  it('列表 / 网格 / 缩略图墙三段，点缩略图墙记住选择并通知片库页', async () => {
+  it('列表 / 网格两段，点哪段记住选择并通知片库页；没有缩略图墙', async () => {
     // 布局是同一内容的不同看法，用统一的 SegmentedControl（role=radiogroup，选中项 aria-checked）。
     const wrapper = mount(LibraryToolbar, { props: baseProps({ viewMode: 'grid' }) });
     const group = wrapper.get('[data-test="library-layout"]');
     expect(group.attributes('role')).toBe('radiogroup');
     expect(group.attributes('aria-label')).toBe('片库布局');
     const buttons = () => group.findAll('[role="radio"]');
-    expect(buttons().map(button => button.text())).toEqual(['列表', '网格', '缩略图墙']);
-    expect(buttons().map(button => button.attributes('aria-checked'))).toEqual(['false', 'true', 'false']);
-    expect(buttons()[2].attributes('title')).toContain('只显示缩略图的紧凑平铺');
+    expect(buttons().map(button => button.text())).toEqual(['列表', '网格']);
+    expect(buttons().map(button => button.attributes('aria-checked'))).toEqual(['false', 'true']);
 
-    await buttons()[2].trigger('click');
-    expect(store['cineinsight-library-layout']).toBe('wall');
-    expect(wrapper.emitted('update:viewMode')).toEqual([['wall']]);
-
-    await wrapper.setProps({ viewMode: 'wall' });
-    expect(buttons()[2].attributes('aria-checked')).toBe('true');
     await buttons()[0].trigger('click');
     expect(store['cineinsight-library-layout']).toBe('list');
-    expect(wrapper.emitted('update:viewMode')[1]).toEqual(['list']);
+    expect(wrapper.emitted('update:viewMode')).toEqual([['list']]);
+    await wrapper.setProps({ viewMode: 'list' });
+    await buttons()[1].trigger('click');
+    expect(store['cineinsight-library-layout']).toBe('grid');
+    expect(wrapper.emitted('update:viewMode')[1]).toEqual(['grid']);
     wrapper.unmount();
   });
 
@@ -608,9 +567,9 @@ describe('缺失某项筛选（D-MC-03）', () => {
   });
 
   it('生效的缺失条件写进结果条回显', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ missing: 'year', smartView: 'favorites' }) });
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ missing: 'year', smartView: 'untagged' }) });
     expect(wrapper.get('[data-test="library-missing-filter"]').element.value).toBe('year');
-    expect(wrapper.vm.activeConditionLabels).toEqual(['收藏', '缺少年份']);
+    expect(wrapper.vm.activeConditionLabels).toEqual(['未打标签', '缺少年份']);
     expect(wrapper.get('.result-bar__conditions').text()).toContain('缺少年份');
     wrapper.unmount();
   });

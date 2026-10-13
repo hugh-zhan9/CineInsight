@@ -9,8 +9,7 @@ import { openVersionCompare } from '../../utils/versionCompare.js';
 // 片库页的多版本聚合接线（D-MW-VERSIONS）。查询条件、列表与原地刷新仍归 VideoListPage；
 // 这里只持有「合并版本」开关、本页代表 → 组汇总的映射、展开状态与两个弹窗的开关；
 // 「对比画质」「对比播放」只把一对视频 ID 交给全局的版本对比播放器（utils/versionCompare.js）。
-// 宿主需提供：currentLibraryFilter、isContinueWatchingKeyset、resetAndLoadVideos、playVideo、
-// openPreview、selectedVideoIds、searchMode、smartView、sortMode。
+// 宿主需提供：currentLibraryFilter、resetAndLoadVideos、playVideo、openPreview、selectedVideoIds、searchMode。
 export const versionGroupsMixin = {
   data() {
     return {
@@ -26,11 +25,10 @@ export const versionGroupsMixin = {
     };
   },
   methods: {
-    // 只有走 SearchLibraryVideoPage 的列表才聚合；最近播放、继续观看（均衡排序）、语义搜索与随机批次是文件级入口。
+    // 只有走 SearchLibraryVideoPage 的列表才聚合；语义搜索（含相似视频）是文件级入口。三期（D-P3-03）片库管理拿掉了
+    // 最近播放、继续观看与随机批次，它们原先也是文件级入口。
     versionCollapseActive() {
-      if (!this.collapseVersions || this.searchMode === 'semantic' || this.randomPick?.active) return false;
-      if (this.smartView === 'recently_played' && this.sortMode === 'balanced') return false;
-      return !this.isContinueWatchingKeyset();
+      return Boolean(this.collapseVersions) && this.searchMode !== 'semantic';
     },
     libraryPageFilter() {
       return { ...this.currentLibraryFilter(), collapse_versions: this.versionCollapseActive() };

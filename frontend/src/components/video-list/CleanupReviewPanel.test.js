@@ -28,7 +28,8 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import CleanupReviewPanel from './CleanupReviewPanel.vue';
-import { feedbackState, resetFeedback } from '../../utils/feedback.js';
+import { feedbackState, resetFeedback, runToastAction } from '../../utils/feedback.js';
+import * as recentOperations from '../../utils/recentOperations.js';
 
 // 面板本身不动片库：批量删除、撤销条与列表重载都由片库页经 trashVideos 执行。
 // 替身按 VideoListPage.trashCleanupVideos 的契约：trashVideos(ids, { names }) →
@@ -59,6 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   document.body.innerHTML = '';
   resetFeedback();
+  recentOperations.clear();
   feedback.confirmAction.mockResolvedValue(true);
   api.GetCleanupStatus.mockResolvedValue(null);
 });
@@ -104,7 +106,14 @@ describe('清理候选审阅', () => {
     const method = kind === 'near' ? 'dismissNearDuplicateGroup' : kind === 'clip' ? 'dismissClipCandidate' : 'rejectCleanupSameSource';
     await wrapper.vm[method](group);
     expect(wrapper.vm.cleanupDialog.analysis[key]).toEqual([]);
-    expect(feedback.notifySuccess).toHaveBeenCalledOnce();
+    // 「不是重复」「忽略」可撤销（D-P3-06）：带「撤销」的提示，并记进「最近操作」；「不是同源」没有撤销接口，照旧只提示。
+    if (kind === 'same-source') {
+      expect(feedback.notifySuccess).toHaveBeenCalledOnce();
+      expect(recentOperations.list()).toEqual([]);
+    } else {
+      expect(feedbackState.toasts.at(-1).action.label).toBe('撤销');
+      expect(recentOperations.list()).toHaveLength(1);
+    }
 
     resolveOld(oldStatus);
     await pendingRead;
@@ -2041,5 +2050,77 @@ describe('D-P3-02 视频标签的页面状态', () => {
     handlers['cleanup-consolidation-progress']({ id: 1, version: 3, status: 'cancelled', completed: 2 });
     expect(wrapper.vm.cleanupResultStale).toBe(true);
     wrapper.unmount(); window.runtime = previousRuntime;
+  });
+});
+
+// D-P3-06：「不是重复」「移出本组」「忽略」进任务中心「最近操作」，提示与「最近操作」里都能撤销。忽略接口不回记录 ID，
+// 撤销时按 ListCleanupDismissals 找回这一步写下的记录（媒体对上就是它），再 UndoCleanupDismissals。
+describe('D-P3-06 清理忽略可撤销', () => {
+  const v = (id, extra = {}) => ({ id, name: `v${id}.mp4`, path: `/v/v${id}.mp4`, directory: '/v', size: 100 + id, duration: 60, ...extra });
+  const nearOnly = () => ({ duplicate_groups: [], near_duplicate_groups: [{ original: v(1), candidates: [v(2), v(3)], reason: '画面相近' }], same_source_groups: [], clip_groups: [], low_duration: [v(9, { duration: 1 })], low_resolution: [] });
+  const record = (id, kind, ...mediaIDs) => ({ id, kind, media: mediaIDs.map(mediaID => ({ id: mediaID, name: `v${mediaID}.mp4` })), created_at: '2026-10-13T10:00:00Z' });
+  const lastToast = () => feedbackState.toasts.at(-1);
+
+  it('「不是重复」整组：撤销找回这一组两两配对的三条记录（不碰别的记录）并撤销，提示重新分析后参与检测', async () => {
+    const { wrapper } = await openWith(nearOnly());
+    await wrapper.vm.dismissNearDuplicateGroup(wrapper.vm.cleanupDialog.analysis.near_duplicate_groups[0]);
+    await flushPromises();
+    expect(api.DismissNearDuplicateGroup).toHaveBeenCalledWith([1, 2, 3]);
+    expect(recentOperations.list().map(item => item.label)).toEqual(['清理：3 个视频「不是重复」']);
+
+    // 第一页里有这一组的三条（新写的在最前）与别的组的一条；第二页才有一条更早的同组记录时也找得到。
+    api.ListCleanupDismissals.mockImplementation(async (kind, cursor) => (cursor === 0
+      ? { items: [record(52, kind, 2, 3), record(51, kind, 1, 3), record(40, kind, 7, 8)], next_cursor: 40, has_more: true }
+      : { items: [record(20, kind, 1, 2)], next_cursor: 20, has_more: false }));
+    api.UndoCleanupDismissals.mockResolvedValue({ kind: 'near_duplicate', removed: 3 });
+    expect(await runToastAction(lastToast().id)).toBe(true);
+    await flushPromises();
+    expect(api.ListCleanupDismissals).toHaveBeenCalledWith('near_duplicate', 0, 200);
+    expect(api.ListCleanupDismissals).toHaveBeenCalledWith('near_duplicate', 40, 200);
+    expect(api.UndoCleanupDismissals).toHaveBeenCalledWith('near_duplicate', [52, 51, 20]);
+    expect(feedback.notifySuccess).toHaveBeenCalledWith('已撤销忽略。重新分析后会重新参与检测。');
+    expect(recentOperations.list()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('「移出本组」只撤销这个成员与组内其他成员的配对；极短候选的「忽略」按视频找记录', async () => {
+    const { wrapper } = await openWith(nearOnly());
+    const group = wrapper.vm.cleanupDialog.analysis.near_duplicate_groups[0];
+    await wrapper.vm.removeNearDuplicateMember(group, v(3));
+    await wrapper.vm.dismissCleanupVideo({ kind: 'low-duration', keeper: v(9, { duration: 1 }) });
+    await flushPromises();
+    expect(recentOperations.list().map(item => item.label)).toEqual(['清理：忽略极短片段「v9.mp4」', '清理：「v3.mp4」移出本组']);
+
+    api.ListCleanupDismissals.mockImplementation(async kind => (kind === 'short'
+      ? { items: [record(5, kind, 4), record(6, kind, 9)], next_cursor: 5, has_more: false }
+      : { items: [record(31, kind, 2, 3), record(30, kind, 1, 3), record(29, kind, 1, 2)], next_cursor: 29, has_more: false }));
+    api.UndoCleanupDismissals.mockImplementation(async (kind, ids) => ({ kind, removed: ids.length }));
+    const [shortOp, memberOp] = recentOperations.list();
+    await recentOperations.undo(memberOp.id);
+    expect(api.UndoCleanupDismissals).toHaveBeenLastCalledWith('near_duplicate', [31, 30]);
+    await recentOperations.undo(shortOp.id);
+    expect(api.UndoCleanupDismissals).toHaveBeenLastCalledWith('short', [6]);
+    wrapper.unmount();
+  });
+
+  it('已经在「已忽略」里撤销过（找不到记录）：按撤销完成处理、说一声；撤销接口失败时记录留着可再试', async () => {
+    const { wrapper } = await openWith({ ...nearOnly(), clip_groups: [{ full: v(11), clip: v(12), reason: '片段' }] });
+    await wrapper.vm.dismissClipCandidate({ full: v(11), clip: v(12) });
+    await wrapper.vm.dismissNearDuplicateGroup(wrapper.vm.cleanupDialog.analysis.near_duplicate_groups[0]);
+    await flushPromises();
+    const [nearOp, clipOp] = recentOperations.list();
+
+    api.ListCleanupDismissals.mockResolvedValue({ items: [record(70, 'clip', 12, 11)], next_cursor: 70, has_more: false });
+    await recentOperations.undo(clipOp.id);
+    // 记录的方向是（完整片, 片段）：(12, 11) 不是这一对。
+    expect(api.UndoCleanupDismissals).not.toHaveBeenCalled();
+    expect(feedback.notify).toHaveBeenCalledWith('这条忽略已经撤销过了。');
+    expect(recentOperations.list().map(item => item.id)).toEqual([nearOp.id]);
+
+    api.ListCleanupDismissals.mockResolvedValue({ items: [record(80, 'near_duplicate', 1, 2)], next_cursor: 80, has_more: false });
+    api.UndoCleanupDismissals.mockRejectedValueOnce(new Error('数据库繁忙'));
+    await expect(recentOperations.undo(nearOp.id)).rejects.toThrow('数据库繁忙');
+    expect(recentOperations.list().map(item => item.id)).toEqual([nearOp.id]);
+    wrapper.unmount();
   });
 });

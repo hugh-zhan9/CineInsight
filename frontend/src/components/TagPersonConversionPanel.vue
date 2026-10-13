@@ -70,7 +70,8 @@ export default {
           target_person_id: this.target === 'new' ? 0 : Number(this.target),
           create_new: this.target === 'new'
         });
-        this.$emit('converted', { ...result, tag_id: this.preview.tag_id });
+        // 带上原标签名：宿主的「撤销」提示与任务中心「最近操作」要写清是哪个标签（D-P3-06）。
+        this.$emit('converted', { ...result, tag_id: this.preview.tag_id, tag_name: this.preview.tag_name });
       } catch (err) {
         this.error = '转换失败，请重试或刷新确认结果：' + err;
       } finally {

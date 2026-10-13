@@ -3,8 +3,8 @@
     :class="['page-content', { 'page-content--with-preview': previewOpen }]"
     @wheel="forwardWheelToScrollOwner"
   >
-    <!-- 页头（D-UD-06）：观看侧「视频」与管理侧「片库管理」共用本页，标题跟着当前入口走。 -->
-    <PageHeader class="library-page-header" :title="pageTitle" />
+    <!-- 页头（D-UD-06）：本页只属于管理侧「片库管理」（观看侧「视频」是海报墙 VideoBrowsePage）。 -->
+    <PageHeader class="library-page-header" title="片库管理" />
     <LibraryToolbar
       ref="libraryToolbar"
       :tags="tags"
@@ -29,9 +29,6 @@
       :res-options="resOptions"
       :saved-views="savedViews"
       :selected-saved-view-i-d="selectedSavedViewID"
-      :random-conditions="randomConditions"
-      :random-pick-loading="randomPick.loading"
-      :random-pick-size="randomPickSize"
       :semantic-available="semanticAvailable"
       :semantic-unavailable-notice="semanticUnavailableNotice"
       :filtered-count="filteredCount"
@@ -59,7 +56,6 @@
       @update:row-density="rowDensity = $event"
       @search="handleSearch"
       @set-search-mode="setSearchMode"
-      @play-random="playRandom"
       @search-scenes="$emit('search-scenes', currentLibraryFilter())"
       @toggle-tag="toggleTagFilter"
       @clear-tags="clearTagFilter"
@@ -71,7 +67,6 @@
       @open-save-view="openSaveViewDialog"
       @manage-select="onManageSelect"
       @view-select="onViewSelect"
-      @random-select="onRandomSelect"
     />
     <MetadataBatchEditDialog
       v-if="metadataBatchEdit"
@@ -83,17 +78,6 @@
       @close="metadataBatchEdit = null"
       @applied="handleMetadataBatchEdited"
       @undone="handleMetadataBatchEdited"
-    />
-    <TonightPickerDialog
-      v-if="tonightOpen"
-      :filter="tonightFilter"
-      :conditions="randomConditions"
-      :exclude-ids="recentRandomVideoIDs"
-      @update:conditions="randomConditions = $event"
-      @close="tonightOpen = false"
-      @preview="previewTonightSuggestion"
-      @play="playTonightSuggestion"
-      @play-random="playRandomFromTonight"
     />
     <IncrementalScanBar
       ref="incrementalScanBar"
@@ -153,12 +137,13 @@
       </template>
     </AppBanner>
 
-    <!-- 保存视图引用的标签或人物已被删除（D-PC35、LIB-15）：照常应用其余条件，并说清少了几个。 -->
+    <!-- 保存视图有条件用不了（D-PC35、LIB-15；D-P3-03）：引用的标签或人物已删除、或用到片库管理已拿掉的智能视图 / 排序，
+         照常应用其余条件（拿掉的视图退回「全部视频」、排序退回「均衡排序」），说清少了什么，可以用当前条件更新这个视图。 -->
     <AppBanner
       v-if="savedViewNotice"
       class="library-banner"
       tone="warning"
-      :title="`保存视图「${savedViewNotice.name}」有 ${savedViewNotice.dropped} 个条件已失效（引用的标签或人物已删除），已忽略。`"
+      :title="savedViewNoticeText"
       data-test="saved-view-notice"
     >
       <template #actions>
@@ -167,11 +152,6 @@
       </template>
     </AppBanner>
 
-    <BackgroundTaskStatusBars
-      ref="taskBars"
-      @state-change="applyBackgroundTaskState"
-      @library-changed="reloadCurrentView"
-    />
     <SemanticNoticeBar
       :semantic-available="semanticAvailable"
       :semantic-unavailable-notice="semanticUnavailableNotice"
@@ -197,17 +177,6 @@
       @translated="handleSubtitleTranslated"
       @translating-change="handleTranslatingChange"
       @translate-progress="translatingSubtitlePercent = Number($event?.percent || 0)"
-    />
-
-    <RandomPickBanner
-      :random-pick="randomPick"
-      :random-pick-size="randomPickSize"
-      :video-count="videos.length"
-      :random-play="randomPlayBanner"
-      @reshuffle="reshuffleRandomPick"
-      @exit="exitRandomPick"
-      @reroll="rerollRandomPlay"
-      @dismiss-play="dismissRandomPlay"
     />
 
     <div class="video-list" ref="videoList">
@@ -267,9 +236,8 @@
             @open-row-menu="openRowMenu"
             @contextmenu="showContextMenu"
           />
-          <!-- 缩略图墙的格子只放缩略图，展开的版本列表塞不进去；切回列表或网格时展开状态照旧。 -->
           <VersionGroupMembers
-            v-if="viewMode !== 'wall' && isVersionGroupExpanded(video)"
+            v-if="isVersionGroupExpanded(video)"
             :summary="versionGroupFor(video)"
             :current-video-id="video.id"
             :busy="versionGroupBusy"
@@ -533,7 +501,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, ListContinueWatchingWithFilter, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, PickRandomVideos, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -542,16 +510,14 @@ import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import SubtitleWorkbench from './SubtitleWorkbench.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
-import TonightPickerDialog from './TonightPickerDialog.vue';
 import MetadataBatchEditDialog from './MetadataBatchEditDialog.vue';
 import { addToPlaybackQueue, openPlaybackQueue } from '../utils/playbackQueue.js';
 import VideoListRow, { STALE_REASON_LABELS } from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
 import LocalMetadataDialog from './LocalMetadataDialog.vue';
-import BackgroundTaskStatusBars from './video-list/BackgroundTaskStatusBars.vue';
 import LibraryToolbar from './video-list/LibraryToolbar.vue';
 import IncrementalScanBar from './video-list/IncrementalScanBar.vue';
-import RandomPickBanner from './video-list/RandomPickBanner.vue';
+import { libraryTaskStateMixin } from './video-list/libraryTasks.js';
 import RenameDialogs from './video-list/RenameDialogs.vue';
 import SemanticNoticeBar from './video-list/SemanticNoticeBar.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
@@ -569,7 +535,7 @@ import { versionGroupsMixin } from './video-list/versionGroupsMixin.js';
 import { videoEditEntryMixin } from './video-list/videoEditEntryMixin.js';
 import HDReplacePickerDialog from './video-workbench/HDReplacePickerDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
-import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight, estimateVideoWallHeight, normalizeLibraryLayout } from '../utils/virtualList.js';
+import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight } from '../utils/virtualList.js';
 import AppBanner from './ui/AppBanner.vue';
 import AppIcon from './ui/AppIcon.vue';
 import AppSpinner from './ui/AppSpinner.vue';
@@ -586,30 +552,45 @@ import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { findCommand, registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/playbackProxy.js';
-import { resumable, resumePosition } from '../utils/watchState.js';
+import { resumePosition } from '../utils/watchState.js';
 import { scrubAbsolutePaths } from '../utils/pathText.js';
 import { formatLocalTime, subtitleExceptionText } from '../utils/subtitleTools.js';
-import { randomConditionFields, randomPlaybackMixin } from '../utils/randomPlayback.js';
+import { LIBRARY_MANAGE_SMART_VIEWS } from '../utils/appCommands.js';
 
-// 「随机 N 部」一次抽取的条数。
-const RANDOM_PICK_SIZE = 10;
 // 智能视图「本地资料有更新」（后端 LibraryViewLocalMetadataUpdated）。
 const LOCAL_METADATA_UPDATED_VIEW = 'local_metadata_updated';
 // UpdateVideoWatchProgress 的起播来源（D-PC42）：从断点、从片头、从字幕命中或指定时间。
 const WATCH_PROGRESS_ORIGINS = ['resume', 'start', 'jump'];
-// 自动对账会改变的行状态：这几个视图里改了这些状态就可能不再属于当前视图，要重载。
-const STATE_SENSITIVE_VIEWS = ['favorites', 'liked', 'continue_watching', 'unwatched', 'watched'];
-// 分页游标的全部字段及其初值：整表重载、原地刷新从头翻页、装入随机批次时都清成这一份。
+// 分页游标的全部字段及其初值：整表重载、原地刷新从头翻页时都清成这一份。
 const EMPTY_PAGING_CURSOR = Object.freeze({
   cursorScore: 0,
   cursorSize: 0,
   cursorID: 0,
-  cursorLastPlayedAt: '',
-  cursorRecentPlayedID: 0,
-  cursorProgressUpdatedAt: '',
-  cursorContinueID: 0,
   libraryCursor: null
 });
+// 片库管理的布局（D-P3-03）：列表与网格。缩略图墙拿掉了，本机记着它的打开时退回列表并提示一次（随即改写偏好）。
+const LIBRARY_LAYOUT_KEY = 'cineinsight-library-layout';
+const LIBRARY_LAYOUTS = ['list', 'grid'];
+const REMOVED_LAYOUT_NOTICE = '片库管理不再有缩略图墙，已换成列表。浏览海报请去观看侧「视频」。';
+// 片库管理的排序（与工具栏的排序选项一致）；保存视图带来别的排序时退回均衡排序。
+const LIBRARY_SORT_MODES = ['balanced', 'rating_desc', 'rating_asc'];
+// 观看向智能视图的中文名（保存视图用到它们时，提示里要说清是哪一个被拿掉了；命令面板与工具栏同一套说法）。
+const REMOVED_SMART_VIEW_LABELS = {
+  continue_watching: '继续观看', favorites: '收藏', liked: '点赞', recently_played: '最近播放',
+  unwatched: '未看', watched: '已看', recently_added: '最近添加'
+};
+
+// 读本机记住的布局：缩略图墙等已拿掉的值退回列表，removed 为真时调用方提示一次并改写偏好。
+export function readLibraryLayout() {
+  let stored = null;
+  try {
+    stored = window.localStorage?.getItem(LIBRARY_LAYOUT_KEY) ?? null;
+  } catch (_err) {
+    stored = null;
+  }
+  if (LIBRARY_LAYOUTS.includes(stored)) return { layout: stored, removed: false };
+  return { layout: 'list', removed: stored === 'wall' };
+}
 // 原地刷新每次请求的条数上限：后端分页接口超过 200 会退回默认值，语义检索封顶 100。
 const IN_PLACE_REFRESH_PAGE_LIMIT = 100;
 
@@ -634,27 +615,25 @@ function relocateErrorText(err) {
 
 export default {
   name: 'VideoListPage',
-  // 随机播放一部（主键、今晚看什么里的「随机播放一部」、结果条「换一个」）与随机条件、最近排除表在 randomPlaybackMixin，
-  // 与视频海报墙共用（D-P2-01）；本页提供 randomPlayFilter / randomPlayBlockedReason / applyPlaybackAttemptResult。
-  mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin, randomPlaybackMixin],
-  components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
+  // 三期（D-P3-03）本页只属于管理侧「片库管理」：随机播放与今晚看什么、缩略图墙、观看向的智能视图都在观看侧「视频」海报墙上。
+  // 「管理」菜单发起的补全与 NFO 写出、它们的进度文案在 libraryTaskStateMixin（原 BackgroundTaskStatusBars，D-P3-05）。
+  mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin, libraryTaskStateMixin],
+  components: { MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, IncrementalScanBar, LibraryToolbar, SemanticNoticeBar, TrashUndoBanner, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
-    pageActive: { type: Boolean, default: true },
-    // 历史名：原先控制本页接不接 ⌘⇧K。清理中心三期起是 App 的页面（D-P3-02），⌘⇧K 只由 App 接；
-    // 这个开关只剩页头标题一个用处（App 在「片库管理」上传 true）。
-    cleanupHotkey: { type: Boolean, default: true }
+    pageActive: { type: Boolean, default: true }
   },
   // open-cleanup({ relationId? })：进清理中心的视频标签（AI 审阅「去清理」带上要定位的同源对）；
   // trash-restored({ videoIDs, fromTrashDialog })：本页回收站恢复了视频，清理中心的审阅放掉对应的「已移到废纸篓」标记。
-  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'search-scenes', 'find-similar-scenes', 'open-video-edit', 'open-cleanup', 'trash-restored'],
+  // open-task-center：「管理」菜单发起的任务，提示里点「查看」打开任务中心。
+  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'search-scenes', 'find-similar-scenes', 'open-video-edit', 'open-cleanup', 'trash-restored', 'open-task-center'],
   data() {
     return {
       videos: [],
       consolidationRefreshVersions: new Map(),
-      viewMode: normalizeLibraryLayout(window.localStorage?.getItem('cineinsight-library-layout')),
+      viewMode: readLibraryLayout().layout,
       rowDensity: window.localStorage?.getItem('cineinsight-library-density') === 'comfortable' ? 'comfortable' : 'compact',
       searchKeyword: '',
       searchMode: 'file',
@@ -678,14 +657,8 @@ export default {
       filteredCount: null,
       libraryTotalCount: null,
       countToken: 0,
-      // 随机条件与「最近 12 次」排除表（randomConditions / recentRandomVideoIDs）在 randomPlaybackMixin，存在本机（D-PC44）。
-      tonightOpen: false,
       // 元数据批量编辑（D-MC-04）：打开时记下所选与当前筛选；null 表示没开。
       metadataBatchEdit: null,
-      tonightFilter: {},
-      randomPick: { active: false, ids: [], reason: '', loading: false },
-      // 最近一次随机播放（D-PC43、D-PC44）在 randomPlaybackMixin 的 randomPlay。
-      randomPickToken: 0,
       selectedTags: [],
       // 人物筛选（D-PC33）：[{ id, name }]，与工具栏的 selected-people 双向对应；筛选 DTO 只带 id。
       selectedPeople: [],
@@ -714,11 +687,6 @@ export default {
       cursorScore: 0,
       cursorSize: 0,
       cursorID: 0,
-      cursorLastPlayedAt: '',
-      cursorRecentPlayedID: 0,
-      // 「继续观看」键集游标（D-PC42）：上一页最后一行的 watch_progress_updated_at 原样回传，外加 id。
-      cursorProgressUpdatedAt: '',
-      cursorContinueID: 0,
       libraryCursor: null,
       // 行标签「手动」角标（D-PC36）：视频 ID（字符串）→ 被人工覆盖、结果为「加上」的自动标签种类。
       automaticOverrideKinds: {},
@@ -726,7 +694,7 @@ export default {
       loading: false,
       hasMore: true,
       // 列表当前装的是哪一组查询条件（virtualListQueryKey）。重载时条件没变就原地刷新、停在原位，
-      // 条件变了才清空回顶；随机批次装进来时置空，退出批次一定回顶。
+      // 条件变了才清空回顶。
       listQueryKey: '',
       // 原地刷新期间列表照常显示，不出「加载中」；分页游标被刷新占用，触底加载要等它结束。
       refreshingInPlace: false,
@@ -756,12 +724,8 @@ export default {
       moveTargetConfirm: { show: false, targetLabel: '', subject: '', addToRoots: false },
       // 超分运行时状态（D-PC24）：明确不可用时行菜单标「未就绪」并指向设置页。
       enhanceCapability: null,
-      // 四个后台任务的状态条已抽成 BackgroundTaskStatusBars，这里保留一份镜像给「管理」菜单文案。
-      technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
-      perceptualHash: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
-      frameHash: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
-      localMetadataBackfill: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
-	  localMetadataExport: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, failed: 0, failures: [] },
+      // 「管理」菜单进度文案读的四份任务状态（technicalBackfill、perceptualHash、localMetadataBackfill、localMetadataExport）
+      // 在 libraryTaskStateMixin。
       // 播放代理任务状态（D-006）：管理菜单项要显示进度，跑完再提示一次结果。
       playbackProxy: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, results: [] },
       localMetadataDialog: { show: false, videoIds: [] },
@@ -788,6 +752,13 @@ export default {
     };
   },
   mounted() {
+    // 本机记着已拿掉的缩略图墙：按列表打开、改写偏好（下次不再提示），在用户进到片库管理时提示一次
+    // （本页常挂载，应用一启动就挂上，那时多半还在观看侧）。
+    if (readLibraryLayout().removed) {
+      try { window.localStorage?.setItem(LIBRARY_LAYOUT_KEY, 'list'); } catch (_err) { /* 存储不可用：下次还会提示一次 */ }
+      this._removedLayoutNoticePending = true;
+      this.showRemovedLayoutNotice();
+    }
     this.listQueryKey = this.virtualListQueryKey;
     this.loadVideos();
     this.refreshLibraryCounts();
@@ -807,23 +778,6 @@ export default {
         keywords: ['scan', '扫描'],
         enabled: () => !this.migrationRunning,
         run: () => { this.showScanDialog = true; }
-      },
-      {
-        id: 'action:random-play',
-        group: 'action',
-        label: '随机播放',
-        keywords: ['random', '随机'],
-        // 语义模式下随机会忽略搜索词、从全库抽取（PLAY-08），与工具栏按钮同样禁用。
-        enabled: () => !this.randomPick.loading && this.searchMode !== 'semantic',
-        run: () => this.playRandom()
-      },
-      {
-        id: 'action:tonight',
-        group: 'action',
-        label: '今晚看什么',
-        keywords: ['tonight', '今晚', '选片', '随机'],
-        enabled: () => this.searchMode !== 'semantic' && !this.migrationRunning && !this.incrementalScan.running,
-        run: () => this.openTonightPicker()
       },
       // 待处理工作台按固定 ID 跳到本页的既有面板（详细设计 §6.1）。run() 只负责打开面板，
       // 切到片库页由调用方先做（本页常挂载、以 v-show 切换）。library.openCleanup 三期起由清理中心页注册（D-P3-02）。
@@ -885,6 +839,9 @@ export default {
     }
   },
   watch: {
+    pageActive(active) {
+      if (active) this.showRemovedLayoutNotice();
+    },
     subtitleIndexNoticeVisible: {
       immediate: true,
       handler(visible) {
@@ -921,17 +878,14 @@ export default {
     this.teardownRuntimeEvents();
   },
   computed: {
-    // 列表是不是「当前筛选」的结果：语义检索、随机批次与相似视频列出的是排序结果（语义检索没有距离阈值，
+    // 列表是不是「当前筛选」的结果：语义检索与相似视频列出的是排序结果（语义检索没有距离阈值，
     // 「全部」就是整个已索引的片库），没有命中数，也不能当筛选范围用。
     listIsFilterResult() {
-      return this.searchMode !== 'semantic' && !this.randomPick.active && !this.semanticSimilarVideoID;
+      return this.searchMode !== 'semantic' && !this.semanticSimilarVideoID;
     },
     // 不是筛选结果时批量编辑不提供筛选范围。
     metadataBatchFilterUsable() {
       return this.listIsFilterResult;
-    },
-    randomPickSize() {
-      return RANDOM_PICK_SIZE;
     },
     subtitleIndexNoticeVisible() {
       return this.smartView === 'no_subtitle' || this.isSubtitleSearchActive();
@@ -1033,10 +987,15 @@ export default {
       if (!this.selectedPreviewVideoId) return null;
       return this.videos.find(video => video.id === this.selectedPreviewVideoId) || this.previewVideoSnapshot;
     },
-    // 页头标题：观看侧「视频」与管理侧「片库管理」共用本页实例，App 只在「片库管理」上传 cleanupHotkey（见 props 说明），
-    // 标题据此与顶栏的入口名一致。
-    pageTitle() {
-      return this.cleanupHotkey ? '片库管理' : '视频';
+    // 保存视图条件失效的提示：剔除的标签 / 人物有几个、拿掉的智能视图与排序各是什么。
+    savedViewNoticeText() {
+      const notice = this.savedViewNotice;
+      if (!notice) return '';
+      const parts = [];
+      if (notice.dropped > 0) parts.push(`${notice.dropped} 个条件已失效（引用的标签或人物已删除），已忽略`);
+      if (notice.removedView) parts.push(`「${notice.removedView}」已从片库管理移到观看侧「视频」，这里按「全部视频」显示`);
+      if (notice.removedSort) parts.push('它的排序片库管理没有，这里按「均衡排序」显示');
+      return `保存视图「${notice.name}」：${parts.join('；')}。`;
     },
     // 三种空状态（D-PC58、APP-10）的文案与图标；下一步按钮在模板里。
     emptyStateCopy() {
@@ -1089,7 +1048,6 @@ export default {
     },
     virtualListQueryKey() {
       return JSON.stringify({
-        randomPick: this.randomPick.active ? this.randomPick.ids.join(',') : '',
         mode: this.searchMode,
         keyword: this.currentQueryKeyword(),
         similarVideoID: this.semanticSimilarVideoID,
@@ -1222,30 +1180,13 @@ export default {
         } catch (_err) {}
       }
     },
-    openTonightPicker() {
-      if (this.searchMode === 'semantic' || this.migrationRunning || this.incrementalScan.running) return;
-      this.tonightFilter = this.currentLibraryFilter();
-      this.tonightOpen = true;
-    },
-    previewTonightSuggestion(video) { this.tonightOpen = false; this.openPreview(video); },
-    playTonightSuggestion(video) { this.tonightOpen = false; return this.playVideo(video.id); },
-    // 弹窗里的「随机播放一部」就是工具栏主键：同样的条件、排除表、结果条与 30 秒「换一个」。
-    playRandomFromTonight() { this.tonightOpen = false; return this.playRandom(); },
     debugLog(message, payload = null, isError = false) {
       return logFrontend('VideoListPage', message, payload, isError);
     },
-    // 四个后台任务的启动入口留在菜单里，实际执行与状态条都在 BackgroundTaskStatusBars。
-    startTechnicalBackfill() {
-      return this.$refs.taskBars?.startTechnicalBackfill();
-    },
-    startPerceptualHashBackfill() {
-      return this.$refs.taskBars?.startPerceptualHashBackfill();
-    },
-    startFrameHashBackfill() {
-      return this.$refs.taskBars?.startFrameHashBackfill();
-    },
-    startLocalMetadataBackfill() {
-      return this.$refs.taskBars?.startLocalMetadataBackfill();
+    showRemovedLayoutNotice() {
+      if (!this._removedLayoutNoticePending || !this.pageActive) return;
+      this._removedLayoutNoticePending = false;
+      notify(REMOVED_LAYOUT_NOTICE);
     },
     // 代理增删之后根条目的预览会话要重取：mode 会在外部预览与内嵌之间切换。
     async refreshPreviewSession(videoID) {
@@ -1289,12 +1230,6 @@ export default {
       } catch (err) {
         notifyError('为当前筛选生成播放代理失败: ' + err);
       }
-    },
-    startLocalMetadataExport() {
-      return this.$refs.taskBars?.startLocalMetadataExport(this.currentLibraryFilter());
-    },
-    exportLocalMetadataNFO(video) {
-      return this.$refs.taskBars?.exportLocalMetadataNFO(video);
     },
     openBookmark(resolution) {
       if (resolution?.status !== 'ready' || !resolution.video) return;
@@ -1350,7 +1285,6 @@ export default {
     },
     async findSimilarVideos(video) {
       if (!video?.id) return;
-      this.deactivateRandomPick();
       this.semanticSimilarVideoID = video.id;
       this.searchMode = 'semantic';
       this.searchKeyword = `与「${video.display_title || video.name}」相似`;
@@ -1414,14 +1348,6 @@ export default {
         if (wanted.has(video.id)) names[video.id] = video.name;
       }
       return names;
-    },
-    // 状态条组件把四份任务状态镜像过来，「管理」菜单的进度文案与清理面板的重算按钮才有数据。
-    applyBackgroundTaskState(state) {
-      this.technicalBackfill = state.technicalBackfill;
-      this.perceptualHash = state.perceptualHash;
-      this.frameHash = state.frameHash;
-      this.localMetadataBackfill = state.localMetadataBackfill;
-      this.localMetadataExport = state.localMetadataExport;
     },
     openSubtitlePreview(video) {
       return this.$refs.subtitlePreview?.open(video);
@@ -1711,9 +1637,8 @@ export default {
       };
     },
     // 片库总数只在为空时才重新取（refreshLibraryCounts）；扫描与重新检查之后置空让它重取。
-    // 随机批次里不走 refreshLibraryCounts，置空会让结果条一直没有总数，所以批次里先不动。
     invalidateLibraryTotal() {
-      if (!this.randomPick.active) this.libraryTotalCount = null;
+      this.libraryTotalCount = null;
     },
     // 结果条的命中数：筛选变化后请求一次，翻页不再重复请求。
     async refreshLibraryCounts() {
@@ -1763,7 +1688,7 @@ export default {
         case 'scan-incremental': this.runIncrementalScan(); break;
         case 'move-folder': this.moveFolder(); break;
         case 'rename-folder': this.renameFolder(); break;
-        case 'export-nfo': this.startLocalMetadataExport(); break;
+        case 'export-nfo': this.startLocalMetadataExport(this.currentLibraryFilter()); break;
         case 'batch-edit-filter': this.openMetadataBatchEditForFilter(); break;
         case 'backfill-technical': this.startTechnicalBackfill(); break;
         case 'backfill-phash': this.startPerceptualHashBackfill(); break;
@@ -1839,17 +1764,6 @@ export default {
         default: break;
       }
     },
-    onRandomSelect(item) {
-      if (item.id === 'tonight') {
-        this.openTonightPicker();
-        return;
-      }
-      if (item.id === 'pick-ten') {
-        this.enterRandomPick();
-        return;
-      }
-      this.applyRandomConditionItem(item.id);
-    },
     currentQueryKeyword() {
       return this.searchKeyword.trim();
     },
@@ -1872,8 +1786,6 @@ export default {
       });
     },
     estimateVideoHeight(video, widthBucket, subtitleMode, geometry) {
-      // 缩略图墙不展开版本组（见模板），格子高度只由列宽决定。
-      if (this.viewMode === 'wall') return estimateVideoWallHeight(geometry?.cardWidth);
       const versions = this.versionExtraHeight(video);
       if (this.viewMode === 'grid') return estimateVideoGridHeight(video, geometry?.cardWidth) + versions;
       const density = this.previewOpen && this.viewMode === 'list' ? 'narrow' : this.rowDensity;
@@ -1920,18 +1832,8 @@ export default {
         return (String(video.stale_reason || '') || 'unknown') === this.staleReasonFilter;
       }
       if (video.is_stale) return false;
+      // 片库管理只有管理向的视图（D-P3-03），观看向的（收藏、继续观看……）在观看侧「视频」上。
       switch (this.smartView) {
-        case 'favorites': return !!video.is_favorite;
-        case 'liked': return !!video.is_liked;
-        // 「继续观看」= 断点可续，含重看中的已看片（D-PC42、PLAY-10）。
-        case 'continue_watching': return resumable(video);
-        case 'unwatched': return !video.is_watched;
-        case 'watched': return !!video.is_watched;
-        case 'recently_played': return !!video.last_played_at;
-        case 'recently_added': {
-          const createdAt = new Date(video.created_at || 0).getTime();
-          return createdAt > 0 && createdAt >= Date.now() - 30 * 24 * 60 * 60 * 1000;
-        }
         // 自动分类标签不算「已打标签」（D-PC33、META-10）。
         case 'untagged': return !(video.tags || []).some(tag => !tag?.automatic_kind);
         case 'no_subtitle': return !this.isSubtitleSearchActive();
@@ -2031,25 +1933,6 @@ export default {
         videos = (page?.hits || []).map(hit => ({ ...hit.video, _semanticScore: hit.score }));
         this.libraryCursor = null;
         await this.fillAutomaticOverrideKinds(videos);
-      } else if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
-        videos = await ListRecentlyPlayedWithFilter(
-          this.currentLibraryFilter(),
-          this.cursorLastPlayedAt,
-          this.cursorRecentPlayedID,
-          limit
-        );
-        await this.fillAutomaticOverrideKinds(videos);
-      } else if (this.isContinueWatchingKeyset()) {
-        // 「继续观看」按最近的观看进度倒序（D-PC42、PLAY-09）：键集游标原样回传上一页最后一行的
-        // watch_progress_updated_at 与 id；进度时间为空的老数据排在最后，游标时间传空串。
-        const page = await ListContinueWatchingWithFilter(
-          this.currentLibraryFilter(),
-          this.cursorProgressUpdatedAt,
-          this.cursorContinueID,
-          limit
-        );
-        videos = page?.videos || [];
-        this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
       } else {
         const request = { filter: this.libraryPageFilter(), limit };
         if (this.libraryCursor) request.cursor = this.libraryCursor;
@@ -2062,21 +1945,7 @@ export default {
 
       videos = await this.attachSubtitleHits(videos, keyword);
 
-      const recentKeyset = this.smartView === 'recently_played' && this.sortMode === 'balanced';
-      const arrayKeyset = recentKeyset || this.isContinueWatchingKeyset();
-      const hasMore = this.searchMode === 'semantic'
-        ? semanticHasMore
-        : (arrayKeyset ? videos.length >= limit : !!this.libraryCursor);
-      if (videos.length > 0) {
-        const last = videos[videos.length - 1];
-        if (recentKeyset) {
-          this.cursorLastPlayedAt = last.last_played_at || '';
-          this.cursorRecentPlayedID = last.id;
-        } else if (this.isContinueWatchingKeyset()) {
-          this.cursorProgressUpdatedAt = last.watch_progress_updated_at || '';
-          this.cursorContinueID = last.id;
-        }
-      }
+      const hasMore = this.searchMode === 'semantic' ? semanticHasMore : !!this.libraryCursor;
       return { videos, hasMore };
     },
     reportVideoLoadFailure(err) {
@@ -2174,10 +2043,6 @@ export default {
     isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
       return this.searchMode === 'subtitle' && !!keyword;
     },
-    // 「继续观看」只在均衡排序下走专用的键集接口；换了排序仍走共享分页（排序语义由用户选）。
-    isContinueWatchingKeyset() {
-      return this.searchMode !== 'semantic' && this.smartView === 'continue_watching' && this.sortMode === 'balanced';
-    },
     overrideKindsFor(video) {
       return this.automaticOverrideKinds[String(video?.id)] || [];
     },
@@ -2188,7 +2053,7 @@ export default {
       for (const [id, value] of Object.entries(kinds)) next[String(id)] = Array.isArray(value) ? value : [];
       this.automaticOverrideKinds = next;
     },
-    // 返回数组的接口（最近播放、语义搜索、随机抽取、按 ID 取）没有角标数据，用 GetAutomaticOverrideKinds
+    // 返回数组的接口（语义搜索、相似视频）没有角标数据，用 GetAutomaticOverrideKinds
     // 批量补齐。只查带自动标签的行：没有自动标签就不会有「手动」角标。补不上只少一个角标，不影响列表。
     async fillAutomaticOverrideKinds(videos) {
       const ids = (videos || [])
@@ -2229,9 +2094,10 @@ export default {
       }
     },
     // 命令面板的导航入口（D-029）：切智能视图与应用保存视图都复用工具栏那条路径，
-    // 不另建一套加载逻辑。
+    // 不另建一套加载逻辑。片库管理没有的视图（观看向的，D-P3-03）按「全部视频」处理——App 已经把它们指到观看侧，
+    // 这里只是兜住。
     applySmartViewCommand(value) {
-      this.smartView = value || '';
+      this.smartView = LIBRARY_MANAGE_SMART_VIEWS.includes(value || '') ? (value || '') : '';
       return this.handleSearch(true);
     },
     applySavedViewCommand(viewID) {
@@ -2242,7 +2108,6 @@ export default {
     applyTagFilterCommand(tagID) {
       const id = Number(tagID);
       if (!Number.isInteger(id) || id <= 0) return false;
-      this.deactivateRandomPick();
       this.leaveSavedView();
       this.resetConditionsForCommand();
       this.selectedTags = [id];
@@ -2252,7 +2117,6 @@ export default {
     applyMissingFilter(field) {
       const value = String(field || '');
       if (!VIDEO_MISSING_OPTIONS.some(option => option.value === value)) return false;
-      this.deactivateRandomPick();
       this.leaveSavedView();
       this.resetConditionsForCommand();
       if (this.searchMode === 'semantic') this.searchMode = 'file';
@@ -2290,10 +2154,10 @@ export default {
       this.savedViewNotice = null;
     },
     // 保存视图里的标签与人物先经后端剔除已删除的 ID（与 Jellyfin 同口径），剔掉几个就提示几个。
+    // 用到片库管理已拿掉的智能视图或排序（D-P3-03）时退回「全部视频」/「均衡排序」，同一条提示里说清。
     async applySelectedSavedView() {
       const view = this.savedViews.find(item => item.id === Number(this.selectedSavedViewID));
       if (!view) return;
-      this.deactivateRandomPick();
       const storedTagIDs = parseSavedViewIDs(view.tag_ids_json);
       const storedPersonIDs = parseSavedViewIDs(view.person_ids_json);
       let tagResult;
@@ -2311,19 +2175,25 @@ export default {
       const tagIDs = (tagResult?.tag_ids || []).map(Number).filter(Boolean);
       const people = await this.resolvePeople((personResult?.person_ids || []).map(Number).filter(Boolean));
       const dropped = Number(tagResult?.dropped || 0) + Number(personResult?.dropped || 0);
+      const storedView = view.smart_view || '';
+      const viewRemoved = !LIBRARY_MANAGE_SMART_VIEWS.includes(storedView);
+      const storedSort = view.sort_mode || 'balanced';
+      const sortRemoved = !LIBRARY_SORT_MODES.includes(storedSort);
       this.searchMode = view.search_mode || 'file';
       this.searchKeyword = view.keyword || '';
-      this.smartView = view.smart_view || '';
+      this.smartView = viewRemoved ? '' : storedView;
       this.missingFilter = view.missing || '';
       this.selectedTags = tagIDs;
       this.selectedPeople = people;
       this.lastAppliedSavedViewID = view.id;
-      this.savedViewNotice = dropped > 0 ? { name: view.name, dropped } : null;
+      this.savedViewNotice = dropped > 0 || viewRemoved || sortRemoved
+        ? { name: view.name, dropped, removedView: viewRemoved ? (REMOVED_SMART_VIEW_LABELS[storedView] || storedView) : '', removedSort: sortRemoved }
+        : null;
       this.selectedSizeRange = this.findRangeOption(this.sizeOptions, view.min_size, view.max_size);
       this.selectedResRange = this.findRangeOption(this.resOptions, view.min_height, view.max_height);
       this.minRating = view.min_rating === null || view.min_rating === undefined ? '' : String(view.min_rating);
       this.maxRating = view.max_rating === null || view.max_rating === undefined ? '' : String(view.max_rating);
-      this.sortMode = view.sort_mode || 'balanced';
+      this.sortMode = sortRemoved ? 'balanced' : storedSort;
       await this.reloadCurrentView();
     },
     // 保存视图只存人物 ID：名字先看已选过的，没有的再逐个取（一个视图里的人物通常只有几个）。
@@ -2342,7 +2212,6 @@ export default {
     },
     // 工具栏人物组合框的选择（D-PC33）：与点标签同一条路径——退出随机批次、离开保存视图、重载。
     updateSelectedPeople(people) {
-      this.deactivateRandomPick();
       this.selectedPeople = (people || [])
         .map(person => ({ id: Number(person?.id || 0), name: String(person?.name || '') }))
         .filter(person => person.id > 0);
@@ -2361,7 +2230,6 @@ export default {
       }
     },
     async reloadCurrentView() {
-      if (this.randomPick.active) return this.refreshRandomPick();
       return this.resetAndLoadVideos();
     },
     applyClientFilters(videos) {
@@ -2392,7 +2260,6 @@ export default {
       return this.selectedTags.includes(Number(tagID));
     },
     toggleTagFilter(tagID) {
-      this.deactivateRandomPick();
       const id = Number(tagID);
       if (this.isTagSelected(id)) {
         this.selectedTags = this.selectedTags.filter(item => item !== id);
@@ -2403,7 +2270,6 @@ export default {
       this.reloadCurrentView();
     },
     clearTagFilter() {
-      this.deactivateRandomPick();
       this.selectedTags = [];
       this.leaveSavedView();
       this.reloadCurrentView();
@@ -2482,10 +2348,7 @@ export default {
     async applyVideoStateChange(updatedVideo) {
       if (!updatedVideo) return;
       this.refreshVersionGroupForVideo(updatedVideo.id);
-      if (STATE_SENSITIVE_VIEWS.includes(this.smartView) && !this.matchesSmartView(updatedVideo)) {
-        await this.reloadCurrentView();
-        return;
-      }
+      // 片库管理的视图都不看收藏、已看、进度这些行状态（D-P3-03 拿掉了观看向的视图）：就地并上即可。
       this.mergeVideoState(updatedVideo);
     },
     // 别处（观看侧整页详情）改了某部片的状态：{ id, changes } 只带改动的字段（收藏、已看、评分、进度、失效）。
@@ -2569,11 +2432,6 @@ export default {
         return;
       }
 
-      if (this.smartView === 'recently_played') {
-        await this.reloadCurrentView();
-        return;
-      }
-
       if (!this.canVideoMatchCurrentView(reconcile.updated_video)) {
         await this.reloadCurrentView();
         return;
@@ -2634,9 +2492,6 @@ export default {
       if (this.smartView === 'stale') this.loadStaleReasonCounts();
     },
     async handleSearch(immediate = false, clearSimilar = false) {
-      // 筛选条件变了，固定的随机批次就不再成立：退出批次、作废在途的抽取，按新条件正常加载。
-      if (this.randomPick.active) immediate = true;
-      this.deactivateRandomPick();
       this.leaveSavedView();
       if (clearSimilar) this.semanticSimilarVideoID = 0;
       if (this.searchDebounceTimer) {
@@ -2657,99 +2512,6 @@ export default {
         this.searchDebounceTimer = null;
         this.reloadCurrentView();
       }, 250);
-    },
-    // 「随机 N 部」直接接管主列表：抽出来的条目走的是同一个列表组件，
-    // 预览/播放/标签/删除等操作与平时完全一致，不需要另做一套。
-    async enterRandomPick() {
-      await this.loadRandomPickBatch([]);
-    },
-    async reshuffleRandomPick() {
-      await this.loadRandomPickBatch(this.randomPick.ids);
-    },
-    async loadRandomPickBatch(extraExcludeIDs) {
-      if (this.randomPick.loading) return;
-      const token = ++this.randomPickToken;
-      this.randomPick.loading = true;
-      try {
-        const excludeIDs = [...new Set([
-          ...this.recentRandomVideoIDs.slice(-12),
-          ...(extraExcludeIDs || [])
-        ])];
-        const result = await PickRandomVideos({
-          filter: this.currentLibraryFilter(),
-          ...randomConditionFields(this.randomConditions),
-          exclude_ids: excludeIDs
-        }, RANDOM_PICK_SIZE);
-        const picked = result?.videos || [];
-        if (picked.length === 0) {
-          notifyError(result?.user_message || '当前筛选范围没有可随机的视频。');
-          return;
-        }
-        await this.fillAutomaticOverrideKinds(picked);
-        const videos = await this.attachSubtitleHits(picked, this.currentQueryKeyword());
-        // 抽样结果要盖掉列表，先等在途的加载收尾，避免被后到的分页结果覆盖。
-        if (this.reloadPromise) await this.reloadPromise;
-        await this.waitForLoadIdle();
-        // 等待期间用户可能改了筛选或退出了随机，这一批已经作废，不能再装回列表。
-        if (token !== this.randomPickToken) return;
-        this.randomPick.active = true;
-        this.randomPick.ids = videos.map(video => video.id);
-        this.randomPick.reason = result?.selection_reason || '';
-        this.applyRandomPickVideos(videos);
-      } catch (err) {
-        console.error('随机抽取失败:', err);
-        notifyError('随机抽取失败: ' + err);
-      } finally {
-        this.randomPick.loading = false;
-      }
-    },
-    applyRandomPickVideos(videos) {
-      this.videos = videos;
-      this.listQueryKey = '';
-      this.selectedVideoIds = [];
-      this.hasMore = false;
-      this.setPagingCursor(EMPTY_PAGING_CURSOR);
-    },
-    // 随机批次是固定的一组 ID，刷新时按 ID 取最新记录，而不是重新抽一批。
-    async refreshRandomPick() {
-      let videos = [];
-      try {
-        const refreshed = await GetVideosByIDs(this.randomPick.ids) || [];
-        await this.fillAutomaticOverrideKinds(refreshed);
-        videos = await this.attachSubtitleHits(refreshed, this.currentQueryKeyword());
-      } catch (err) {
-        // 与普通列表加载失败保持一致：报错并留住当前批次，不把列表清空。
-        console.error('刷新随机批次失败:', err);
-        notifyError('刷新随机批次失败: ' + err);
-        return;
-      }
-      if (videos.length === 0) {
-        this.deactivateRandomPick();
-        await this.resetAndLoadVideos();
-        return;
-      }
-      this.randomPick.ids = videos.map(video => video.id);
-      this.applyRandomPickVideos(videos);
-    },
-    deactivateRandomPick() {
-      // 顺带作废在途的抽取请求；loading 仍由 loadRandomPickBatch 自己收尾。
-      this.randomPickToken += 1;
-      this.randomPick.active = false;
-      this.randomPick.ids = [];
-      this.randomPick.reason = '';
-    },
-    async exitRandomPick() {
-      if (this.randomPick.loading) return;
-      this.deactivateRandomPick();
-      await this.resetAndLoadVideos();
-    },
-    // randomPlaybackMixin 的宿主钩子：随机播放只在当前片库筛选里抽。
-    randomPlayFilter() {
-      return this.currentLibraryFilter();
-    },
-    // 语义模式下随机会忽略搜索词、从全库抽取（PLAY-08）：入口已禁用，这里再挡一次快捷键与命令面板。
-    randomPlayBlockedReason() {
-      return this.searchMode === 'semantic' ? '语义搜索结果不支持随机，请切回文件或字幕搜索。' : '';
     },
     async playVideo(id) {
       try {

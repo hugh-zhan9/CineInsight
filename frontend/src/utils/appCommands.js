@@ -6,9 +6,10 @@
 // 命令面板只在那里留最小的挂载点（mixins、一个组件标签、两个 ref）。
 // 因此这里依赖 App.vue 的状态、ref 与方法：
 //   this.currentPage / this.startupError / this.settings（可缺省）
-//   this.$refs.videoListPage（常挂载，v-show 切换）/ this.$refs.settingsPage（v-if）
+//   this.$refs.videoListPage（常挂载，v-show 切换）/ this.$refs.videoBrowsePage（首次进入「视频」才挂载）/ this.$refs.settingsPage（v-if）
 //   this.navigateTo(page, params?)：切页（别名 key 由它换成真正的页面，见 resolvePageRoute）；params 是交给目标页的一次性参数
-//     （「视频」认 { keyword } / { watch } / { tagId }；片单认 { tab }；人物 / 作品集认 { keyword }；场景检索认 { query, mode } / { image }）。
+//     （「视频」认 { keyword } / { watch } / { tagId }；片单、清理中心、人物与作品集认 { tab }；人物 / 作品集认 { keyword }；
+//     场景检索认 { query, mode } / { image }）。
 //     能直接切时同步返回 true；设置页有未保存修改时返回 Promise，用户放弃切页时 resolve 为 false（见下面的 whenNavigated）
 //   this.openTaskCenter() / this.openPendingWork()：打开任务中心抽屉与待处理页（D-P3-01 起是管理侧页面 pending-work）
 //   this.openVideo(video, { from })：打开一部片，按调用方区域分流到整页详情或片库管理的抽屉（D-UI-07）
@@ -73,8 +74,8 @@ export const MANAGE_NAV_GROUPS = [
       { key: 'manage-home', label: '管理首页', keywords: ['manage', 'guanli', '管理', '统计', '最近的变化'] },
       { key: 'library-manage', label: '片库管理', keywords: ['library manage', 'pianku', '片库', '扫描', '批量'] },
       { key: 'photos-manage', label: '图片管理', keywords: ['photo manage', 'tupian guanli', '图片库', '扫描图片'] },
-      // 人物与作品集的编辑（D-P2-06 起观看页只看不改）：过渡期原样挂 EntityLibraryPage，三期改成三个标签（D-P3-04）。
-      { key: 'entities-manage', label: '人物与作品集', keywords: ['people manage', 'collection manage', 'renwu', 'zuopinji', '人物', '作品集', '人脸', '合并人物', '编辑'] }
+      // 人物与作品集的编辑（D-P2-06 起观看页只看不改）：三个标签 人物 · 作品集 · 人脸审阅（D-P3-04，见 ENTITIES_MANAGE_TABS）。
+      { key: 'entities-manage', label: '人物与作品集', keywords: ['people manage', 'collection manage', 'renwu', 'zuopinji', '人物', '作品集', '人脸', '人脸审阅', '合并人物', '编辑'] }
     ]
   },
   {
@@ -140,6 +141,32 @@ export function isCleanupTab(key) {
   return CLEANUP_TABS.some(tab => tab.key === key);
 }
 
+// 清理中心在删除流程中（删除确认框开着或正在删，任一标签，CleanupCenterPage 的 busy）时不能离开，也不能换标签或接新的
+// 请求：另一个标签一挂上 / 卸下会打断正在进行的删除（图片标签卸下时它的删除宿主跟着卸下，「不支持废纸篓」的二选一
+// 再也答不了，撤销提示与「最近操作」都没了）。离开、换标签、打开集中整理任务都给同一句提示。
+export const CLEANUP_BUSY_NOTICE = '正在移到废纸篓，完成后再离开清理中心。';
+
+// 落到清理中心的这组参数会不会改动它：换到另一个标签，或带着一次性请求（打开清理审阅、定位同源对、打开集中整理任务）。
+export function cleanupParamsChangePage(params, currentTab) {
+  if (!params || typeof params !== 'object') return false;
+  if (isCleanupTab(params.tab) && params.tab !== currentTab) return true;
+  return Boolean(params.open) || Number(params.relationId || 0) > 0 || Number(params.consolidationTaskID || 0) > 0;
+}
+
+// 人物与作品集管理（D-P3-04）：一个页面 `entities-manage`，三个标签，人物是默认标签。当前标签是 App 的页面参数
+// （navigateTo('entities-manage', { tab })，与片单、清理中心同一做法）；people.openFaceReview 落在人脸审阅标签上。
+export const ENTITIES_MANAGE_PAGE = 'entities-manage';
+export const ENTITIES_MANAGE_TABS = [
+  { key: 'person', label: '人物' },
+  { key: 'collection', label: '作品集' },
+  { key: 'faces', label: '人脸审阅' }
+];
+export const DEFAULT_ENTITIES_MANAGE_TAB = ENTITIES_MANAGE_TABS[0].key;
+
+export function isEntitiesManageTab(key) {
+  return ENTITIES_MANAGE_TABS.some(tab => tab.key === key);
+}
+
 // 页面 key（可能是别名）+ 参数 → 真正的页面与参数：别名换成 `lists` 并带上 { tab }，其余原样。
 export function resolvePageRoute(page, params = null) {
   if (LIST_TAB_KEYS.has(page)) return { page: LISTS_PAGE, params: { ...(params || {}), tab: page } };
@@ -190,17 +217,19 @@ export function isNavPageVisible(page, settings) {
   return !page?.requiresBrowserBridge || Boolean(settings?.browser_bridge_enabled);
 }
 
-// 与 video-list/LibraryToolbar.vue 的 smartViewOptions 一一对应（那份是真值来源）。
-// appCommands.test.js 有一条防漂移断言比对两处。
+// 命令面板的「视频 · 某智能视图」（命令 ID nav:smart:<value> 不变）。三期（D-P3-03）片库管理只留管理向的视图：
+// 不带 viewer 的几项与 video-list/LibraryToolbar.vue 的 smartViewOptions 一一对应（那份是真值来源，
+// appCommands.test.js 有一条防漂移断言比对两处）；带 viewer 的是观看向的视图，已从片库管理拿掉，命令改指向观看侧
+// 「视频」海报墙（smartViewTarget）。
 const COMMAND_SMART_VIEWS = [
   { value: '', label: '全部视频' },
-  { value: 'continue_watching', label: '继续观看' },
-  { value: 'favorites', label: '收藏' },
-  { value: 'liked', label: '点赞' },
-  { value: 'recently_played', label: '最近播放' },
-  { value: 'unwatched', label: '未看' },
-  { value: 'watched', label: '已看' },
-  { value: 'recently_added', label: '最近添加' },
+  { value: 'continue_watching', label: '继续观看', viewer: true },
+  { value: 'favorites', label: '收藏', viewer: true },
+  { value: 'liked', label: '点赞', viewer: true },
+  { value: 'recently_played', label: '最近播放', viewer: true },
+  { value: 'unwatched', label: '未看', viewer: true },
+  { value: 'watched', label: '已看', viewer: true },
+  { value: 'recently_added', label: '最近添加', viewer: true },
   { value: 'untagged', label: '未打标签' },
   { value: 'no_subtitle', label: '无字幕' },
   { value: 'local_metadata_updated', label: '本地资料有更新' },
@@ -210,6 +239,24 @@ const COMMAND_SMART_VIEWS = [
 // 「视频」海报墙（viewer/VideoBrowsePage.vue）的观看状态对应的智能视图，与它的 VIDEO_BROWSE_WATCH_OPTIONS 逐项一致
 // （VideoBrowsePage.test.js 钉住）。写在这里而不从页面导入：页面经 viewerNavigation.js 已经依赖本文件，反过来会成环。
 export const VIDEO_BROWSE_SMART_VIEWS = Object.freeze(['', 'unwatched', 'continue_watching', 'watched', 'favorites']);
+
+// 片库管理认得的智能视图（D-P3-03：全部、未打标签、无字幕、本地资料有更新、路径失效）。保存视图或命令带来别的视图时，
+// 片库管理退回「全部」并提示一次（VideoListPage）。
+export const LIBRARY_MANAGE_SMART_VIEWS = Object.freeze(COMMAND_SMART_VIEWS.filter(view => !view.viewer).map(view => view.value));
+
+// 智能视图命令的落点（D-P3-03「命令改指向观看侧」）：
+// - 海报墙认得的观看状态（未看、继续观看、已看、收藏）一律去「视频」并带上 { watch }，不论当前在哪一侧；
+// - 海报墙表达不了的观看向视图（点赞、最近播放、最近添加）片库管理已不再提供：命令保留但不在面板里列出（hidden），
+//   执行时去「视频」的全部（海报墙默认按最近添加排序）；
+// - 「全部视频」跟着当前区域：管理侧是片库管理的全部，观看侧是「视频」的全部；
+// - 其余（管理向）去「片库管理」套上这个视图。
+export function smartViewTarget(value, area) {
+  const view = value || '';
+  if (view === '') return area === 'manage' ? { page: 'library-manage', view } : { page: 'videos', watch: '' };
+  if (VIDEO_BROWSE_SMART_VIEWS.includes(view)) return { page: 'videos', watch: view };
+  if (LIBRARY_MANAGE_SMART_VIEWS.includes(view)) return { page: 'library-manage', view };
+  return { page: 'videos', watch: '' };
+}
 
 // 固定命令 ID → 宿主页（详细设计 §6.1）。命令由宿主页（或它的常挂载子组件）注册；宿主页可能
 // 还没挂载（人物页、图片页按需挂载），所以跳转前先切到宿主页、等它挂载完再按 ID 执行。
@@ -224,20 +271,15 @@ export const COMMAND_HOST_PAGES = {
   'library.openTagManager': 'library-manage',
   'photos.openAIReview': 'photos-manage',
   'photos.openCleanup': CLEANUP_PAGE,
-  'people.openFaceReview': 'entities-manage'
+  'people.openFaceReview': ENTITIES_MANAGE_PAGE
 };
 
-// 切到宿主页时一并带上的页面参数：清理中心的两条命令各自落在自己的标签上，切页与换标签同一拍，
-// 不会先按上次的标签挂一遍（图片标签一挂上就会读状态、没结果时还会自动开始分析）。
+// 切到宿主页时一并带上的页面参数：清理中心的两条命令各自落在自己的标签上、人脸审阅落在人物与作品集的「人脸审阅」
+// 标签上，切页与换标签同一拍，不会先按上次的标签挂一遍（图片标签一挂上就会读状态、没结果时还会自动开始分析）。
 const COMMAND_HOST_PARAMS = {
   'library.openCleanup': { tab: 'video' },
-  'photos.openCleanup': { tab: 'image' }
-};
-
-// 宿主页上还要选定的实体种类：过渡期的「人物与作品集」一次只挂一种实体（App.vue 的 entitiesManageKind），
-// 人脸审阅的命令由人物那一种注册。
-const COMMAND_HOST_ENTITY_KINDS = {
-  'people.openFaceReview': 'person'
+  'photos.openCleanup': { tab: 'image' },
+  'people.openFaceReview': { tab: 'faces' }
 };
 
 // 作品集与人物按需懒加载，只取首页：面板是快速跳转，不是完整列表页。
@@ -291,8 +333,9 @@ export const appCommandsMixin = {
       // 命令面板打开某个作品集 / 人物：置一次即被子组件消费，随后清空，
       // 免得下次正常进入该页时又自动展开上一次的实体。
       entityFocus: { person: null, collection: null },
-      // 管理侧「人物与作品集」当前挂的实体种类（person | collection）与要定位的对象（{ id, name }，同样置一次即清空）。
-      entitiesManageKind: 'person',
+      // 管理侧「人物与作品集」的当前标签（ENTITIES_MANAGE_TABS：person | collection | faces，页面参数 { tab }）
+      // 与要定位的对象（{ id, name }，置一次即清空）。
+      entitiesManageTab: DEFAULT_ENTITIES_MANAGE_TAB,
       entitiesManageFocus: null
     };
   },
@@ -382,20 +425,14 @@ export const appCommandsMixin = {
     async prepareCommandRun(command) {
       return this.enterCommandHost(command?.id);
     },
-    // 切到固定命令的宿主页（还要选定实体种类或页面标签的一并选上），等它挂载、注册完命令。已经在那儿时什么也不做；
-    // 用户在切页确认里放弃时返回 false。种类、标签与切页同一拍改，宿主页只按目标种类 / 标签挂载一次。
-    // 带页面参数的（清理中心的标签）已在宿主页上时也交一次参数：navigateTo 对当前页只落参数。
+    // 切到固定命令的宿主页（还要选定页面标签的一并选上），等它挂载、注册完命令。已经在那儿时什么也不做；
+    // 用户在切页确认里放弃时返回 false。标签与切页同一拍改，宿主页只按目标标签挂载一次。
+    // 带页面参数的（清理中心、人物与作品集的标签）已在宿主页上时也交一次参数：navigateTo 对当前页只落参数。
     async enterCommandHost(commandID) {
       const page = COMMAND_HOST_PAGES[commandID];
-      const kind = COMMAND_HOST_ENTITY_KINDS[commandID];
       const params = COMMAND_HOST_PARAMS[commandID] || null;
-      const navigate = Boolean(page) && (page !== this.currentPage || Boolean(params));
-      if (!navigate && (!kind || this.entitiesManageKind === kind)) return true;
-      const arrived = await whenNavigated(navigate ? this.navigateTo(page, params) : true, () => {
-        if (kind) this.entitiesManageKind = kind;
-        return true;
-      });
-      if (arrived === false) return false;
+      if (!page || (page === this.currentPage && !params)) return true;
+      if (await whenNavigated(this.navigateTo(page, params), () => true) === false) return false;
       await this.$nextTick();
       return true;
     },
@@ -427,6 +464,8 @@ export const appCommandsMixin = {
           group: 'navigate',
           label: `视频 · ${view.label}`,
           keywords: ['smart view', '智能视图', view.value].filter(Boolean),
+          // 海报墙表达不了的观看向视图（点赞、最近播放、最近添加）不再列出，命令 ID 照旧可执行（见 smartViewTarget）。
+          ...(view.viewer && !VIDEO_BROWSE_SMART_VIEWS.includes(view.value) ? { hidden: true } : {}),
           run: () => this.applySmartViewFromCommand(view.value)
         });
       }
@@ -466,6 +505,22 @@ export const appCommandsMixin = {
       // 全局动作（D-PC60）：任何页面都能执行，需要宿主页的先切过去。
       commands.push(
         { id: 'action:playback-queue', group: 'action', label: '打开待播队列', keywords: ['queue', '下一集', '连播'], run: () => { this.playbackQueueOpen = true; } },
+        // 随机播放与今晚看什么三期起只在观看侧「视频」海报墙上（D-P3-03，片库管理拿掉了它们的入口）：命令 ID 照旧，
+        // 改为切到「视频」再按海报墙当前的筛选与随机条件执行（原先由片库页注册、按片库筛选执行）。
+        {
+          id: 'action:random-play',
+          group: 'action',
+          label: '随机播放',
+          keywords: ['random', '随机'],
+          run: () => this.runOnVideoBrowse(page => page.playRandom())
+        },
+        {
+          id: 'action:tonight',
+          group: 'action',
+          label: '今晚看什么',
+          keywords: ['tonight', '今晚', '选片', '随机'],
+          run: () => this.runOnVideoBrowse(page => page.openTonightPicker())
+        },
         {
           id: 'action:task-center',
           group: 'action',
@@ -575,17 +630,22 @@ export const appCommandsMixin = {
       };
       this.registerTaskCommands();
     },
-    // 智能视图落在当前区域的视频页上，不为套一个筛选把用户换到另一侧：观看侧是「视频」海报墙（D-P2-01），
-    // 它的观看状态只有全部 / 没看过 / 在看 / 看过 / 收藏这几个智能视图，作为参数带过去（新的一次浏览）；
-    // 其余智能视图（点赞、最近播放、未打标签、路径失效……）只有片库管理能套，去「片库管理」。
+    // 智能视图的落点见 smartViewTarget（D-P3-03）：观看向的去「视频」海报墙，作为参数带过去（新的一次浏览）；
+    // 管理向的（未打标签、无字幕、本地资料有更新、路径失效）去「片库管理」；「全部视频」跟着当前区域。
     applySmartViewFromCommand(value) {
-      const view = value || '';
-      if (pageArea(this.currentPage) !== 'manage' && VIDEO_BROWSE_SMART_VIEWS.includes(view)) {
-        return this.navigateTo('videos', { watch: view });
-      }
+      const target = smartViewTarget(value, pageArea(this.currentPage));
+      if (target.page === 'videos') return this.navigateTo('videos', { watch: target.watch });
       return whenNavigated(this.navigateTo('library-manage'), async () => {
         await this.$nextTick();
-        await this.$refs.videoListPage?.applySmartViewCommand(view);
+        await this.$refs.videoListPage?.applySmartViewCommand(target.view);
+      });
+    },
+    // 在「视频」海报墙上执行一个动作（随机播放、今晚看什么）：先切过去（首次进入才挂载），等它挂好再执行。
+    runOnVideoBrowse(action) {
+      return whenNavigated(this.navigateTo('videos'), async () => {
+        await this.$nextTick();
+        const page = this.$refs.videoBrowsePage;
+        return page ? action(page) : false;
       });
     },
     // 保存视图是片库管理的整套筛选（体积、分辨率、评分、缺失项……），海报墙装不下，一律在「片库管理」打开。
@@ -613,13 +673,12 @@ export const appCommandsMixin = {
         this.entityFocus = { ...this.entityFocus, [type]: null };
       });
     },
-    // 观看页的「在管理中编辑」：去管理侧「人物与作品集」，挂上这一种实体并打开这一个（EntityLibraryPage 的 focusEntity，
-    // 打开时连编辑抽屉一起打开）。没有 id 时只切过去（观看页空列表的下一步）。
+    // 观看页的「在管理中编辑」：去管理侧「人物与作品集」的人物或作品集标签，打开这一个（EntityLibraryPage 的 focusEntity，
+    // 打开时连编辑抽屉一起打开）。没有 id 时只切过去（观看页空列表的下一步）。标签随切页一起落下（页面参数）。
     openEntityInManage({ kind, id, name } = {}) {
-      const entityKind = kind === 'collection' ? 'collection' : 'person';
+      const tab = kind === 'collection' ? 'collection' : 'person';
       const entityID = Number(id || 0);
-      return whenNavigated(this.navigateTo('entities-manage'), async () => {
-        this.entitiesManageKind = entityKind;
+      return whenNavigated(this.navigateTo(ENTITIES_MANAGE_PAGE, { tab }), async () => {
         if (!entityID) return true;
         this.entitiesManageFocus = { id: entityID, name: name || '' };
         await this.$nextTick();

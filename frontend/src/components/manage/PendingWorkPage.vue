@@ -6,6 +6,20 @@
       </template>
     </PageHeader>
 
+    <!-- 摘要（GetPendingWorkSummary）没读到：整页一个横幅 + 重试；靠摘要计数的几块各自只写一行「数量没读到」，
+         不再五块各出一个一样的横幅。建议作品集与本地资料有自己的来源，照旧各自显示自己的状态。 -->
+    <AppBanner
+      v-if="summary.error"
+      tone="danger"
+      title="待处理数量没读到"
+      :message="summary.error"
+      data-test="pending-summary-error"
+    >
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="pending-summary-retry" @click="refreshSummary">重试</button>
+      </template>
+    </AppBanner>
+
     <!-- 每类都处理完：整页一个空状态，下一步回管理首页。失败的 AI 打标不算待处理，照旧在下面提一句。 -->
     <template v-if="allClear">
       <EmptyState
@@ -72,10 +86,15 @@
         <template v-if="!section.done">
           <SkeletonBlock v-if="section.loading" :lines="2" />
           <template v-else>
+            <p
+              v-if="section.error && section.source === 'summary'"
+              class="pending-section__unread"
+              :data-test="`pending-count-unread-${section.key}`"
+            >数量没读到</p>
             <AppBanner
-              v-if="section.error"
+              v-else-if="section.error"
               tone="danger"
-              :title="section.source === 'summary' ? '数量没读到' : `${section.label}没读到`"
+              :title="`${section.label}没读到`"
               :message="section.error"
               :data-test="`pending-error-${section.key}`"
             >
@@ -154,7 +173,7 @@
     </div>
 
     <CollectionSuggestionPanel v-if="suggestionPanelOpen" @close="closeSuggestionPanel" />
-    <LocalMetadataDialog :visible="localReviewIDs.length > 0" :video-ids="localReviewIDs" @close="closeLocalReview" />
+    <LocalMetadataDialog :visible="localReviewIDs.length > 0" :video-ids="localReviewIDs" @close="closeLocalReview" @applied="notifyLibraryChanged" />
   </section>
 </template>
 
@@ -201,8 +220,9 @@ export const PENDING_SECTIONS = Object.freeze([
     description: 'AI 给图片提的标签，在图片管理的 AI 审阅里处理。'
   },
   {
+    // library.openCleanup：清理中心的视频标签（候选数就是视频清理的口径），不停在上次看的标签上。
     key: 'cleanup_candidates', label: '清理候选', source: 'summary', fields: ['cleanup_candidates'],
-    command: 'action:cleanup', action: '打开清理中心', shortcut: '⌘⇧K',
+    command: 'library.openCleanup', action: '打开清理中心', shortcut: '⌘⇧K',
     description: '重复、同源片段、极短或低清的视频，在清理中心决定留哪份。'
   }
 ]);
@@ -343,11 +363,12 @@ function errorText(err) {
 }
 
 // 待处理页（D-P3-01）。App 只在这一页时挂载它（v-if），每次进来都重读。顶栏「管理」角标由 App 自己每分钟读一次
-// GetPendingWorkSummary；这一页读到新的摘要时发 badge-change 让角标立刻跟上。
+// GetPendingWorkSummary；这一页读到新的摘要时发 badge-change 让角标立刻跟上。本地资料应用成功（「应用」「全部应用」、
+// 「逐项确认…」对话框里的应用）发 videos-changed，App 让片库管理按当前条件重取（handleVideosChangedElsewhere）。
 export default {
   name: 'PendingWorkPage',
   components: { AppBadge, AppBanner, AppIcon, CollectionSuggestionPanel, EmptyState, FaceClusterReviewPanel, LocalMetadataDialog, PageHeader, SkeletonBlock },
-  emits: ['run-command', 'open-task-center', 'badge-change', 'navigate'],
+  emits: ['run-command', 'open-task-center', 'badge-change', 'navigate', 'videos-changed'],
   data() {
     return {
       // 每个来源一份状态：loading 只在还没有读到过时为真（之后的刷新不换成骨架）；updatedAt 是这一次读成功的时间。
@@ -523,8 +544,10 @@ export default {
       this.local = { ...this.local, busyID: row.id };
       try {
         const result = await ApplyLocalMetadataBatch({ requests: [row.plan.request] });
-        if (Number(result?.succeeded || 0) > 0) notifySuccess(`已应用《${row.title}》的本地资料`);
-        else notifyError(`《${row.title}》没应用上：${localMetadataFailureText(result?.failures?.[0])}`);
+        if (Number(result?.succeeded || 0) > 0) {
+          notifySuccess(`已应用《${row.title}》的本地资料`);
+          this.notifyLibraryChanged();
+        } else notifyError(`《${row.title}》没应用上：${localMetadataFailureText(result?.failures?.[0])}`);
       } catch (err) {
         notifyError(`应用本地资料失败：${errorText(err)}`);
       } finally {
@@ -572,7 +595,10 @@ export default {
         const result = await ApplyLocalMetadataBatch({ requests: summary.ready.map(plan => plan.request) });
         const succeeded = Number(result?.succeeded || 0);
         const failed = Number(result?.failed || 0);
-        if (succeeded > 0) notifySuccess(`已应用 ${this.formatCount(succeeded)} 个视频的本地资料`);
+        if (succeeded > 0) {
+          notifySuccess(`已应用 ${this.formatCount(succeeded)} 个视频的本地资料`);
+          this.notifyLibraryChanged();
+        }
         if (failed > 0) notifyError(`${this.formatCount(failed)} 个没应用上：${localMetadataFailureText(result?.failures?.[0])}`);
       } catch (err) {
         notifyError(`应用本地资料失败：${errorText(err)}`);
@@ -584,6 +610,10 @@ export default {
     closeLocalReview() {
       this.localReviewIDs = [];
       this.refreshLocalSection();
+    },
+    // 本地资料写进了片库（片名、年份、人物……）：片库管理按当前条件重取（它常挂载，不重取就停在旧资料上）。
+    notifyLibraryChanged() {
+      this.$emit('videos-changed', {});
     },
     closeSuggestionPanel() {
       this.suggestionPanelOpen = false;
@@ -651,6 +681,8 @@ export default {
 }
 .pending-section__lead { margin: 0; color: var(--text-secondary); font-size: var(--fs-secondary); line-height: 1.6; }
 .pending-section__note { margin: 0; color: var(--warning-text); font-size: var(--fs-secondary); }
+/* 摘要没读到时靠它计数的几块只写这一行（整页横幅在页头下面）。 */
+.pending-section__unread { margin: 0; color: var(--text-muted); font-size: var(--fs-secondary); }
 .pending-section__more { justify-self: start; }
 
 .pending-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }

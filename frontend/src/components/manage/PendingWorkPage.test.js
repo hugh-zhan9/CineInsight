@@ -193,13 +193,24 @@ describe('待处理页的区块（D-P3-01）', () => {
     expect(wrapper.emitted('open-task-center')).toHaveLength(1);
   });
 
-  it('摘要读失败：靠摘要计数的各块各自出横幅（后端的中文说明原样显示），其余两块照常；重试只重读摘要', async () => {
+  // 摘要读失败只出一个页级横幅（后端的中文说明原样显示）+ 重试；靠摘要计数的五块各写一行「数量没读到」，
+  // 不再五块各出一个一样的横幅。建议作品集与本地资料有自己的来源，照常。
+  it('摘要读失败：页头下一个横幅 + 重试，靠摘要计数的各块只写「数量没读到」，其余两块照常；重试只重读摘要', async () => {
     api.GetPendingWorkSummary.mockRejectedValue('数据库后端已切换，请重启应用后再查看');
     const wrapper = await mountPage();
 
+    const banners = wrapper.findAll('.ui-banner');
+    expect(banners).toHaveLength(1);
+    const banner = wrapper.get('[data-test="pending-summary-error"]');
+    expect(banner.text()).toContain('待处理数量没读到');
+    expect(banner.text()).toContain('数据库后端已切换，请重启应用后再查看');
     for (const key of ['face', 'ai_video_candidates', 'same_source_unconfirmed', 'ai_image_candidates', 'cleanup_candidates']) {
-      expect(wrapper.get(`[data-test="pending-error-${key}"]`).text()).toContain('数据库后端已切换，请重启应用后再查看');
+      expect(wrapper.find(`[data-test="pending-error-${key}"]`).exists(), key).toBe(false);
+      expect(wrapper.get(`[data-test="pending-count-unread-${key}"]`).text()).toBe('数量没读到');
+      expect(wrapper.find(`[data-test="pending-count-${key}"]`).exists(), key).toBe(false);
     }
+    expect(wrapper.find('[data-test="pending-count-unread-collection_suggestions"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="pending-count-unread-local_metadata_updates"]').exists()).toBe(false);
     // 计数读不到时工具入口与人脸面板照样能用（它们各有各的数据）。
     expect(wrapper.find('[data-test="pending-go-cleanup_candidates"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(true);
@@ -211,9 +222,11 @@ describe('待处理页的区块（D-P3-01）', () => {
     api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY });
     api.CountLibraryVideos.mockClear();
     api.ListCollectionSuggestions.mockClear();
-    await wrapper.get('[data-test="pending-retry-cleanup_candidates"]').trigger('click');
+    await wrapper.get('[data-test="pending-summary-retry"]').trigger('click');
     await flushPromises();
 
+    expect(wrapper.find('[data-test="pending-summary-error"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test^="pending-count-unread-"]').exists()).toBe(false);
     expect(wrapper.find('[data-test^="pending-error-"]').exists()).toBe(false);
     expect(wrapper.get('[data-test="pending-count-cleanup_candidates"]').text()).toBe('7');
     expect(api.CountLibraryVideos).not.toHaveBeenCalled();
@@ -265,13 +278,14 @@ describe('待处理页的区块（D-P3-01）', () => {
 });
 
 describe('进入专门工具（D-P3-01）', () => {
+  // 清理候选交 library.openCleanup：清理中心的视频标签（候选数是视频清理的口径），不停在上次看的标签上。
   it('AI 视频 / 同源 / AI 图片 / 清理候选交出固定命令 ID；清理候选标出 ⌘⇧K', async () => {
     const wrapper = await mountPage();
     const expected = {
       ai_video_candidates: 'library.openAIReview',
       same_source_unconfirmed: 'library.openAIReview',
       ai_image_candidates: 'photos.openAIReview',
-      cleanup_candidates: 'action:cleanup'
+      cleanup_candidates: 'library.openCleanup'
     };
     const emitted = [];
     for (const key of Object.keys(expected)) {
@@ -279,7 +293,7 @@ describe('进入专门工具（D-P3-01）', () => {
       emitted.push([key, wrapper.emitted('run-command').at(-1)[0]]);
     }
     expect(Object.fromEntries(emitted)).toEqual(expected);
-    expect(wrapper.emitted('run-command').at(-1)).toEqual(['action:cleanup', '清理候选']);
+    expect(wrapper.emitted('run-command').at(-1)).toEqual(['library.openCleanup', '清理候选']);
     expect(section(wrapper, 'cleanup_candidates').text()).toContain('⌘⇧K');
     expect(PENDING_SECTIONS.filter(item => item.command).map(item => item.key).sort()).toEqual(Object.keys(expected).sort());
   });
@@ -389,6 +403,8 @@ describe('页内处理：本地资料有更新', () => {
       }]
     });
     expect(toasts()).toContain('success:已应用《春光乍泄》的本地资料');
+    // 本地资料写进了片库：通知 App 让片库管理重取（独立评审 P3 #2）。
+    expect(wrapper.emitted('videos-changed')).toEqual([[{}]]);
     expect(api.CountLibraryVideos).toHaveBeenCalledTimes(1);
     expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
     expect(api.ListCollectionSuggestions).not.toHaveBeenCalled();
@@ -402,6 +418,7 @@ describe('页内处理：本地资料有更新', () => {
     await wrapper.get('[data-test="pending-local-apply-1"]').trigger('click');
     await flushPromises();
     expect(toasts()).toContain('error:《春光乍泄》没应用上：本地资料或片库资料在这期间变了，刷新后再看一眼');
+    expect(wrapper.emitted('videos-changed')).toBeUndefined();
   });
 
   it('「逐项确认…」打开导入本地资料对话框（只这一部），关掉后重读这一块', async () => {
@@ -418,6 +435,12 @@ describe('页内处理：本地资料有更新', () => {
     expect(dialog.props('visible')).toBe(false);
     expect(api.CountLibraryVideos).toHaveBeenCalledTimes(1);
     expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
+    // 只关掉、没应用：片库不用重取。对话框里应用了（applied）：通知 App 让片库管理重取。
+    expect(wrapper.emitted('videos-changed')).toBeUndefined();
+    await wrapper.get('[data-test="pending-local-review-2"]').trigger('click');
+    dialog.vm.$emit('applied', { succeeded: 1 });
+    await flushPromises();
+    expect(wrapper.emitted('videos-changed')).toEqual([[{}]]);
   });
 
   it('「全部应用」先取全部做预览、确认框写清会补什么与跳过什么，确认后只应用能直接应用的', async () => {
@@ -463,6 +486,7 @@ describe('页内处理：本地资料有更新', () => {
     ]);
     expect(requests.every(request => request.overwrite_fields.length === 0)).toBe(true);
     expect(toasts()).toContain('success:已应用 2 个视频的本地资料');
+    expect(wrapper.emitted('videos-changed')).toEqual([[{}]]);
     expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
     expect(wrapper.get('[data-test="pending-local-apply-all"]').attributes('disabled')).toBeUndefined();
   });
@@ -476,6 +500,7 @@ describe('页内处理：本地资料有更新', () => {
 
     expect(api.ApplyLocalMetadataBatch).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="pending-local-apply-all"]').text()).toBe('全部应用');
+    expect(wrapper.emitted('videos-changed')).toBeUndefined();
   });
 
   it('「全部应用」没有能直接应用的：只提示，不弹确认', async () => {

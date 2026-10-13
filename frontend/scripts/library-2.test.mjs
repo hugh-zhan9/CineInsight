@@ -9,17 +9,16 @@ const inlinePlayer = readFileSync(new URL('../src/components/player/InlineVideoP
 // P-002 把清理审阅面板抽成了独立组件，下面属于面板的断言跟着搬到新文件上。
 const cleanupPanel = readFileSync(new URL('../src/components/video-list/CleanupReviewPanel.vue', import.meta.url), 'utf8');
 const saveViewDialog = readFileSync(new URL('../src/components/video-list/SaveViewDialog.vue', import.meta.url), 'utf8');
-// UI 二期（D-P2-01）把「随机播放一部」抽到 utils/randomPlayback.js 的 randomPlaybackMixin（片库页与视频海报墙共用），
-// 随机播放请求的断言跟着搬到新文件上，并断言片库页确实用了它、筛选来自 currentLibraryFilter。
+// UI 二期（D-P2-01）把「随机播放一部」抽到 utils/randomPlayback.js 的 randomPlaybackMixin，随机播放请求的断言跟着搬到新文件上。
+// 三期（D-P3-03）片库管理拿掉了随机播放、今晚看什么与随机 N 部，只有视频海报墙用它（筛选来自海报墙自己的 currentFilter）。
 const randomPlayback = readFileSync(new URL('../src/utils/randomPlayback.js', import.meta.url), 'utf8');
+const videoBrowse = readFileSync(new URL('../src/components/viewer/VideoBrowsePage.vue', import.meta.url), 'utf8');
 
 assert.match(page, /SearchLibraryVideoPage/, 'main library should use the stable shared smart-view query');
-assert.match(page, /ListRecentlyPlayedWithFilter/, 'recently played should be filtered and paginated by the backend');
-// 条数由调用方给：触底加载用 pageSize，同条件原地刷新按已加载深度分批取。
-assert.match(page, /this\.cursorLastPlayedAt,\s+this\.cursorRecentPlayedID,\s+limit/, 'recently played should use a stable time-and-ID cursor');
+// D-P3-03：最近播放、继续观看这些观看向的智能视图从片库管理拿掉了（去处在观看侧「视频」），专用的键集接口随之不再用。
+assert.doesNotMatch(page, /ListRecentlyPlayedWithFilter|ListContinueWatchingWithFilter|cursorLastPlayedAt|cursorProgressUpdatedAt/, 'library manage no longer pages recently played / continue watching');
 assert.match(page, /GetLibrarySubtitleHits\(keyword, videos\.map\(video => video\.id\)\)/, 'subtitle snippets should enrich only the videos handed in, never the whole library');
-assert.match(page, /PickRandomVideos\(\{[\s\S]*?filter: this\.currentLibraryFilter\(\)/, 'random pick should reuse the same filter contract as random play');
-assert.match(page, /if \(this\.randomPick\.active\) return this\.refreshRandomPick\(\)/, 'reloads inside a random batch should refresh the fixed batch, not re-draw one');
+assert.doesNotMatch(page, /PickRandomVideos|randomPick|TonightPickerDialog|RandomPickBanner/, 'library manage no longer offers random pick, random play or 今晚看什么');
 assert.match(page, /ListSavedLibraryViews/, 'saved views should be loaded from the backend');
 assert.match(saveViewDialog, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibraryFilter\(\) \}\)/, 'saved views should capture the current filter');
 // P-034（D-PC35、LIB-15）：剔除已删除的标签与人物改由后端 FilterActiveTagIDs / FilterActivePersonIDs 判定，
@@ -27,8 +26,8 @@ assert.match(saveViewDialog, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibra
 assert.match(page, /FilterActiveTagIDs\(storedTagIDs\)/, 'saved views should ignore deleted tag IDs when restored');
 assert.match(page, /FilterActivePersonIDs\(storedPersonIDs\)/, 'saved views should ignore deleted people when restored');
 assert.match(page, /个条件已失效/, 'saved views should tell how many conditions were dropped');
-assert.match(page, /mixins: \[[^\]]*randomPlaybackMixin/, 'the library page should play random through the shared random playback mixin');
-assert.match(page, /randomPlayFilter\(\) \{\s+return this\.currentLibraryFilter\(\);/, 'random play should use the current filter contract');
+assert.doesNotMatch(page, /randomPlaybackMixin/, 'the library page no longer plays random');
+assert.match(videoBrowse, /mixins: \[[^\]]*randomPlaybackMixin/, 'the video poster wall plays random through the shared random playback mixin');
 assert.match(randomPlayback, /PlayRandomVideoWithFilter\(randomPlayRequest\(this\.randomPlayFilter\(\), this\.randomConditions, this\.recentRandomVideoIDs\)\)/, 'random play should send the host filter, conditions and recent picks');
 assert.match(randomPlayback, /exclude_ids: normalizeRecentRandomIDs\(recentIDs\)/, 'random play should avoid recent repeats');
 assert.match(page, /@watch-progress="handlePreviewWatchProgress"/, 'preview progress should be persisted by the page');

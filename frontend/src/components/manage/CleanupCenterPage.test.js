@@ -658,6 +658,39 @@ describe('图片标签（原图片库清理审阅的用例）', () => {
     expect(lastEmitted(wrapper, 'busy-change')).toEqual([false]);
   });
 
+  // 独立评审 P3 #1（原探针 center-image-switch）：图片删除进行中，命令面板 / 待处理的「清理中心 · 视频 / 图片」
+  // （openFromCommand）不换标签——换过去会卸下图片标签和它的删除宿主，「不支持废纸篓」的二选一再也答不了，撤销提示、
+  // 「最近操作」与图片库重载都丢了。拦下时提示同一句；删完一切照常。
+  it('图片删除进行中：「清理中心 · 视频 / 图片」命令不换标签、图片标签不卸下；删完撤销提示与图片库重载照常', async () => {
+    const wrapper = await openCleanup({ duplicate_groups: [{ ...exactImages(), candidates: [image(2, 'copy.jpg'), image(5, 'copy2.jpg')] }] });
+    let finishDelete;
+    api.DeleteImagesWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okDelete(ids, 'batch-busy')); }));
+    await confirmImageDelete(wrapper);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1);
+    expect(lastEmitted(wrapper, 'busy-change')).toEqual([true]);
+
+    expect(findCommand('library.openCleanup').run()).toBe(false);
+    expect(findCommand('photos.openCleanup').run()).toBe(false);
+    expect(wrapper.emitted('update:tab')).toBeUndefined();
+    expect(feedback.notify).toHaveBeenCalledWith('正在移到废纸篓，完成后再离开清理中心。');
+    expect(feedback.notify).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
+    // 视频这一侧也没被拉起来读状态。
+    expect(api.GetCleanupStatus).not.toHaveBeenCalled();
+
+    finishDelete();
+    await flushPromises();
+    expect(lastEmitted(wrapper, 'busy-change')).toEqual([false]);
+    expect(undoToast()).toBeTruthy();
+    expect(recentOperations.list()).toHaveLength(1);
+    expect(wrapper.emitted('images-changed')).toHaveLength(1);
+
+    // 删完以后命令照常换标签。
+    api.GetCleanupStatus.mockResolvedValue({ running: false, completed: false, cancelled: false });
+    findCommand('library.openCleanup').run();
+    expect(lastEmitted(wrapper, 'update:tab')).toEqual(['video']);
+  });
+
   it('确认框打开期间「重新分析」禁用（图片标签报 locked）', async () => {
     const wrapper = await openCleanup({ duplicate_groups: [exactImages()] });
     await wrapper.get('[data-test="cleanup-delete-selected"]').trigger('click');

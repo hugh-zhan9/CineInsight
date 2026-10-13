@@ -15,8 +15,10 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import {
-  ACTION_COMMAND_PAGES, appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS, DEFAULT_LIST_TAB, isListTab,
-  LIST_TABS, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea, resolvePageRoute, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS
+  ACTION_COMMAND_PAGES, appCommandsMixin, cleanupParamsChangePage, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS,
+  DEFAULT_ENTITIES_MANAGE_TAB, DEFAULT_LIST_TAB, ENTITIES_MANAGE_TABS, isEntitiesManageTab, isListTab, LIBRARY_MANAGE_SMART_VIEWS,
+  LIST_TABS, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea, resolvePageRoute, smartViewTarget, VIDEO_BROWSE_SMART_VIEWS, VIDEO_DETAIL_PAGE,
+  VIEWER_NAV_GROUPS
 } from './appCommands.js';
 import { commandList, findCommand, registerCommands, unregisterCommands } from './commandRegistry.js';
 import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './feedback.js';
@@ -34,10 +36,12 @@ const Host = {
   },
   methods: {
     debugLog: vi.fn(),
-    // params：App.vue 交给目标页的一次性参数（「视频」海报墙的 { watch } 等），这里记下最近一次。
+    // params：App.vue 交给目标页的一次性参数（「视频」海报墙的 { watch } 等），这里记下最近一次；
+    // 人物与作品集的 { tab } 照 App 的 applyPageParams 落到 entitiesManageTab 上。
     navigateTo(page, params = null) {
       this.currentPage = page;
       this.navigateParams = params;
+      if (page === 'entities-manage' && params?.tab) this.entitiesManageTab = params.tab;
       return true;
     },
     openVideo() {},
@@ -206,9 +210,10 @@ describe('应用级命令注册', () => {
     expect(isListTab(undefined)).toBe(false);
   });
 
-  // 二期（D-P2-01）：观看侧「视频」是海报墙，它的观看状态只有全部 / 没看过 / 在看 / 看过 / 收藏，作为参数带过去；
-  // 其余智能视图与保存视图只有片库管理能套。管理侧照旧落在「片库管理」。
-  it('D-UI-09 智能视图落在当前区域的视频页：观看侧海报墙认得的带参数去「视频」，其余与保存视图去「片库管理」', async () => {
+  // 三期（D-P3-03「命令改指向观看侧」）：片库管理只留管理向的视图。观看向的智能视图命令不论在哪一侧都去「视频」海报墙
+  // （海报墙认得的带 { watch }，点赞 / 最近播放 / 最近添加不再列出、执行时去「视频」的全部）；管理向的去「片库管理」；
+  // 「全部视频」跟着当前区域。保存视图一律在「片库管理」打开。
+  it('D-P3-03 智能视图命令：观看向的去「视频」海报墙（不论在哪一侧），管理向的去「片库管理」，「全部」跟着区域', async () => {
     // 片库页在 App.vue 里是 ref="videoListPage"：这里用一个带同名 ref 的元素顶上，接住两个入口。
     const wrapper = mount({ ...Host, template: '<div><i ref="videoListPage" /></div>' });
     wrappers.push(wrapper);
@@ -216,25 +221,34 @@ describe('应用级命令注册', () => {
     const applySavedView = vi.fn();
     Object.assign(wrapper.vm.$refs.videoListPage, { applySmartViewCommand: applySmartView, applySavedViewCommand: applySavedView });
 
-    wrapper.vm.currentPage = 'home';
-    await commandByID('nav:smart:favorites').run();
-    expect(wrapper.vm.currentPage).toBe('videos');
-    expect(wrapper.vm.navigateParams).toEqual({ watch: 'favorites' });
+    for (const area of ['home', 'insights']) {
+      wrapper.vm.currentPage = area;
+      await commandByID('nav:smart:favorites').run();
+      expect(wrapper.vm.currentPage).toBe('videos');
+      expect(wrapper.vm.navigateParams).toEqual({ watch: 'favorites' });
+      wrapper.vm.currentPage = area;
+      await commandByID('nav:smart:continue_watching').run();
+      expect(wrapper.vm.navigateParams).toEqual({ watch: 'continue_watching' });
+      wrapper.vm.currentPage = area;
+      await findCommand('nav:smart:liked').run();
+      expect(wrapper.vm.currentPage).toBe('videos');
+      expect(wrapper.vm.navigateParams).toEqual({ watch: '' });
+    }
+    expect(applySmartView).not.toHaveBeenCalled();
+
     wrapper.vm.currentPage = 'recap';
     await commandByID('nav:smart:all').run();
     expect(wrapper.vm.currentPage).toBe('videos');
     expect(wrapper.vm.navigateParams).toEqual({ watch: '' });
-    expect(applySmartView).not.toHaveBeenCalled();
+    wrapper.vm.currentPage = 'insights';
+    await commandByID('nav:smart:all').run();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(applySmartView).toHaveBeenLastCalledWith('');
 
     wrapper.vm.currentPage = 'home';
-    await commandByID('nav:smart:liked').run();
+    await commandByID('nav:smart:stale').run();
     expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(applySmartView).toHaveBeenLastCalledWith('liked');
-
-    wrapper.vm.currentPage = 'insights';
-    await commandByID('nav:smart:favorites').run();
-    expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(applySmartView).toHaveBeenLastCalledWith('favorites');
+    expect(applySmartView).toHaveBeenLastCalledWith('stale');
 
     wrapper.vm.currentPage = 'settings';
     await wrapper.vm.applySavedViewFromCommand(3);
@@ -243,6 +257,62 @@ describe('应用级命令注册', () => {
     await wrapper.vm.applySavedViewFromCommand(4);
     expect(wrapper.vm.currentPage).toBe('library-manage');
     expect(applySavedView.mock.calls).toEqual([[3], [4]]);
+  });
+
+  it('D-P3-03 smartViewTarget 逐项落点', () => {
+    expect(LIBRARY_MANAGE_SMART_VIEWS).toEqual(['', 'untagged', 'no_subtitle', 'local_metadata_updated', 'stale']);
+    for (const view of VIDEO_BROWSE_SMART_VIEWS.filter(Boolean)) {
+      expect(smartViewTarget(view, 'manage')).toEqual({ page: 'videos', watch: view });
+      expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'videos', watch: view });
+    }
+    for (const view of ['liked', 'recently_played', 'recently_added', 'nope']) {
+      expect(smartViewTarget(view, 'manage'), view).toEqual({ page: 'videos', watch: '' });
+    }
+    for (const view of ['untagged', 'no_subtitle', 'local_metadata_updated', 'stale']) {
+      expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'library-manage', view });
+    }
+    expect(smartViewTarget('', 'manage')).toEqual({ page: 'library-manage', view: '' });
+    expect(smartViewTarget(undefined, 'viewer')).toEqual({ page: 'videos', watch: '' });
+  });
+
+  // D-P3-03：随机播放与今晚看什么只在观看侧「视频」海报墙上；命令 ID 不变，改由 App 注册，先切到「视频」（首次进入才挂载）
+  // 再调海报墙的 playRandom / openTonightPicker。
+  it('D-P3-03 action:random-play / action:tonight 切到「视频」海报墙再执行它的随机播放与今晚看什么', async () => {
+    const playRandom = vi.fn(() => 'played');
+    const openTonightPicker = vi.fn();
+    // 海报墙的替身：首次切到「视频」才挂载（App 里 v-if videosMounted），方法挂在组件实例上。
+    const BrowseStub = { methods: { playRandom, openTonightPicker }, template: '<i />' };
+    const wrapper = mount({
+      ...Host,
+      components: { BrowseStub },
+      data: () => ({ ...Host.data(), browseMounted: false }),
+      template: '<div><BrowseStub v-if="browseMounted" ref="videoBrowsePage" /></div>'
+    });
+    wrappers.push(wrapper);
+    const navigate = wrapper.vm.navigateTo;
+    wrapper.vm.navigateTo = (page, params) => {
+      const result = navigate.call(wrapper.vm, page, params);
+      if (page === 'videos') wrapper.vm.browseMounted = true;
+      return result;
+    };
+    wrapper.vm.currentPage = 'library-manage';
+    const random = commandByID('action:random-play');
+    expect(random.label).toBe('随机播放');
+    const pending = random.run();
+    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(playRandom).not.toHaveBeenCalled();
+    expect(await pending).toBe('played');
+    expect(playRandom).toHaveBeenCalledTimes(1);
+
+    wrapper.vm.currentPage = 'home';
+    await commandByID('action:tonight').run();
+    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(openTonightPicker).toHaveBeenCalledTimes(1);
+
+    wrapper.vm.currentPage = 'settings';
+    wrapper.vm.navigateTo = vi.fn(() => Promise.resolve(false));
+    expect(await commandByID('action:random-play').run()).toBe(false);
+    expect(playRandom).toHaveBeenCalledTimes(1);
   });
 
   it('D-UI-07 命令面板打开一部片交给 App 的分流，来源标为命令面板', () => {
@@ -263,13 +333,20 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('downloads');
   });
 
-  it('智能视图逐条注册为导航命令', () => {
+  // 命令 ID 不变：十二条都还在；海报墙表达不了的观看向视图（点赞、最近播放、最近添加）不在面板里列出（hidden），
+  // 按 ID 照样能执行（D-P3-03）。
+  it('智能视图逐条注册为导航命令（ID 不变），点赞 / 最近播放 / 最近添加不在面板里列出', () => {
     host();
+    const hidden = ['liked', 'recently_played', 'recently_added'];
     for (const view of COMMAND_PALETTE_SMART_VIEWS) {
-      const command = commandByID(`nav:smart:${view.value || 'all'}`);
+      const id = `nav:smart:${view.value || 'all'}`;
+      const command = findCommand(id);
       expect(command, view.label).not.toBeNull();
       expect(command.label).toBe(`视频 · ${view.label}`);
+      expect(Boolean(command.hidden), id).toBe(hidden.includes(view.value));
+      expect(commandByID(id) !== null, id).toBe(!hidden.includes(view.value));
     }
+    expect(COMMAND_PALETTE_SMART_VIEWS).toHaveLength(12);
   });
 
   it('设置每个分区各有一条动作命令，执行即跳到设置页', async () => {
@@ -386,7 +463,7 @@ describe('全局命令（D-PC60、APP-12）', () => {
       'library.openLocalMetadataUpdates': 'library-manage',
       'library.openCollectionSuggestions': 'library-manage',
       'photos.openAIReview': 'photos-manage',
-      // D-P2-06：人物观看页只看不改，人脸审阅在管理侧「人物与作品集」。
+      // D-P2-06：人物观看页只看不改，人脸审阅是管理侧「人物与作品集」的一个标签（D-P3-04）。
       'people.openFaceReview': 'entities-manage'
     }));
     const wrapper = host();
@@ -430,43 +507,64 @@ describe('全局命令（D-PC60、APP-12）', () => {
     unregisterCommands('test-cleanup-center');
   });
 
-  it('人脸审阅的宿主是「人物与作品集」的人物那一种：切页与换种类同一拍，已在作品集那一种时只换种类', async () => {
+  // D-P3-04：人脸审阅是「人物与作品集」的第三个标签。切页与换标签同一拍（页面参数 { tab: 'faces' }），已在这一页的别的标签上
+  // 时也交一次参数（只换标签）。
+  it('D-P3-04 人脸审阅的宿主是「人物与作品集」的「人脸审阅」标签：切页与换标签同一拍，已在这一页时只换标签', async () => {
     const wrapper = host();
     const run = vi.fn();
     registerHost('people.openFaceReview', run);
-    wrapper.vm.entitiesManageKind = 'collection';
+    wrapper.vm.entitiesManageTab = 'collection';
     wrapper.vm.currentPage = 'settings';
     const seen = [];
     const navigate = wrapper.vm.navigateTo;
-    wrapper.vm.navigateTo = page => { const result = navigate.call(wrapper.vm, page); seen.push([wrapper.vm.currentPage, wrapper.vm.entitiesManageKind]); return result; };
+    wrapper.vm.navigateTo = (page, params) => { seen.push([page, params]); return navigate.call(wrapper.vm, page, params); };
 
     expect(await wrapper.vm.runHostCommand('people.openFaceReview', '人脸待命名')).toBeUndefined();
     expect(wrapper.vm.currentPage).toBe('entities-manage');
-    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.vm.entitiesManageTab).toBe('faces');
     expect(run).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([['entities-manage', { tab: 'faces' }]]);
 
-    wrapper.vm.entitiesManageKind = 'collection';
+    wrapper.vm.entitiesManageTab = 'collection';
     expect(await wrapper.vm.prepareCommandRun({ id: 'people.openFaceReview' })).toBe(true);
-    expect(wrapper.vm.entitiesManageKind).toBe('person');
-    expect(seen).toEqual([['entities-manage', 'collection']]);
+    expect(wrapper.vm.entitiesManageTab).toBe('faces');
 
-    // 别的宿主命令不动人物与作品集的种类。
-    wrapper.vm.entitiesManageKind = 'collection';
+    // 别的宿主命令不动人物与作品集的标签。
+    wrapper.vm.entitiesManageTab = 'collection';
     expect(await wrapper.vm.prepareCommandRun({ id: 'photos.openAIReview' })).toBe(true);
-    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+    expect(wrapper.vm.entitiesManageTab).toBe('collection');
   });
 
-  it('切页确认里放弃时，人脸审阅不换种类也不执行', async () => {
+  it('切页确认里放弃时，人脸审阅不换标签也不执行', async () => {
     const wrapper = host();
     const run = vi.fn();
     registerHost('people.openFaceReview', run);
-    wrapper.vm.entitiesManageKind = 'collection';
+    wrapper.vm.entitiesManageTab = 'collection';
     wrapper.vm.currentPage = 'settings';
     wrapper.vm.navigateTo = vi.fn(() => Promise.resolve(false));
 
     expect(await wrapper.vm.runHostCommand('people.openFaceReview', '人脸待命名')).toBe(false);
-    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+    expect(wrapper.vm.entitiesManageTab).toBe('collection');
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('D-P3-04 人物与作品集的三个标签与校验', () => {
+    expect(ENTITIES_MANAGE_TABS.map(tab => [tab.key, tab.label])).toEqual([['person', '人物'], ['collection', '作品集'], ['faces', '人脸审阅']]);
+    expect(DEFAULT_ENTITIES_MANAGE_TAB).toBe('person');
+    expect(isEntitiesManageTab('faces')).toBe(true);
+    expect(isEntitiesManageTab('people')).toBe(false);
+    expect(isEntitiesManageTab(undefined)).toBe(false);
+  });
+
+  // 清理中心删除流程中（busy）拦不拦一组落到清理中心的参数：换到另一个标签、或带一次性请求就算改动。
+  it('cleanupParamsChangePage：换标签或带请求才算改动这一页', () => {
+    expect(cleanupParamsChangePage(null, 'image')).toBe(false);
+    expect(cleanupParamsChangePage({ tab: 'image' }, 'image')).toBe(false);
+    expect(cleanupParamsChangePage({ tab: 'video' }, 'image')).toBe(true);
+    expect(cleanupParamsChangePage({ tab: 'nope' }, 'image')).toBe(false);
+    expect(cleanupParamsChangePage({ tab: 'video', consolidationTaskID: 42 }, 'video')).toBe(true);
+    expect(cleanupParamsChangePage({ relationId: 9 }, 'video')).toBe(true);
+    expect(cleanupParamsChangePage({ open: true }, 'video')).toBe(true);
   });
 
   it('宿主页注册的 hidden 跳转目标不出现在面板里，但 findCommand 找得到', () => {
@@ -525,11 +623,12 @@ describe('打开面板时的懒加载', () => {
     expect(wrapper.vm.entityFocus.collection).toBeNull();
   });
 
-  it('「在管理中编辑」进管理侧人物与作品集：选上种类、交出要定位的对象后清空；没有 id 只切过去', async () => {
+  it('「在管理中编辑」进管理侧人物与作品集的对应标签（页面参数 { tab }）、交出要定位的对象后清空；没有 id 只切过去', async () => {
     const wrapper = host();
     const pending = wrapper.vm.openEntityInManage({ kind: 'collection', id: 5, name: '旅行' });
     expect(wrapper.vm.currentPage).toBe('entities-manage');
-    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+    expect(wrapper.vm.navigateParams).toEqual({ tab: 'collection' });
+    expect(wrapper.vm.entitiesManageTab).toBe('collection');
     expect(wrapper.vm.entitiesManageFocus).toEqual({ id: 5, name: '旅行' });
     await pending;
     expect(wrapper.vm.entitiesManageFocus).toBeNull();
@@ -537,13 +636,13 @@ describe('打开面板时的懒加载', () => {
     wrapper.vm.currentPage = 'people';
     await wrapper.vm.openEntityInManage({ kind: 'person' });
     expect(wrapper.vm.currentPage).toBe('entities-manage');
-    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.vm.entitiesManageTab).toBe('person');
     expect(wrapper.vm.entitiesManageFocus).toBeNull();
 
     wrapper.vm.currentPage = 'settings';
     wrapper.vm.navigateTo = vi.fn(() => Promise.resolve(false));
     expect(await wrapper.vm.openEntityInManage({ kind: 'collection', id: 9 })).toBe(false);
-    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.vm.entitiesManageTab).toBe('person');
     expect(wrapper.vm.entitiesManageFocus).toBeNull();
   });
 });
@@ -709,6 +808,8 @@ describe('命令面板快捷键与其他对话框（D-UD-03）', () => {
 });
 
 describe('智能视图清单防漂移', () => {
+  // 三期（D-P3-03）片库管理只留管理向的视图：命令清单里不带 viewer 的几项就是工具栏的全部选项；带 viewer 的观看向视图
+  // 命令 ID 照旧、改指向观看侧（smartViewTarget）。
   it('与 LibraryToolbar.vue 的 smartViewOptions 逐条一致（含 META-09 的「本地资料有更新」）', () => {
     // vitest 的根就是 frontend/，jsdom 环境下 import.meta.url 不是 file: 协议。
     const source = readFileSync(resolve(process.cwd(), 'src/components/video-list/LibraryToolbar.vue'), 'utf8');
@@ -719,7 +820,10 @@ describe('智能视图清单防漂移', () => {
       .map(match => ({ label: match[1], value: match[2] }));
 
     expect(fromToolbar.length).toBeGreaterThan(0);
-    expect(COMMAND_PALETTE_SMART_VIEWS).toEqual(fromToolbar);
+    expect(COMMAND_PALETTE_SMART_VIEWS.filter(view => !view.viewer).map(({ label, value }) => ({ label, value }))).toEqual(fromToolbar);
+    expect(LIBRARY_MANAGE_SMART_VIEWS).toEqual(fromToolbar.map(view => view.value));
+    expect(COMMAND_PALETTE_SMART_VIEWS.filter(view => view.viewer).map(view => view.value))
+      .toEqual(['continue_watching', 'favorites', 'liked', 'recently_played', 'unwatched', 'watched', 'recently_added']);
     expect(fromToolbar).toContainEqual({ label: '本地资料有更新', value: 'local_metadata_updated' });
   });
 });

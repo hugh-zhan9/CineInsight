@@ -1,6 +1,6 @@
-// 片库「缩略图墙」接线（2026-10-12 用户裁决「不要颜色，只要一个紧凑的缩略图墙」）：
-// 布局偏好的读取与回退、虚拟列表与行组件拿到的布局、格子行高预估，以及点格子与点网格卡「预览」打开同一个抽屉。
-// 这里让 VideoListRow 真实渲染，虚拟列表换成逐项渲染插槽的桩，才点得到格子本身。
+// 片库管理的布局（D-P3-03）：列表与网格。2026-10-12 加的「缩略图墙」三期拿掉了（浏览海报去观看侧「视频」）：
+// 本机还记着它的打开时退回列表，提示一次并改写偏好。另钉住网格卡「预览」打开抽屉、版本列表照常展开。
+// 这里让 VideoListRow 真实渲染，虚拟列表换成逐项渲染插槽的桩，才点得到卡片本身。
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,8 +21,11 @@ vi.mock('./VirtualVideoList.vue', () => ({
   }
 }));
 
-import VideoListPage from './VideoListPage.vue';
-import { estimateVideoWallHeight } from '../utils/virtualList.js';
+const feedback = vi.hoisted(() => ({ notify: vi.fn() }));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
+
+import VideoListPage, { readLibraryLayout } from './VideoListPage.vue';
+import { estimateVideoGridHeight } from '../utils/virtualList.js';
 
 const summary = { group_id: 5, title: '', revision: 2, member_count: 3, watched_count: 0, rated_count: 0, min_rating: null, max_rating: null, members: [] };
 const rows = [
@@ -78,75 +81,82 @@ beforeEach(() => {
 
 describe('布局偏好', () => {
   it.each([
-    ['wall', 'wall'],
     ['grid', 'grid'],
     ['list', 'list'],
     [null, 'list'],
     ['mosaic', 'list']
-  ])('localStorage 存 %s 时以 %s 打开', async (stored, expected) => {
+  ])('localStorage 存 %s 时以 %s 打开，不提示', async (stored, expected) => {
     if (stored !== null) store['cineinsight-library-layout'] = stored;
     const wrapper = await mountPage();
     expect(wrapper.vm.viewMode).toBe(expected);
     expect(wrapper.findComponent({ name: 'VirtualVideoList' }).props('layoutMode')).toBe(expected);
+    expect(feedback.notify).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  it('工具栏切到缩略图墙后虚拟列表与行组件都换成 wall', async () => {
+  it('D-P3-03 本机记着已拿掉的缩略图墙：按列表打开、提示一次并改写偏好，下次不再提示', async () => {
+    store['cineinsight-library-layout'] = 'wall';
     const wrapper = await mountPage();
-    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('update:viewMode', 'wall');
-    await flushPromises();
-    expect(wrapper.findComponent({ name: 'VirtualVideoList' }).props('layoutMode')).toBe('wall');
-    const rowsRendered = wrapper.findAllComponents({ name: 'VideoListRow' });
-    expect(rowsRendered).toHaveLength(2);
-    expect(rowsRendered.every(item => item.props('layoutMode') === 'wall' && item.props('narrow') === false)).toBe(true);
-    expect(wrapper.findAll('[data-test="library-wall-tile"]').map(tile => tile.attributes('title'))).toEqual(['第一部', '第四部']);
+    expect(wrapper.vm.viewMode).toBe('list');
+    expect(wrapper.findComponent({ name: 'VirtualVideoList' }).props('layoutMode')).toBe('list');
+    expect(wrapper.findAll('[data-test="library-wall-tile"]')).toHaveLength(0);
+    expect(feedback.notify).toHaveBeenCalledTimes(1);
+    expect(feedback.notify).toHaveBeenCalledWith('片库管理不再有缩略图墙，已换成列表。浏览海报请去观看侧「视频」。');
+    expect(store['cineinsight-library-layout']).toBe('list');
     wrapper.unmount();
+
+    const again = await mountPage();
+    expect(again.vm.viewMode).toBe('list');
+    expect(feedback.notify).toHaveBeenCalledTimes(1);
+    again.unmount();
+  });
+
+  it('D-P3-03 应用启动时本页还不在前台（观看侧）：先改写偏好，等进到片库管理再提示', async () => {
+    store['cineinsight-library-layout'] = 'wall';
+    const wrapper = shallowMount(VideoListPage, {
+      props: { tags: [], settings: {}, directories: [], pageActive: false },
+      global: { stubs: { VirtualVideoList: false, VideoListRow: false } }
+    });
+    await flushPromises();
+    expect(wrapper.vm.viewMode).toBe('list');
+    expect(store['cineinsight-library-layout']).toBe('list');
+    expect(feedback.notify).not.toHaveBeenCalled();
+    await wrapper.setProps({ pageActive: true });
+    expect(feedback.notify).toHaveBeenCalledTimes(1);
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    expect(feedback.notify).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('读偏好时存储不可用（访问即抛错）按列表打开，不提示', () => {
+    Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
+    expect(readLibraryLayout()).toEqual({ layout: 'list', removed: false });
   });
 });
 
-describe('点格子打开预览', () => {
-  it('点缩略图墙的格子与点网格卡上的「预览」打开同一个预览抽屉', async () => {
+describe('网格卡与版本组', () => {
+  it('点网格卡上的「预览」打开预览抽屉', async () => {
     store['cineinsight-library-layout'] = 'grid';
     const wrapper = await mountPage();
     const gridCard = wrapper.get('[data-row="4"]');
     await gridCard.findAll('.video-row-btn').find(button => button.text() === '预览').trigger('click');
     await flushPromises();
-    const fromGrid = previewState(wrapper);
-    expect(fromGrid).toEqual({ open: true, id: 4, snapshot: 4, sessionRequest: [4] });
-
-    wrapper.vm.closePreview();
-    api.GetPreviewSession.mockClear();
-    wrapper.vm.viewMode = 'wall';
-    await flushPromises();
-    await wrapper.get('[data-row="4"] [data-test="library-wall-tile"]').trigger('click');
-    await flushPromises();
-    expect(previewState(wrapper)).toEqual(fromGrid);
+    expect(previewState(wrapper)).toEqual({ open: true, id: 4, snapshot: 4, sessionRequest: [4] });
     expect(wrapper.vm.previewSession).toEqual({ video_id: 4, mode: 'inline' });
     wrapper.unmount();
   });
-});
 
-describe('格子高度与版本组', () => {
-  it('行高预估只由格子宽度决定：标签再多、版本组展开也不加高', async () => {
-    store['cineinsight-library-layout'] = 'wall';
+  it('网格里展开的版本列表照常显示，行高预估随之加高', async () => {
+    store['cineinsight-library-layout'] = 'grid';
     const wrapper = await mountPage();
+    const geometry = { columns: 4, cardWidth: 240 };
+    const before = wrapper.vm.estimateVideoHeight(rows[1], 15, false, geometry);
+    expect(before).toBe(estimateVideoGridHeight(rows[1], 240));
     wrapper.vm.toggleVersionGroup(rows[1]);
-    expect(wrapper.vm.isVersionGroupExpanded(rows[1])).toBe(true);
-    const geometry = { columns: 8, cardWidth: 144.75 };
-    expect(wrapper.vm.estimateVideoHeight(rows[1], 15, false, geometry)).toBe(estimateVideoWallHeight(144.75));
-    expect(wrapper.vm.estimateVideoHeight(rows[0], 15, false, geometry)).toBe(estimateVideoWallHeight(144.75));
-    wrapper.unmount();
-  });
-
-  it('展开的版本列表不塞进缩略图墙的格子，切回网格后照旧展开', async () => {
-    store['cineinsight-library-layout'] = 'wall';
-    const wrapper = await mountPage();
-    wrapper.vm.toggleVersionGroup(rows[1]);
-    await flushPromises();
-    expect(wrapper.findComponent({ name: 'VersionGroupMembers' }).exists()).toBe(false);
-    wrapper.vm.viewMode = 'grid';
     await flushPromises();
     expect(wrapper.findComponent({ name: 'VersionGroupMembers' }).exists()).toBe(true);
+    expect(wrapper.vm.estimateVideoHeight(rows[1], 15, false, geometry)).toBeGreaterThan(before);
     wrapper.unmount();
   });
 });

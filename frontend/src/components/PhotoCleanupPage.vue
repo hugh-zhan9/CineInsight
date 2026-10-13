@@ -542,7 +542,8 @@ import {
   resetPhotoCleanupReview,
   refreshPhotoCleanupStatus
 } from '../utils/photoCleanupStore.js';
-import { confirmAction } from '../utils/feedback.js';
+import { confirmAction, notify, notifySuccess, notifyUndoable } from '../utils/feedback.js';
+import { groupPairKeys, memberPairKeys, undoCleanupDismissalRecords } from '../utils/cleanupDismissals.js';
 import {
   applySuggestion, cleanupGroup, clearGroupSelection, deletionPlan, deletionPlanUnchanged,
   describeMergeFailure, describeSelectionKinds, keeperOf, lockedIDs, pruneSelection,
@@ -1404,6 +1405,11 @@ export default {
         this.review.dismissedKeys = [...new Set([...(this.review.dismissedKeys || []), entry.key])];
         this.review.selection = this.selection.filter(id => !ids.includes(id));
         this.dismissals.loaded = false;
+        // 可撤销（D-P3-06）：提示带「撤销」并记进任务中心「最近操作」；撤销后这一组在本轮审阅里重新出现。
+        const reviewKey = this.review.key;
+        notifyUndoable(`已记录这组 ${ids.length} 张图片不是重复。`, () => this.undoDismissalFromToast(groupPairKeys(ids), reviewKey, review => {
+          review.dismissedKeys = (review.dismissedKeys || []).filter(key => key !== entry.key);
+        }), { label: `图片清理：${ids.length} 张图片「不是重复」` });
       } catch (err) {
         this.localError = `忽略近似重复组失败：${err}`;
       } finally {
@@ -1431,6 +1437,11 @@ export default {
         // 移出的是推荐保留项时由剩下排第一的接替：按新的组重新裁剪，接替者不能还勾着。
         this.review.selection = pruneSelection(this.selection.filter(id => id !== memberID), this.cleanupGroups, this.selectionOptions());
         this.dismissals.loaded = false;
+        const reviewKey = this.review.key;
+        notifyUndoable('已移出本组，其余成员仍在这一组里。', () => this.undoDismissalFromToast(memberPairKeys(ids, memberID), reviewKey, review => {
+          const left = (review.removedMembers?.[entry.key] || []).filter(id => Number(id) !== memberID);
+          review.removedMembers = { ...(review.removedMembers || {}), [entry.key]: left };
+        }), { label: `图片清理：「${member.name || `图片 ${memberID}`}」移出本组` });
       } catch (err) {
         this.localError = `移出本组失败：${err}`;
       } finally {
@@ -1471,6 +1482,23 @@ export default {
     formatDismissalTime(value) {
       const time = new Date(value).getTime();
       return Number.isFinite(time) && time > 0 ? `忽略于 ${new Date(time).toLocaleString()}` : '';
+    },
+    // 提示与任务中心「最近操作」里的「撤销」（D-P3-06）：找回这一步写下的忽略记录并撤销（utils/cleanupDismissals.js）。
+    // 审阅进度在 photoCleanupStore 里，面板卸下了也照样改得到：还是同一轮分析（review.key 没变）就把这一组 / 这个成员
+    // 放回本轮审阅（restoreReview）。已经在「已忽略」里撤销过的按撤销完成处理、说一声；失败抛出，记录留着可再试。
+    async undoDismissalFromToast(keys, reviewKey, restoreReview) {
+      const { removed } = await undoCleanupDismissalRecords(DISMISSAL_KIND, keys);
+      if (!removed) {
+        notify('这条忽略已经撤销过了。');
+        return;
+      }
+      if (photoCleanupStore.review.key === reviewKey) restoreReview(photoCleanupStore.review);
+      if (!this.disposed) {
+        this.dismissals.loaded = false;
+        if (this.showDismissed) this.loadDismissals(true);
+      }
+      notifySuccess('已撤销忽略，这些图片重新参与这一轮审阅。');
+      await refreshPhotoCleanupStatus();
     },
     async undoDismissal(item) {
       if (!item?.id || this.dismissals.undoing) return;

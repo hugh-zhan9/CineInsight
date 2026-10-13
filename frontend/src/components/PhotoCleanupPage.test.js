@@ -1348,3 +1348,79 @@ describe('统一设计：选择操作条与用词（D-UD-10 / D-UD-14）', () =>
     wrapper.unmount();
   });
 });
+
+// D-P3-06：图片标签的「不是重复」「移出本组」也进任务中心「最近操作」，提示与「最近操作」里都能撤销。审阅进度在
+// photoCleanupStore 里：面板卸下（切到视频标签、离开清理中心）以后撤销，这一组 / 这个成员照样回到本轮审阅。
+describe('D-P3-06 图片清理忽略可撤销', () => {
+  const threeWay = () => statusWith({ near_duplicate_groups: [{
+    original: makeMember(1, 'a.jpg'),
+    candidates: [makeMember(2, 'b.jpg'), makeMember(3, 'c.jpg')],
+    reason: '接近'
+  }] });
+  const record = (id, ...ids) => ({ id, kind: 'image_near_duplicate', media: ids.map(mediaID => ({ id: mediaID, name: `${mediaID}.jpg` })), created_at: '' });
+
+  it('「不是重复」：提示带「撤销」并记进「最近操作」；面板卸下后撤销，三对记录都撤销，这一组回到本轮审阅', async () => {
+    const wrapper = await mountWith(threeWay());
+    await wrapper.get('[data-test="cleanup-dismiss-group"]').trigger('click');
+    await flushPromises();
+    expect(api.DismissImageNearDuplicateGroup).toHaveBeenCalledWith([1, 2, 3]);
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(0);
+    expect(undoToast().message).toBe('已记录这组 3 张图片不是重复。');
+    expect(recentOperations.list().map(item => item.label)).toEqual(['图片清理：3 张图片「不是重复」']);
+    wrapper.unmount();
+
+    api.ListCleanupDismissals.mockResolvedValue({ items: [record(9, 2, 3), record(8, 1, 3), record(7, 1, 2), record(6, 4, 5)], next_cursor: 6, has_more: false });
+    api.UndoCleanupDismissals.mockResolvedValue({ kind: 'image_near_duplicate', removed: 3 });
+    expect(await runToastAction(undoToast().id)).toBe(true);
+    await flushPromises();
+    expect(api.UndoCleanupDismissals).toHaveBeenCalledWith('image_near_duplicate', [9, 8, 7]);
+    expect(photoCleanupStore.review.dismissedKeys).toEqual([]);
+    expect(feedback.notifySuccess).toHaveBeenCalledWith('已撤销忽略，这些图片重新参与这一轮审阅。');
+    expect(recentOperations.list()).toEqual([]);
+
+    const again = await mountWith(threeWay());
+    expect(again.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
+    again.unmount();
+  });
+
+  it('「移出本组」撤销只撤这一张与其余成员的配对，它回到组里；已经撤销过的说一声、不报错', async () => {
+    const wrapper = await mountWith(threeWay());
+    await wrapper.findAll('[data-test="cleanup-remove-member"]')[2].trigger('click');
+    await flushPromises();
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(2);
+    const [operation] = recentOperations.list();
+    expect(operation.label).toBe('图片清理：「c.jpg」移出本组');
+
+    api.ListCleanupDismissals.mockResolvedValue({ items: [record(12, 2, 3), record(11, 1, 3), record(10, 1, 2)], next_cursor: 10, has_more: false });
+    api.UndoCleanupDismissals.mockResolvedValue({ kind: 'image_near_duplicate', removed: 2 });
+    await recentOperations.undo(operation.id);
+    await flushPromises();
+    expect(api.UndoCleanupDismissals).toHaveBeenCalledWith('image_near_duplicate', [12, 11]);
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(3);
+
+    // 再移出一次，然后在「已忽略」里撤销过了：这里的撤销找不到记录，按撤销完成处理。
+    await wrapper.findAll('[data-test="cleanup-remove-member"]')[2].trigger('click');
+    await flushPromises();
+    api.ListCleanupDismissals.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
+    api.UndoCleanupDismissals.mockClear();
+    await recentOperations.undo(recentOperations.list()[0].id);
+    expect(api.UndoCleanupDismissals).not.toHaveBeenCalled();
+    expect(feedback.notify).toHaveBeenCalledWith('这条忽略已经撤销过了。');
+    expect(recentOperations.list()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('重新分析过（审阅换了一轮）以后撤销：记录照样撤销，不去改新一轮的审阅', async () => {
+    const wrapper = await mountWith(threeWay());
+    await wrapper.get('[data-test="cleanup-dismiss-group"]').trigger('click');
+    await flushPromises();
+    resetPhotoCleanupReview('next-run');
+    photoCleanupStore.review.dismissedKeys = ['other'];
+    api.ListCleanupDismissals.mockResolvedValue({ items: [record(7, 1, 2)], next_cursor: 7, has_more: false });
+    api.UndoCleanupDismissals.mockResolvedValue({ kind: 'image_near_duplicate', removed: 1 });
+    await recentOperations.undo(recentOperations.list()[0].id);
+    expect(api.UndoCleanupDismissals).toHaveBeenCalledWith('image_near_duplicate', [7]);
+    expect(photoCleanupStore.review.dismissedKeys).toEqual(['other']);
+    wrapper.unmount();
+  });
+});

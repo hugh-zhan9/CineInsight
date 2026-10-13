@@ -619,7 +619,8 @@ import StatTile from '../ui/StatTile.vue';
 import CleanupConsolidationDialog from './CleanupConsolidationDialog.vue';
 import { consolidationRequest, consolidationGroupIdentity, consolidationReviewSignature, CONSOLIDATION_KINDS } from '../../utils/cleanupConsolidation.js';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
-import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
+import { confirmAction, notify, notifyError, notifySuccess, notifyUndoable } from '../../utils/feedback.js';
+import { clipKey, groupPairKeys, memberPairKeys, undoCleanupDismissalRecords, videoKey } from '../../utils/cleanupDismissals.js';
 import {
   applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, deletionPlan, deletionPlanUnchanged,
   describeMergeFailure, describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, pruneSelection,
@@ -763,6 +764,7 @@ export default {
     });
   },
   beforeUnmount() {
+    this._disposed = true;
     this.cleanupModeGeneration++;
     this.cleanupStatusRequestID++;
     this.resetCleanupProgressTracking();
@@ -1619,7 +1621,9 @@ export default {
               .filter(item => ![item.original?.id, ...(item.candidates || []).map(video => video.id)].every(id => ids.includes(id)));
           }
           this.cleanupSelection = this.cleanupSelection.filter(id => !ids.includes(id));
-          notifySuccess('已记录“不是重复”，这组视频之间的配对不再作为近似重复候选。');
+          notifyUndoable('已记录“不是重复”，这组视频之间的配对不再作为近似重复候选。',
+            () => this.undoDismissalFromToast('near_duplicate', groupPairKeys(ids)),
+            { label: `清理：${ids.length} 个视频「不是重复」` });
           await this.refreshCleanupStatus();
         } catch (err) {
           notifyError('忽略近似重复组失败: ' + err);
@@ -1660,7 +1664,9 @@ export default {
           this.cleanupKeepOverrides = this.migrateKeepOverride(oldKey, newKey, memberID);
           // 移出的是原保留项时 rest[0] 升为保留项：按新的组重新裁剪，把它移出勾选（P-032 评审 I-1）。
           this.cleanupSelection = pruneSelection(this.cleanupSelection.filter(id => id !== memberID), this.cleanupGroups, this.selectionOptions());
-          notifySuccess('已移出本组，其余成员仍在这一组里。');
+          notifyUndoable('已移出本组，其余成员仍在这一组里。',
+            () => this.undoDismissalFromToast('near_duplicate', memberPairKeys(ids, memberID)),
+            { label: `清理：「${member.name || `视频 ${memberID}`}」移出本组` });
           await this.refreshCleanupStatus();
         } catch (err) {
           notifyError('移出本组失败: ' + err);
@@ -1695,7 +1701,9 @@ export default {
               .filter(item => item.full?.id !== fullID || item.clip?.id !== clipID);
           }
           this.cleanupSelection = this.cleanupSelection.filter(id => id !== clipID);
-          notifySuccess('已记录忽略；双方文件未变时，这对截取候选不会再次出现。');
+          notifyUndoable('已记录忽略；双方文件未变时，这对截取候选不会再次出现。',
+            () => this.undoDismissalFromToast('clip', [clipKey(fullID, clipID)]),
+            { label: `清理：忽略截取片段「${group.clip?.name || `视频 ${clipID}`}」` });
           await this.refreshCleanupStatus();
         } catch (err) {
           notifyError('忽略截取片段失败: ' + err);
@@ -1724,7 +1732,9 @@ export default {
           // 同一个视频可能还在别的类别里，只有它不再是任何候选时才放掉勾选。
           const remaining = new Set(this.getAllCleanupCandidates().map(item => item.id));
           this.cleanupSelection = this.cleanupSelection.filter(id => remaining.has(id));
-          notifySuccess(`已忽略这条${label}候选。`);
+          notifyUndoable(`已忽略这条${label}候选。`,
+            () => this.undoDismissalFromToast(category, [videoKey(video.id)]),
+            { label: `清理：忽略${label}「${video.name || `视频 ${video.id}`}」` });
           await this.refreshCleanupStatus();
         } catch (err) {
           notifyError(`忽略${label}候选失败: ` + err);
@@ -1797,6 +1807,20 @@ export default {
     formatDismissalTime(value) {
       const time = new Date(value).getTime();
       return Number.isFinite(time) && time > 0 ? `忽略于 ${new Date(time).toLocaleString()}` : '';
+    },
+    // 「不是重复」「移出本组」「忽略」之后提示与任务中心「最近操作」里的「撤销」（D-P3-06）：找回这一步写下的忽略记录
+    // 并撤销（utils/cleanupDismissals.js）。已经在「已忽略」里撤销过的按撤销完成处理、说一声；失败抛出，记录留着可再试。
+    // 撤销之后与「已忽略」里逐条撤销一样：重新分析后这些候选重新参与检测，已读过的「已忽略」列表重读。
+    async undoDismissalFromToast(kind, keys) {
+      const { removed } = await undoCleanupDismissalRecords(kind, keys);
+      if (!removed) {
+        notify('这条忽略已经撤销过了。');
+        return;
+      }
+      notifySuccess('已撤销忽略。重新分析后会重新参与检测。');
+      if (this._disposed) return;
+      if (this.dismissals.loaded && this.dismissals.kind === kind) await this.loadCleanupDismissals(true);
+      await this.refreshCleanupStatus();
     },
     async undoCleanupDismissal(item) {
       if (!item?.id || this.dismissals.undoing) return;

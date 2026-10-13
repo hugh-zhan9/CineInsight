@@ -171,7 +171,7 @@ import { CreateTagWithCategory, MergeTags, UpdateTagWithCategory, TriggerAITaggi
 import AppIcon from './ui/AppIcon.vue';
 import DialogShell from './ui/DialogShell.vue';
 import TagPersonConversionPanel from './TagPersonConversionPanel.vue';
-import { confirmAction, notify, notifyError } from '../utils/feedback.js';
+import { confirmAction, notify, notifyError, notifyUndoable } from '../utils/feedback.js';
 
 // 撤销标签转人物的错误码（D-PC34）。
 const UNDO_ERROR_TEXT = {
@@ -180,6 +180,11 @@ const UNDO_ERROR_TEXT = {
   tag_name_taken: '已经有同名的标签，无法恢复原标签。请先改名或合并那个标签，再撤销这次转换。'
 };
 const RECENT_CONVERSION_LIMIT = 10;
+
+function conversionUndoError(err) {
+  const raw = String(err?.message || err || '');
+  return { raw, code: Object.keys(UNDO_ERROR_TEXT).find(item => raw.includes(item)) };
+}
 
 // 合并确认框里的影响范围（META-14）：来源标签上的视频与图片（回收站里的另列）。
 function usageSummary(counts, ids) {
@@ -359,20 +364,40 @@ export default {
       this.undoingConversionID = Number(record.id);
       this.conversionsError = '';
       try {
-        const result = await UndoTagPersonConversion(Number(record.id));
-        this.conversions = this.conversions.map(item => (Number(item.id) === Number(record.id) ? { ...item, state: 'undone', undoable: false } : item));
-        const deletedPart = result?.person_deleted ? '，这次新建的人物已删除' : '';
-        notify(`已撤销：恢复标签「${result?.tag?.name || record.tag_name}」，${Number(result?.video_count || 0)} 部视频、${Number(result?.image_count || 0)} 张图片${deletedPart}。`);
-        this.$emit('tags-changed');
-        this.$emit('conversion-undone', result);
+        await this.performConversionUndo(record.id, record.tag_name);
       } catch (err) {
-        const raw = String(err?.message || err || '');
-        const code = Object.keys(UNDO_ERROR_TEXT).find(item => raw.includes(item));
+        const { code, raw } = conversionUndoError(err);
         // 记录已经变了（别处撤销过、原标签被清理）就先重读，再把原因写上——重读会清空旧提示。
         if (code === 'conversion_not_applied' || code === 'conversion_not_undoable') await this.loadConversions();
         this.conversionsError = code ? UNDO_ERROR_TEXT[code] : `撤销失败：${raw}`;
       } finally {
         this.undoingConversionID = 0;
+      }
+    },
+    // 撤销一次标签转人物（「最近转换」列表、转换后的提示与任务中心「最近操作」共用）：恢复原标签与打标关系，
+    // 通知宿主重读标签与图片库。失败原样抛出，由调用方按入口给说法。
+    async performConversionUndo(conversionID, tagName) {
+      const result = await UndoTagPersonConversion(Number(conversionID));
+      this.conversions = this.conversions.map(item => (Number(item.id) === Number(conversionID) ? { ...item, state: 'undone', undoable: false } : item));
+      const deletedPart = result?.person_deleted ? '，这次新建的人物已删除' : '';
+      notify(`已撤销：恢复标签「${result?.tag?.name || tagName}」，${Number(result?.video_count || 0)} 部视频、${Number(result?.image_count || 0)} 张图片${deletedPart}。`);
+      this.$emit('tags-changed');
+      this.$emit('conversion-undone', result);
+      return result;
+    },
+    // 转换后的提示与任务中心「最近操作」里的「撤销」（D-P3-06）：不再确认（这就是刚做的那一步）。已经在「最近转换」里
+    // 撤销过的按撤销完成处理、说一声；其余失败抛出中文原因，记录留着可以再试。
+    async undoConversionFromToast(conversionID, tagName) {
+      try {
+        await this.performConversionUndo(conversionID, tagName);
+      } catch (err) {
+        const { code, raw } = conversionUndoError(err);
+        if (code === 'conversion_not_applied') {
+          notify('这次转换已经撤销过了。');
+          if (this.visible) await this.loadConversions();
+          return;
+        }
+        throw new Error(code ? UNDO_ERROR_TEXT[code] : raw);
       }
     },
     canConvertToPerson(tag) {
@@ -396,7 +421,12 @@ export default {
       this.mergeSourceIds = this.mergeSourceIds.filter(id => Number(id) !== Number(result.tag_id));
       this.newCategoryTagIDs = this.newCategoryTagIDs.filter(id => Number(id) !== Number(result.tag_id));
       if (Number(this.mergeTargetId) === Number(result.tag_id)) this.mergeTargetId = 0;
-      notify(`已转为人物「${result.person.display_name}」，关联 ${result.video_count} 部视频、${result.image_count} 张图片，原标签已删除。可在「最近转换」里撤销。`);
+      // 可撤销（D-P3-06）：提示带「撤销」，同时记进任务中心「最近操作」；「最近转换」列表里照样能撤销。
+      const tagName = result.tag_name || '';
+      const message = `已转为人物「${result.person.display_name}」，关联 ${result.video_count} 部视频、${result.image_count} 张图片，原标签已删除。`;
+      notifyUndoable(message, () => this.undoConversionFromToast(result.conversion_id, tagName), {
+        label: `标签「${tagName || result.person.display_name}」转为人物`
+      });
       this.$emit('tags-changed');
       this.$emit('person-converted', result);
       this.loadConversions();

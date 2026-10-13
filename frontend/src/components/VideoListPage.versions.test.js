@@ -99,18 +99,17 @@ describe('合并版本开关与查询', () => {
     reopened.unmount();
   });
 
-  it('最近播放（均衡排序）是文件级入口：不聚合，计数也按文件', async () => {
+  // 片库管理三期起只剩语义搜索（含相似视频）是文件级入口（最近播放、继续观看与随机批次拿掉了，D-P3-03）。
+  it('语义搜索是文件级入口：不聚合，计数也按文件；其余列表照「合并版本」开关', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.smartView = 'recently_played';
-    expect(wrapper.vm.versionCollapseActive()).toBe(false);
-    expect(wrapper.vm.libraryPageFilter().collapse_versions).toBe(false);
-    expect(wrapper.vm.versionGroupFor(rows[0])).toBeNull();
-    wrapper.vm.smartView = '';
-    wrapper.vm.randomPick = { active: true, ids: [1], reason: '', loading: false };
-    expect(wrapper.vm.versionCollapseActive()).toBe(false);
-    wrapper.vm.randomPick = { active: false, ids: [], reason: '', loading: false };
     expect(wrapper.vm.versionCollapseActive()).toBe(true);
     wrapper.vm.searchMode = 'semantic';
+    expect(wrapper.vm.versionCollapseActive()).toBe(false);
+    expect(wrapper.vm.libraryPageFilter().collapse_versions).toBe(false);
+    wrapper.vm.searchMode = 'file';
+    wrapper.vm.smartView = 'stale';
+    expect(wrapper.vm.versionCollapseActive()).toBe(true);
+    wrapper.vm.collapseVersions = false;
     expect(wrapper.vm.versionCollapseActive()).toBe(false);
     wrapper.unmount();
   });

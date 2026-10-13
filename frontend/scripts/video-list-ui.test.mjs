@@ -14,7 +14,11 @@ const settingsSource = readFileSync(new URL('../src/components/SettingsPage.vue'
 const scanDirectoriesSource = readFileSync(new URL('../src/components/settings/ScanDirectoriesSection.vue', import.meta.url), 'utf8');
 // P-002 把清理审阅面板抽成了独立组件，下面属于面板的断言跟着搬到新文件上。
 const cleanupPanelSource = readFileSync(new URL('../src/components/video-list/CleanupReviewPanel.vue', import.meta.url), 'utf8');
-const taskBarsSource = readFileSync(new URL('../src/components/video-list/BackgroundTaskStatusBars.vue', import.meta.url), 'utf8');
+// D-P3-05：片库页的后台任务状态条（BackgroundTaskStatusBars）删了，进度、取消与上一轮结果都在任务中心；
+// 「管理」菜单的进度文案与本地资料补全后的重载由 video-list/libraryTasks.js 承担。
+const libraryTasksSource = readFileSync(new URL('../src/components/video-list/libraryTasks.js', import.meta.url), 'utf8');
+const taskCommandsSource = readFileSync(new URL('../src/utils/taskCommands.js', import.meta.url), 'utf8');
+const taskCenterSource = readFileSync(new URL('../src/components/TaskCenterDrawer.vue', import.meta.url), 'utf8');
 // 吸顶工具栏（含结果条）与批量操作栏也各自成组件了。
 const toolbarSource = readFileSync(new URL('../src/components/video-list/LibraryToolbar.vue', import.meta.url), 'utf8');
 const batchBarSource = readFileSync(new URL('../src/components/video-list/BatchActionBar.vue', import.meta.url), 'utf8');
@@ -33,7 +37,8 @@ assert.match(toolbarSource, /<SegmentedControl[^>]*?label="搜索模式"[^>]*?:o
 assert.match(toolbarSource, /dataTest: `search-mode-\$\{mode\.value\}`/, 'each search mode keeps its search-mode-* hook');
 assert.match(toolbarSource, /<SegmentedControl\s+label="片库布局"/, 'layout should use the shared SegmentedControl');
 assert.match(toolbarSource, /<SegmentedControl[\s\S]*?label="行高"/, 'row density should use the shared SegmentedControl');
-assert.match(toolbarSource, /class="split-btn"/, 'random play should be one split button, not a select plus two buttons');
+// D-P3-03：片库管理只留管理，随机播放与今晚看什么在观看侧「视频」海报墙上。
+assert.doesNotMatch(toolbarSource, /class="split-btn"|random-play-main|id: 'tonight'|'play-random'/, 'the library-manage toolbar no longer offers random play or 今晚看什么');
 assert.match(toolbarSource, /toggleToolbarMenu\('filter', 'filterTrigger'\)/, 'range conditions should collapse into a filter popover');
 assert.match(toolbarSource, /toggleToolbarMenu\('manage', 'manageTrigger'\)/, 'library maintenance should collapse into a manage menu');
 
@@ -57,7 +62,7 @@ assert.doesNotMatch(toolbarSource, /manageAttentionCount/, 'the manage button ba
 // D-P3-01：待处理工作台（弹窗）改成待处理页。AI 视频 / 同源、AI 图片、清理候选进专门工具（固定命令 ID）；
 // 人脸、建议作品集、本地资料更新改在页内处理（嵌现有面板、调现有应用接口），不再跳走。
 const pendingPageSource = readFileSync(new URL('../src/components/manage/PendingWorkPage.vue', import.meta.url), 'utf8');
-for (const command of ['library.openAIReview', 'photos.openAIReview', 'action:cleanup']) {
+for (const command of ['library.openAIReview', 'photos.openAIReview', 'library.openCleanup']) {
   assert.match(pendingPageSource, new RegExp(`command: '${command.replace('.', '\\.')}'`), `pending work page should open the tool via ${command}`);
 }
 for (const inline of [/<FaceClusterReviewPanel\b/, /<CollectionSuggestionPanel\b/, /ApplyLocalMetadataBatch\(/, /PreviewLocalMetadataBatch\(/]) {
@@ -70,14 +75,18 @@ assert.doesNotMatch(videoListSource, /GetAITaggingStatusSummary/, 'the library p
 assert.doesNotMatch(videoListSource, /cleanupBadgeCount|cleanupAnalyzing|aiTagSummary/, 'the dead manage-menu badge mirrors are gone');
 assert.doesNotMatch(videoListSource, /@delete-tag=/, 'the toolbar no longer offers a delete × on tag chips (META-14)');
 
-// 运行中的补全任务把进度和取消让给了常驻状态条——按钮进了菜单，
-// 进度不能跟着一起藏起来，否则关掉菜单就看不到还在跑什么。任务名取自共享标签表（APP-03）。
-assert.match(taskBarsSource, /\{\{ labels\.technical \}\} \{\{ technicalBackfill\.processed \}\}\/\{\{ technicalBackfill\.total \}\}/, 'running backfill progress should stay visible in the status banner');
-assert.match(taskBarsSource, /@click="cancelTechnicalBackfill"/, 'the status banner should carry the cancel action');
-assert.match(taskBarsSource, /@click="cancelPerceptualHashBackfill"/, 'the status banner should carry the phash cancel action');
-assert.match(taskBarsSource, /@click="cancelLocalMetadataExport"/, 'the status banner should carry the NFO export cancel action');
-// 运行中的进度条用统一的 ProgressBar（D-UD-06）。
-assert.match(taskBarsSource, /<ProgressBar v-if="technicalBackfill\.running/, 'running backfills should show the shared progress bar');
+// 运行中的补全任务按钮在菜单里，进度与取消在任务中心（D-P3-05，原片库页的常驻状态条）：菜单项照旧写「（p/t）」，
+// 数据跟着各任务既有的运行时事件走；取消（含 NFO 写出）与进度条都在任务中心。
+assert.doesNotMatch(videoListSource, /<BackgroundTaskStatusBars\b|import BackgroundTaskStatusBars|\$refs\.taskBars/, 'the library page no longer carries background task status bars');
+for (const event of ['technical-backfill-state', 'perceptual-hash-state', 'local-metadata-backfill', 'local-metadata-export']) {
+  assert.match(libraryTasksSource, new RegExp(`event: '${event}'`), `manage-menu progress labels should follow ${event}`);
+}
+assert.match(libraryTasksSource, /key === 'localMetadataBackfill' && data\?\.completed && data\?\.succeeded\) this\.reloadCurrentView\(\)/, 'a finished local metadata backfill still reloads the library');
+assert.match(toolbarSource, /`补全技术信息（\$\{this\.technicalBackfill\.processed\}\/\$\{this\.technicalBackfill\.total\}）`/, 'the manage menu still shows backfill progress');
+for (const [key, cancel] of [['technical', 'CancelTechnicalBackfill'], ['phash', 'CancelPerceptualHashBackfill'], ['local_metadata_export', 'CancelLocalMetadataExport']]) {
+  assert.match(taskCommandsSource, new RegExp(`${key}: \\{[^}]*cancel: \\(\\) => ${cancel}\\(\\)`), `the task center can cancel ${key}`);
+}
+assert.match(taskCenterSource, /<ProgressBar class="task-item__bar"/, 'running tasks show the shared progress bar in the task center');
 
 // 结果条是新工具栏的回显机制：条件折叠进浮层后，靠它让用户知道还开着什么。
 assert.match(toolbarSource, /class="result-bar"/, 'a result bar should echo the active conditions');

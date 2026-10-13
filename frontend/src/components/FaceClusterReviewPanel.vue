@@ -74,7 +74,8 @@
           </div>
         </div>
 
-        <button type="button" class="btn btn--secondary btn--sm" :data-test="`face-cluster-detail-${card.id}`" @click="detailCluster = card">查看来源详情</button>
+        <!-- 卡片是纵向 flex：按钮不能被拉满整张卡片的宽度，只占自己的宽（align-self）。 -->
+        <button type="button" class="btn btn--secondary btn--sm face-review__detail" :data-test="`face-cluster-detail-${card.id}`" @click="detailCluster = card">查看来源详情</button>
         <div v-if="card.status === 'unnamed'" class="face-review__actions">
           <button
             type="button"
@@ -376,7 +377,7 @@ import {
   IgnoreFaceCluster, LinkFaceCluster, ListFaceClusterPage, ListIgnoredFaceClusters, ListPeople, NameFaceCluster,
   PreviewFaceClusterUnlink, ReassignFaceCluster, RestoreFaceCluster, UnlinkFaceCluster
 } from '../../wailsjs/go/main/App';
-import { confirmAction } from '../utils/feedback.js';
+import { confirmAction, notify, notifyUndoable } from '../utils/feedback.js';
 
 // 后端错误码到人话的映射。STALE_CODES 说明这一簇已经被别处处理过了，除了报错还要顺手
 // 刷新，否则用户对着过期的卡片再点一次还是同一个错。按长度倒序匹配，避免一个码是另一个码的子串。
@@ -522,6 +523,8 @@ export default {
     }
   },
   beforeUnmount() {
+    // 卸下以后（人物与作品集、待处理页切走了）还可能从「最近操作」撤销忽略：撤销照常调接口，只是不再改这里的列表。
+    this._disposed = true;
     this.reviewOff?.();
     this.analysisOff?.();
   },
@@ -771,6 +774,8 @@ export default {
       });
     },
     // 忽略前二次确认（D-PC30）：被忽略的簇还会吸收同一个人的新人脸，只是不再提示。
+    // 忽略做完给带「撤销」的全局提示并记进任务中心「最近操作」（D-P3-06，撤销 = RestoreFaceCluster），
+    // 代替原来写在面板里的那一行说明。
     async ignore(card) {
       if (this.busy) return;
       const confirmed = await confirmAction({
@@ -784,8 +789,35 @@ export default {
         if (this.ignored.loaded) {
           this.ignored.items = [{ cluster: { ...card, status: 'ignored' }, ignored_at: new Date().toISOString(), absorbed_since_ignored: 0 }, ...this.ignored.items];
         }
-        return '已忽略这一组；同一个人的新人脸会归入此组且不再提示，可在「已忽略」中恢复。';
+        notifyUndoable(
+          '已忽略这一组人脸；同一个人的新人脸会归入此组且不再提示，可在「已忽略」中恢复。',
+          () => this.undoIgnore(card),
+          { label: `忽略人脸组（${this.mediaSummary(card)}）` }
+        );
+        return '';
       });
+    },
+    // 提示或「最近操作」里的「撤销」：恢复这一组（回到「待处理」）。已经恢复过（不在「已忽略」里了）按撤销完成处理、
+    // 说一声；其余失败抛出中文原因，记录留着可以再试。面板还在时就地把它挪回「待处理」，不整表重拉。
+    async undoIgnore(card) {
+      try {
+        await RestoreFaceCluster(card.id);
+      } catch (err) {
+        const { code, text } = this.errorMessage(err);
+        if (code === 'cluster_not_ignored') {
+          notify('这组人脸已经不在「已忽略」里了（可能已经恢复过），不用再撤销。');
+          if (!this._disposed) await this.refresh();
+          return;
+        }
+        throw new Error(code ? text : String(err?.message || err || '') || '恢复失败');
+      }
+      if (this._disposed) return;
+      this.ignored.items = this.ignored.items.filter(item => item.cluster.id !== card.id);
+      if (!this.unnamed.items.some(item => item.id === card.id)) {
+        this.unnamed.items = [{ ...card, status: 'unnamed', person_id: 0, person_name: '' }, ...this.unnamed.items];
+      }
+      this.$emit('changed');
+      this.emitLoaded();
     },
     restore(row) {
       const cluster = row.cluster;
@@ -960,6 +992,10 @@ export default {
 
 .face-review__more {
   align-self: center;
+}
+
+.face-review__detail {
+  align-self: flex-start;
 }
 
 .face-review__card {

@@ -1,11 +1,33 @@
 <template>
-  <main :class="['entity-library', { 'entity-library--with-drawer': drawerEntity }]">
-    <nav v-if="selectedEntity" class="entity-library__nav">
-      <button type="button" class="btn btn--secondary btn--sm" @click="closeEntity"><AppIcon name="chevron-left" /> 返回{{ isPeople ? '人物' : '作品集' }}列表</button>
-    </nav>
-    <PageHeader class="entity-library__toolbar" :title="pageTitle" :subtitle="pageSubtitle">
-      <template #actions>
-        <template v-if="selectedEntity">
+  <!-- 人物与作品集管理页（D-P3-04）：页头 + 三个标签 人物 · 作品集 · 人脸审阅。人物与作品集两个标签共用下面的列表 / 对象区
+       （listKind 是正在管的那一种实体），人脸审阅标签挂完整的人脸审阅面板（待处理 · 已命名 · 已忽略）。 -->
+  <main :class="['entity-library', { 'entity-library--with-drawer': drawerEntity && !isFacesTab }]">
+    <PageHeader class="entity-library__header" title="人物与作品集" :subtitle="pageSubtitle">
+      <template v-if="!isFacesTab && !selectedEntity" #actions>
+        <div class="entity-library__search">
+          <input v-model="keyword" :placeholder="isPeople ? '搜索显示或原始姓名' : '搜索名称或简介'" :aria-label="isPeople ? '搜索人物' : '搜索作品集'" data-test="entity-library-search" @keyup.enter="reload" />
+          <button type="button" class="btn btn--secondary" @click="reload">搜索</button>
+        </div>
+      </template>
+      <template #below>
+        <AppTabs :tabs="tabItems" :model-value="activeTab" id-prefix="entities-manage" aria-label="人物与作品集" @update:model-value="selectTab" />
+      </template>
+    </PageHeader>
+
+    <div
+      v-show="!isFacesTab"
+      :id="`entities-manage-panel-${listKind}`"
+      class="entity-library__panel"
+      role="tabpanel"
+      :aria-labelledby="`entities-manage-tab-${listKind}`"
+      :aria-busy="listLoadingFirst || entityLoadingFirst ? 'true' : undefined"
+    >
+    <template v-if="selectedEntity">
+      <nav class="entity-library__nav">
+        <button type="button" class="btn btn--secondary btn--sm" @click="closeEntity"><AppIcon name="chevron-left" /> 返回{{ isPeople ? '人物' : '作品集' }}列表</button>
+      </nav>
+      <PageHeader class="entity-library__entity-head" level="section" :title="selectedEntityName" :subtitle="entitySubtitle" data-test="entity-library-entity-head">
+        <template #actions>
           <button type="button" class="btn btn--primary" @click="drawerEntity = { ...selectedEntity }">编辑与批量关联</button>
           <!-- D-PC32：人物合并与显式删除（META-03 / META-05）。 -->
           <template v-if="isPeople">
@@ -13,16 +35,12 @@
             <button type="button" class="btn btn--danger" data-test="person-delete" :disabled="personActionBusy" @click="requestDeletePerson">删除人物</button>
           </template>
         </template>
-        <div v-else class="entity-library__search">
-          <input v-model="keyword" :placeholder="isPeople ? '搜索显示或原始姓名' : '搜索名称或简介'" @keyup.enter="reload" />
-          <button type="button" class="btn btn--secondary" @click="reload">搜索</button>
-        </div>
-      </template>
-    </PageHeader>
+      </PageHeader>
+    </template>
 
     <section v-if="!selectedEntity" class="entity-library__create glass-surface">
-      <input v-model="createForm.name" :placeholder="isPeople ? '显示姓名' : '作品集名称'" maxlength="200" />
-      <input v-model="createForm.secondary" :placeholder="isPeople ? '原始姓名（可空）' : '简介（可空）'" :maxlength="isPeople ? 200 : 4000" />
+      <input ref="createName" v-model="createForm.name" :placeholder="isPeople ? '显示姓名' : '作品集名称'" :aria-label="isPeople ? '新人物的显示姓名' : '新作品集的名称'" maxlength="200" />
+      <input v-model="createForm.secondary" :placeholder="isPeople ? '原始姓名（可空）' : '简介（可空）'" :aria-label="isPeople ? '新人物的原始姓名' : '新作品集的简介'" :maxlength="isPeople ? 200 : 4000" />
       <button type="button" class="btn btn--primary" :disabled="creating" @click="createEntity">{{ creating ? '创建中…' : (isPeople ? '明确新建人物' : '新建作品集') }}</button>
     </section>
 
@@ -32,7 +50,7 @@
     <section v-if="isPeople && selectedEntity && mergeForm.open" class="entity-person-merge glass-surface" data-test="person-merge-panel">
       <p>把其他人物合并到「{{ selectedEntityName }}」：它们的视频、图片关系并入「{{ selectedEntityName }}」（重复的自动去掉），人脸组改指向「{{ selectedEntityName }}」，被并入的人物随后删除。</p>
       <div class="entity-library__search">
-        <input v-model="mergeForm.keyword" placeholder="搜索要并入的人物" data-test="person-merge-search" @keyup.enter="searchMergeCandidates" />
+        <input v-model="mergeForm.keyword" placeholder="搜索要并入的人物" aria-label="搜索要并入的人物" data-test="person-merge-search" @keyup.enter="searchMergeCandidates" />
         <button type="button" class="btn btn--secondary" :disabled="mergeForm.searching" @click="searchMergeCandidates">搜索</button>
       </div>
       <div class="entity-person-merge__options">
@@ -50,21 +68,17 @@
       </div>
     </section>
 
-    <!-- 人脸分析认出来但还没命名的面孔就在这里等着：命名或关联之后它们才成为下面列表里的人物。
-         面板与 AI 标签管理里的「人物候选」是同一个组件、同一批簇。 -->
-    <section v-if="isPeople && !selectedEntity" class="entity-face-review glass-surface" data-test="people-face-review">
-      <div class="entity-face-review__head">
-        <div>
-          <h3>待命名人脸</h3>
-          <p data-test="people-face-review-summary">{{ faceReviewSummary }}</p>
-        </div>
-        <button type="button" class="btn btn--secondary btn--sm" data-test="people-face-review-toggle" @click="toggleFaceReview">{{ faceReviewCollapsed ? '展开' : '收起' }}</button>
-      </div>
-      <FaceClusterReviewPanel v-show="!faceReviewCollapsed" @changed="reload" @loaded="onFaceReviewLoaded" />
-    </section>
-
     <template v-if="!selectedEntity">
-      <section class="entity-library__grid">
+      <!-- 列表的三种状态：首次读取骨架屏；读失败横幅 + 重试；读到了但没有时空状态（给下一步）。 -->
+      <AppBanner v-if="listError" tone="danger" :title="`${isPeople ? '人物' : '作品集'}列表没读到`" :message="listError" data-test="entity-library-list-error">
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" data-test="entity-library-list-retry" :disabled="loading" @click="reload">重试</button>
+        </template>
+      </AppBanner>
+      <div v-if="listLoadingFirst" class="entity-library__grid" data-test="entity-library-loading">
+        <SkeletonBlock v-for="index in 6" :key="index" shape="card" :lines="2" />
+      </div>
+      <section v-else class="entity-library__grid">
         <button v-for="item in items" :key="entityID(item)" type="button" class="btn-plain entity-card glass-surface" @click="openEntity(item)">
           <img v-if="assetURL(item)" :src="assetURL(item)" alt="" />
           <div v-else class="entity-card__placeholder">{{ isPeople ? '人物' : '作品集' }}</div>
@@ -77,15 +91,29 @@
         </button>
       </section>
       <EmptyState
-        v-if="!loading && !items.length"
+        v-if="!loading && !listError && !items.length"
         :icon="isPeople ? 'person' : 'collection'"
         :title="`暂无${isPeople ? '人物' : '作品集'}`"
-        :message="keyword.trim() ? '换个关键词再搜一次。' : (isPeople ? '在上面明确新建人物，或者给待命名人脸起名。' : '在上面新建作品集，再把视频加进去。')"
+        :message="emptyMessage"
         data-test="entity-library-empty"
-      />
+      >
+        <template #actions>
+          <button v-if="keyword.trim()" type="button" class="btn btn--secondary" data-test="entity-library-clear-search" @click="clearSearch">清空搜索</button>
+          <button v-else-if="isPeople" type="button" class="btn btn--secondary" data-test="entity-library-go-faces" @click="selectTab('faces')">去人脸审阅</button>
+          <button v-else type="button" class="btn btn--secondary" data-test="entity-library-focus-create" @click="focusCreate">新建作品集</button>
+        </template>
+      </EmptyState>
     </template>
 
     <template v-else>
+      <AppBanner v-if="entityError" tone="danger" :title="`${isPeople ? '人物' : '作品集'}的内容没读到`" :message="entityError" data-test="entity-library-entity-error">
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" data-test="entity-library-entity-retry" :disabled="entityVideosLoading" @click="loadEntityVideos(true)">重试</button>
+        </template>
+      </AppBanner>
+      <div v-if="entityLoadingFirst" class="entity-video-grid" data-test="entity-library-entity-loading">
+        <SkeletonBlock v-for="index in 4" :key="index" shape="card" :lines="2" />
+      </div>
       <section v-if="entityVideos.length" class="entity-video-grid" aria-label="相关视频">
         <article v-for="video in entityVideos" :key="video.id" class="entity-video-card glass-surface">
           <button type="button" class="btn-plain entity-video-card__preview" @click="openVideoDetails(video)">
@@ -105,7 +133,11 @@
           </div>
         </article>
       </section>
-      <EmptyState v-if="!entityVideosLoading && !entityVideos.length" icon="videos" title="当前还没有关联视频" message="点击「编辑与批量关联」可按文件夹筛选并多选加入。" data-test="entity-videos-empty" />
+      <EmptyState v-if="!entityVideosLoading && !entityError && !entityVideos.length" icon="videos" title="当前还没有关联视频" message="点击「编辑与批量关联」可按文件夹筛选并多选加入。" data-test="entity-videos-empty">
+        <template #actions>
+          <button type="button" class="btn btn--secondary" data-test="entity-videos-empty-edit" @click="drawerEntity = { ...selectedEntity }">编辑与批量关联</button>
+        </template>
+      </EmptyState>
       <section v-if="isPeople" class="entity-image-section" aria-label="相关图片" data-test="person-image-section">
         <h3>图片（{{ selectedEntityImageCount }}）</h3>
         <p v-if="entityImagesError" class="entity-library__error" role="alert">{{ entityImagesError }}</p>
@@ -145,12 +177,27 @@
     >
       {{ (selectedEntity ? entityVideosLoading : loading) ? '加载中…' : (selectedEntity ? '加载更多相关视频' : `加载更多${isPeople ? '人物' : '作品集'}`) }}
     </button>
+    </div>
+
+    <!-- 人脸审阅（D-P3-04）：人脸分析认出的面孔在这里命名、关联、确认追加或忽略，命名或关联之后成为「人物」标签里的人物。
+         面板随本页一起挂载（标签上的数量要靠它读），不在这个标签上时只隐藏。 -->
+    <section
+      v-show="isFacesTab"
+      id="entities-manage-panel-faces"
+      class="entity-face-review"
+      role="tabpanel"
+      aria-labelledby="entities-manage-tab-faces"
+      data-test="people-face-review"
+    >
+      <p class="entity-face-review__summary" data-test="people-face-review-summary">{{ faceReviewSummary }}</p>
+      <FaceClusterReviewPanel @changed="handleFacesChanged" @loaded="onFaceReviewLoaded" />
+    </section>
 
     <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="unlinkingImageIDs.includes(imagePreview.id)" :action-error="entityImagesError" @close="imagePreview = null" @unlink="unlinkPersonImage" @delete="requestPersonMediaDelete('image', $event)" />
     <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" @restored="handlePersonMediaRestored" />
 
     <PreviewDrawer
-      v-if="drawerEntity"
+      v-if="drawerEntity && !isFacesTab"
       ref="personDrawer"
       :initial-entity="drawerEntity"
       @close="drawerEntity = null"
@@ -175,12 +222,16 @@ import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
+import AppBanner from './ui/AppBanner.vue';
 import AppIcon from './ui/AppIcon.vue';
+import AppTabs from './ui/AppTabs.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notify, notifySuccess } from '../utils/feedback.js';
 import { formatBytes, formatDuration } from '../utils/mediaDetails.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
+import { DEFAULT_ENTITIES_MANAGE_TAB, ENTITIES_MANAGE_TABS, isEntitiesManageTab } from '../utils/appCommands.js';
 
 // UpdateVideoWatchProgress 的起播来源（D-PC42）。
 const WATCH_PROGRESS_ORIGINS = ['resume', 'start', 'jump'];
@@ -195,45 +246,82 @@ function personErrorText(err, fallback) {
   return { code, text: code ? PERSON_ERROR_TEXT[code] : `${fallback}：${raw}` };
 }
 const emptyMergeForm = () => ({ open: false, keyword: '', results: [], selectedIDs: [], searching: false, error: '' });
+// 列表 / 对象区管的实体种类：标签 person / collection 各管一种；人脸审阅标签不换种类（切回来时列表与打开的对象都还在）。
+const LIST_KINDS = ['person', 'collection'];
+const TAB_DATA_TESTS = { person: 'entities-manage-tab-person', collection: 'entities-manage-tab-collection', faces: 'entities-manage-tab-faces' };
+const PAGE_SUBTITLES = {
+  person: '本地维护的演员实体；同名人物会保持独立。',
+  collection: '手工编排的视频集合；一个视频可以属于多个作品集。',
+  faces: '人脸分析认出的面孔：在这里命名、关联或确认追加之后，才会成为「人物」里的人物。'
+};
+const COMMAND_SCOPE = 'entities-manage';
 
+// 管理侧「人物与作品集」（D-P3-04，详细设计 §3.8）：页头 + 标签 人物 · 作品集 · 人脸审阅。
+// - 当前标签归 App（页面参数 tab，点标签发 update:tab）；people.openFaceReview 由 App 带着 { tab: 'faces' } 切过来。
+// - 人物 / 作品集：新建、改名（编辑抽屉）、合并、删除、批量关联、从片库移除媒体、解绑图片、作品集排序，全部编辑能力都在这里。
+// - focusEntity（观看页「在管理中编辑」）：{ id, name }，在对应的标签上打开这个对象并连编辑抽屉一起打开，置一次即消费。
 export default {
   name: 'EntityLibraryPage',
-  components: { AppIcon, EmptyState, FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PageHeader, PersonMediaDeleteDialog },
-  // open-video(video)：点了某部相关视频，App 按观看区分流进整页详情。
-  emits: ['open-video'],
+  components: { AppBanner, AppIcon, AppTabs, EmptyState, FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PageHeader, PersonMediaDeleteDialog, SkeletonBlock },
+  // open-video(video)：点了某部相关视频，App 按管理区分流（片库管理 + 详情抽屉）。update:tab(key)：用户点了标签。
+  emits: ['open-video', 'update:tab'],
   props: {
-    entityType: { type: String, required: true },
-    // 命令面板「作品集 · X」/「人物 · X」的落点（D-029）：{ id, name }，置一次即消费。
+    tab: { type: String, default: DEFAULT_ENTITIES_MANAGE_TAB },
     focusEntity: { type: Object, default: null }
   },
   data() {
     return {
+      listKind: LIST_KINDS.includes(this.tab) ? this.tab : 'person',
       items: [], keyword: '', cursorName: '', cursorID: 0, hasMore: true, loading: false, creating: false, error: '',
+      // 列表读失败（横幅 + 重试）；打开的对象读失败（横幅 + 重试）。其余动作的失败照旧写在 error 里。
+      listError: '', entityError: '',
       createForm: { name: '', secondary: '' }, selectedEntity: null, selectedItem: null, drawerEntity: null,
       entityVideos: [], entityVideosHasMore: false, entityVideosLoading: false, entityVideoCursor: 0, collectionVideoPool: [],
       // 人物详情的图片区块独立分页、不与视频混排（D-021）；作品集不覆盖图片。
       entityImages: [], entityImageCursor: 0, entityImagesLoading: false, entityImagesError: '',
       playingVideoIDs: [], selectedPersonImageIDs: [], imagePreview: null, unlinkingImageIDs: [],
       personMediaDeleteTarget: null,
-      // 待命名人脸分区：面板自己拉数据，这里只记摘要与收起状态。没有待处理项时默认收起，
-      // 用户手动点过展开/收起之后就不再替他做主。
-      faceReviewCounts: null, faceReviewCollapsed: false, faceReviewToggled: false,
+      // 人脸审阅：面板自己拉数据，这里只记它报上来的数量（标签上的数字与摘要）。
+      faceReviewCounts: null,
       mergeForm: emptyMergeForm(), personActionBusy: false
     };
   },
   computed: {
-    isPeople() { return this.entityType === 'person'; },
+    activeTab() { return isEntitiesManageTab(this.tab) ? this.tab : DEFAULT_ENTITIES_MANAGE_TAB; },
+    isFacesTab() { return this.activeTab === 'faces'; },
+    isPeople() { return this.listKind === 'person'; },
+    tabItems() {
+      return ENTITIES_MANAGE_TABS.map(tab => ({
+        key: tab.key,
+        label: tab.label,
+        dataTest: TAB_DATA_TESTS[tab.key],
+        count: tab.key === 'faces' ? this.faceReviewTabCount : null
+      }));
+    },
+    // 人脸审阅标签上的数字：面板读到之后才有（未命名还有下一页时带「+」），没有待处理项时不写。
+    faceReviewTabCount() {
+      const counts = this.faceReviewCounts;
+      if (!counts) return null;
+      const total = counts.unnamed + counts.appendPending;
+      if (!total && !counts.unnamedHasMore) return null;
+      return `${total}${counts.unnamedHasMore ? '+' : ''}`;
+    },
+    listLoadingFirst() { return this.loading && !this.items.length && !this.listError; },
+    entityLoadingFirst() { return this.entityVideosLoading && !this.entityVideos.length && !this.entityError; },
+    emptyMessage() {
+      if (this.keyword.trim()) return '换个关键词再搜一次，或清空搜索看全部。';
+      return this.isPeople ? '在上面明确新建人物，或者去「人脸审阅」给认出来的面孔起名。' : '在上面新建作品集，再把视频加进去。';
+    },
     selectedEntityName() { return this.selectedItem ? this.entityName(this.selectedItem) : (this.isPeople ? '人物作品' : '作品集成员'); },
     selectedEntityVideoCount() { return Number(this.selectedItem?.active_video_count || this.entityVideos.length); },
     selectedEntityImageCount() { return Number(this.selectedItem?.active_image_count || this.entityImages.length); },
-    // 页头（PageHeader）：列表时是「人物 / 作品集」，打开某一个时是它的名字与已加载的数量。
-    pageTitle() { return this.selectedEntity ? this.selectedEntityName : (this.isPeople ? '人物' : '作品集'); },
-    pageSubtitle() {
-      if (this.selectedEntity && this.isPeople) {
+    // 页头副标题跟着标签走；打开某一个对象时，它的名字与已加载的数量写在下面的分区标题上。
+    pageSubtitle() { return PAGE_SUBTITLES[this.activeTab]; },
+    entitySubtitle() {
+      if (this.isPeople) {
         return `已加载：视频 ${this.entityVideos.length} / ${this.selectedEntityVideoCount} 部 · 图片 ${this.entityImages.length} / ${this.selectedEntityImageCount} 张。`;
       }
-      if (this.selectedEntity) return `${this.entityVideos.length} / ${this.selectedEntityVideoCount} 部已加载，可直接查看详情、播放或在访达中显示。`;
-      return this.isPeople ? '本地维护的演员实体；同名人物会保持独立。' : '手工编排的视频集合；一个视频可以属于多个作品集。';
+      return `${this.entityVideos.length} / ${this.selectedEntityVideoCount} 部已加载，可直接查看详情、播放或在访达中显示。`;
     },
     faceReviewSummary() {
       const counts = this.faceReviewCounts;
@@ -243,7 +331,7 @@ export default {
       if (counts.unnamed) parts.push(`${counts.unnamed}${counts.unnamedHasMore ? '+' : ''} 组未命名`);
       if (counts.appendPending) parts.push(`${counts.appendPending} 组待确认追加`);
       if (!parts.length) return '暂无待处理的人脸候选。人脸分析在设置页启动，认出的面孔会出现在这里。';
-      return `${parts.join(' · ')}；命名或关联后会成为下面列表里的人物。`;
+      return `${parts.join(' · ')}；命名或关联后会出现在「人物」标签里。`;
     },
     mergeCandidates() {
       const selfID = Number(this.selectedEntity?.id || 0);
@@ -251,36 +339,19 @@ export default {
     }
   },
   watch: {
-    entityType() { this.closeEntity(); this.reload(); },
+    // 标签换到另一种实体：列表从头读，打开的对象与表单收起（原先是整页按种类重挂）。先于 focusEntity 处理，
+    // 「在管理中编辑」同一拍换标签又给对象时，对象落在新的那一种上（applyFocusEntity 也会先同步一次）。
+    tab() { this.syncListKind(); },
     focusEntity(focus) { this.applyFocusEntity(focus); }
   },
   mounted() {
     this.setupInfiniteLoading();
     this.reload();
     this.applyFocusEntity(this.focusEntity);
-    // 命令面板的本页动作（D-029）。两种实体各挂一个 scope：两个页面不会同时挂载。
-    const commands = [{
-      id: this.isPeople ? 'action:person-reload' : 'action:collection-reload',
-      group: 'action',
-      label: this.isPeople ? '刷新人物列表' : '刷新作品集列表',
-      keywords: ['reload', '刷新'],
-      enabled: () => !this.loading,
-      run: () => this.reload()
-    }];
-    // people.openFaceReview 是待处理工作台跳转用的固定命令 ID（详细设计 §6.1 / D-PC27）。
-    if (this.isPeople) {
-      commands.push({
-        id: 'people.openFaceReview',
-        group: 'action',
-        label: '处理待命名人脸',
-        keywords: ['face', '人脸', '人物候选', '待处理'],
-        run: () => this.openFaceReview()
-      });
-    }
-    registerCommands(this.isPeople ? 'entity-person' : 'entity-collection', commands);
+    this.registerPageCommands();
   },
   beforeUnmount() {
-    unregisterCommands(this.isPeople ? 'entity-person' : 'entity-collection');
+    unregisterCommands(COMMAND_SCOPE);
     this._intersectionObserver?.disconnect();
   },
   methods: {
@@ -349,23 +420,58 @@ export default {
     },
     formatBytes,
     formatDuration,
+    // 命令面板的本页动作（D-029）：刷新当前那一种实体的列表（命令 ID 按种类，换种类时重新登记），以及
+    // people.openFaceReview——待处理与 App 全局命令跳转用的固定命令 ID（详细设计 §6.1 / D-PC27），切到「人脸审阅」标签。
+    registerPageCommands() {
+      registerCommands(COMMAND_SCOPE, [
+        {
+          id: this.isPeople ? 'action:person-reload' : 'action:collection-reload',
+          group: 'action',
+          label: this.isPeople ? '刷新人物列表' : '刷新作品集列表',
+          keywords: ['reload', '刷新'],
+          enabled: () => !this.loading,
+          run: () => this.reload()
+        },
+        {
+          id: 'people.openFaceReview',
+          group: 'action',
+          label: '处理待命名人脸',
+          keywords: ['face', '人脸', '人脸审阅', '人物候选', '待处理'],
+          run: () => this.selectTab('faces')
+        }
+      ]);
+    },
+    selectTab(key) {
+      if (isEntitiesManageTab(key) && key !== this.activeTab) this.$emit('update:tab', key);
+    },
+    // 当前标签是人物或作品集、又不是正在管的那一种：换过去，列表从头读，打开的对象、搜索与表单都收起。
+    syncListKind() {
+      const kind = this.activeTab;
+      if (!LIST_KINDS.includes(kind) || kind === this.listKind) return;
+      this.listKind = kind;
+      this.closeEntity();
+      this.keyword = '';
+      this.createForm = { name: '', secondary: '' };
+      this.error = '';
+      this.reload();
+      this.registerPageCommands();
+    },
+    clearSearch() {
+      this.keyword = '';
+      this.reload();
+    },
+    focusCreate() {
+      this.$refs.createName?.focus?.();
+    },
     onFaceReviewLoaded(counts) {
       this.faceReviewCounts = { unnamed: Number(counts?.unnamed || 0), appendPending: Number(counts?.appendPending || 0), unnamedHasMore: Boolean(counts?.unnamedHasMore) };
-      if (!this.faceReviewToggled) {
-        this.faceReviewCollapsed = this.faceReviewCounts.unnamed + this.faceReviewCounts.appendPending === 0;
-      }
     },
-    toggleFaceReview() {
-      this.faceReviewToggled = true;
-      this.faceReviewCollapsed = !this.faceReviewCollapsed;
-    },
-    // 从待处理工作台跳过来：回到人物列表、展开「待命名人脸」并滚到它。展开算用户的选择，之后不再自动收起。
-    openFaceReview() {
+    // 人脸审阅里命名、关联、改派之后人物列表变了：停在人物列表上就重读；正打开着某个人物时等回到列表再读
+    // （对象打开时 reload 读不了列表，会把列表清空）。
+    handleFacesChanged() {
       if (!this.isPeople) return;
-      if (this.selectedEntity) this.closeEntity();
-      this.faceReviewToggled = true;
-      this.faceReviewCollapsed = false;
-      this.$nextTick(() => this.$el?.querySelector?.('[data-test="people-face-review"]')?.scrollIntoView?.({ block: 'start' }));
+      if (this.selectedEntity) this._listStale = true;
+      else this.reload();
     },
     openMergeForm() {
       this.mergeForm = { ...emptyMergeForm(), open: true };
@@ -492,13 +598,13 @@ export default {
     },
     async reload() {
       const requestToken = Symbol('entity-query'); this._queryToken = requestToken;
-      this.items = []; this.cursorName = ''; this.cursorID = 0; this.hasMore = true;
+      this.items = []; this.cursorName = ''; this.cursorID = 0; this.hasMore = true; this.listError = '';
       await this.loadMore(requestToken, true);
     },
     async loadMore(requestToken = this._queryToken, force = false) {
       if (!requestToken) { requestToken = Symbol('entity-query'); this._queryToken = requestToken; }
       if ((!force && this.loading) || !this.hasMore || this.selectedEntity) return;
-      this.loading = true; this.error = '';
+      this.loading = true; this.error = ''; this.listError = '';
       const isPeople = this.isPeople; const keyword = this.keyword; const cursorName = this.cursorName; const cursorID = this.cursorID;
       try {
         const page = isPeople
@@ -507,7 +613,10 @@ export default {
         if (this._queryToken !== requestToken) return;
         const next = page || []; this.items.push(...next); this.hasMore = next.length === 50;
         if (next.length) { const last = next[next.length - 1]; this.cursorName = last.cursor_name; this.cursorID = this.entityID(last); }
-      } catch (err) { if (this._queryToken === requestToken) this.error = String(err); }
+      } catch (err) {
+        // 读失败横幅 + 重试；停住自动翻页（哨兵一直在视口里时不会连发失败的请求），「重试」从头读。
+        if (this._queryToken === requestToken) { this.listError = String(err?.message || err || '') || '读取失败'; this.hasMore = false; }
+      }
       finally { if (this._queryToken === requestToken) this.loading = false; }
     },
     async createEntity() {
@@ -532,6 +641,8 @@ export default {
     applyFocusEntity(focus) {
       const id = Number(focus?.id || 0);
       if (!id) return undefined;
+      this.syncListKind();
+      if (!LIST_KINDS.includes(this.activeTab)) return undefined;
       const known = this.items.find(item => this.entityID(item) === id);
       const fallback = this.isPeople
         ? { person: { id, display_name: focus.name || '' }, avatar_url: '', active_video_count: 0 }
@@ -540,7 +651,7 @@ export default {
     },
     async openEntity(item) {
       this.selectedItem = item;
-      this.selectedEntity = { type: this.entityType, id: this.entityID(item) };
+      this.selectedEntity = { type: this.listKind, id: this.entityID(item) };
       this.drawerEntity = { ...this.selectedEntity };
       this.entityVideos = []; this.entityVideoCursor = 0; this.collectionVideoPool = []; this.entityVideosHasMore = true;
       this.resetEntityImages();
@@ -548,15 +659,18 @@ export default {
       this.$nextTick(() => this.observeSentinel());
     },
     closeEntity() {
-      this.selectedEntity = null; this.selectedItem = null; this.drawerEntity = null;
+      this.selectedEntity = null; this.selectedItem = null; this.drawerEntity = null; this.entityError = '';
       this.entityVideos = []; this.collectionVideoPool = []; this.entityVideosHasMore = false; this.entityVideoCursor = 0;
       this.resetEntityImages();
+      this.mergeForm = emptyMergeForm();
+      // 对象打开期间人脸审阅改过人物（handleFacesChanged）：回到列表时补读一次。
+      if (this._listStale) { this._listStale = false; this.reload(); }
       this.$nextTick(() => this.observeSentinel());
     },
     async loadEntityVideos(reset = false) {
       if (!this.selectedEntity || this.entityVideosLoading || (!reset && !this.entityVideosHasMore)) return;
       const entity = { ...this.selectedEntity }; const token = reset ? Symbol('entity-videos') : this._entityVideosToken;
-      this._entityVideosToken = token; this.entityVideosLoading = true; this.error = '';
+      this._entityVideosToken = token; this.entityVideosLoading = true; this.error = ''; this.entityError = '';
       try {
         if (entity.type === 'person') {
           const cursor = reset ? 0 : this.entityVideoCursor;
@@ -587,7 +701,10 @@ export default {
           this.entityVideosHasMore = this.entityVideoCursor < this.collectionVideoPool.length;
         }
         this.patchSelectedItem();
-      } catch (err) { if (this._entityVideosToken === token) this.error = `加载相关视频失败：${err}`; }
+      } catch (err) {
+        // 横幅 + 重试（从头重读这个对象）；翻页停住，免得哨兵在视口里时反复发失败的请求。
+        if (this._entityVideosToken === token) { this.entityError = String(err?.message || err || '') || '读取失败'; this.entityVideosHasMore = false; }
+      }
       finally { if (this._entityVideosToken === token) this.entityVideosLoading = false; }
     },
     resetEntityImages() {
@@ -616,8 +733,8 @@ export default {
       const index = this.items.findIndex(item => this.entityID(item) === id);
       if (index >= 0) this.items.splice(index, 1, { ...this.items[index], ...this.selectedItem });
     },
-    // 人物与作品集属观看区（D-UI-07）：点视频交给 App 的分流进整页详情，不在本页抽屉里开；
-    // 改资料从详情页的「编辑资料」进片库管理。人物 / 作品集本身的编辑仍是本页的「编辑与批量关联」抽屉。
+    // 点视频交给 App 按管理区分流（片库管理 + 详情抽屉），不在本页抽屉里开；人物 / 作品集本身的编辑是本页的
+    // 「编辑与批量关联」抽屉。
     openVideoDetails(video) { this.$emit('open-video', video); },
     async playEntityVideo(video) {
       const id = Number(video.id); if (!id || this.playingVideoIDs.includes(id)) return;
@@ -666,11 +783,16 @@ export default {
 .entity-image-card__preview { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .entity-image-card__actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .entity-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }.entity-library--with-drawer { padding-right: calc(18px + 520px); }
-/* 页头是 PageHeader：这里只把它与下面的分区间距交给外层 gap。 */
-.entity-library__toolbar { margin-bottom: 0; }
+/* 页头是 PageHeader（下面挂标签）：这里只把它与下面的分区间距交给外层 gap。 */
+.entity-library__header { margin-bottom: 0; }
+/* 人物 / 作品集两个标签共用的列表与对象区：分区之间的间距与外层一致。 */
+.entity-library__panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* 打开的对象：名字、已加载数量与「编辑与批量关联」等动作用分区级的页头（h2）。 */
+.entity-library__entity-head { margin-bottom: 0; }
 .entity-library__nav { display: flex; align-items: center; }
 .entity-library__create { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; gap: 12px; align-items: center; justify-content: space-between; }
-.entity-face-review { display: grid; gap: 10px; padding: 12px 14px; border-radius: var(--radius-md); }.entity-face-review__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.entity-face-review__head h3 { margin: 0; font-size: var(--fs-body); }.entity-face-review__head p { margin: 3px 0 0; color: var(--text-secondary); font-size: var(--fs-caption); }
+.entity-face-review { display: grid; gap: var(--space-3); min-width: 0; }
+.entity-face-review__summary { margin: 0; color: var(--text-secondary); font-size: var(--fs-secondary); }
 .entity-library__search,.entity-library__create { display: flex; gap: 8px; }.entity-library input { min-width: 180px; height: var(--h-unit); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0 10px; color: var(--text-primary); background: var(--control-bg); font-size: var(--fs-secondary); }.entity-library__create { justify-content: flex-start; }.entity-library__create input:nth-child(2) { flex: 1; }
 /* 原型 A9：卡片改成竖版，封面在上、名称与作品数在下；列宽随窗口自增。 */
 .entity-library__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
