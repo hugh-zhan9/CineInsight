@@ -175,9 +175,47 @@
         @relaunch-required="showRelaunchRequired($event && $event.message)"
       />
 
-      <!-- 人物与作品集属观看区：点视频进整页详情（D-UI-07），编辑资料从详情页的「编辑资料」进片库管理。 -->
-      <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" @open-video="openVideo($event, { from: 'people' })" />
-      <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" :focus-entity="entityFocus.collection" @open-video="openVideo($event, { from: 'collections' })" />
+      <!-- 人物与作品集观看页（D-P2-06）：只看不改，点视频进整页详情（D-UI-07），「在管理中编辑」去管理侧。
+           首次进入才挂载，之后只隐藏：从整页详情「返回」时还停在刚才那个人物 / 作品集上，滚动位置也在；
+           从管理侧「人物与作品集」离开后换代（entityBrowseEpoch），下次进入重新取数。 -->
+      <EntityBrowsePage
+        v-if="peopleMounted"
+        v-show="currentPage === 'people'"
+        :key="`people-${entityBrowseEpoch}`"
+        kind="person"
+        :page-active="currentPage === 'people'"
+        :focus-entity="entityFocus.person"
+        @open-video="openVideoByID($event, { from: 'people' })"
+        @play-video="openVideoByID($event.id, { from: 'people', startAtMs: $event.startAtMs })"
+        @open-image="openPhotoImage"
+        @edit-in-manage="openEntityInManage"
+        @navigate="navigateTo"
+      />
+      <EntityBrowsePage
+        v-if="collectionsMounted"
+        v-show="currentPage === 'collections'"
+        :key="`collections-${entityBrowseEpoch}`"
+        kind="collection"
+        :page-active="currentPage === 'collections'"
+        :focus-entity="entityFocus.collection"
+        @open-video="openVideoByID($event, { from: 'collections' })"
+        @play-video="openVideoByID($event.id, { from: 'collections', startAtMs: $event.startAtMs })"
+        @open-image="openPhotoImage"
+        @edit-in-manage="openEntityInManage"
+        @navigate="navigateTo"
+      />
+      <!-- 管理侧「人物与作品集」（过渡期，D-P3-04 之前）：原样挂现有 EntityLibraryPage（新建、合并、删除、关联、人脸审阅都在这里），
+           它一次只管一种实体，上面的页签切换人物 / 作品集；三期改成「人物 · 作品集 · 人脸审阅」三个标签的管理页。
+           点视频按管理区分流（切到片库管理 + 详情抽屉）。 -->
+      <div v-if="currentPage === 'entities-manage'" class="entities-manage" data-test="entities-manage">
+        <AppTabs class="entities-manage__tabs" :tabs="entitiesManageTabs" :model-value="entitiesManageKind" @update:model-value="entitiesManageKind = $event" />
+        <EntityLibraryPage
+          :key="entitiesManageKind"
+          :entity-type="entitiesManageKind"
+          :focus-entity="entitiesManageFocus"
+          @open-video="openVideo($event, { from: 'entities-manage' })"
+        />
+      </div>
 	  <InsightsPage
 	    v-if="currentPage === 'insights'"
 	    :directories="directories"
@@ -295,6 +333,7 @@ import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDi
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
+import EntityBrowsePage from './components/viewer/EntityBrowsePage.vue';
 import InsightsPage from './components/InsightsPage.vue';
 import DataCarePage from './components/DataCarePage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
@@ -321,6 +360,7 @@ import BaseMenu from './components/ui/BaseMenu.vue';
 import DialogShell from './components/ui/DialogShell.vue';
 import AppBadge from './components/ui/AppBadge.vue';
 import AppSpinner from './components/ui/AppSpinner.vue';
+import AppTabs from './components/ui/AppTabs.vue';
 import SystemHealthPanel from './components/SystemHealthPanel.vue';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
@@ -338,6 +378,12 @@ function scanRootKey(dirs) {
   return (dirs || []).map(dir => String(dir?.path || '')).sort().join('\n');
 }
 
+// 管理侧「人物与作品集」过渡期的页签（三期改成人物 · 作品集 · 人脸审阅）：key 就是 EntityLibraryPage 的 entity-type。
+const ENTITIES_MANAGE_TABS = [
+  { key: 'person', label: '人物', dataTest: 'entities-manage-tab-person' },
+  { key: 'collection', label: '作品集', dataTest: 'entities-manage-tab-collection' }
+];
+
 // 浏览器插件的下载里还有在跑或排队的：「立即重启」会打断它们（m5）。
 function hasActiveDownloads(tasks) {
   return (tasks || []).some(task => task?.state === 'running' || task?.state === 'queued');
@@ -351,7 +397,7 @@ export default {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
     MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     BaseMenu, DialogShell, AppBadge, AppSpinner, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
-    HomePage, VideoDetailPage, ManageHomePage
+    HomePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs
   },
   data() {
     return {
@@ -370,6 +416,10 @@ export default {
       // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
       photosMounted: false,
       notesMounted: false,
+      // 人物、作品集观看页：首次进入才挂载，之后只隐藏（D-P2-06）；离开管理侧「人物与作品集」时换代重挂。
+      peopleMounted: false,
+      collectionsMounted: false,
+      entityBrowseEpoch: 0,
       recapMounted: false,
       scenesMounted: false,
       // 片库带过来的场景检索范围：{ filter, token }；为空表示全部视频。
@@ -502,10 +552,18 @@ export default {
     },
     currentPage: {
       immediate: true,
-      handler(page) {
+      handler(page, previous) {
+        // 从管理侧「人物与作品集」离开：那里可能改过、删过、合并过人物或作品集，观看侧两页卸掉，下次进入重新取数。
+        if (previous === 'entities-manage') {
+          this.peopleMounted = false;
+          this.collectionsMounted = false;
+          this.entityBrowseEpoch += 1;
+        }
         if (page === 'home') this.homeMounted = true;
         if (page === 'photos' || page === 'photos-manage') this.photosMounted = true;
         if (page === 'viewing-notes') this.notesMounted = true;
+        if (page === 'people') this.peopleMounted = true;
+        if (page === 'collections') this.collectionsMounted = true;
         if (page === 'recap') this.recapMounted = true;
         if (page === 'scenes') this.scenesMounted = true;
         if (page === 'video-workbench') this.workbenchMounted = true;
@@ -517,6 +575,9 @@ export default {
     }
   },
   computed: {
+    entitiesManageTabs() {
+      return ENTITIES_MANAGE_TABS;
+    },
     // 任务指示的读屏文字（接在导航名后面）：按钮上只看得到转圈、数字和红点。
     taskIndicatorStatus() {
       const { running, failed } = this.taskCenterBadge;
@@ -847,7 +908,7 @@ export default {
       if (top !== null && top !== undefined && this.$refs.mainView) this.$refs.mainView.scrollTop = top;
     },
     // 整页详情的「返回」：弹回来源页并恢复它的滚动位置；栈空（从管理区或面板直接进来）时回观看首页。
-    // 回到的页面可能是重新挂载、还在取数的（观影记录、想看、榜单、人物、作品集），等内容长够了再放回去。
+    // 回到的页面可能是重新挂载、还在取数的（观影记录、想看、榜单），等内容长够了再放回去。
     async goBackFromDetail() {
       this.supersedeVideoOpen();
       const { entry, stack } = popDetailReturn(this.detailReturnStack);
@@ -1137,6 +1198,8 @@ export default {
 }
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
+/* 管理侧「人物与作品集」过渡期的页签：与下面 EntityLibraryPage 的左右留白对齐。 */
+.entities-manage__tabs { margin: 14px 18px 0; }
 .relaunch-overlay {
   position: fixed;
   inset: 0;

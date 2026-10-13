@@ -516,7 +516,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(wrapper.findComponent({ name: 'BaseMenu' }).exists()).toBe(false);
   });
 
-  it('D-UI-02 管理区：返回观看 · 管理首页 · 片库管理 · 图片管理 · 待处理 · 清理中心 · 下载 · 视频工作台 · 洞察 · 数据维护 · 任务中心 · 设置', async () => {
+  it('D-UI-02 管理区：返回观看 · 管理首页 · 片库管理 · 图片管理 · 人物与作品集 · 待处理 · 清理中心 · 下载 · 视频工作台 · 洞察 · 数据维护 · 任务中心 · 设置', async () => {
     api.GetSettings.mockResolvedValue({ auto_scan_on_startup: false, theme: 'system', browser_bridge_enabled: true });
     const wrapper = await mountApp();
     await enterManage(wrapper);
@@ -525,7 +525,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(wrapper.find('[data-test="nav-area-manage"]').exists()).toBe(true);
     expect(wrapper.get('[data-test="nav-back-to-viewer"]').text()).toBe('返回观看');
     expect(groupLabels(wrapper)).toEqual([
-      { key: 'manage-library', label: '片库', pages: ['管理首页', '片库管理', '图片管理'] },
+      { key: 'manage-library', label: '片库', pages: ['管理首页', '片库管理', '图片管理', '人物与作品集'] },
       { key: 'manage-review', label: '待处理与清理', pages: ['待处理', '清理中心'] },
       { key: 'manage-tools', label: '工具', pages: ['下载', '视频工作台', '洞察', '数据维护'] },
       { key: 'manage-system', label: '系统', pages: ['任务中心', '设置'] }
@@ -757,7 +757,8 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it('APP-11 工作台「处理」先切到宿主页（人物页按需挂载），再按固定命令 ID 执行', async () => {
+  // D-P2-06：人物观看页只看不改，人脸审阅在管理侧「人物与作品集」（过渡期挂 EntityLibraryPage 的人物那一种）。
+  it('APP-11 工作台「处理」先切到宿主页（管理侧人物与作品集按需挂载），再按固定命令 ID 执行', async () => {
     const wrapper = await mountApp();
     const run = vi.fn();
     registerCommands('test-face-host', [{ id: 'people.openFaceReview', group: 'action', label: '人脸审阅', hidden: true, run }]);
@@ -765,9 +766,26 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'people.openFaceReview', '人脸待命名');
     await flushPromises();
 
-    expect(wrapper.vm.currentPage).toBe('people');
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.findComponent({ name: 'EntityLibraryPage' }).props('entityType')).toBe('person');
     expect(run).toHaveBeenCalledTimes(1);
     unregisterCommands('test-face-host');
+  });
+
+  it('APP-11 人物与作品集停在作品集那一种时，人脸审阅先换回人物（同一页也要换），再执行命令', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'entities-manage', entitiesManageKind: 'collection' });
+    expect(wrapper.findComponent({ name: 'EntityLibraryPage' }).props('entityType')).toBe('collection');
+    const run = vi.fn();
+    registerCommands('test-face-kind', [{ id: 'people.openFaceReview', group: 'action', label: '人脸审阅', hidden: true, run }]);
+
+    await wrapper.vm.runPendingCommand('people.openFaceReview', '人脸待命名');
+
+    unregisterCommands('test-face-kind');
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.findComponent({ name: 'EntityLibraryPage' }).props('entityType')).toBe('person');
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('APP-11 宿主页没有注册该命令时给出中文提示，不静默失败', async () => {
@@ -1135,7 +1153,7 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
     ['home', 'viewer'], ['videos', 'viewer'], ['people', 'viewer'], ['collections', 'viewer'], ['photos', 'viewer'],
     ['watchlist', 'viewer'], ['movie-chart', 'viewer'], ['watched-movies', 'viewer'], ['viewing-notes', 'viewer'],
     ['recap', 'viewer'], ['scenes', 'viewer'], ['video-detail', 'viewer'],
-    ['manage-home', 'manage'], ['library-manage', 'manage'], ['photos-manage', 'manage'], ['downloads', 'manage'],
+    ['manage-home', 'manage'], ['library-manage', 'manage'], ['photos-manage', 'manage'], ['entities-manage', 'manage'], ['downloads', 'manage'],
     ['video-workbench', 'manage'], ['insights', 'manage'], ['data-care', 'manage'], ['settings', 'manage']
   ])('区域由当前页面推出：%s 属于 %s', async (page, area) => {
     const wrapper = await mountApp();
@@ -1226,16 +1244,18 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
     ['ViewingNotesPage', 'viewing-notes', 'open-video-id', 7],
     ['ViewingNotesPage', 'viewing-notes', 'open-video', { id: 7, name: 'a.mp4' }],
     ['WatchedMoviesPage', 'watched-movies', 'open-video', { id: 7, name: 'a.mp4' }],
-    // I-3：人物与作品集页点视频不再开本页抽屉，交给 App 分流。
-    ['EntityLibraryPage', 'people', 'open-video', { id: 7, name: 'a.mp4' }],
-    ['EntityLibraryPage', 'collections', 'open-video', { id: 7, name: 'a.mp4' }],
+    // I-3 / D-P2-06：人物与作品集观看页点视频交给 App 分流（发视频 ID）。
+    ['EntityBrowsePage', 'people', 'open-video', 7],
+    ['EntityBrowsePage', 'collections', 'open-video', 7],
     ['PlaybackQueuePanel', 'recap', 'open-video', 7]
   ];
   const manageCallers = [
     ['InsightsPage', 'insights', 'open-video-id', 7],
     ['DataCarePage', 'data-care', 'open-video-id', 7],
     ['VideoWorkbenchPage', 'video-workbench', 'open-video', 7],
-    ['TaskCenterDrawer', 'manage-home', 'open-video', 7]
+    ['TaskCenterDrawer', 'manage-home', 'open-video', 7],
+    // 管理侧「人物与作品集」（过渡期挂 EntityLibraryPage）：点视频按管理区分流。
+    ['EntityLibraryPage', 'entities-manage', 'open-video', { id: 7, name: 'a.mp4' }]
   ];
 
   async function onPage(page) {
@@ -1336,6 +1356,127 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
     wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-person', { id: 8, name: '甲' });
     await flushPromises();
     expect(wrapper.vm.currentPage).toBe('people');
+  });
+});
+
+describe('人物与作品集：观看页只看、编辑去管理侧（D-P2-06）', () => {
+  it('人物、作品集观看页首次进入才挂载，之后只隐藏：切走再回来还是同一个实例，pageActive 跟着走', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.findAllComponents({ name: 'EntityBrowsePage' })).toHaveLength(0);
+
+    await wrapper.get('[data-test="nav-people"]').trigger('click');
+    const people = wrapper.findComponent({ name: 'EntityBrowsePage' });
+    expect(people.props()).toMatchObject({ kind: 'person', pageActive: true });
+    const instance = people.vm;
+
+    await wrapper.get('[data-test="nav-collections"]').trigger('click');
+    const pages = wrapper.findAllComponents({ name: 'EntityBrowsePage' });
+    expect(pages.map(page => [page.props('kind'), page.props('pageActive'), page.isVisible()])).toEqual([
+      ['person', false, false], ['collection', true, true]
+    ]);
+    expect(wrapper.vm.cinemaSurface).toBe(true);
+
+    await wrapper.get('[data-test="nav-people"]').trigger('click');
+    const again = wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(page => page.props('kind') === 'person');
+    expect(again.vm).toBe(instance);
+    expect(again.props('pageActive')).toBe(true);
+    // 观看侧不再挂编辑页。
+    expect(wrapper.findComponent({ name: 'EntityLibraryPage' }).exists()).toBe(false);
+  });
+
+  it('离开管理侧人物与作品集后，观看侧两页卸掉，下次进入是新实例（那边可能改过数据）', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'people' });
+    await wrapper.setData({ currentPage: 'collections' });
+    const before = wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(page => page.props('kind') === 'person').vm;
+    await wrapper.setData({ currentPage: 'entities-manage' });
+    expect(wrapper.findAllComponents({ name: 'EntityBrowsePage' })).toHaveLength(2);
+
+    await wrapper.setData({ currentPage: 'people' });
+    const pages = wrapper.findAllComponents({ name: 'EntityBrowsePage' });
+    expect(pages.map(page => page.props('kind'))).toEqual(['person']);
+    expect(pages[0].vm).not.toBe(before);
+    expect(pages[0].props('pageActive')).toBe(true);
+
+    // 不经过管理页的来回不重挂。
+    const kept = pages[0].vm;
+    await wrapper.setData({ currentPage: 'home' });
+    await wrapper.setData({ currentPage: 'people' });
+    expect(wrapper.findComponent({ name: 'EntityBrowsePage' }).vm).toBe(kept);
+  });
+
+  it('命令面板、首页打开人物 / 作品集：落到观看页并把要打开的对象交给它', async () => {
+    const wrapper = await mountApp();
+    const pending = wrapper.vm.openEntityFromCommand('collection', 5, '旅行');
+    expect(wrapper.vm.currentPage).toBe('collections');
+    expect(wrapper.vm.entityFocus.collection).toEqual({ id: 5, name: '旅行' });
+    await pending;
+    expect(wrapper.vm.entityFocus.collection).toBeNull();
+    expect(wrapper.findComponent({ name: 'EntityBrowsePage' }).props('kind')).toBe('collection');
+  });
+
+  it('「从下一部播放」进整页详情并带上起播位置；相关图片去图片页定位', async () => {
+    const wrapper = await mountApp();
+    api.GetVideosByIDs.mockResolvedValue([{ id: 31, name: 'part3.mp4' }]);
+    await wrapper.setData({ currentPage: 'collections' });
+    wrapper.findComponent({ name: 'EntityBrowsePage' }).vm.$emit('play-video', { id: 31, startAtMs: 754000 });
+    await flushPromises();
+    expect(api.GetVideosByIDs).toHaveBeenCalledWith([31]);
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props()).toMatchObject({ videoId: 31, startAtMs: 754000 });
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['collections']);
+
+    await wrapper.setData({ currentPage: 'people', photosMounted: true });
+    const locate = vi.fn();
+    wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.locateImage = locate;
+    const person = wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(page => page.props('kind') === 'person');
+    person.vm.$emit('open-image', { id: 11, name: 'p.jpg' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(locate).toHaveBeenCalledWith({ id: 11, name: 'p.jpg' });
+  });
+
+  it('「在管理中编辑」去管理侧人物与作品集，挂上对应那一种并定位到这个对象（置一次即清空）', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'collections' });
+    wrapper.findComponent({ name: 'EntityBrowsePage' }).vm.$emit('edit-in-manage', { kind: 'collection', id: 5, name: '旅行' });
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.vm.area).toBe('manage');
+    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+    expect(wrapper.vm.entitiesManageFocus).toEqual({ id: 5, name: '旅行' });
+    await flushPromises();
+    expect(wrapper.vm.entitiesManageFocus).toBeNull();
+    const manage = wrapper.findComponent({ name: 'EntityLibraryPage' });
+    expect(manage.props('entityType')).toBe('collection');
+    expect(wrapper.get('[data-test="nav-entities-manage"]').classes()).toContain('active');
+    expect(wrapper.vm.cinemaSurface).toBe(false);
+  });
+
+  it('空列表的「去人物与作品集管理」只切过去并挂上那一种，不定位', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'people' });
+    await wrapper.vm.openEntityInManage({ kind: 'person' });
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.vm.entitiesManageFocus).toBeNull();
+  });
+
+  it('管理侧人物与作品集：页签切换人物 / 作品集，换一种就重新挂载那一种的编辑页', async () => {
+    const wrapper = await mountApp();
+    await enterManage(wrapper);
+    await wrapper.get('[data-test="nav-entities-manage"]').trigger('click');
+    const tabs = wrapper.findComponent({ name: 'AppTabs' });
+    expect(tabs.props('tabs').map(tab => [tab.key, tab.label])).toEqual([['person', '人物'], ['collection', '作品集']]);
+    expect(tabs.props('modelValue')).toBe('person');
+    const first = wrapper.findComponent({ name: 'EntityLibraryPage' });
+    expect(first.props('entityType')).toBe('person');
+
+    tabs.vm.$emit('update:modelValue', 'collection');
+    await flushPromises();
+    const second = wrapper.findComponent({ name: 'EntityLibraryPage' });
+    expect(second.props('entityType')).toBe('collection');
+    expect(second.vm).not.toBe(first.vm);
+    expect(wrapper.findComponent({ name: 'AppTabs' }).props('modelValue')).toBe('collection');
   });
 });
 
@@ -1508,8 +1649,8 @@ describe('返回到重新挂载的页面时等内容长够再恢复滚动（I-2�
 
   it.each([
     ['watched-movies', 'WatchedMoviesPage', 'open-video', { id: 7 }],
-    ['people', 'EntityLibraryPage', 'open-video', { id: 7 }],
-    ['collections', 'EntityLibraryPage', 'open-video', { id: 7 }]
+    ['people', 'EntityBrowsePage', 'open-video', 7],
+    ['collections', 'EntityBrowsePage', 'open-video', 7]
   ])('%s：内容长到够高才放回滚动位置', async (page, name, event, payload) => {
     const { wrapper, el, box } = await fromPage(page);
     await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name }).vm.$emit(event, payload));
