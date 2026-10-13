@@ -63,6 +63,10 @@
           <span v-if="labels[side].proxyNote" class="version-compare__note">{{ labels[side].proxyNote }}</span>
           <span v-if="state[side].loading" class="version-compare__note">正在读取…</span>
           <span v-if="state[side].error" class="version-compare__error" role="alert" :data-test="`version-compare-error-${side}`">{{ state[side].error }}</span>
+          <!-- 不能直放（2026-10-13）：proxy-preparing 按这一侧的 owner 自动请求代理，就绪后换成内嵌；proxy-manual 只给手动。 -->
+          <span v-if="state[side].proxyStatus" class="version-compare__note" role="status" :data-test="`version-compare-proxy-status-${side}`">{{ state[side].proxyStatus }}</span>
+          <span v-if="state[side].proxyAlert" class="version-compare__error" role="alert" :data-test="`version-compare-proxy-alert-${side}`">{{ state[side].proxyAlert }}</span>
+          <button v-if="canGenerateProxy(side)" type="button" class="btn-secondary btn-compact version-compare__proxy-btn" :data-test="`version-compare-proxy-generate-${side}`" @pointerdown.stop @click="generateProxy(side)">生成播放代理</button>
         </div>
       </div>
       <div
@@ -103,6 +107,7 @@
 
 <script>
 import { GetPreviewSession, GetVideoDetails } from '../../wailsjs/go/main/App';
+import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import {
   COMPARE_SYNC_INTERVAL_MS, applyCompareOffset, compareClipPath, compareDriftSeek, compareFollowerTarget, compareMediaErrorText,
   compareMuteState, compareSideLabel, compareSliderPercent, compareSourceFromSession, formatCompareOffset, formatCompareTime
@@ -110,7 +115,10 @@ import {
 
 const SIDES = ['left', 'right'];
 const otherSide = side => (side === 'left' ? 'right' : 'left');
-const emptySide = () => ({ loading: true, details: null, session: null, src: '', proxy: null, error: '', seeking: false, waiting: false });
+const emptySide = () => ({
+  loading: true, details: null, session: null, src: '', proxy: null, error: '', manual: false, seeking: false, waiting: false,
+  proxyPending: false, proxyStatus: '', proxyAlert: ''
+});
 
 // 版本对比播放器（2026-10-12）：两个版本左右同步播放比画质，由 App.vue 按 versionCompareState 常驻挂载。
 // 左侧主导、右侧跟随（位置 = 左侧 + 偏移），定时纠偏的规则在 utils/versionCompare.js。
@@ -173,6 +181,12 @@ export default {
   },
   created() {
     this._media = { left: null, right: null };
+    // 每一侧一个代理跟随器（各自的 owner）：关闭对话框时撤销还在等的请求。
+    this._proxyFollowers = Object.fromEntries(SIDES.map(side => [side, createPreviewProxyFollower({
+      kind: `compare-${side}`,
+      onState: change => this.applyProxyState(side, change),
+      onReady: videoID => this.loadSide(side, videoID, { follow: false })
+    })]));
   },
   mounted() {
     window.addEventListener('keydown', this.onKeydown, true);
@@ -190,7 +204,8 @@ export default {
     usable(side) { return !!this.state[side].src && !this.state[side].error; },
     mediaSrc(side) { return this.released ? undefined : (this.state[side].src || undefined); },
     // 播放源与详情抽屉同一条路（GetPreviewSession，含播放代理）；标注用 GetVideoDetails。两者各自失败互不拖累。
-    async loadSide(side, videoID) {
+    // follow：会话为 proxy-preparing 时自动请求代理。代理就绪后的重取不再自动请求，免得反复排队。
+    async loadSide(side, videoID, { follow = true } = {}) {
       const [sessionResult, detailsResult] = await Promise.allSettled([GetPreviewSession(videoID), GetVideoDetails(videoID)]);
       if (this.released) return;
       const state = this.state[side];
@@ -205,6 +220,21 @@ export default {
       state.src = source.src;
       state.proxy = source.proxy;
       state.error = source.error;
+      state.manual = source.manual;
+      if (follow) this._proxyFollowers[side].follow(state.session);
+    },
+    applyProxyState(side, change) {
+      const state = this.state[side];
+      state.proxyPending = change.phase === 'pending';
+      state.proxyStatus = state.proxyPending || change.phase === 'notice' ? change.text : '';
+      state.proxyAlert = change.phase === 'failed' ? change.text : '';
+    },
+    canGenerateProxy(side) {
+      const state = this.state[side];
+      return !this.released && !state.src && !state.proxyPending && ['proxy-preparing', 'proxy-manual'].includes(state.session?.mode);
+    },
+    generateProxy(side) {
+      this._proxyFollowers[side].generate(side === 'left' ? this.leftVideoId : this.rightVideoId);
     },
     onKeydown(event) {
       if (event.key !== 'Escape') return;
@@ -220,6 +250,7 @@ export default {
     release() {
       if (this.released) return;
       this.released = true;
+      for (const side of SIDES) this._proxyFollowers[side].stop();
       this.playing = false;
       clearInterval(this._syncTimer);
       for (const side of SIDES) {
@@ -446,6 +477,8 @@ export default {
   pointer-events: none;
 }
 .version-compare__label--left { left: 10px; }
+.version-compare__proxy-btn { pointer-events: auto; align-self: flex-start; }
+.version-compare__label--right .version-compare__proxy-btn { align-self: flex-end; }
 .version-compare__label--right { right: 10px; text-align: right; }
 .version-compare__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
 .version-compare__side { margin-right: 6px; padding: 0 5px; border-radius: 4px; background: var(--accent-color); color: var(--accent-on); font-size: 11px; }

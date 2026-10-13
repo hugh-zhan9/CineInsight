@@ -3,6 +3,9 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 	"video-master/database"
@@ -19,6 +22,12 @@ func previewSnapshot(format, videoCodec, audioCodec string) playbackProxySnapsho
 }
 
 const isoBMFF = "mov,mp4,m4a,3gp,3g2,mj2"
+
+// videoDetail 给快照补上首个视频流的 codec_tag_string 与 pix_fmt。
+func videoDetail(snapshot playbackProxySnapshot, tag, pixelFormat string) playbackProxySnapshot {
+	snapshot.VideoCodecTag, snapshot.VideoPixelFormat = tag, pixelFormat
+	return snapshot
+}
 
 func TestDecideDesktopPreviewTable(t *testing.T) {
 	cases := []struct {
@@ -39,18 +48,31 @@ func TestDecideDesktopPreviewTable(t *testing.T) {
 		{"mp4+h264+mp3", "/v/a.mp4", previewSnapshot(isoBMFF, "h264", "mp3"), true, desktopPreviewDirect, "video/mp4", ""},
 		{"老快照没有 format_name 不据此否决", "/v/a.mov", previewSnapshot("", "h264", "aac"), true, desktopPreviewDirect, "video/quicktime", ""},
 		{"mov+mpeg4 → 转码代理", "/v/a.mov", previewSnapshot(isoBMFF, "mpeg4", "aac"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
-		{"mov+h264+pcm → 代理", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_s16le"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
+		{"mov+h264+pcm_s16le 直放", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_s16le"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"mov+prores+pcm_s24le 直放", "/v/a.mov", previewSnapshot(isoBMFF, "prores", "pcm_s24le"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"mov+h264+pcm_s16be 直放", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_s16be"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"mov+h264+pcm_s24be 直放", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_s24be"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"mov+h264+pcm_s32le 直放", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_s32le"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"mov+h264+pcm_f32le 直放", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_f32le"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"mov+h264+pcm_u8 → 转码代理", "/v/a.mov", previewSnapshot(isoBMFF, "h264", "pcm_u8"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
+		{"hevc hvc1 直放", "/v/a.mp4", videoDetail(previewSnapshot(isoBMFF, "hevc", "aac"), "hvc1", "yuv420p10le"), true, desktopPreviewDirect, "video/mp4", ""},
+		{"hevc hev1 → 转封装代理", "/v/a.mp4", videoDetail(previewSnapshot(isoBMFF, "hevc", "aac"), "hev1", "yuv420p"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyRemux},
+		{"h264 nv12 直放", "/v/a.mov", videoDetail(previewSnapshot(isoBMFF, "h264", "aac"), "avc1", "nv12"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"h264 yuvj420p 直放", "/v/a.mov", videoDetail(previewSnapshot(isoBMFF, "h264", "aac"), "avc1", "yuvj420p"), true, desktopPreviewDirect, "video/quicktime", ""},
+		{"h264 10 位 → 转码代理", "/v/a.mov", videoDetail(previewSnapshot(isoBMFF, "h264", "aac"), "avc1", "yuv420p10le"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
+		{"h264 4:2:2 → 转码代理", "/v/a.mp4", videoDetail(previewSnapshot(isoBMFF, "h264", "aac"), "avc1", "yuv422p"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
+		{"mkv h264 10 位 → 转码代理", "/v/a.mkv", videoDetail(previewSnapshot("matroska,webm", "h264", "aac"), "", "yuv420p10le"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
 		{"mp4+h264+opus → 代理", "/v/a.mp4", previewSnapshot(isoBMFF, "h264", "opus"), true, desktopPreviewProxy, "", ""},
 		{"改了扩展名的 mkv → 代理", "/v/a.mp4", previewSnapshot("matroska,webm", "h264", "aac"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyRemux},
-		{"快照没有视频流 → 代理", "/v/a.mov", playbackProxySnapshot{FormatName: isoBMFF}, true, desktopPreviewProxy, "", ""},
 		{"mov 快照判不出 → 旧行为", "/v/a.mov", playbackProxySnapshot{}, false, desktopPreviewLegacy, "", ""},
 		{"mp4 快照判不出 → 旧行为", "/v/a.mp4", playbackProxySnapshot{}, false, desktopPreviewLegacy, "", ""},
 		{"mkv+h264+aac → 转封装代理", "/v/a.mkv", previewSnapshot("matroska,webm", "h264", "aac"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyRemux},
-		{"mkv 不看快照", "/v/a.mkv", playbackProxySnapshot{}, false, desktopPreviewProxy, "", ""},
+		{"mkv 快照判不出 → 旧行为", "/v/a.mkv", playbackProxySnapshot{}, false, desktopPreviewLegacy, "", ""},
 		{"avi+xvid(mpeg4) → 转码代理", "/v/a.avi", previewSnapshot("avi", "mpeg4", "mp3"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
-		{"wmv → 代理", "/v/a.wmv", playbackProxySnapshot{}, false, desktopPreviewProxy, "", ""},
-		{"flv → 代理", "/v/a.flv", playbackProxySnapshot{}, false, desktopPreviewProxy, "", ""},
-		{"ts → 代理", "/v/a.ts", playbackProxySnapshot{}, false, desktopPreviewProxy, "", ""},
+		{"wmv → 转码代理", "/v/a.wmv", previewSnapshot("asf", "wmv3", "wmav2"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
+		{"flv → 转码代理", "/v/a.flv", previewSnapshot("flv", "flv1", "mp3"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyTranscode},
+		{"ts h264+aac → 转封装代理", "/v/a.ts", previewSnapshot("mpegts", "h264", "aac"), true, desktopPreviewProxy, "", models.PlaybackProxyStrategyRemux},
+		{"wmv 快照判不出 → 旧行为", "/v/a.wmv", playbackProxySnapshot{}, false, desktopPreviewLegacy, "", ""},
 		{"webm 照旧直放", "/v/a.webm", playbackProxySnapshot{}, false, desktopPreviewDirect, "video/webm", ""},
 		{"ogv 照旧直放", "/v/a.ogv", playbackProxySnapshot{}, false, desktopPreviewDirect, "video/ogg", ""},
 		{"ogg 照旧直放", "/v/a.ogg", playbackProxySnapshot{}, false, desktopPreviewDirect, "video/ogg", ""},
@@ -94,8 +116,21 @@ func newPreviewTestVideoService(t *testing.T, probe *previewProbe) (*VideoServic
 	proxies, _ := newProxyTestService(t)
 	videoService := &VideoService{mediaProbe: newMediaProbeServiceWithRunner(probe.run)}
 	videoService.SetPlaybackProxyService(proxies)
+	stubPreviewFFmpeg(t, true)
 	return videoService, proxies
 }
+
+// stubPreviewFFmpeg 固定「本机有没有 ffmpeg」，测试不依赖机器上装没装。
+func stubPreviewFFmpeg(t *testing.T, available bool) {
+	t.Helper()
+	original := previewFFmpegAvailable
+	previewFFmpegAvailable = func() bool { return available }
+	t.Cleanup(func() { previewFFmpegAvailable = original })
+}
+
+const mkvH264AACProbe = `{"format":{"format_name":"matroska,webm","duration":"10.0"},` +
+	`"streams":[{"index":0,"codec_type":"video","codec_name":"h264","pix_fmt":"yuv420p","width":640,"height":360},` +
+	`{"index":1,"codec_type":"audio","codec_name":"aac"}]}`
 
 // writePreviewSnapshot 写一份新鲜的技术快照，并把容器名改成 format（writeProxySnapshot 固定写 matroska）。
 func writePreviewSnapshot(t *testing.T, video models.Video, format, videoCodec, audioCodec string) {
@@ -154,9 +189,9 @@ func TestGetPreviewSessionMovMpeg4NeedsProxy(t *testing.T) {
 	}
 }
 
-func TestGetPreviewSessionMkvNeedsProxyWithoutProbing(t *testing.T) {
+func TestGetPreviewSessionMkvProbesThenNeedsProxy(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	probe := &previewProbe{payload: movH264AACProbe}
+	probe := &previewProbe{payload: mkvH264AACProbe}
 	videoService, _ := newPreviewTestVideoService(t, probe)
 	video := createProxyTestVideo(t, "show.mkv", 10)
 
@@ -164,11 +199,11 @@ func TestGetPreviewSessionMkvNeedsProxyWithoutProbing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "proxy-preparing" || session.ExternalAction == nil {
+	if session.Mode != "proxy-preparing" || session.ExternalAction == nil || session.ReasonCode != "proxy_required" {
 		t.Fatalf("mkv 应当等待代理: %#v", session)
 	}
-	if probe.calls != 0 {
-		t.Fatalf("mkv 怎样都不能直放，不该为判定探测: %d", probe.calls)
+	if probe.calls != 1 {
+		t.Fatalf("缺快照的 mkv 应补探一次（估算代理大小要用）: %d", probe.calls)
 	}
 }
 
@@ -225,24 +260,59 @@ func TestGetPreviewSessionProbeFailureFallsBackByExtension(t *testing.T) {
 	}
 }
 
-// 补探有上限：ffprobe 卡住时按超时放弃，退回旧行为。
-func TestGetPreviewSessionProbeHonoursTimeout(t *testing.T) {
+// 补探有上限：ffprobe 卡住（替身一直阻塞到 ctx 结束）时期限真的把它停下，退回旧行为；
+// 失败记在内存里，再打开同一份源不再探测、立即按旧行为。
+func TestGetPreviewSessionHangingProbeStopsAtDeadline(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	proxies, _ := newProxyTestService(t)
-	var deadline time.Time
-	videoService := &VideoService{mediaProbe: newMediaProbeServiceWithRunner(func(ctx context.Context, path string) ([]byte, string, error) {
-		deadline, _ = ctx.Deadline()
-		return nil, "", context.DeadlineExceeded
-	})}
-	videoService.SetPlaybackProxyService(proxies)
+	original := previewCodecProbeTimeout
+	previewCodecProbeTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { previewCodecProbeTimeout = original })
+	calls := 0
+	videoService, _ := newPreviewTestVideoService(t, &previewProbe{})
+	videoService.mediaProbe = newMediaProbeServiceWithRunner(func(ctx context.Context, path string) ([]byte, string, error) {
+		calls++
+		<-ctx.Done() // 卡住，直到期限到
+		return nil, "", ctx.Err()
+	})
 	video := createProxyTestVideo(t, "slow.mov", 10)
+
 	started := time.Now()
 	session, err := videoService.GetPreviewSession(video.ID)
 	if err != nil || session.Mode != "external-preview" {
 		t.Fatalf("探测超时应退回旧行为: %#v err=%v", session, err)
 	}
-	if deadline.IsZero() || deadline.Sub(started) > previewCodecProbeTimeout+time.Second {
-		t.Fatalf("补探应带不超过 %s 的期限: deadline=%v", previewCodecProbeTimeout, deadline)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("期限应把卡住的探测停下: 用了 %s", elapsed)
+	}
+	started = time.Now()
+	if session, err = videoService.GetPreviewSession(video.ID); err != nil || session.Mode != "external-preview" {
+		t.Fatalf("再打开仍按旧行为: %#v err=%v", session, err)
+	}
+	if calls != 1 || time.Since(started) > previewCodecProbeTimeout {
+		t.Fatalf("同一份源失败过就不再探测: calls=%d", calls)
+	}
+	// 源文件变了（新指纹）：重新探测一次。
+	mustSetFileModTime(t, video.Path, time.Now().Add(time.Hour))
+	if _, err := videoService.GetPreviewSession(video.ID); err != nil || calls != 2 {
+		t.Fatalf("源变了应重新探测: calls=%d err=%v", calls, err)
+	}
+}
+
+// 快照里没有视频流（只有音频）：生产路径是「不新鲜 → 补探 → 仍判不出 → 旧行为」，并记下不再补探。
+func TestGetPreviewSessionSnapshotWithoutVideoFallsBack(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	probe := &previewProbe{payload: `{"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"10.0"},` +
+		`"streams":[{"index":0,"codec_type":"audio","codec_name":"aac"}]}`}
+	videoService, _ := newPreviewTestVideoService(t, probe)
+	video := createProxyTestVideo(t, "voice.mov", 10)
+	for range 2 {
+		session, err := videoService.GetPreviewSession(video.ID)
+		if err != nil || session.Mode != "external-preview" {
+			t.Fatalf("没有视频流应按 mov 的旧行为: %#v err=%v", session, err)
+		}
+	}
+	if probe.calls != 1 {
+		t.Fatalf("应只补探一次: %d", probe.calls)
 	}
 }
 
@@ -263,5 +333,105 @@ func TestMobileWhitelistUnaffectedByDesktopDirectPlay(t *testing.T) {
 	}
 	if mimeType, ok := mobileInlineMIME(mp4, &mpeg4); !ok || mimeType != "video/mp4" {
 		t.Fatalf("手机端仍按扩展名白名单直连 mp4: %s ok=%t", mimeType, ok)
+	}
+}
+
+func TestAutoProxySizeLimitAndEstimate(t *testing.T) {
+	const gib = int64(1 << 30)
+	for limit, want := range map[int64]int64{0: 10 * gib, 50 * gib: 10 * gib, 100 * gib: 10 * gib, 5 * gib: gib} {
+		if got := autoProxySizeLimit(limit); got != want {
+			t.Fatalf("上限 %d 时自动生成上限应为 %d，实际 %d", limit, want, got)
+		}
+	}
+	remux := previewSnapshot("matroska,webm", "h264", "aac")
+	if got := estimatePlaybackProxyBytes(remux, 12345, 3600); got != 12345 {
+		t.Fatalf("remux 估算应取源大小: %d", got)
+	}
+	transcode := previewSnapshot("avi", "mpeg4", "mp3")
+	if got := estimatePlaybackProxyBytes(transcode, 1, 3600); got != (8_000_000+160_000)*3600/8 {
+		t.Fatalf("转码按码率上限 + 音频 × 时长估算: %d", got)
+	}
+	transcode.VideoBitRate = 2_000_000
+	if got := estimatePlaybackProxyBytes(transcode, 1, 3600); got != (2_000_000+160_000)*3600/8 {
+		t.Fatalf("源码率低于上限时按源码率估算: %d", got)
+	}
+	silent := previewSnapshot("avi", "mpeg4", "")
+	if got := estimatePlaybackProxyBytes(silent, 1, 100); got != 8_000_000*100/8 {
+		t.Fatalf("无音频不加音频码率: %d", got)
+	}
+	if got := estimatePlaybackProxyBytes(transcode, 777, 0); got != 777 {
+		t.Fatalf("时长未知时退到源大小: %d", got)
+	}
+}
+
+// 预计产物太大：会话是 proxy-manual（说明大小、只给手动生成），不排任务。
+func TestGetPreviewSessionLargeProxyNeedsManualGeneration(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	videoService, proxies := newPreviewTestVideoService(t, &previewProbe{})
+	setLimit := func(bytes int64) {
+		if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("proxy_cache_limit_bytes", bytes).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name     string
+		limit    int64
+		duration float64
+		mode     string
+	}{
+		{"4 小时转码超过 10 GiB", 0, 14400, "proxy-manual"},
+		{"2 小时转码在 10 GiB 内", 0, 7200, "proxy-preparing"},
+		{"上限 5 GiB 时超过其 20%", 5 << 30, 1200, "proxy-manual"},
+		{"上限 5 GiB 时在其 20% 内", 5 << 30, 600, "proxy-preparing"},
+	}
+	for index, tc := range cases {
+		setLimit(tc.limit)
+		video := createProxyTestVideo(t, fmt.Sprintf("long-%d.avi", index), tc.duration)
+		writePreviewSnapshot(t, video, "avi", "mpeg4", "mp3")
+		session, err := videoService.GetPreviewSession(video.ID)
+		if err != nil || session.Mode != tc.mode || session.ExternalAction == nil {
+			t.Fatalf("%s: 期望 %s，实际 %#v err=%v", tc.name, tc.mode, session, err)
+		}
+		if tc.mode == "proxy-manual" && (session.ReasonCode != "proxy_too_large" || !strings.Contains(session.ReasonMessage, "文件较大（约 ") ||
+			!strings.Contains(session.ReasonMessage, "GB），生成播放代理会占用相同大小的空间")) {
+			t.Fatalf("%s: 说明不对: %#v", tc.name, session)
+		}
+	}
+	setLimit(100) // 20% = 20 字节：remux 按源大小估算，正好 20 字节仍自动，21 字节只给手动。
+	for size, mode := range map[int]string{20: "proxy-preparing", 21: "proxy-manual"} {
+		video := createProxyTestVideo(t, fmt.Sprintf("remux-%d.mkv", size), 10)
+		if err := os.WriteFile(video.Path, make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writePreviewSnapshot(t, video, "matroska,webm", "h264", "aac")
+		if session, _ := videoService.GetPreviewSession(video.ID); session.Mode != mode {
+			t.Fatalf("remux 源 %d 字节应为 %s: %#v", size, mode, session)
+		}
+	}
+	if status := proxies.Status(); status.Total != 0 {
+		t.Fatalf("读会话不该排任务: %#v", status)
+	}
+}
+
+// 本机没有 ffmpeg：不自动生成（也不会落失败记录），按扩展名沿用旧行为。
+func TestGetPreviewSessionWithoutFFmpegKeepsLegacy(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	videoService, proxies := newPreviewTestVideoService(t, &previewProbe{})
+	stubPreviewFFmpeg(t, false)
+	mkv := createProxyTestVideo(t, "show.mkv", 10)
+	writePreviewSnapshot(t, mkv, "matroska,webm", "h264", "aac")
+	mp4 := createProxyTestVideo(t, "old.mp4", 10)
+	writePreviewSnapshot(t, mp4, isoBMFF, "mpeg4", "aac")
+	if session, err := videoService.GetPreviewSession(mkv.ID); err != nil || session.Mode != "external-preview" {
+		t.Fatalf("没有 ffmpeg 时 mkv 应是旧的外部预览: %#v err=%v", session, err)
+	}
+	if session, err := videoService.GetPreviewSession(mp4.ID); err != nil || session.Mode != "inline" || session.InlineSource.MIME != "video/mp4" {
+		t.Fatalf("没有 ffmpeg 时 mp4 应是旧的白名单内嵌: %#v err=%v", session, err)
+	}
+	if status := proxies.Status(); status.Total != 0 {
+		t.Fatalf("不该排任务: %#v", status)
+	}
+	if row, _ := loadProxyRow(mkv.ID); row != nil {
+		t.Fatalf("不该落失败记录: %#v", row)
 	}
 }

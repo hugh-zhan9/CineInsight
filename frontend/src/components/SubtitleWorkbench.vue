@@ -70,7 +70,12 @@
             </template>
             <div v-else class="subtitle-workbench__preview-fallback">
               <p>{{ previewSession?.reason_message || previewError || '当前视频无法内嵌预览。' }}</p>
+              <!-- 不能直放（2026-10-13）：proxy-preparing 按本窗口的 owner 自动请求代理，就绪后切到内嵌；
+                   proxy-manual（预计产物太大）只给手动生成。 -->
+              <p v-if="previewProxy.status" role="status" data-test="workbench-proxy-status">{{ previewProxy.status }}</p>
+              <p v-if="previewProxy.alert" role="alert" data-test="workbench-proxy-alert">{{ previewProxy.alert }}</p>
               <button type="button" class="btn-secondary" @click="previewExternally">用系统播放器预览</button>
+              <button v-if="canGeneratePreviewProxy" type="button" class="btn-secondary" data-test="workbench-proxy-generate" @click="generatePreviewProxy">生成播放代理</button>
             </div>
             <div class="subtitle-workbench__playback-status">
               <span>播放位置 {{ formatTimestamp(currentTimeMs) }}</span>
@@ -259,6 +264,7 @@ import {
   SaveSubtitleEditDocument
 } from '../../wailsjs/go/main/App';
 import { confirmAction } from '../utils/feedback.js';
+import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import { formatBytes } from '../utils/mediaDetails.js';
 import {
   defaultRetranslateMode, fixSubtitleTimingIssues, formatLocalTime, subtitleEncodingLabel, subtitleEncodingPrompt,
@@ -319,6 +325,8 @@ export default {
       lastFollowedIndex: -1,
       previewLoading: true,
       previewSession: null,
+      // 等代理时的两行：status（排位 / 生成中 / 提示）与 alert（失败）；pending 时不给手动按钮。
+      previewProxy: { pending: false, status: '', alert: '' },
       previewError: '',
       scrollTop: 0,
       viewportHeight: 800,
@@ -344,6 +352,9 @@ export default {
     };
   },
   computed: {
+    canGeneratePreviewProxy() {
+      return ['proxy-preparing', 'proxy-manual'].includes(this.previewSession?.mode) && !this.previewProxy.pending;
+    },
     isDirty() {
       return entriesSignature(this.entries) !== this.baselineSignature;
     },
@@ -459,12 +470,20 @@ export default {
       this.retranslateModeOverride = '';
     }
   },
+  created() {
+    this._proxyFollower = createPreviewProxyFollower({
+      kind: 'subtitle-workbench',
+      onState: change => this.applyPreviewProxyState(change),
+      onReady: () => this.reloadPreviewSession()
+    });
+  },
   mounted() {
     window.addEventListener('beforeunload', this.handleBeforeUnload);
     window.addEventListener('keydown', this.handleShortcut);
     this.loadWorkbench();
   },
   beforeUnmount() {
+    this._proxyFollower.stop();
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
     window.removeEventListener('keydown', this.handleShortcut);
   },
@@ -498,6 +517,7 @@ export default {
       this.loadBackups();
       try {
         this.previewSession = await previewPromise;
+        this._proxyFollower.follow(this.previewSession);
       } catch (error) {
         this.previewError = subtitleExceptionText(error);
       } finally {
@@ -679,6 +699,23 @@ export default {
       const video = this.$refs.videoElement;
       if (video) video.currentTime = this.currentTimeMs / 1000;
     },
+    applyPreviewProxyState(change) {
+      const pending = change.phase === 'pending';
+      this.previewProxy = {
+        pending,
+        status: pending || change.phase === 'notice' ? change.text : '',
+        alert: change.phase === 'failed' ? change.text : ''
+      };
+    },
+    // 代理就绪（或整轮结束、以会话为准）：重取会话，是内嵌就切过去。不再自动请求，免得同一部反复排队。
+    async reloadPreviewSession() {
+      try {
+        this.previewSession = await GetPreviewSession(this.video.id);
+      } catch (error) {
+        this.previewError = subtitleExceptionText(error);
+      }
+    },
+    generatePreviewProxy() { this._proxyFollower.generate(this.video.id); },
     async previewExternally() {
       try {
         await PreviewExternally(this.video.id);

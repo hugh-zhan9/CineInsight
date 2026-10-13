@@ -22,7 +22,10 @@ const api = vi.hoisted(() => ({
   PreviewExternally: vi.fn(),
   RestoreSubtitleBackup: vi.fn(),
   RetranslateSubtitleEntries: vi.fn(),
-  SaveSubtitleEditDocument: vi.fn()
+  SaveSubtitleEditDocument: vi.fn(),
+  RequestPreviewProxy: vi.fn(),
+  CancelPreviewProxy: vi.fn(),
+  CreatePlaybackProxy: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -378,5 +381,72 @@ describe('SubtitleWorkbench 历史版本（D-PC13）', () => {
     await wrapper.find('[data-test="workbench-restore-backup"]').trigger('click');
     await flushPromises();
     expect(api.RestoreSubtitleBackup).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubtitleWorkbench 不能直放时的播放代理（2026-10-13）', () => {
+  const queued = id => ({ running: true, queued: 1, queued_video_ids: [id], current_video_id: 99, results: [] });
+  function installRuntime() {
+    const handlers = {};
+    window.runtime = { EventsOn: vi.fn((name, fn) => { handlers[name] = fn; return () => { delete handlers[name]; }; }) };
+    return handlers;
+  }
+  async function mountPreparing(session) {
+    api.GetSubtitleEditDocument.mockResolvedValue(documentFixture());
+    api.GetPreviewSession.mockResolvedValueOnce(session);
+    const wrapper = mount(SubtitleWorkbench, { props: { video: { id: 7, name: 'movie.mkv', duration: 30 } } });
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('proxy-preparing：按本窗口的 owner 自动请求，显示排位，就绪后重取会话切到内嵌', async () => {
+    const handlers = installRuntime();
+    api.RequestPreviewProxy.mockResolvedValueOnce(queued(7));
+    const wrapper = await mountPreparing({ video_id: 7, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。' });
+    api.GetPreviewSession.mockResolvedValueOnce({ video_id: 7, mode: 'inline', inline_source: { locator_value: '/preview/media/7', mime: 'video/mp4' }, proxy: { strategy: 'remux', size: 9 } });
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(7, expect.stringMatching(/^subtitle-workbench-/));
+    expect(wrapper.get('[data-test="workbench-proxy-status"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.find('[data-test="workbench-proxy-generate"]').exists()).toBe(false);
+    handlers['playback-proxy-state']({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 7, code: 'created' }] });
+    await flushPromises();
+    expect(wrapper.find('video source').attributes('src')).toBe('/preview/media/7');
+    wrapper.unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy).not.toHaveBeenCalled();
+    delete window.runtime;
+  });
+
+  it('关闭时撤销本窗口还在等的请求；失败时给失败文案与手动按钮', async () => {
+    const handlers = installRuntime();
+    api.RequestPreviewProxy.mockResolvedValueOnce(queued(7));
+    const wrapper = await mountPreparing({ video_id: 7, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。' });
+    handlers['playback-proxy-state']({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 7, code: 'encode_failed' }] });
+    await flushPromises();
+    expect(wrapper.get('[data-test="workbench-proxy-alert"]').text()).toBe('生成播放代理失败：转封装失败');
+    expect(wrapper.find('[data-test="workbench-proxy-generate"]').exists()).toBe(true);
+    api.RequestPreviewProxy.mockResolvedValueOnce(queued(7));
+    const pending = await mountPreparing({ video_id: 7, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。' });
+    const owner = api.RequestPreviewProxy.mock.calls.at(-1)[1];
+    pending.unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(7, owner);
+    wrapper.unmount();
+    delete window.runtime;
+  });
+
+  it('proxy-manual：不自动请求，手动「生成播放代理」走 CreatePlaybackProxy', async () => {
+    installRuntime();
+    api.CreatePlaybackProxy.mockResolvedValueOnce(queued(7));
+    const wrapper = await mountPreparing({ video_id: 7, mode: 'proxy-manual', reason_message: '文件较大（约 12.0 GB），生成播放代理会占用相同大小的空间' });
+    expect(api.RequestPreviewProxy).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('文件较大（约 12.0 GB）');
+    await wrapper.get('[data-test="workbench-proxy-generate"]').trigger('click');
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(7);
+    expect(wrapper.get('[data-test="workbench-proxy-status"]').text()).toBe('排队中（第 1 个）');
+    wrapper.unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy).not.toHaveBeenCalled();
+    delete window.runtime;
   });
 });

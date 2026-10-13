@@ -1076,7 +1076,7 @@ describe('P-037 内嵌播放器报错的回退（D-PC26）', () => {
     expect(wrapper.emitted('preview-externally')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
 
     // 2026-10-13：直放的源解码失败时自动排代理，生成代理按钮照留（等待中不可再点）。
-    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1);
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1, expect.stringMatching(/^player-/));
     expect(api.CreatePlaybackProxy).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="preview-inline-error-proxy"]').attributes('disabled')).toBeDefined();
     expect(wrapper.get('[data-test="preview-inline-error-progress"]').text()).toBe('排队中（第 1 个）');
@@ -1429,17 +1429,17 @@ describe('2026-10-13 直接播 + 自动代理（抽屉经共用播放器）', ()
   it('不能直放的会话：打开即自动排代理、显示进度与系统播放器入口；关闭抽屉时取消', async () => {
     const handlers = installRuntime();
     const wrapper = await mountInline({ session: { video_id: 1, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。', external_action: { button_label: '使用系统播放器预览' } } });
-    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1);
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1, expect.stringMatching(/^player-/));
     expect(wrapper.find('video').exists()).toBe(false);
-    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('排队中（第 1 个）');
     expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('完成后会自动切到内嵌播放');
     await wrapper.get('[data-test="preview-proxy-preparing-external"]').trigger('click');
     expect(wrapper.emitted('preview-externally')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
     handlers['playback-proxy-state']({ running: true, queued: 0, queued_video_ids: [], current_video_id: 1, results: [] });
     await flushPromises();
-    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('生成中');
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('生成中');
     wrapper.unmount();
     await flushPromises();
-    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(1);
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(1, expect.stringMatching(/^player-/));
   });
 });

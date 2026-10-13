@@ -32,6 +32,10 @@ type VideoService struct {
 	// 可为 nil：没接代理服务时一切退回本批之前的行为。
 	playbackProxyMu sync.RWMutex
 	playbackProxy   *PlaybackProxyService
+
+	// previewProbeFailures：打开预览时补探失败过的「视频 + 源指纹」，本次运行内不再补探（preview_direct_play.go）。
+	previewProbeMu       sync.Mutex
+	previewProbeFailures map[previewProbeKey]struct{}
 	// watchState 保存已看状态观察者（D-PC52），见 library_service.go 的 SetWatchStateObserver。
 	watchState watchStateNotifier
 	// newVideoObserver 在新建视频记录（探测与本地元数据观察之后）时收到 id，供规则队列入队（D-RA-05）。

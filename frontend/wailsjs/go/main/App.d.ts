@@ -105,7 +105,7 @@ export function CancelPerceptualHashBackfill():Promise<void>;
 
 export function CancelPlaybackProxyTask():Promise<void>;
 
-export function CancelPreviewProxy(arg1:number):Promise<boolean>;
+export function CancelPreviewProxy(arg1:number,arg2:string):Promise<boolean>;
 
 export function CancelSceneIndex():Promise<void>;
 
@@ -691,7 +691,7 @@ export function RepairDataHealth(arg1:string):Promise<services.DataHealthRepairR
 
 export function ReportInlineQueuePlayback(arg1:services.InlineQueueEvent):Promise<void>;
 
-export function RequestPreviewProxy(arg1:number):Promise<services.PlaybackProxyStatus>;
+export function RequestPreviewProxy(arg1:number,arg2:string):Promise<services.PlaybackProxyStatus>;
 
 export function RequeueEditProject(arg1:services.EditQueueRequest):Promise<services.EditQueueResult>;
 

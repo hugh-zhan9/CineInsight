@@ -386,12 +386,12 @@ describe('VideoDetailPage in-app playback', () => {
   it('auto-requests a proxy for a proxy-preparing session and cancels it when the player closes (2026-10-13)', async () => {
     api.GetPreviewSession.mockResolvedValue({ video_id: 5, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。', external_action: { button_label: '使用系统播放器预览' } });
     const wrapper = await mountPage({ startAtMs: 1000 }, { realPlayer: true });
-    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(5);
-    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('排队中（第 1 个）');
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(5, expect.stringMatching(/^player-/));
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('排队中（第 1 个）');
     expect(wrapper.find('[data-test="detail-proxy-create"]').exists()).toBe(false);
     await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
     await flushPromises();
-    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(5);
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(5, expect.stringMatching(/^player-/));
   });
 
   it('has no proxy button while the session plays inline', async () => {

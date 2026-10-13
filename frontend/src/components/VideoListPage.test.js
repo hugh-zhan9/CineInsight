@@ -1336,6 +1336,23 @@ describe('播放代理入口（D-006）', () => {
     expect(feedback.notify).not.toHaveBeenCalled();
     wrapper.unmount();
   });
+
+  it('只有预览自动代理的一轮（auto_only）不弹汇总提示，带手动请求的一轮照弹（2026-10-13）', async () => {
+    const handlers = {};
+    window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return () => {}; } };
+    const wrapper = await mountPage();
+    handlers['playback-proxy-state']({ running: true, auto_only: true, processed: 0, total: 1, results: [] });
+    await wrapper.vm.$nextTick();
+    handlers['playback-proxy-state']({ running: false, completed: true, auto_only: true, processed: 1, total: 1, succeeded: 1, skipped: 0, failed: 0, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).not.toHaveBeenCalled();
+    handlers['playback-proxy-state']({ running: true, auto_only: false, processed: 0, total: 2, results: [] });
+    await wrapper.vm.$nextTick();
+    handlers['playback-proxy-state']({ running: false, completed: true, auto_only: false, processed: 2, total: 2, succeeded: 2, skipped: 0, failed: 0, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('成功 2'));
+    wrapper.unmount();
+  });
 });
 
 // 收藏 / 已看只改一列，返回值却要整行覆盖列表项；后端不带 tags 时一次收藏就把标签"清空"了。

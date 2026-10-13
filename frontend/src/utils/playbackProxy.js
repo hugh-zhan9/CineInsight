@@ -44,6 +44,29 @@ export function playbackProxyItemState(status, videoID, { tracked = false } = {}
   return { phase: 'idle' };
 }
 
+// advanceProxyTracking 按一份状态快照推进对某一项代理的跟踪（D-PC26）：排队与处理中只更新显示；正在等的
+// 那一项有了结果、或整轮结束时收尾一次。入队请求还没返回（submitting）时，事件里的空白或旧结果都不算数。
+// tracking 为 { videoID, state } 或 null；返回 { tracking（新的跟踪，null 为不再跟踪）, finished（收尾时的 state） }。
+// 内嵌播放器与会话读者（utils/previewProxy.js）共用。
+export function advanceProxyTracking(tracking, status, videoID, { fromEvent = true } = {}) {
+  const id = Number(videoID);
+  const state = playbackProxyItemState(status, id, { tracked: !!tracking });
+  if (state.phase === 'queued' || state.phase === 'processing') return { tracking: { videoID: id, state }, finished: null };
+  if (!tracking) return { tracking: null, finished: null };
+  if (fromEvent && tracking.state?.phase === 'submitting') return { tracking, finished: null };
+  if (fromEvent && state.phase === 'idle' && status?.running) return { tracking, finished: null };
+  return { tracking: null, finished: state };
+}
+
+// 自动代理请求被拒（同时在等自动代理的视频已有 2 部，后端报 auto_proxy_limit）时的提示。
+export const AUTO_PROXY_LIMIT_TEXT = '已有 2 部视频在等自动生成的播放代理，这一部可稍后重新打开，或点「生成播放代理」手动排队。';
+
+// proxyRequestErrorText 把入队失败翻成一句话：被上限拒绝是提示（notice），其余是失败（error）。
+export function proxyRequestErrorText(err) {
+  const text = String(err ?? '');
+  return text.includes('auto_proxy_limit') ? { notice: AUTO_PROXY_LIMIT_TEXT, error: '' } : { notice: '', error: `生成播放代理失败：${text}` };
+}
+
 // playbackProxyItemStateText 是抽屉里显示的那一句：「排队中（第 N 个）」「生成中」。
 export function playbackProxyItemStateText(state) {
   if (state?.phase === 'processing') return '生成中';

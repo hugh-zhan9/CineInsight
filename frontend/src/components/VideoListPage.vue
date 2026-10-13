@@ -863,8 +863,9 @@ export default {
         if (!status) return;
         const wasRunning = this.playbackProxy.running;
         this.playbackProxy = { ...this.playbackProxy, ...status };
-        // 只在"刚刚从运行变成不运行"这一刻提示一次，别每条结果都弹。
-        if (wasRunning && !status.running && !status.cancelled) {
+        // 只在"刚刚从运行变成不运行"这一刻提示一次，别每条结果都弹。只有预览自动代理的一轮（auto_only）
+        // 不弹：播放器自己显示进度与结果（2026-10-13）。
+        if (wasRunning && !status.running && !status.cancelled && !status.auto_only) {
           notify(playbackProxyBatchSummary(status));
         }
       });

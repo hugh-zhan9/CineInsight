@@ -66,6 +66,7 @@ type PlaybackProxyStatus struct {
 	Running   bool `json:"running"`
 	Cancelled bool `json:"cancelled"`
 	Completed bool `json:"completed"`
+	AutoOnly  bool `json:"auto_only"` // 这一轮只有预览自动代理：跑完不发桌面通知、片库页不弹汇总
 	Queued    int  `json:"queued"`
 	// QueuedVideoIDs 是还在排队（尚未轮到）的视频，按处理顺序排列：下标 i 的视频排在
 	// 「第 i+1 个」（D-PC26，抽屉显示「排队中（第 N 个）」）。正在处理的那一项是
@@ -108,10 +109,11 @@ type PlaybackProxyService struct {
 	inFlight map[uint]struct{}
 	cancel   context.CancelFunc
 	stopping bool
-	// autoVideoID 是跟着打开的预览走的那一项自动代理（2026-10-13「直接播 + 自动代理」），0 表示没有。
-	// 一次最多一项；预览关闭或换片时 CancelAuto 取消它（排队中或处理中都取消），手动入口不受影响。
-	// 手动入口再点同一个视频就转成手动项（清零），之后不再被预览取消。
-	autoVideoID uint
+	// autoOwners：等自动代理的视频 → 还在等它的预览宿主（playback_proxy_auto.go）。
+	// 有这一条的视频就是自动项；手动入口接管或这一项有了结果就删掉。
+	autoOwners map[uint]map[string]struct{}
+	// autoCancelling：处理中的自动项已被取消、结果还没记下；值为真表示期间手动入口又要了它。
+	autoCancelling map[uint]bool
 	// itemCancel 只取消正在处理的那一项（整轮照跑）。只有 CancelAuto 用它。
 	itemCancel context.CancelFunc
 
@@ -308,69 +310,12 @@ func filterPlaybackProxyCandidates(videoIDs []uint) ([]uint, error) {
 }
 
 func (s *PlaybackProxyService) enqueue(parent context.Context, videoIDs []uint) (PlaybackProxyStatus, error) {
-	return s.enqueueItems(parent, videoIDs, false)
+	return s.enqueueItems(parent, videoIDs, "")
 }
 
-// EnqueueAuto 为正在预览的视频自动排一项代理（2026-10-13「直接播 + 自动代理」）。用户打开预览即算
-// 用户发起，不过空闲门。一次最多一项：上一项自动代理（换了片）先取消；同一视频已是自动项时不重复入队；
-// 已经被手动入口排进去时只跟着它走，不另记一项、也不标成自动项（手动项不被预览取消）。
-func (s *PlaybackProxyService) EnqueueAuto(parent context.Context, videoID uint) (PlaybackProxyStatus, error) {
-	if s == nil {
-		return PlaybackProxyStatus{}, errPlaybackProxyServiceMissing
-	}
-	if videoID == 0 {
-		return s.Status(), nil
-	}
-	return s.enqueueItems(parent, []uint{videoID}, true)
-}
-
-// CancelAuto 取消视频 videoID 的自动代理（预览关闭或换片）。它不是当前自动项（已完成、已转手动、
-// 或已被下一项替换）时什么都不做，返回 false。做好的代理照常保留（LRU 管）。
-func (s *PlaybackProxyService) CancelAuto(videoID uint) bool {
-	if s == nil || videoID == 0 {
-		return false
-	}
-	s.mu.Lock()
-	if s.autoVideoID != videoID {
-		s.mu.Unlock()
-		return false
-	}
-	cancelItem := s.cancelAutoLocked()
-	status, emitter := s.snapshotLocked(), s.emitter
-	s.mu.Unlock()
-	if cancelItem != nil {
-		cancelItem()
-	}
-	if emitter != nil {
-		emitter(status)
-	}
-	return true
-}
-
-// cancelAutoLocked 取消当前自动项：还在排队就当场摘掉并记 cancelled；正在处理就返回这一项的取消函数，
-// 由调用方在锁外调用，worker 随后按取消记结果。没有自动项时返回 nil。
-func (s *PlaybackProxyService) cancelAutoLocked() context.CancelFunc {
-	videoID := s.autoVideoID
-	if videoID == 0 {
-		return nil
-	}
-	s.autoVideoID = 0
-	for index, queued := range s.queue {
-		if queued != videoID {
-			continue
-		}
-		s.queue = append(s.queue[:index], s.queue[index+1:]...)
-		delete(s.inFlight, videoID)
-		s.appendResultLocked(PlaybackProxyItemResult{VideoID: videoID, Code: PlaybackProxyCodeCancelled, Message: "已取消"})
-		return nil
-	}
-	if s.status.CurrentVideoID == videoID {
-		return s.itemCancel
-	}
-	return nil
-}
-
-func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []uint, auto bool) (PlaybackProxyStatus, error) {
+// enqueueItems 是所有入口的入队。autoOwner 非空表示预览自动代理（EnqueueAuto，只带一个视频），
+// 空表示手动、批量或扫描后自动（它们从不被预览取消）。
+func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []uint, autoOwner string) (PlaybackProxyStatus, error) {
 	if s == nil {
 		return PlaybackProxyStatus{}, errors.New("播放代理服务未初始化")
 	}
@@ -387,23 +332,15 @@ func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []u
 	if s.inFlight == nil {
 		s.inFlight = make(map[uint]struct{})
 	}
-	var cancelPreviousAuto context.CancelFunc
-	if auto {
-		videoID := videoIDs[0]
-		if s.autoVideoID != videoID {
-			cancelPreviousAuto = s.cancelAutoLocked()
-		}
-		// 已在排队或处理中（本身就是自动项，或由手动入口排进去的）：跟着它走，不重复入队。
-		if _, running := s.inFlight[videoID]; running {
-			status, emitter := s.snapshotLocked(), s.emitter
+	if s.autoOwners == nil {
+		s.autoOwners = make(map[uint]map[string]struct{})
+		s.autoCancelling = make(map[uint]bool)
+	}
+	if autoOwner != "" {
+		if handled, err := s.autoPrecheckLocked(videoIDs[0], autoOwner); handled {
+			status := s.snapshotLocked()
 			s.mu.Unlock()
-			if cancelPreviousAuto != nil {
-				cancelPreviousAuto()
-			}
-			if emitter != nil {
-				emitter(status)
-			}
-			return status, nil
+			return status, err
 		}
 	}
 	queued := make([]uint, 0, len(videoIDs))
@@ -416,9 +353,8 @@ func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []u
 			continue
 		}
 		seen[videoID] = struct{}{}
-		if !auto && videoID == s.autoVideoID {
-			// 手动入口接管了这一项：之后预览关闭也不取消它。
-			s.autoVideoID = 0
+		if autoOwner == "" {
+			s.promoteAutoLocked(videoID)
 		}
 		if _, running := s.inFlight[videoID]; running {
 			busy = append(busy, videoID)
@@ -445,8 +381,13 @@ func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []u
 	s.status.Total += len(queued) + len(busy)
 	s.status.UpdatedAt = &now
 	s.queue = append(s.queue, queued...)
-	if auto && len(queued) == 1 {
-		s.autoVideoID = queued[0]
+	if autoOwner != "" && len(queued) == 1 {
+		s.autoOwners[queued[0]] = map[string]struct{}{autoOwner: {}}
+	}
+	if startWorker {
+		s.status.AutoOnly = autoOwner != ""
+	} else if autoOwner == "" {
+		s.status.AutoOnly = false
 	}
 	for _, videoID := range busy {
 		// 同一个视频已经在队列里或正在处理：本次合并进去，不是失败。
@@ -463,9 +404,6 @@ func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []u
 	}
 	status, emitter, registry := s.snapshotLocked(), s.emitter, s.registry
 	s.mu.Unlock()
-	if cancelPreviousAuto != nil {
-		cancelPreviousAuto()
-	}
 
 	if startWorker {
 		registry.Begin(BackgroundTaskProxy)
@@ -611,7 +549,8 @@ func (s *PlaybackProxyService) finish(cancelled bool) bool {
 	s.stopping = false
 	s.queue = nil
 	s.inFlight = make(map[uint]struct{})
-	s.autoVideoID = 0
+	s.autoOwners = nil
+	s.autoCancelling = nil
 	status, emitter, notifier := s.snapshotLocked(), s.emitter, s.notifier
 	s.mu.Unlock()
 	if cancel != nil {
@@ -622,7 +561,8 @@ func (s *PlaybackProxyService) finish(cancelled bool) bool {
 	}
 	// 一轮跑完发一条通知（D-013）：只报成功/失败条数，不带路径也不带失败原因
 	// （底层报错常含绝对路径，通知会留在系统通知中心里）。取消不发：那是用户按的。
-	if !cancelled && status.Total > 0 {
+	// 只有预览自动代理的一轮不发：播放器自己显示进度与结果（2026-10-13 评审修订）。
+	if !cancelled && status.Total > 0 && !status.AutoOnly {
 		notifyDesktop(notifier, "播放代理生成完成",
 			fmt.Sprintf("成功 %d 项，失败 %d 项", status.Succeeded, status.Failed))
 	}
@@ -644,11 +584,14 @@ func (s *PlaybackProxyService) setCurrentName(name string) {
 func (s *PlaybackProxyService) recordResult(result PlaybackProxyItemResult) {
 	s.mu.Lock()
 	delete(s.inFlight, result.VideoID)
-	if s.autoVideoID == result.VideoID {
-		// 自动项有了结果就不再是「可取消的自动项」：之后预览关闭不影响做好的代理。
-		s.autoVideoID = 0
-	}
+	// 自动项有了结果就不再可被预览取消；处理中被取消、期间又有人要它的，在这里重排。
+	requeue := s.settleAutoLocked(result)
 	s.appendResultLocked(result)
+	if requeue {
+		s.inFlight[result.VideoID] = struct{}{}
+		s.queue = append(s.queue, result.VideoID)
+		s.status.Total++
+	}
 	status, emitter := s.snapshotLocked(), s.emitter
 	s.mu.Unlock()
 	if emitter != nil {

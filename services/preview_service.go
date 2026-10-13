@@ -116,14 +116,15 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 	}
 
 	// 没有代理时按实际编码判定（2026-10-13「直接播 + 自动代理」，preview_direct_play.go）：能直放的
-	// 直接内嵌源文件；不能的返回 proxy-preparing，由内嵌播放器自动排一项代理（RequestPreviewProxy），
-	// 就绪后重取会话切到内嵌。编码判不出来、或没有代理服务时按扩展名沿用旧行为。
-	decision := s.desktopPreviewPlan(*video)
+	// 直接内嵌源文件；不能的返回 proxy-preparing，由预览宿主按 owner 自动请求代理（RequestPreviewProxy），
+	// 就绪后重取会话切到内嵌；预计产物太大时返回 proxy-manual，只给手动生成。编码判不出来、没有代理服务
+	// 或本机没有 ffmpeg 时按扩展名沿用旧行为。
+	decision := s.desktopPreviewPlan(*video, playbackProxyFingerprintOf(info))
 	if decision.Route == desktopPreviewDirect {
 		return inlineSourceSession(video, sourceVersion, decision.MIME), nil
 	}
-	if decision.Route == desktopPreviewProxy && s.playbackProxies() != nil {
-		return &PreviewSession{
+	if proxies := s.playbackProxies(); decision.Route == desktopPreviewProxy && proxies != nil && previewFFmpegAvailable() {
+		session := &PreviewSession{
 			VideoID:        video.ID,
 			Mode:           "proxy-preparing",
 			DisplayName:    video.Name,
@@ -131,7 +132,13 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 			ExternalAction: previewExternalAction(),
 			ReasonCode:     "proxy_required",
 			ReasonMessage:  "这个文件的格式或编码不能在应用内直接播放，需要先生成播放代理。",
-		}, nil
+		}
+		if estimate := estimatePlaybackProxyBytes(decision.Snapshot, info.Size(), video.Duration); estimate > autoProxySizeLimit(proxies.cacheLimitBytes()) {
+			session.Mode = "proxy-manual"
+			session.ReasonCode = "proxy_too_large"
+			session.ReasonMessage = autoProxyTooLargeMessage(estimate)
+		}
+		return session, nil
 	}
 
 	if mimeType, ok := inlinePreviewMIME(video.Path); ok {

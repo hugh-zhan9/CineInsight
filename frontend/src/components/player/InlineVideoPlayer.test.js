@@ -19,6 +19,7 @@ import { currentActivePlayer, releaseActivePlayer } from '../../utils/activePlay
 
 const inlineSession = (id, extra = {}) => ({ video_id: id, mode: 'inline', inline_source: { locator_value: `/preview/video/${id}`, mime: 'video/mp4' }, ...extra });
 const preparingSession = id => ({ video_id: id, mode: 'proxy-preparing', reason_code: 'proxy_required', reason_message: '需要先生成播放代理。', external_action: { button_label: '使用系统播放器预览' } });
+const OWNER = expect.stringMatching(/^player-/);
 const idleStatus = (extra = {}) => ({ running: false, queued: 0, queued_video_ids: [], current_video_id: 0, results: [], ...extra });
 
 const mounted = [];
@@ -253,7 +254,7 @@ describe('InlineVideoPlayer 无法内嵌与播放代理', () => {
     await flushPromises();
     expect(wrapper.find('video').exists()).toBe(false);
     expect(api.RequestPreviewProxy).toHaveBeenCalledTimes(1);
-    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1);
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1, OWNER);
     expect(api.CreatePlaybackProxy).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="preview-inline-error-progress"]').text()).toBe('排队中（第 1 个）');
     expect(wrapper.get('[data-test="preview-inline-error-proxy"]').attributes('disabled')).toBeDefined();
@@ -339,18 +340,18 @@ describe('InlineVideoPlayer 自动代理（2026-10-13「直接播 + 自动代理
     api.GetPlaybackProxy.mockResolvedValueOnce(null).mockResolvedValue({ video_id: 4, strategy: 'transcode', status: 'ready', output_size: 10, last_error: '' });
     const wrapper = await mountPlayer({ videoId: 4, session: preparingSession(4) });
     expect(api.RequestPreviewProxy).toHaveBeenCalledTimes(1);
-    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(4);
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(4, OWNER);
     expect(api.CreatePlaybackProxy).not.toHaveBeenCalled();
     expect(wrapper.find('video').exists()).toBe(false);
     expect(wrapper.get('[data-test="preview-proxy-preparing"]').text()).toContain('需要先生成播放代理。');
-    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('排队中（第 2 个）');
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('排队中（第 2 个）');
     expect(wrapper.get('[data-test="preview-proxy-preparing-proxy"]').attributes('disabled')).toBeDefined();
     await wrapper.get('[data-test="preview-proxy-preparing-external"]').trigger('click');
     expect(wrapper.emitted('preview-externally')).toEqual([[4]]);
 
     handlers['playback-proxy-state'](idleStatus({ running: true, current_video_id: 4 }));
     await flushPromises();
-    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('生成中');
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('生成中');
     handlers['playback-proxy-state'](idleStatus({ completed: true, results: [{ video_id: 4, code: 'created', strategy: 'transcode' }] }));
     await flushPromises();
     expect(wrapper.emitted('preview-session-stale')).toEqual([[4]]);
@@ -366,7 +367,7 @@ describe('InlineVideoPlayer 自动代理（2026-10-13「直接播 + 自动代理
     api.GetPlaybackProxy.mockResolvedValue({ video_id: 4, strategy: 'remux', status: 'ready', output_size: 10, last_error: '' });
     const wrapper = await mountPlayer({ videoId: 4, session: undefined });
     await flushPromises();
-    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(4);
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(4, OWNER);
     expect(api.GetPreviewSession).toHaveBeenCalledTimes(2);
     expect(wrapper.find('video').exists()).toBe(true);
     expect(wrapper.vm.playingThroughProxy).toBe(true);
@@ -378,9 +379,10 @@ describe('InlineVideoPlayer 自动代理（2026-10-13「直接播 + 自动代理
     const wrapper = await mountPlayer({ videoId: 4, session: preparingSession(4) });
     handlers['playback-proxy-state'](idleStatus({ completed: true, results: [{ video_id: 4, code: 'encode_failed', message: 'x' }] }));
     await flushPromises();
-    const state = wrapper.get('[data-test="preview-proxy-preparing-state"]');
-    expect(state.text()).toBe('生成播放代理失败：转封装失败');
-    expect(state.attributes('role')).toBe('alert');
+    const alert = wrapper.get('[data-test="preview-proxy-preparing-alert"]');
+    expect(alert.text()).toBe('生成播放代理失败：转封装失败');
+    expect(alert.attributes('role')).toBe('alert');
+    expect(wrapper.find('[data-test="preview-proxy-preparing-status"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="preview-proxy-preparing-external"]').exists()).toBe(true);
     expect(wrapper.vm.showsProxyState).toBe(true);
     api.CreatePlaybackProxy.mockResolvedValueOnce(idleStatus({ running: true, queued: 1, queued_video_ids: [4], current_video_id: 2 }));
@@ -397,16 +399,16 @@ describe('InlineVideoPlayer 自动代理跟着预览走', () => {
     // 入队回执与后端一样带着刚排进去的这一项。
     api.RequestPreviewProxy.mockImplementation(id => Promise.resolve(idleStatus({ running: true, current_video_id: 99, queued: 1, queued_video_ids: [id] })));
     const wrapper = await mountPlayer({ videoId: 4, session: preparingSession(4) });
-    expect(api.RequestPreviewProxy).toHaveBeenLastCalledWith(4);
+    expect(api.RequestPreviewProxy).toHaveBeenLastCalledWith(4, OWNER);
     await wrapper.setProps({ videoId: 6, session: preparingSession(6) });
     await flushPromises();
     expect(api.CancelPreviewProxy).toHaveBeenCalledTimes(1);
-    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(4);
-    expect(api.RequestPreviewProxy).toHaveBeenLastCalledWith(6);
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(4, OWNER);
+    expect(api.RequestPreviewProxy).toHaveBeenLastCalledWith(6, OWNER);
     mounted.pop().unmount();
     await flushPromises();
     expect(api.CancelPreviewProxy).toHaveBeenCalledTimes(2);
-    expect(api.CancelPreviewProxy).toHaveBeenLastCalledWith(6);
+    expect(api.CancelPreviewProxy).toHaveBeenLastCalledWith(6, OWNER);
   });
 
   it('换片到能直放的视频同样取消上一部；直放会话本身不排代理', async () => {
@@ -415,7 +417,7 @@ describe('InlineVideoPlayer 自动代理跟着预览走', () => {
     const wrapper = await mountPlayer({ videoId: 4, session: preparingSession(4) });
     await wrapper.setProps({ videoId: 7, session: inlineSession(7) });
     await flushPromises();
-    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(4);
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(4, OWNER);
     expect(api.RequestPreviewProxy).toHaveBeenCalledTimes(1);
     mounted.pop().unmount();
     await flushPromises();
@@ -463,5 +465,51 @@ describe('InlineVideoPlayer 自动代理跟着预览走', () => {
     await flushPromises();
     expect(api.RequestPreviewProxy).not.toHaveBeenCalled();
     expect(wrapper.find('[data-test="preview-proxy-preparing-proxy"]').attributes('disabled')).toBeUndefined();
+  });
+});
+
+describe('InlineVideoPlayer 自动代理按宿主记账（评审修订）', () => {
+  it('两个宿主看同一部：各用自己的 owner 请求，关掉一个只撤销它自己的', async () => {
+    installRuntime();
+    api.RequestPreviewProxy.mockImplementation(id => Promise.resolve(idleStatus({ running: true, current_video_id: 99, queued: 1, queued_video_ids: [id] })));
+    const drawer = await mountPlayer({ videoId: 4, session: preparingSession(4) });
+    const detail = await mountPlayer({ videoId: 4, session: preparingSession(4) });
+    expect(api.RequestPreviewProxy).toHaveBeenCalledTimes(2);
+    const [[, drawerOwner], [, detailOwner]] = api.RequestPreviewProxy.mock.calls;
+    expect(drawerOwner).not.toBe(detailOwner);
+    mounted.splice(mounted.indexOf(drawer), 1); drawer.unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy.mock.calls).toEqual([[4, drawerOwner]]);
+    expect(detail.get('[data-test="preview-proxy-preparing-status"]').attributes('role')).toBe('status');
+  });
+
+  it('proxy-manual（预计产物太大）：不自动请求，说明大小，手动生成照旧', async () => {
+    installRuntime();
+    const session = { ...preparingSession(4), mode: 'proxy-manual', reason_code: 'proxy_too_large', reason_message: '文件较大（约 12.0 GB），生成播放代理会占用相同大小的空间' };
+    api.CreatePlaybackProxy.mockResolvedValueOnce(idleStatus({ running: true, queued: 1, queued_video_ids: [4], current_video_id: 2 }));
+    const wrapper = await mountPlayer({ videoId: 4, session });
+    expect(api.RequestPreviewProxy).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="preview-proxy-preparing"]').text()).toContain('文件较大（约 12.0 GB），生成播放代理会占用相同大小的空间');
+    expect(wrapper.find('[data-test="preview-proxy-preparing-external"]').exists()).toBe(true);
+    await wrapper.get('[data-test="preview-proxy-preparing-proxy"]').trigger('click');
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(4);
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('排队中（第 1 个）');
+    mounted.pop().unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy).not.toHaveBeenCalled();
+  });
+
+  it('同时在等的已有 2 部：请求被拒时给提示（不是失败），可手动生成，关闭时不撤销', async () => {
+    installRuntime();
+    api.RequestPreviewProxy.mockRejectedValueOnce('auto_proxy_limit: 已有 2 部视频在等自动生成的播放代理');
+    const wrapper = await mountPlayer({ videoId: 4, session: preparingSession(4) });
+    const status = wrapper.get('[data-test="preview-proxy-preparing-status"]');
+    expect(status.text()).toContain('已有 2 部视频在等自动生成的播放代理');
+    expect(wrapper.find('[data-test="preview-proxy-preparing-alert"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="preview-proxy-preparing-proxy"]').attributes('disabled')).toBeUndefined();
+    mounted.pop().unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy).not.toHaveBeenCalled();
   });
 });
