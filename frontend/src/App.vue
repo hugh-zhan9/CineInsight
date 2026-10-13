@@ -6,8 +6,8 @@
       </div>
       <!-- 顶栏两套导航（D-UI-02、D-UI-09）：区域由当前页面推出，只显示这一侧的导航；组间分隔，
            「片单」是一个页面（D-P2-04，不再是下拉）；「下载」只在开启浏览器插件桥接时出现。页面清单与命令面板同一份
-           （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的三项是动作：
-           执行命令面板里同 ID 的既有命令，打开待处理、清理中心与任务中心。
+           （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的两项是动作：
+           执行命令面板里同 ID 的既有命令，打开清理中心与任务中心；「待处理」三期起是页面（D-P3-01）。
            导航项是 .btn .btn--ghost，尺寸与选中态由下面的 .header .nav-btn 收窄。 -->
       <nav class="header-nav" aria-label="页面导航" :data-test="`nav-area-${area}`">
         <template v-if="area === 'manage'">
@@ -103,6 +103,15 @@
         @run-command="runPendingCommand"
         @open-pending-work="openPendingWork"
         @open-task-center="openTaskCenter"
+      />
+      <!-- 待处理（D-P3-01）：管理侧页面，每次进来重新读；页内处理人脸、建议作品集与本地资料更新，其余按固定命令 ID
+           进专门工具（runPendingCommand）。它读到新的摘要时同步顶栏角标。 -->
+      <PendingWorkPage
+        v-if="currentPage === 'pending-work'"
+        @navigate="navigateTo"
+        @run-command="runPendingCommand"
+        @open-task-center="openTaskCenter"
+        @badge-change="setPendingWorkTotal"
       />
       <!-- 视频海报墙（D-P2-01）：观看侧「视频」，只做浏览，筛选状态与片库管理各自独立。首次进入才挂载，之后只隐藏，
            切走再回来筛选、已加载的卡片与滚动位置都在。navigateTo('videos', { keyword | watch | tagId }) 带来的参数经 pageRequests 交给它。 -->
@@ -269,7 +278,7 @@
       @close="closeCommandPalette"
     />
 
-    <!-- 任务中心与待处理工作台常挂载（关着也在），顶栏角标才能跟着事件与定时刷新走。 -->
+    <!-- 任务中心常挂载（关着也在），顶栏任务指示才能跟着事件走。待处理角标由 App 自己定时读（refreshPendingWorkTotal）。 -->
     <TaskCenterDrawer
       v-if="!startupError"
       :open="taskCenterOpen"
@@ -278,14 +287,6 @@
       @open-video="openVideoByID($event, { from: 'task-center' })"
       @open-consolidation="openConsolidationTask"
       @open-video-edit="openVideoEditProject"
-    />
-    <PendingWorkHub
-      v-if="!startupError"
-      :open="pendingWorkOpen"
-      @close="pendingWorkOpen = false"
-      @badge-change="pendingWorkTotal = $event"
-      @run-command="runPendingCommand"
-      @open-task-center="openTaskCenter"
     />
     <QuitConfirmDialog />
     <!-- 版本对比播放器：任何地方调 openVersionCompare(左, 右) 就在这里打开；每次打开是一次新会话（key）。 -->
@@ -331,7 +332,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -348,10 +349,10 @@ import VideoBrowsePage from './components/viewer/VideoBrowsePage.vue';
 import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
 import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
+import PendingWorkPage from './components/manage/PendingWorkPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
-import PendingWorkHub from './components/PendingWorkHub.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
 import VersionCompareDialog from './components/VersionCompareDialog.vue';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
@@ -384,6 +385,10 @@ const ENTITIES_MANAGE_TABS = [
   { key: 'collection', label: '作品集', dataTest: 'entities-manage-tab-collection' }
 ];
 
+// 顶栏「管理」与管理导航「待处理」角标的刷新周期（原待处理工作台的做法）：数量来自好几个面板背后的计数查询，
+// 不跟每个进度事件走；待处理页读到新的摘要时另外同步一次。
+const PENDING_WORK_REFRESH_MS = 60000;
+
 // 浏览器插件的下载里还有在跑或排队的：「立即重启」会打断它们（m5）。
 function hasActiveDownloads(tasks) {
   return (tasks || []).some(task => task?.state === 'running' || task?.state === 'queued');
@@ -395,7 +400,7 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
-    AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
+    AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs
   },
@@ -459,8 +464,7 @@ export default {
       taskCenterOpen: false,
       consolidationRoute: null,
       consolidationRouteGeneration: 0,
-      pendingWorkOpen: false,
-      // 两个顶栏角标的数据由常挂载的抽屉与工作台报上来。
+      // 任务指示的数据由常挂载的任务中心报上来；待处理角标 = GetPendingWorkSummary 的总数（refreshPendingWorkTotal）。
       taskCenterBadge: { running: 0, failed: false },
       pendingWorkTotal: 0,
       settings: {
@@ -500,6 +504,8 @@ export default {
     await this.loadDirectories();
     this.loadTags();
     this.loadLibraryCounts();
+    this.refreshPendingWorkTotal();
+    this._pendingWorkTimer = setInterval(() => this.refreshPendingWorkTotal(), PENDING_WORK_REFRESH_MS);
     // 扫描完成事件（D-PC09）：库里真的多了、少了或恢复了视频时，顶栏的库规模计数跟着刷新。
     // 列表本身的刷新归片库页。
     this.registerRuntimeEvent('library-scan-summary', event => this.handleLibraryScanSummary(event));
@@ -538,6 +544,7 @@ export default {
   },
   beforeUnmount() {
     this.detachForegroundReporting();
+    clearInterval(this._pendingWorkTimer);
     document.body.classList.remove('surface-cinema');
   },
   watch: {
@@ -671,7 +678,7 @@ export default {
         this.relaunching = false;
       }
     },
-    // 所有切页都走这里（顶栏、命令面板、待处理工作台、图片页的「去设置」）。设置页有未保存修改时
+    // 所有切页都走这里（顶栏、命令面板、待处理页、图片页的「去设置」）。设置页有未保存修改时
     // 先确认「放弃未保存的设置修改？」（D-PC57、APP-08）：SettingsPage 是 v-if，切走即销毁表单。
     // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
     // params 是交给目标页的一次性参数（见 applyPageParams）；片单的四个别名 key 先换成 `lists` + 标签（D-P2-04），
@@ -762,12 +769,30 @@ export default {
       this.taskCenterOpen = false;
     },
     openTaskCenter() {
-      this.pendingWorkOpen = false;
       this.taskCenterOpen = true;
     },
+    // 命令 action:pending-work、管理首页的待处理卡片：打开待处理页（D-P3-01，原先是弹窗）。任务中心开着时先收起。
     openPendingWork() {
       this.taskCenterOpen = false;
-      this.pendingWorkOpen = true;
+      return this.navigateTo('pending-work');
+    },
+    // 顶栏待处理角标：读失败（数据库维护、待重启……）时清零，与原工作台一致。待处理页读到的摘要更新，
+    // 用 setPendingWorkTotal 交过来，同时作废路上那次定时读取（晚到的旧数不覆盖新数）。
+    async refreshPendingWorkTotal() {
+      const seq = (this._pendingWorkSeq || 0) + 1;
+      this._pendingWorkSeq = seq;
+      try {
+        const summary = await GetPendingWorkSummary();
+        if (seq === this._pendingWorkSeq) this.pendingWorkTotal = Number(summary?.total || 0);
+      } catch (err) {
+        if (seq !== this._pendingWorkSeq) return;
+        this.pendingWorkTotal = 0;
+        this.debugLog('GetPendingWorkSummary failed', { err: String(err) }, true);
+      }
+    },
+    setPendingWorkTotal(total) {
+      this._pendingWorkSeq = (this._pendingWorkSeq || 0) + 1;
+      this.pendingWorkTotal = Number(total || 0);
     },
     // 命令面板「数据维护 · 某页签」：带上页签切过去；已在该页时由 token 变化触发切签。
     openDataCare(tab) {
@@ -790,7 +815,7 @@ export default {
       this.loadLibraryCounts();
       return this.$refs.videoListPage?.handleVideosChangedElsewhere(removedIDs);
     },
-    // 工作台的「处理」：按固定命令 ID 跳到宿主页并打开既有面板（详细设计 §6.1）。
+    // 待处理页、管理首页等的「进入专门工具」：按固定命令 ID 跳到宿主页并打开既有面板（详细设计 §6.1）。
     runPendingCommand(commandID, label) {
       return Promise.resolve(this.runHostCommand(commandID, label))
         .catch(err => notifyError(`打开「${label || '待处理事项'}」失败：${err}`));
@@ -979,7 +1004,7 @@ export default {
     openPerson(person) {
       return this.openRecapEntity({ type: 'person', id: person?.id, name: person?.name });
     },
-    // 顶栏一项：页面就切页；动作（待处理、清理中心、任务中心）执行命令面板里同 ID 的既有命令。
+    // 顶栏一项：页面就切页；动作（清理中心、任务中心）执行命令面板里同 ID 的既有命令。
     selectNavItem(item) {
       if (!item.command) return this.navigateTo(item.key);
       const command = findCommand(item.command);
@@ -1199,6 +1224,8 @@ export default {
   line-height: 18px;
   text-align: center;
 }
+/* 「待处理」三期起是页面（D-P3-01），选中时整个按钮是强调色：角标反色，免得与底色混在一起。 */
+.nav-btn.active .header-badge { background: var(--accent-on); color: var(--accent-color); }
 .header-task-spinner { color: var(--accent-text); }
 .nav-btn.active .header-task-spinner { color: inherit; }
 .header-dot {

@@ -54,9 +54,14 @@ for (const id of ['ai-tags', 'cleanup']) {
   assert.doesNotMatch(toolbarSource, new RegExp(`id: '${id}'`), `manage menu should no longer carry the ${id} entry (APP-11)`);
 }
 assert.doesNotMatch(toolbarSource, /manageAttentionCount/, 'the manage button badge moved to the header pending-work badge (META-08)');
-const pendingHubSource = readFileSync(new URL('../src/components/PendingWorkHub.vue', import.meta.url), 'utf8');
-for (const command of ['library.openAIReview', 'library.openCleanup', 'photos.openAIReview', 'people.openFaceReview', 'library.openCollectionSuggestions', 'library.openLocalMetadataUpdates']) {
-  assert.match(pendingHubSource, new RegExp(`command: '${command.replace('.', '\\.')}'`), `pending work hub should jump via ${command}`);
+// D-P3-01：待处理工作台（弹窗）改成待处理页。AI 视频 / 同源、AI 图片、清理候选进专门工具（固定命令 ID）；
+// 人脸、建议作品集、本地资料更新改在页内处理（嵌现有面板、调现有应用接口），不再跳走。
+const pendingPageSource = readFileSync(new URL('../src/components/manage/PendingWorkPage.vue', import.meta.url), 'utf8');
+for (const command of ['library.openAIReview', 'photos.openAIReview', 'action:cleanup']) {
+  assert.match(pendingPageSource, new RegExp(`command: '${command.replace('.', '\\.')}'`), `pending work page should open the tool via ${command}`);
+}
+for (const inline of [/<FaceClusterReviewPanel\b/, /<CollectionSuggestionPanel\b/, /ApplyLocalMetadataBatch\(/, /PreviewLocalMetadataBatch\(/]) {
+  assert.match(pendingPageSource, inline, `pending work page should handle ${inline} in place`);
 }
 assert.match(videoListSource, /case 'trash': this\.openTrashDialog\(\)/, 'manage menu should still open the trash');
 // P-034（APP-11、META-08）：同源未读与清理候选的计数改由顶栏待处理工作台汇总，片库页不再轮询 AI 汇总、
