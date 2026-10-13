@@ -38,7 +38,7 @@ func TestFaceAppleRuntimeReportsMissingSystemRevision(t *testing.T) {
 			return appleAIResponse{}, appleAIError(code)
 		}
 		status := r.Status()
-		if status.State != FaceRuntimeStateIncompatible || !strings.Contains(status.Reason, "人脸识别不可用") {
+		if status.State != FaceRuntimeStateIncompatible || !strings.Contains(status.Reason, "人脸识别不可用") || strings.Contains(status.Reason, code) {
 			t.Fatalf("%s: %+v", code, status)
 		}
 	}

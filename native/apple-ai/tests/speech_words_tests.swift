@@ -26,15 +26,21 @@ func accumulationTests() {
     check(joined(told) == "I told him. | I", "untimed \"I\" after \"I told him.\" commits the first utterance: \(joined(told))")
     let toldTimed=run(0,[[w("I",0,0.2),w("told",0.2,0.5),w("him.",0.5,0.9)],[w("I",3.0,3.1)]])
     check(joined(toldTimed) == "I told him. | I", "timed \"I\" after a pause commits the first utterance: \(joined(toldTimed))")
-    check(joined(run(0,[partial(0,"It's"),partial(0,"I")])) == "It's | I", "untimed \"It's\" then \"I\" is not a revision (whole first words differ)")
+    check(joined(run(0,[partial(0,"It's"),partial(0,"I")])) == "I", "an untimed partial is revised, never committed (\"It's\" then \"I\")")
     check(joined(run(0,[[w("I",3.0,3.03)],[w("It's",3.0,3.2)]])) == "It's", "timed \"It's\" starting inside \"I\" is a revision")
     check(joined(run(0,[[w("I",3.0,3.03)],[w("I",3.0,3.2),w("went",3.2,3.5)]])) == "I went", "a <50 ms single-word partial is revised, not repeated")
     let thenNext=run(0,[[w("I",3.0,3.03)],[w("I",3.0,3.2),w("went",3.2,3.5)],[w("Next",6.0,6.3)]])
     check(joined(thenNext) == "I went | Next", "the revised <50 ms partial stays one utterance when another follows: \(joined(thenNext))")
     check(joined(run(0,[[w("So",1.0,1.2),w("I",1.2,1.3),w("went",1.3,1.6)],[w("I",1.2,1.3),w("went",1.3,1.6),w("to",1.6,1.7),w("the",1.7,1.8),w("store",1.8,2.2)]])) == "I went to the store",
           "a revision dropping its first word inside the previous span is not a restart")
-    check(joined(run(0,[partial(0,"We","are","watching","a"),partial(0,"We","are","washing")])) == "We are watching a | We are washing",
-          "untimed revision of an earlier word is kept as text rather than lost")
+    let washing=run(0,[partial(0,"We","are","watching","a"),[w("We",0,0.2),w("are",0.2,0.4),w("washing",0.4,0.8),w("a",0.8,0.9),w("car.",0.9,1.3)]])
+    check(joined(washing) == "We are washing a car.", "a timed closure revising an earlier word replaces the partial: \(joined(washing))")
+    let dollars=run(0,[partial(0,"I","have","twenty","five"),partial(0,"I","have","25","dollars"),[w("I",0,0.2),w("have",0.2,0.5),w("25",0.5,1.0),w("dollars.",1.0,1.5)]])
+    check(joined(dollars) == "I have 25 dollars.", "routine partial revisions are not duplicated: \(joined(dollars))")
+    let no=run(0,[[w("No.",1.0,1.3)],partial(0,"No"),[w("No,",3.0,3.2),w("I",3.2,3.3),w("don't.",3.3,3.6)]])
+    check(joined(no) == "No. | No, I don't.", "a short closure followed by an utterance with the same first word is kept: \(joined(no))")
+    let come=run(0,[partial(0,"Come"),[w("Come",0.5,0.7),w("on.",0.7,1.0)],partial(0,"Come"),partial(0,"Come","here."),[w("Come",4.0,4.2),w("here.",4.2,4.6)]])
+    check(joined(come) == "Come on. | Come here.", "\"Come on.\" then \"Come here.\" keeps both utterances: \(joined(come))")
     check(joined(run(0,[partial(0,"We"),partial(0,"We","are"),partial(0,"We","are","watch"),partial(0,"We","are","watching","a")])) == "We are watching a",
           "untimed growth with a revised last word stays one utterance")
     let overlap=run(0,[[w("We",0,0.2),w("are",0.2,0.4),w("here",0.4,0.8)],[w("here",0.76,0.85),w("now",0.9,1.2)]])
@@ -92,9 +98,41 @@ func collectorTests() {
     check(abs((rated.transcript.confidence ?? -1)-0.7) < 1e-9, "confidence is weighted over rated words only")
 }
 
+/// Replays tests/fixtures: recognizer snapshots logged on macOS 27 with the macOS 15 path forced, from synthetic `say`
+/// speech. One line per result callback: `SNAP final=<isFinal> offset=<chunk start>` then one
+/// `[substring|timestamp+duration|c<confidence>]` per segment, timestamps relative to the chunk.
+func replay(_ path: String) -> [String] {
+    guard let log=try? String(contentsOfFile:path,encoding:.utf8) else { check(false,"fixture \(path) readable"); return [] }
+    var chunks=[(Double,[[Piece]])]()
+    for line in log.split(separator:"\n") where line.hasPrefix("SNAP") {
+        let offset=Double(line.split(separator:" ")[2].dropFirst(7)) ?? 0
+        let pieces=line.split(separator:"[").dropFirst().map { token -> Piece in
+            let parts=token.split(separator:"|"), time=parts[1].split(separator:"+"), start=offset+(Double(time[0]) ?? 0)
+            return w(String(parts[0]),start,start+(Double(time[1]) ?? 0),Double(parts[2].dropFirst().prefix { $0 != "]" }) ?? 0)
+        }
+        if chunks.last?.0 != offset { chunks.append((offset,[])) }
+        chunks[chunks.count-1].1.append(pieces)
+    }
+    return chunks.flatMap { offset,snapshots in
+        var accumulator=SnapshotAccumulator(origin:offset)
+        snapshots.forEach { accumulator.add($0) }
+        return accumulator.snapshots.map { $0.map(\.segment.text).joined(separator:" ") }
+    }
+}
+func replayTests(_ fixtures: String) {
+    let long=replay(fixtures+"/legacy-snapshots-90s.log")
+    let sentences=["The first train leaves at seven","My sister bought a red bicycle","We should paint the kitchen tomorrow","The library closes early on Sunday",
+        "Please bring an umbrella with you","The museum has a new dinosaur exhibit","Our neighbor plays the violin every night","The coffee shop sells fresh bread",
+        "I forgot my keys at the office","The children built a Sandcastle on the beach","Turn left after the bridge","The concert starts at 9: 30"]
+    check(long == sentences, "logged 90 s sample (98 snapshots, two chunks) gives its 12 sentences once each: \(long.count)")
+    let english=replay(fixtures+"/legacy-snapshots-english.log")
+    check(english == ["We are watching a movie tonight please wait for me here. The weather is nice and the popcorn is ready."], "logged English sample gives one utterance: \(english)")
+}
+
 @main struct SpeechWordsTests {
     static func main() {
         accumulationTests(); durationTests(); errorTests(); detectionTests(); collectorTests()
+        replayTests(CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "native/apple-ai/tests/fixtures")
         print(failures == 0 ? "speech_words tests passed" : "\(failures) speech_words test(s) failed")
         exit(failures == 0 ? 0 : 1)
     }

@@ -54,7 +54,8 @@ describe('字幕引擎状态与准备（D-PC22）', () => {
   });
 
   it('macOS 15 语音识别权限被拒时显示去系统设置的说明，系统翻译语言仍可准备', async () => {
-    const guidance = 'apple_speech_permission_denied: 请在「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策后重试';
+    // 后端状态只给中文说明（错误码不进界面文字）。
+    const guidance = '请在「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策后重试';
     api.GetSubtitleEngineStatuses.mockResolvedValue([apple({
       supported: false, needs_prepare: false, reason_message: guidance,
       translation_languages: [{ code: 'en', name: '英语', installed: false }, { code: 'zh', name: '中文', installed: false }]
@@ -63,6 +64,7 @@ describe('字幕引擎状态与准备（D-PC22）', () => {
     const wrapper = await mountSection();
     expect(wrapper.get('[data-test="subtitle-engine-apple"]').text()).toContain('「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策');
     expect(wrapper.get('[data-test="subtitle-engine-apple"]').text()).not.toContain('不支持');
+    expect(wrapper.text()).not.toContain('apple_speech_permission_denied');
     expect(wrapper.findAll('[data-test="apple-translation-source"] option').map(option => option.attributes('value'))).toEqual(['en', 'zh']);
     await wrapper.get('[data-test="apple-translation-prepare"]').trigger('click');
     await flushPromises();

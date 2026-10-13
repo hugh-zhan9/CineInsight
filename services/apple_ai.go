@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -59,6 +58,21 @@ type appleAIResponse struct {
 }
 type appleAIRunner func(context.Context, appleAIRequest) (appleAIResponse, error)
 
+// appleAIFailure is a helper error code with its Chinese explanation. Error() keeps the "code: message" form for
+// logs and callers that match codes; user-facing status text uses Message alone.
+type appleAIFailure struct{ Code, Message string }
+
+func (e *appleAIFailure) Error() string { return e.Code + ": " + e.Message }
+
+// appleAIReason is the user-facing text of an error: the explanation without the helper code.
+func appleAIReason(err error) string {
+	var failure *appleAIFailure
+	if errors.As(err, &failure) {
+		return failure.Message
+	}
+	return err.Error()
+}
+
 func appleAIError(code string) error {
 	messages := map[string]string{
 		"apple_platform_unsupported":         "苹果系统能力需要 macOS 15 或更新版本",
@@ -83,7 +97,7 @@ func appleAIError(code string) error {
 	if !ok {
 		message = "苹果系统处理失败"
 	}
-	return fmt.Errorf("%s: %s", code, message)
+	return &appleAIFailure{Code: code, Message: message}
 }
 
 func appleAIExecutable() string {
@@ -296,7 +310,7 @@ func (s *SubtitleService) getAppleStatus() SubtitleEngineStatus {
 	if err != nil {
 		// A status can carry a code and still list languages: on macOS 15 a denied speech permission blocks
 		// recognition (shown with its guidance) but not system translation.
-		status.ReasonMessage = err.Error()
+		status.ReasonMessage = appleAIReason(err)
 		status.ReasonCode = SubtitleReasonMissingRuntime
 		status.Languages = result.Languages
 		status.TranslationLanguages = result.TranslationLanguages

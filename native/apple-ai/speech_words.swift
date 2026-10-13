@@ -8,9 +8,9 @@ func wordKey(_ text: String) -> String { String(text.lowercased().filter { $0.is
 func wordKeys(_ pieces: [Piece]) -> [String] { pieces.map { wordKey($0.segment.text) }.filter { !$0.isEmpty } }
 
 /// Joins the snapshots one macOS 15 recognition request reports. On-device recognition restarts its transcription
-/// after a pause (measured: untimed partials grow, a timed snapshot closes the utterance, the next utterance starts
-/// from one word), so the final result may hold only the last utterance. A snapshot that restarts commits the
-/// previous one; anything else replaces it. The rules prefer keeping text over guessing.
+/// after a pause, so the final result may hold only the last utterance. Measured shape: untimed partials grow and get
+/// revised, a timed snapshot closes the utterance, and the next utterance starts again from one untimed word. A
+/// snapshot that restarts commits the previous one; anything else replaces it.
 struct SnapshotAccumulator {
     /// Chunk start in file time. Partial results carry no timing: every word sits here with zero length.
     let origin: Double
@@ -23,17 +23,14 @@ struct SnapshotAccumulator {
         current=snapshot
     }
     func timed(_ pieces: [Piece]) -> Bool { pieces.contains { $0.segment.start > origin || $0.segment.end > $0.segment.start } }
-    /// With timings on both sides a restart begins after the previous snapshot ended and later than it began; a
-    /// revision begins inside its span, even with a different first word. Without timings only a strict revision
-    /// keeps the snapshot: the same first word, and the previous words except possibly the last repeated in order.
+    /// An untimed partial is never committed: whatever follows revises it. After a timed closure, an untimed
+    /// snapshot starts the next utterance; a timed one is a restart only when it begins after the closure ended (and
+    /// later than it began), otherwise it revises the closure, even with a different first word.
     func restarts(from previous: [Piece], to next: [Piece]) -> Bool {
-        guard let p0=previous.first, let s0=next.first else { return false }
-        if timed(previous), timed(next) {
-            let previousEnd=previous.map(\.segment.end).max() ?? p0.segment.end
-            return s0.segment.start >= previousEnd-0.05 && s0.segment.start > p0.segment.start+0.05
-        }
-        let old=wordKeys(previous), new=wordKeys(next)
-        return old.first != new.first || !new.starts(with:old.dropLast())
+        guard let p0=previous.first, let s0=next.first, timed(previous) else { return false }
+        guard timed(next) else { return true }
+        let previousEnd=previous.map(\.segment.end).max() ?? p0.segment.end
+        return s0.segment.start >= previousEnd-0.05 && s0.segment.start > p0.segment.start+0.05
     }
     /// Utterances in order. Committed words the latest snapshot covers again (a final result repeating the whole
     /// request) are dropped, and so are leading words that repeat the previous utterance's tail at overlapping times.

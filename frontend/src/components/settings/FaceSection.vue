@@ -158,7 +158,7 @@ export default {
       if (this.runtimeStatus.state === 'available') {
         return '苹果系统人脸特征已就绪。';
       }
-      // 后端原因带系统组件的错误码前缀（如 `apple_face_version_changed: …`），界面只显示中文说明。
+      // 后端已只给中文说明；仍去掉可能残留的系统组件错误码前缀（如 `apple_face_version_changed: …`）。
       return String(this.runtimeStatus.reason || '').replace(/^[a-z][a-z0-9_]*:\s*/, '');
     },
     analysisWaitingIdle() {

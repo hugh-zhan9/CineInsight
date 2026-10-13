@@ -10,4 +10,4 @@ trap 'rm -rf "${WORK}"' EXIT
 xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macos15.0" \
   "${SOURCES}/protocol.swift" "${SOURCES}/speech_words.swift" "${SOURCES}/tests/speech_words_tests.swift" \
   -o "${WORK}/speech_words_tests"
-"${WORK}/speech_words_tests"
+"${WORK}/speech_words_tests" "${SOURCES}/tests/fixtures"

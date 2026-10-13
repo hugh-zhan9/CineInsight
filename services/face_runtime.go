@@ -69,7 +69,7 @@ func (r *FaceRuntime) check(ctx context.Context) FaceRuntimeStatus {
 	status.RuntimeDir = r.RuntimeDir()
 	response, err := r.probe(ctx, appleAIRequest{Operation: "face_status"})
 	if err != nil {
-		status.Reason = err.Error()
+		status.Reason = appleAIReason(err)
 		return status
 	}
 	if !response.Supported || response.ModelID != faceRuntimeIdentity {

@@ -233,8 +233,12 @@ func TestAppleErrorMessagesForMacOS15Paths(t *testing.T) {
 		"apple_face_unsupported":         "人脸识别不可用",
 		"apple_face_version_changed":     "人脸识别不可用",
 	} {
-		if err := appleAIError(code); !strings.HasPrefix(err.Error(), code+": ") || !strings.Contains(err.Error(), want) {
+		err := appleAIError(code)
+		if !strings.HasPrefix(err.Error(), code+": ") || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v", code, err)
+		}
+		if reason := appleAIReason(err); strings.Contains(reason, code) || !strings.Contains(reason, want) {
+			t.Fatalf("user-facing reason keeps the code: %q", reason)
 		}
 	}
 }
@@ -262,8 +266,9 @@ func TestAppleSpeechPermissionDeniedShowsSystemSettingsGuidance(t *testing.T) {
 	}
 	statuses, err := s.GetEngineStatuses()
 	if err != nil || len(statuses) != 1 || statuses[0].Supported || statuses[0].Available ||
-		!strings.Contains(statuses[0].ReasonMessage, guidance) || strings.Contains(statuses[0].ReasonMessage, "不支持") {
-		t.Fatalf("status: %+v %v", statuses, err)
+		statuses[0].ReasonMessage != appleAIReason(appleAIError("apple_speech_permission_denied")) ||
+		!strings.Contains(statuses[0].ReasonMessage, guidance) || strings.Contains(statuses[0].ReasonMessage, "apple_") {
+		t.Fatalf("status shows only the guidance, without the helper code: %+v %v", statuses, err)
 	}
 	if got := statuses[0].TranslationLanguages; len(got) != 2 || got[0].Code != "en" || got[1].Code != "zh" {
 		t.Fatalf("translation languages lost with the permission code: %+v", got)
@@ -271,12 +276,12 @@ func TestAppleSpeechPermissionDeniedShowsSystemSettingsGuidance(t *testing.T) {
 	if got := statuses[0].Languages; len(got) != 1 || got[0].Code != "en-US" || !got[0].Installed {
 		t.Fatalf("speech languages: %+v", got)
 	}
-	if err := s.PrepareEngine(SubtitleEngineApple); err == nil || !strings.Contains(err.Error(), guidance) {
+	if err := s.PrepareEngine(SubtitleEngineApple); err == nil || !strings.Contains(err.Error(), guidance) || strings.Contains(err.Error(), "apple_") {
 		t.Fatalf("prepare: %v", err)
 	}
 	video := filepath.Join(t.TempDir(), "movie.mp4")
 	request := SubtitleGenerateRequest{VideoID: 1, Engine: SubtitleEngineApple, SourceLang: "en"}
-	if _, err := s.executeSubtitleTask(context.Background(), 1, request, video, SubtitleGenerateOptions{}); err == nil || !strings.Contains(err.Error(), guidance) {
+	if _, err := s.executeSubtitleTask(context.Background(), 1, request, video, SubtitleGenerateOptions{}); err == nil || !strings.Contains(err.Error(), guidance) || strings.Contains(err.Error(), "apple_") {
 		t.Fatalf("generate: %v", err)
 	}
 }
