@@ -15,7 +15,6 @@ assert.ok(exported.size > 0, 'App.d.ts should export bindings');
 // 白名单只放「已裁决保留、界面随后接入」的绑定，每项写明原因（2026-09-30：「取消关联」已接入）。
 // 2026-10-13 UI 二期 P2-A 先合入后端接口，由 P2-B..E 接入界面；接入的那一组把对应项从这里删掉（守卫会提醒）。
 const allowedUnused = new Map([
-  ['ListCollectionProgress', 'UI 二期 D-P2-02「追到哪了」：P2-B 首页与视频页、P2-D 作品集页接入'],
   ['ListWatchlistInLibrary', 'UI 二期 D-P2-07 首页「想看的片片库里已有」：P2-B 首页接入'],
   ['ListPeopleByCount', 'UI 二期 D-P2-06 人物头像墙「按出现次数」：P2-D 集成时接入'],
 ]);

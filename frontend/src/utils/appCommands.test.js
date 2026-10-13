@@ -139,7 +139,7 @@ describe('应用级命令注册', () => {
     const viewer = VIEWER_NAV_GROUPS.flatMap(group => group.pages).map(page => page.key);
     const manage = MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => !page.command).map(page => page.key);
     expect(viewer).toEqual(['home', 'videos', 'people', 'collections', 'photos', 'lists', 'recap', 'scenes']);
-    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
+    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'entities-manage', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
     expect(viewer.filter(key => manage.includes(key))).toEqual([]);
     for (const key of viewer) expect(pageArea(key), key).toBe('viewer');
     for (const key of manage) expect(pageArea(key), key).toBe('manage');
@@ -159,7 +159,7 @@ describe('应用级命令注册', () => {
     const wrapper = host({ settings: { browser_bridge_enabled: true } });
     const existing = ['videos', 'people', 'collections', 'photos', 'viewing-notes', 'recap', 'watchlist', 'movie-chart',
       'watched-movies', 'insights', 'data-care', 'scenes', 'video-workbench', 'downloads', 'settings'];
-    for (const key of [...existing, 'home', 'lists', 'manage-home', 'library-manage', 'photos-manage']) {
+    for (const key of [...existing, 'home', 'lists', 'manage-home', 'library-manage', 'photos-manage', 'entities-manage']) {
       expect(commandByID(`nav:page:${key}`), key).not.toBeNull();
     }
     expect(commandByID('nav:page:video-detail')).toBeNull();
@@ -337,7 +337,8 @@ describe('全局命令（D-PC60、APP-12）', () => {
       'library.openLocalMetadataUpdates': 'library-manage',
       'library.openCollectionSuggestions': 'library-manage',
       'photos.openAIReview': 'photos-manage',
-      'people.openFaceReview': 'people'
+      // D-P2-06：人物观看页只看不改，人脸审阅在管理侧「人物与作品集」。
+      'people.openFaceReview': 'entities-manage'
     }));
     const wrapper = host();
     wrapper.vm.currentPage = 'settings';
@@ -346,6 +347,45 @@ describe('全局命令（D-PC60、APP-12）', () => {
     expect(wrapper.vm.currentPage).toBe('photos-manage');
     expect(await wrapper.vm.prepareCommandRun({ id: 'action:backup-now' })).toBe(true);
     expect(wrapper.vm.currentPage).toBe('photos-manage');
+  });
+
+  it('人脸审阅的宿主是「人物与作品集」的人物那一种：切页与换种类同一拍，已在作品集那一种时只换种类', async () => {
+    const wrapper = host();
+    const run = vi.fn();
+    registerHost('people.openFaceReview', run);
+    wrapper.vm.entitiesManageKind = 'collection';
+    wrapper.vm.currentPage = 'settings';
+    const seen = [];
+    const navigate = wrapper.vm.navigateTo;
+    wrapper.vm.navigateTo = page => { const result = navigate.call(wrapper.vm, page); seen.push([wrapper.vm.currentPage, wrapper.vm.entitiesManageKind]); return result; };
+
+    expect(await wrapper.vm.runHostCommand('people.openFaceReview', '人脸待命名')).toBeUndefined();
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(run).toHaveBeenCalledTimes(1);
+
+    wrapper.vm.entitiesManageKind = 'collection';
+    expect(await wrapper.vm.prepareCommandRun({ id: 'people.openFaceReview' })).toBe(true);
+    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(seen).toEqual([['entities-manage', 'collection']]);
+
+    // 别的宿主命令不动人物与作品集的种类。
+    wrapper.vm.entitiesManageKind = 'collection';
+    expect(await wrapper.vm.prepareCommandRun({ id: 'photos.openAIReview' })).toBe(true);
+    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+  });
+
+  it('切页确认里放弃时，人脸审阅不换种类也不执行', async () => {
+    const wrapper = host();
+    const run = vi.fn();
+    registerHost('people.openFaceReview', run);
+    wrapper.vm.entitiesManageKind = 'collection';
+    wrapper.vm.currentPage = 'settings';
+    wrapper.vm.navigateTo = vi.fn(() => Promise.resolve(false));
+
+    expect(await wrapper.vm.runHostCommand('people.openFaceReview', '人脸待命名')).toBe(false);
+    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('宿主页注册的 hidden 跳转目标不出现在面板里，但 findCommand 找得到', () => {
@@ -402,6 +442,28 @@ describe('打开面板时的懒加载', () => {
 
     await pending;
     expect(wrapper.vm.entityFocus.collection).toBeNull();
+  });
+
+  it('「在管理中编辑」进管理侧人物与作品集：选上种类、交出要定位的对象后清空；没有 id 只切过去', async () => {
+    const wrapper = host();
+    const pending = wrapper.vm.openEntityInManage({ kind: 'collection', id: 5, name: '旅行' });
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.vm.entitiesManageKind).toBe('collection');
+    expect(wrapper.vm.entitiesManageFocus).toEqual({ id: 5, name: '旅行' });
+    await pending;
+    expect(wrapper.vm.entitiesManageFocus).toBeNull();
+
+    wrapper.vm.currentPage = 'people';
+    await wrapper.vm.openEntityInManage({ kind: 'person' });
+    expect(wrapper.vm.currentPage).toBe('entities-manage');
+    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.vm.entitiesManageFocus).toBeNull();
+
+    wrapper.vm.currentPage = 'settings';
+    wrapper.vm.navigateTo = vi.fn(() => Promise.resolve(false));
+    expect(await wrapper.vm.openEntityInManage({ kind: 'collection', id: 9 })).toBe(false);
+    expect(wrapper.vm.entitiesManageKind).toBe('person');
+    expect(wrapper.vm.entitiesManageFocus).toBeNull();
   });
 });
 

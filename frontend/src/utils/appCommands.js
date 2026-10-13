@@ -68,7 +68,9 @@ export const MANAGE_NAV_GROUPS = [
     pages: [
       { key: 'manage-home', label: '管理首页', keywords: ['manage', 'guanli', '管理', '统计', '最近的变化'] },
       { key: 'library-manage', label: '片库管理', keywords: ['library manage', 'pianku', '片库', '扫描', '批量'] },
-      { key: 'photos-manage', label: '图片管理', keywords: ['photo manage', 'tupian guanli', '图片库', '扫描图片'] }
+      { key: 'photos-manage', label: '图片管理', keywords: ['photo manage', 'tupian guanli', '图片库', '扫描图片'] },
+      // 人物与作品集的编辑（D-P2-06 起观看页只看不改）：过渡期原样挂 EntityLibraryPage，三期改成三个标签（D-P3-04）。
+      { key: 'entities-manage', label: '人物与作品集', keywords: ['people manage', 'collection manage', 'renwu', 'zuopinji', '人物', '作品集', '人脸', '合并人物', '编辑'] }
     ]
   },
   {
@@ -196,7 +198,13 @@ export const COMMAND_HOST_PAGES = {
   'library.openTagManager': 'library-manage',
   'photos.openAIReview': 'photos-manage',
   'photos.openCleanup': 'photos-manage',
-  'people.openFaceReview': 'people'
+  'people.openFaceReview': 'entities-manage'
+};
+
+// 宿主页上还要选定的实体种类：过渡期的「人物与作品集」一次只挂一种实体（App.vue 的 entitiesManageKind），
+// 人脸审阅的命令由人物那一种注册。
+const COMMAND_HOST_ENTITY_KINDS = {
+  'people.openFaceReview': 'person'
 };
 
 // 作品集与人物按需懒加载，只取首页：面板是快速跳转，不是完整列表页。
@@ -249,7 +257,10 @@ export const appCommandsMixin = {
       commandTaskState: { running: [], waiting: [] },
       // 命令面板打开某个作品集 / 人物：置一次即被子组件消费，随后清空，
       // 免得下次正常进入该页时又自动展开上一次的实体。
-      entityFocus: { person: null, collection: null }
+      entityFocus: { person: null, collection: null },
+      // 管理侧「人物与作品集」当前挂的实体种类（person | collection）与要定位的对象（{ id, name }，同样置一次即清空）。
+      entitiesManageKind: 'person',
+      entitiesManageFocus: null
     };
   },
   mounted() {
@@ -322,11 +333,7 @@ export const appCommandsMixin = {
     // 按固定命令 ID 执行宿主页的命令：先切到宿主页（设置页有未保存修改时可能被用户拦下），
     // 等宿主页挂载、注册完命令再执行。找不到或不可用时给出中文提示并返回 false。
     async runHostCommand(commandID, label = '该入口') {
-      const page = COMMAND_HOST_PAGES[commandID];
-      if (page && page !== this.currentPage) {
-        if (await whenNavigated(this.navigateTo(page), () => true) === false) return false;
-        await this.$nextTick();
-      }
+      if (await this.enterCommandHost(commandID) === false) return false;
       const command = findCommand(commandID);
       if (!command) {
         notifyError(`「${label}」暂时打不开：所在页面还没有准备好，请稍后再试。`);
@@ -341,9 +348,20 @@ export const appCommandsMixin = {
     // 命令面板执行一条命令之前的准备：宿主页的固定命令（其他页面注册、面板里可见的那些）先切到
     // 宿主页再执行，否则弹窗会开在隐藏的页面里。返回 false 表示放弃执行。
     async prepareCommandRun(command) {
-      const page = COMMAND_HOST_PAGES[command?.id];
-      if (!page || page === this.currentPage) return true;
-      if (await whenNavigated(this.navigateTo(page), () => true) === false) return false;
+      return this.enterCommandHost(command?.id);
+    },
+    // 切到固定命令的宿主页（还要选定实体种类的一并选上），等它挂载、注册完命令。已经在那儿时什么也不做；
+    // 用户在切页确认里放弃时返回 false。种类与切页同一拍改，宿主页只按目标种类挂载一次。
+    async enterCommandHost(commandID) {
+      const page = COMMAND_HOST_PAGES[commandID];
+      const kind = COMMAND_HOST_ENTITY_KINDS[commandID];
+      const navigate = Boolean(page) && page !== this.currentPage;
+      if (!navigate && (!kind || this.entitiesManageKind === kind)) return true;
+      const arrived = await whenNavigated(navigate ? this.navigateTo(page) : true, () => {
+        if (kind) this.entitiesManageKind = kind;
+        return true;
+      });
+      if (arrived === false) return false;
       await this.$nextTick();
       return true;
     },
@@ -547,11 +565,26 @@ export const appCommandsMixin = {
         this.$refs.settingsPage?.scrollToSection(key);
       });
     },
+    // 命令面板、首页、整页详情、回顾打开人物 / 作品集：进观看侧的人物 / 作品集页并打开这一个（D-P2-06）。
     openEntityFromCommand(type, id, name) {
       return whenNavigated(this.navigateTo(type === 'person' ? 'people' : 'collections'), async () => {
         this.entityFocus = { ...this.entityFocus, [type]: { id, name } };
         await this.$nextTick();
         this.entityFocus = { ...this.entityFocus, [type]: null };
+      });
+    },
+    // 观看页的「在管理中编辑」：去管理侧「人物与作品集」，挂上这一种实体并打开这一个（EntityLibraryPage 的 focusEntity，
+    // 打开时连编辑抽屉一起打开）。没有 id 时只切过去（观看页空列表的下一步）。
+    openEntityInManage({ kind, id, name } = {}) {
+      const entityKind = kind === 'collection' ? 'collection' : 'person';
+      const entityID = Number(id || 0);
+      return whenNavigated(this.navigateTo('entities-manage'), async () => {
+        this.entitiesManageKind = entityKind;
+        if (!entityID) return true;
+        this.entitiesManageFocus = { id: entityID, name: name || '' };
+        await this.$nextTick();
+        this.entitiesManageFocus = null;
+        return true;
       });
     }
   }
