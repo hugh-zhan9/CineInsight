@@ -89,7 +89,7 @@ func TestPlaybackProxyRealRemuxFromMKV(t *testing.T) {
 	source := synthesizeMedia(t, ffmpeg, "real-remux.mkv",
 		"-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
 		"-f", "lavfi", "-i", "sine=duration=2",
-		"-c:v", "libx264", "-c:a", "aac")
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac")
 	video := createRegisteredVideo(t, source, 2)
 
 	service := newRealProxyService(t)
@@ -170,7 +170,7 @@ func TestPlaybackProxyRealShortFeedRouteServesProxyBytes(t *testing.T) {
 	source := synthesizeMedia(t, ffmpeg, "route-remux.mkv",
 		"-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
 		"-f", "lavfi", "-i", "sine=duration=2",
-		"-c:v", "libx264", "-c:a", "aac")
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac")
 	video := createRegisteredVideo(t, source, 2)
 
 	service := newRealProxyService(t)
@@ -326,7 +326,7 @@ func TestPlaybackProxyRealShortFeedRouteSupportsRange(t *testing.T) {
 	source := synthesizeMedia(t, ffmpeg, "range-remux.mkv",
 		"-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
 		"-f", "lavfi", "-i", "sine=duration=2",
-		"-c:v", "libx264", "-c:a", "aac")
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac")
 	video := createRegisteredVideo(t, source, 2)
 
 	service := newRealProxyService(t)

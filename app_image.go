@@ -198,13 +198,8 @@ func (a *App) DeleteImageDirectory(id uint) error {
 		return fmt.Errorf("图片扫描目录不存在: %d", id)
 	}
 
-	marked, err := a.imageService.MarkImagesStaleUnderRemovedRoot(removedPath, remaining)
-	if err != nil {
-		log.Printf("API DeleteImageDirectory mark stale id=%d path=%s err=%v", id, removedPath, err)
-		return err
-	}
-
-	err = a.imageService.DeleteImageDirectory(id)
+	// 标失效与删配置一起做，并与进行中的对账串行（RemoveImageDirectory）。
+	marked, err := a.imageService.RemoveImageDirectory(id, removedPath, remaining)
 	log.Printf("API DeleteImageDirectory id=%d path=%s marked_stale=%d err=%v", id, removedPath, marked, err)
 	return err
 }

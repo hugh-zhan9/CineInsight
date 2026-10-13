@@ -130,6 +130,9 @@ func (s *ImageService) DeleteImageDirectory(id uint) error {
 
 // SyncImageDirectories 对账扫描全部活跃图片目录：新增/失踪求差 → name+size 双向唯一
 // 迁移匹配 → 剩余新增入库 → 剩余失踪仅软删记录（不动文件、不建回收站条目）。
+// imageSyncAfterConfigRead 只给测试用：对账读完目录配置之后调用，用来卡住一轮进行中的对账。
+var imageSyncAfterConfigRead func()
+
 func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 	imagePathMutationMu.RLock()
 	defer imagePathMutationMu.RUnlock()
@@ -141,6 +144,9 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 	dirs, err := s.GetAllImageDirectories()
 	if err != nil {
 		return nil, fmt.Errorf("读取图片扫描目录失败: %w", err)
+	}
+	if imageSyncAfterConfigRead != nil {
+		imageSyncAfterConfigRead()
 	}
 
 	var settings models.Settings
@@ -490,7 +496,27 @@ func (s *ImageService) reconcileOrphanedImages(configuredRoots []string, result 
 func (s *ImageService) MarkImagesStaleUnderRemovedRoot(removedRoot string, remainingRoots []string) (int, error) {
 	imagePathMutationMu.RLock()
 	defer imagePathMutationMu.RUnlock()
+	return s.markImagesStaleUnderRemovedRootLocked(removedRoot, remainingRoots)
+}
 
+// RemoveImageDirectory 删除图片扫描目录：先把只属于它的图片按失踪对账标失效，再删配置行；标记失败就不删。
+// 两步与 SyncImageDirectories 用同一把 scanSyncMu 串行：进行中的对账（例如加目录后的后台恢复扫描）
+// 读到的是删除前的目录配置，与删除交错时会把刚标失效的图片又恢复成正常（2026-10-13 偶发失败的根因）。
+// 现在删除等那一轮对账结束再标记；之后的对账读到的已是删除后的配置。
+func (s *ImageService) RemoveImageDirectory(id uint, removedRoot string, remainingRoots []string) (int, error) {
+	imagePathMutationMu.RLock()
+	defer imagePathMutationMu.RUnlock()
+	s.scanSyncMu.Lock()
+	defer s.scanSyncMu.Unlock()
+	marked, err := s.markImagesStaleUnderRemovedRootLocked(removedRoot, remainingRoots)
+	if err != nil {
+		return marked, err
+	}
+	return marked, database.DB.Delete(&models.ImageDirectory{}, id).Error
+}
+
+// markImagesStaleUnderRemovedRootLocked 是 MarkImagesStaleUnderRemovedRoot 的主体，调用方已持 imagePathMutationMu 读锁。
+func (s *ImageService) markImagesStaleUnderRemovedRootLocked(removedRoot string, remainingRoots []string) (int, error) {
 	root := filepath.Clean(strings.TrimSpace(removedRoot))
 	if root == "" || root == "." {
 		return 0, fmt.Errorf("图片扫描目录为空")

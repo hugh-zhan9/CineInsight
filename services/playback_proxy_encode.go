@@ -20,13 +20,17 @@ import (
 var (
 	playbackProxyRemuxableVideoCodecs = map[string]struct{}{"h264": {}, "hevc": {}}
 	playbackProxyRemuxableAudioCodecs = map[string]struct{}{"aac": {}, "mp3": {}}
+	// h264EightBit420PixelFormats：WebKit 能解的 H.264 只有 8 位 4:2:0。其余（10 位、4:2:2、4:4:4）
+	// 换容器也放不出来，要转码（2026-10-13 评审修订）。像素格式未知（老快照）不据此否决。
+	h264EightBit420PixelFormats = map[string]struct{}{"yuv420p": {}, "yuvj420p": {}, "nv12": {}}
 )
 
 const (
 	// playbackProxyMaxVideoBitrate 是转码码率上限（8 Mbps，D-003）。
 	playbackProxyMaxVideoBitrate int64 = 8_000_000
-	// playbackProxyAudioBitrate 是转码音频码率。
-	playbackProxyAudioBitrate = "160k"
+	// playbackProxyAudioBitrate 是转码音频码率；playbackProxyAudioBitsPerSecond 是同一个值，用于估算产物大小。
+	playbackProxyAudioBitrate             = "160k"
+	playbackProxyAudioBitsPerSecond int64 = 160_000
 	// playbackProxyScaleFilter 把**长边**收到 1920 以内且永不放大。
 	//
 	// 只约束宽度是不够的：竖屏 2160×3840 会被"限宽 1920"放行成 1920×3413，
@@ -52,6 +56,12 @@ type playbackProxySnapshot struct {
 	AudioStreamIndex int
 	VideoBitRate     int64
 	TotalBitRate     int64
+	// FormatName 是 ffprobe 的 format_name（如 "mov,mp4,m4a,3gp,3g2,mj2"）。代理策略不用它，
+	// 桌面预览的直放判定用它确认容器确实是 ISO-BMFF（decideDesktopPreview）。
+	FormatName string
+	// VideoCodecTag / VideoPixelFormat 来自首个视频流的 codec_tag_string 与 pix_fmt（小写；未知为空）。
+	VideoCodecTag    string
+	VideoPixelFormat string
 }
 
 // playbackProxyStreamMaps 给出这次编码要保留的流映射。
@@ -85,8 +95,8 @@ func planPlaybackProxy(snapshot playbackProxySnapshot, sourcePath, outputPath st
 		args = append(args, playbackProxyStreamMaps(snapshot)...)
 		args = append(args, "-c", "copy")
 		if snapshot.VideoCodec == "hevc" {
-			// WKWebView 只认 hvc1 标签；ffprobe 不给我们 codec_tag_string，
-			// 所以对 HEVC 一律显式打 hvc1——源本来就是 hvc1 时这是个空操作。
+			// WKWebView 只认 hvc1 标签：对 HEVC 一律显式打 hvc1（hev1 源由此变得可播），
+			// 源本来就是 hvc1 时这是个空操作。快照里的 codec_tag 只用于桌面直放判定。
 			args = append(args, "-tag:v", "hvc1")
 		}
 		args = append(args, "-movflags", "+faststart", outputPath)
@@ -114,10 +124,22 @@ func playbackProxyRemuxable(snapshot playbackProxySnapshot) bool {
 	if _, ok := playbackProxyRemuxableVideoCodecs[snapshot.VideoCodec]; !ok {
 		return false
 	}
+	if snapshot.VideoCodec == "h264" && !h264PixelFormatPlayable(snapshot.VideoPixelFormat) {
+		return false
+	}
 	if !snapshot.HasAudio {
 		return true
 	}
 	_, ok := playbackProxyRemuxableAudioCodecs[snapshot.AudioCodec]
+	return ok
+}
+
+// h264PixelFormatPlayable：像素格式未知时不否决；已知时必须是 8 位 4:2:0。
+func h264PixelFormatPlayable(pixelFormat string) bool {
+	if pixelFormat == "" {
+		return true
+	}
+	_, ok := h264EightBit420PixelFormats[pixelFormat]
 	return ok
 }
 
@@ -158,7 +180,7 @@ func loadPlaybackProxySnapshot(video models.Video) (playbackProxySnapshot, bool,
 		Find(&streams).Error; err != nil {
 		return playbackProxySnapshot{}, false, err
 	}
-	snapshot := playbackProxySnapshot{}
+	snapshot := playbackProxySnapshot{FormatName: metadata.FormatName}
 	if metadata.TotalBitRate != nil {
 		snapshot.TotalBitRate = *metadata.TotalBitRate
 	}
@@ -172,6 +194,8 @@ func loadPlaybackProxySnapshot(video models.Video) (playbackProxySnapshot, bool,
 			snapshot.HasVideo = true
 			snapshot.VideoCodec = strings.ToLower(stream.CodecName)
 			snapshot.VideoStreamIndex = stream.StreamIndex
+			snapshot.VideoCodecTag = strings.ToLower(stream.CodecTag)
+			snapshot.VideoPixelFormat = strings.ToLower(stream.PixelFormat)
 			if stream.BitRate != nil {
 				snapshot.VideoBitRate = *stream.BitRate
 			}

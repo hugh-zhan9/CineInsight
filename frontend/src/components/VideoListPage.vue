@@ -863,8 +863,9 @@ export default {
         if (!status) return;
         const wasRunning = this.playbackProxy.running;
         this.playbackProxy = { ...this.playbackProxy, ...status };
-        // 只在"刚刚从运行变成不运行"这一刻提示一次，别每条结果都弹。
-        if (wasRunning && !status.running && !status.cancelled) {
+        // 只在"刚刚从运行变成不运行"这一刻提示一次，别每条结果都弹。只有预览自动代理的一轮（auto_only）
+        // 不弹：播放器自己显示进度与结果（2026-10-13）。
+        if (wasRunning && !status.running && !status.cancelled && !status.auto_only) {
           notify(playbackProxyBatchSummary(status));
         }
       });
@@ -1030,7 +1031,8 @@ export default {
         { heading: '增强' },
         { id: 'enhance', label: enhanceReady ? '视频超分…' : '视频超分（未就绪）' },
         { id: 'hd-replace', label: '高清替换…' },
-        { id: 'playback-proxy', label: '生成播放代理', disabled: this.playbackProxy.running },
+        // 只有预览自动代理在跑（auto_only）时不置灰：手动请求照常加入或接管（2026-10-13）。
+        { id: 'playback-proxy', label: '生成播放代理', disabled: !!this.playbackProxy.running && !this.playbackProxy.auto_only },
         { divider: true },
         { id: 'delete', label: '删除', danger: true, disabled: this.deletingIds.includes(video.id) }
       ];

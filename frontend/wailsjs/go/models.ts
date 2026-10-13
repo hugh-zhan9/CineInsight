@@ -523,6 +523,7 @@ export namespace models {
 	    stream_type: string;
 	    codec_name: string;
 	    codec_long_name: string;
+	    codec_tag: string;
 	    profile: string;
 	    bit_rate?: number;
 	    language: string;
@@ -557,6 +558,7 @@ export namespace models {
 	        this.stream_type = source["stream_type"];
 	        this.codec_name = source["codec_name"];
 	        this.codec_long_name = source["codec_long_name"];
+	        this.codec_tag = source["codec_tag"];
 	        this.profile = source["profile"];
 	        this.bit_rate = source["bit_rate"];
 	        this.language = source["language"];
@@ -9888,6 +9890,7 @@ export namespace services {
 	    running: boolean;
 	    cancelled: boolean;
 	    completed: boolean;
+	    auto_only: boolean;
 	    queued: number;
 	    queued_video_ids: number[];
 	    total: number;
@@ -9910,6 +9913,7 @@ export namespace services {
 	        this.running = source["running"];
 	        this.cancelled = source["cancelled"];
 	        this.completed = source["completed"];
+	        this.auto_only = source["auto_only"];
 	        this.queued = source["queued"];
 	        this.queued_video_ids = source["queued_video_ids"];
 	        this.total = source["total"];

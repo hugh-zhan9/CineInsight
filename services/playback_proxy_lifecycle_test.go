@@ -80,8 +80,9 @@ func TestPlaybackProxyInvalidatedWhenSourceFingerprintChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "external-preview" || session.Proxy != nil {
-		t.Fatalf("指纹失效后应退回外部预览: %#v", session)
+	// 退回无代理行为：不再标代理、也不内嵌（2026-10-13 起具体是外部预览还是等自动代理取决于编码判定）。
+	if session.Mode == "inline" || session.Proxy != nil {
+		t.Fatalf("指纹失效后应退回无代理行为: %#v", session)
 	}
 	if _, err := os.Stat(proxyPath); !os.IsNotExist(err) {
 		t.Fatalf("失效代理文件应被删除: %v", err)
@@ -115,8 +116,8 @@ func TestPlaybackProxyDropsRowWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "external-preview" {
-		t.Fatalf("产物缺失应退回外部预览: %#v", session)
+	if session.Mode == "inline" || session.Proxy != nil {
+		t.Fatalf("产物缺失应退回无代理行为: %#v", session)
 	}
 	row, err := loadProxyRow(video.ID)
 	if err != nil {
@@ -151,7 +152,7 @@ func TestPlaybackProxyFailedRowIsNotConsumed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "external-preview" || session.Proxy != nil {
+	if session.Mode == "inline" || session.Proxy != nil || session.InlineSource != nil {
 		t.Fatalf("failed 行不该被当成代理: %#v", session)
 	}
 }

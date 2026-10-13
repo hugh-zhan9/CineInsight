@@ -4,7 +4,9 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ GetPreviewSession: vi.fn(), GetVideoDetails: vi.fn() }));
+const api = vi.hoisted(() => ({
+  GetPreviewSession: vi.fn(), GetVideoDetails: vi.fn(), RequestPreviewProxy: vi.fn(), CancelPreviewProxy: vi.fn(), CreatePlaybackProxy: vi.fn()
+}));
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import VersionCompareDialog from './VersionCompareDialog.vue';
@@ -380,5 +382,51 @@ describe('关闭与释放', () => {
     resolve(inlineSession(2));
     await flushPromises();
     expect(wrapper.get('[data-test="version-compare-video-right"]').element.hasAttribute('src')).toBe(false);
+  });
+});
+
+describe('版本对比：不能直放的一侧自动请求播放代理（2026-10-13）', () => {
+  const queued = id => ({ running: true, queued: 1, queued_video_ids: [id], current_video_id: 99, results: [] });
+  let handlers;
+  beforeEach(() => {
+    handlers = {};
+    window.runtime = { EventsOn: vi.fn((name, fn) => { (handlers[name] ||= []).push(fn); return () => { handlers[name] = handlers[name].filter(item => item !== fn); }; }) };
+    api.RequestPreviewProxy.mockImplementation(id => Promise.resolve(queued(id)));
+    api.CancelPreviewProxy.mockResolvedValue(true);
+  });
+  afterEach(() => { delete window.runtime; });
+  const emit = status => (handlers['playback-proxy-state'] || []).forEach(fn => fn(status));
+
+  it('proxy-preparing 的一侧按自己的 owner 请求，显示进度，就绪后换成内嵌；关闭时撤销另一侧还在等的', async () => {
+    const preparing = id => ({ video_id: id, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。' });
+    api.GetPreviewSession.mockImplementation(id => Promise.resolve(preparing(id)));
+    await openDialog();
+    const owners = Object.fromEntries(api.RequestPreviewProxy.mock.calls.map(([id, owner]) => [id, owner]));
+    expect(owners[1]).toMatch(/^compare-left-/);
+    expect(owners[2]).toMatch(/^compare-right-/);
+    expect(wrapper.get('[data-test="version-compare-proxy-status-left"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.find('[data-test="version-compare-error-left"]').exists()).toBe(false);
+    api.GetPreviewSession.mockImplementation(id => Promise.resolve(id === 1 ? { ...inlineSession(1), proxy: { strategy: 'remux', size: 9 } } : preparing(id)));
+    emit({ running: true, queued: 1, queued_video_ids: [2], current_video_id: 0, results: [{ video_id: 1, code: 'created' }] });
+    await flushPromises();
+    expect(wrapper.get('[data-test="version-compare-video-left"]').attributes('src')).toBe('/preview/media/1');
+    await wrapper.get('[data-test="version-compare-close"]').trigger('click');
+    await flushPromises();
+    expect(api.CancelPreviewProxy.mock.calls).toEqual([[2, owners[2]]]);
+  });
+
+  it('proxy-manual 的一侧：报原因、不自动请求，手动「生成播放代理」走 CreatePlaybackProxy', async () => {
+    api.GetPreviewSession.mockImplementation(id => Promise.resolve(id === 2
+      ? { video_id: 2, mode: 'proxy-manual', reason_message: '文件较大（约 12.0 GB），生成播放代理会占用相同大小的空间' }
+      : inlineSession(id)));
+    api.CreatePlaybackProxy.mockResolvedValueOnce(queued(2));
+    await openDialog();
+    expect(api.RequestPreviewProxy).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="version-compare-error-right"]').text()).toContain('文件较大（约 12.0 GB）');
+    await wrapper.get('[data-test="version-compare-proxy-generate-right"]').trigger('click');
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(2);
+    expect(wrapper.get('[data-test="version-compare-proxy-status-right"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.find('[data-test="version-compare-proxy-generate-right"]').exists()).toBe(false);
   });
 });

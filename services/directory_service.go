@@ -274,5 +274,10 @@ func (s *DirectoryService) DeleteDirectory(id uint) error {
 		return err
 	}
 	defer unlock()
+	return s.DeleteDirectoryLocked(id)
+}
+
+// DeleteDirectoryLocked 删配置行，调用方已持路径锁（VideoService.RemoveScanRoot 的回调）。
+func (s *DirectoryService) DeleteDirectoryLocked(id uint) error {
 	return database.DB.Delete(&models.ScanDirectory{}, id).Error
 }

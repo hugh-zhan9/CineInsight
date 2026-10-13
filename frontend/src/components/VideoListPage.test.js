@@ -1252,6 +1252,19 @@ describe('播放代理入口（D-006）', () => {
     wrapper.unmount();
   });
 
+  it('只有预览自动代理在跑（auto_only）时行菜单不置灰，手动生成照常可点（2026-10-13）', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: { id: 7, name: 'seven.mkv' }, anchor: null, position: null };
+    wrapper.vm.playbackProxy = { ...wrapper.vm.playbackProxy, running: true, auto_only: true, processed: 0, total: 1 };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.rowMenuItems.find(entry => entry.id === 'playback-proxy').disabled).toBe(false);
+    api.CreatePlaybackProxy.mockResolvedValue({ results: [] });
+    wrapper.vm.onRowMenuSelect({ id: 'playback-proxy' });
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(7);
+    wrapper.unmount();
+  });
+
   it('行菜单选中后为该视频入队', async () => {
     api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 7, code: 'created' }] });
     const wrapper = await mountPage();
@@ -1336,6 +1349,23 @@ describe('播放代理入口（D-006）', () => {
     handlers['playback-proxy-state']({ running: false, cancelled: true, processed: 1, total: 2, results: [] });
     await wrapper.vm.$nextTick();
     expect(feedback.notify).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('只有预览自动代理的一轮（auto_only）不弹汇总提示，带手动请求的一轮照弹（2026-10-13）', async () => {
+    const handlers = {};
+    window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return () => {}; } };
+    const wrapper = await mountPage();
+    handlers['playback-proxy-state']({ running: true, auto_only: true, processed: 0, total: 1, results: [] });
+    await wrapper.vm.$nextTick();
+    handlers['playback-proxy-state']({ running: false, completed: true, auto_only: true, processed: 1, total: 1, succeeded: 1, skipped: 0, failed: 0, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).not.toHaveBeenCalled();
+    handlers['playback-proxy-state']({ running: true, auto_only: false, processed: 0, total: 2, results: [] });
+    await wrapper.vm.$nextTick();
+    handlers['playback-proxy-state']({ running: false, completed: true, auto_only: false, processed: 2, total: 2, succeeded: 2, skipped: 0, failed: 0, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('成功 2'));
     wrapper.unmount();
   });
 });

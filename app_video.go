@@ -304,6 +304,21 @@ func (a *App) BatchCreatePlaybackProxiesForFilter(filter services.LibraryFilter)
 	return status, err
 }
 
+// RequestPreviewProxy 为 owner（一个预览宿主实例）正在预览、不能直放的视频请求自动播放代理
+// （2026-10-13「直接播 + 自动代理」）。同一视频可有多个 owner；同时在等的自动代理最多 2 部。
+func (a *App) RequestPreviewProxy(videoID uint, owner string) (services.PlaybackProxyStatus, error) {
+	status, err := a.playbackProxies.EnqueueAuto(a.backgroundContext(), videoID, owner)
+	log.Printf("API RequestPreviewProxy video_id=%d queued=%d err=%v", videoID, status.Queued, err)
+	return status, err
+}
+
+// CancelPreviewProxy 在 owner 关闭预览或换片时撤销它的请求；没有别的 owner 时才取消这一项。手动生成的不受影响。
+func (a *App) CancelPreviewProxy(videoID uint, owner string) bool {
+	cancelled := a.playbackProxies.CancelAuto(videoID, owner)
+	log.Printf("API CancelPreviewProxy video_id=%d cancelled=%t", videoID, cancelled)
+	return cancelled
+}
+
 // CancelPlaybackProxyTask 取消当前这一轮代理任务。
 func (a *App) CancelPlaybackProxyTask() error {
 	err := a.playbackProxies.CancelPlaybackProxyTask()

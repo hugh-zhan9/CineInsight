@@ -119,6 +119,8 @@ type NearDuplicateDismissal struct {
 }
 
 // MediaStream stores one supported ffprobe stream from the last successful snapshot.
+// CodecTag（2026-10-13）是 ffprobe 的 codec_tag_string（hvc1 / hev1 / avc1…）：桌面预览据此判断 HEVC
+// 能否直放（WebKit 只认 hvc1）；之前的快照为空串，按「未知」处理。
 type MediaStream struct {
 	ID               uint      `gorm:"primarykey" json:"id"`
 	VideoID          uint      `gorm:"not null;uniqueIndex:idx_media_streams_video_index,priority:1;index:idx_media_streams_video_type,priority:1" json:"video_id"`
@@ -127,6 +129,7 @@ type MediaStream struct {
 	StreamType       string    `gorm:"size:16;not null;index:idx_media_streams_video_type,priority:2" json:"stream_type"`
 	CodecName        string    `gorm:"size:100;not null;default:''" json:"codec_name"`
 	CodecLongName    string    `gorm:"type:text;not null;default:''" json:"codec_long_name"`
+	CodecTag         string    `gorm:"size:32;not null;default:''" json:"codec_tag"` // codec_tag_string，见 mediaProbeCodecTag
 	Profile          string    `gorm:"size:100;not null;default:''" json:"profile"`
 	BitRate          *int64    `json:"bit_rate"`
 	Language         string    `gorm:"size:32;not null;default:''" json:"language"`

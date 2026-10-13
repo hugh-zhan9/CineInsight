@@ -281,6 +281,13 @@ describe('工具栏三层重排', () => {
     running.vm.onManageSelect('backfill-playback-proxy');
     expect(running.emitted('manage-select')[0]).toEqual(['backfill-playback-proxy']);
     running.unmount();
+
+    // 只有预览自动代理在跑（auto_only，2026-10-13）：不显示进度、不置灰。
+    const autoOnly = mountToolbar({ playbackProxy: { running: true, auto_only: true, processed: 0, total: 1 } });
+    const autoOnlyItem = autoOnly.vm.manageMenuItems.find(entry => entry.id === 'backfill-playback-proxy');
+    expect(autoOnlyItem.label).toBe('为当前筛选生成代理');
+    expect(autoOnlyItem.disabled).toBe(false);
+    autoOnly.unmount();
   });
 
   it('批量栏「为选中生成代理」把事件转发回片库页', async () => {

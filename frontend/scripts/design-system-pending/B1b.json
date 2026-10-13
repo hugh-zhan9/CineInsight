@@ -77,7 +77,7 @@
       "components/VersionCompareDialog.vue": 11,
       "components/VersionGroupDialog.vue": 10,
       "components/VersionGroupPanel.vue": 7,
-      "components/player/InlineVideoPlayer.vue": 3,
+      "components/player/InlineVideoPlayer.vue": 2,
       "components/video-list/EnhanceDialog.vue": 9,
       "components/video-list/RenameDialogs.vue": 4,
       "components/video-list/SaveViewDialog.vue": 5,

@@ -180,6 +180,7 @@ type mediaProbeStream struct {
 	Index            int                   `json:"index"`
 	CodecName        string                `json:"codec_name"`
 	CodecLongName    string                `json:"codec_long_name"`
+	CodecTag         string                `json:"codec_tag_string"`
 	Profile          string                `json:"profile"`
 	CodecType        string                `json:"codec_type"`
 	BitRate          string                `json:"bit_rate"`
@@ -246,6 +247,7 @@ func parseMediaProbeOutput(output []byte) (parsedMediaProbe, error) {
 			StreamType:       source.CodecType,
 			CodecName:        source.CodecName,
 			CodecLongName:    source.CodecLongName,
+			CodecTag:         mediaProbeCodecTag(source.CodecTag),
 			Profile:          source.Profile,
 			BitRate:          parseOptionalInt64(source.BitRate),
 			Language:         source.Tags.Language,
@@ -555,4 +557,14 @@ func truncateMediaProbeError(message string) string {
 		return message
 	}
 	return message[:mediaProbeMaxErrorBytes]
+}
+
+// mediaProbeCodecTag 只留可读的四字符标签（hvc1、hev1、avc1…）。mkv 等容器里 ffprobe 给的是
+// "[0][0][0][0]" 这类占位，存成空串（未知）。
+func mediaProbeCodecTag(tag string) string {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	if tag == "" || strings.ContainsAny(tag, "[]") || len(tag) > 32 {
+		return ""
+	}
+	return tag
 }

@@ -642,11 +642,12 @@ export default {
           disabled: this.perceptualHash.running
         },
         {
+          // 只有预览自动代理在跑（auto_only）时既不置灰也不显示进度：那是播放器自己的事（2026-10-13）。
           id: 'backfill-playback-proxy',
-          label: this.playbackProxy.running
+          label: this.playbackProxy.running && !this.playbackProxy.auto_only
             ? `为当前筛选生成代理（${this.playbackProxy.processed}/${this.playbackProxy.total}）`
             : '为当前筛选生成代理',
-          disabled: this.playbackProxy.running
+          disabled: !!this.playbackProxy.running && !this.playbackProxy.auto_only
         }
       ];
       if (this.settings.local_metadata_enabled) {

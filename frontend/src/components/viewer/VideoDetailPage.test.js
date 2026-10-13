@@ -8,7 +8,8 @@ const api = vi.hoisted(() => ({
   // 子组件（书签、待播、真实播放器）用到的绑定。
   ListVideoBookmarks: vi.fn(), SaveVideoBookmark: vi.fn(), DeleteVideoBookmark: vi.fn(), ResolveVideoBookmark: vi.fn(),
   GetPlaybackQueue: vi.fn(), EditPlaybackQueue: vi.fn(), PlayPlaybackQueue: vi.fn(),
-  GetPlaybackProxy: vi.fn(), GetPlaybackProxyStatus: vi.fn(), CreatePlaybackProxy: vi.fn(), DeletePlaybackProxy: vi.fn(), RecordViewEvent: vi.fn()
+  GetPlaybackProxy: vi.fn(), GetPlaybackProxyStatus: vi.fn(), CreatePlaybackProxy: vi.fn(), DeletePlaybackProxy: vi.fn(), RecordViewEvent: vi.fn(),
+  RequestPreviewProxy: vi.fn(), CancelPreviewProxy: vi.fn()
 }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
@@ -24,7 +25,7 @@ const PlayerStub = {
   name: 'InlineVideoPlayer',
   props: ['videoId', 'session', 'startTimeMs', 'resumePositionSeconds', 'bookmarkRange', 'autoplay', 'durationSeconds'],
   emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end'],
-  data: () => ({ proxyBusy: false, proxyPending: false, proxyError: '', proxyNotice: '', proxyCreateLabel: '生成播放代理', position: 0, proxyCalls: 0, playCalls: 0 }),
+  data: () => ({ proxyBusy: false, proxyPending: false, proxyError: '', proxyNotice: '', proxyCreateLabel: '生成播放代理', showsProxyState: false, position: 0, proxyCalls: 0, playCalls: 0 }),
   methods: {
     currentTime() { return this.position; },
     play() { this.playCalls += 1; return Promise.resolve(); },
@@ -64,6 +65,8 @@ beforeEach(() => {
   api.GetPlaybackProxy.mockResolvedValue(null);
   api.GetPlaybackProxyStatus.mockResolvedValue({ running: false, queued: 0, queued_video_ids: [], current_video_id: 0, results: [] });
   api.RecordViewEvent.mockResolvedValue(true);
+  api.RequestPreviewProxy.mockImplementation(async id => ({ running: true, queued: 1, queued_video_ids: [id], current_video_id: 99, results: [] }));
+  api.CancelPreviewProxy.mockResolvedValue(true);
 });
 
 async function mountPage(props = {}, { realPlayer = false } = {}) {
@@ -366,6 +369,29 @@ describe('VideoDetailPage in-app playback', () => {
     await flushPromises();
     expect(wrapper.get('[data-test="detail-proxy-create"]').attributes('disabled')).toBeDefined();
     expect(wrapper.get('[data-test="detail-proxy-create"]').text()).toBe('排队中...');
+  });
+
+  it('does not repeat the proxy message below the player while the player box shows it (2026-10-13)', async () => {
+    const wrapper = await mountPage({ startAtMs: 1000 });
+    const stub = player(wrapper).vm;
+    stub.proxyError = '生成播放代理失败：转封装失败';
+    stub.showsProxyState = true;
+    await flushPromises();
+    expect(wrapper.find('[data-test="detail-proxy-error"]').exists()).toBe(false);
+    stub.showsProxyState = false;
+    await flushPromises();
+    expect(wrapper.get('[data-test="detail-proxy-error"]').text()).toBe('生成播放代理失败：转封装失败');
+  });
+
+  it('auto-requests a proxy for a proxy-preparing session and cancels it when the player closes (2026-10-13)', async () => {
+    api.GetPreviewSession.mockResolvedValue({ video_id: 5, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。', external_action: { button_label: '使用系统播放器预览' } });
+    const wrapper = await mountPage({ startAtMs: 1000 }, { realPlayer: true });
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(5, expect.stringMatching(/^player-/));
+    expect(wrapper.get('[data-test="preview-proxy-preparing-status"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.find('[data-test="detail-proxy-create"]').exists()).toBe(false);
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    await flushPromises();
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(5, expect.stringMatching(/^player-/));
   });
 
   it('has no proxy button while the session plays inline', async () => {

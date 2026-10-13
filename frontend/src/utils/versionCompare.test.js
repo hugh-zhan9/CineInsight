@@ -118,7 +118,7 @@ describe('声音、滑动分界与时间', () => {
 describe('播放源与标注', () => {
   it('内嵌会话直接用预览地址，带代理标注', () => {
     const session = { mode: 'inline', inline_source: { locator_value: '/preview/media/3', mime: 'video/mp4' }, proxy: { strategy: 'remux', size: 9 } };
-    expect(compareSourceFromSession(session)).toEqual({ src: '/preview/media/3', proxy: { strategy: 'remux', size: 9 }, error: '' });
+    expect(compareSourceFromSession(session)).toEqual({ src: '/preview/media/3', proxy: { strategy: 'remux', size: 9 }, error: '', manual: false });
   });
 
   it('不能内嵌时给出原因；格式不支持的提示去详情抽屉生成播放代理', () => {
@@ -126,6 +126,10 @@ describe('播放源与标注', () => {
     expect(external.src).toBe('');
     expect(external.error).toContain('当前文件格式不适合在应用内稳定预览。');
     expect(external.error).toContain('生成播放代理');
+    // 2026-10-13：proxy-preparing 由对话框自动请求代理、另显示进度，这里不报错；proxy-manual 报原因并给手动按钮。
+    expect(compareSourceFromSession({ mode: 'proxy-preparing', reason_message: '需要先生成播放代理。' })).toEqual({ src: '', proxy: null, error: '', manual: false });
+    const manual = compareSourceFromSession({ mode: 'proxy-manual', reason_message: '文件较大（约 12.0 GB），生成播放代理会占用相同大小的空间' });
+    expect(manual).toEqual({ src: '', proxy: null, error: '文件较大（约 12.0 GB），生成播放代理会占用相同大小的空间', manual: true });
     const missing = compareSourceFromSession({ mode: 'unsupported', reason_code: 'file_missing', reason_message: '源文件不存在，当前无法预览。' });
     expect(missing.error).toBe('源文件不存在，当前无法预览。');
     expect(compareSourceFromSession(null).error).toBe('当前视频暂不支持在应用内预览。');
