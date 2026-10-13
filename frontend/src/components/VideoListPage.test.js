@@ -2163,6 +2163,27 @@ describe('P-034 行菜单新增项', () => {
 });
 
 describe('P-034 审阅与标签管理的回调', () => {
+  it('LIB-12 审阅开着时的改动等关掉再重载；关着时收到 changed（关掉审阅后撤销了同源删除）立即重载', async () => {
+    const wrapper = await mountPage();
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    const review = () => wrapper.findComponent({ name: 'AITagReviewDialog' });
+    wrapper.vm.openAITagReviewDialog();
+    review().vm.$emit('changed');
+    await flushPromises();
+    expect(reload).not.toHaveBeenCalled();
+    expect(wrapper.vm.aiTagReviewDialog.dirty).toBe(true);
+    await wrapper.vm.closeAITagReviewDialog();
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    // 已经关了：没有「关闭时重载」可等。
+    review().vm.$emit('changed');
+    await flushPromises();
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(wrapper.vm.aiTagReviewDialog).toEqual({ show: false, dirty: false });
+    expect(wrapper.emitted('reload-tags')).toHaveLength(2);
+    wrapper.unmount();
+  });
+
   it('META-08 审阅里点「去清理」：关掉审阅，打开清理中心并把这一对交给面板', async () => {
     const open = vi.fn();
     const wrapper = await mountPage({}, { global: { stubs: { CleanupReviewPanel: { template: '<div />', methods: { open, refreshStatus() {}, forgetTrashed() {} } } } } });

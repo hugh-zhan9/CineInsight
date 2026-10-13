@@ -23,27 +23,32 @@
   </Teleport>
 </template>
 <script>
-import { GetSettings, RestoreTrashBatch } from '../../wailsjs/go/main/App';
 import DialogShell from './ui/DialogShell.vue';
-import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
+import TrashUndoBanner, { restoreTrashBatches } from './video-list/TrashUndoBanner.vue';
 import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
-import { isTrashItemSuccess, summarizeTrashFailures, trashResultText } from './TrashCenterDialog.vue';
+import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import { feedbackState, notifyUndoable } from '../utils/feedback.js';
 import { formatBytes } from '../utils/mediaDetails.js';
+import { readDeletePreferences } from '../utils/trashConfirm.js';
 
 // 人物页 / 抽屉里删一部视频或一张图片（宿主：EntityLibraryPage、PreviewDrawer）。
 // 先确认还是直接删跟片库删除同一个开关（设置「删除前确认」，默认开；2026-10-13 集成裁决：开关优先于 D-UD-07）：
 //   开：照旧弹确认框（DialogShell），在框里选「同时把原文件移到废纸篓」；
 //   关：不弹框，按设置里的「删除原文件」直接删；删不掉时才把确认框连同原因亮出来，可以重试或取消。
 // 删除走带结果码的批量接口（TrashUndoBanner 的 runDelete：进度、不支持废纸篓时二选一，D-PC02/04）。
-// 删完用全局提示带「撤销」（notifyUndoable，同时记进任务中心「最近操作」），撤销按批次调 RestoreTrashBatch。
-// 提示还在或正在撤销时本组件保持挂载（撤销完要通知宿主重读），提示收起后才发 close；
-// 之后从「最近操作」撤销时本组件已经卸下，只恢复数据，宿主下次读取时才看到。
+// 删完用全局提示带「撤销」（notifyUndoable，同时记进任务中心「最近操作」），撤销按批次恢复（TrashUndoBanner 的 restoreTrashBatches）。
+// 提示还在或正在撤销时本组件保持挂载，提示收起后才发 close；之后从「最近操作」撤销时本组件已经卸下，
+// 恢复照做，宿主照样经 restored 收到通知去重读（见 onRestored）。
 export default {
   name: 'PersonMediaDeleteDialog', components: { DialogShell, TrashUndoBanner },
-  props: { target: { type: Object, required: true } },
-  // restored：撤销或从回收站恢复了这一类媒体，载荷 { kind, ids }（ids 为空表示以回收站为准重读）。
-  emits: ['close', 'deleted', 'restored'],
+  props: {
+    target: { type: Object, required: true },
+    // 宿主的 @restored（撤销或从回收站恢复了这一类媒体，载荷 { kind, ids }；ids 为空表示以回收站为准重读）。
+    // 声明成 prop 而不是放进 emits：Vue 会丢掉已卸下组件的 $emit，而从「最近操作」撤销时本组件早已卸下，
+    // 拿着宿主传进来的这个监听才能照样通知到宿主。宿主写法不变，仍是 @restored。
+    onRestored: { type: Function, default: null }
+  },
+  emits: ['close', 'deleted'],
   data: () => ({
     deleteFile: false, busy: false, error: '', trashHint: DELETE_TRASH_HINT, recordOnlyHint: DELETE_RECORD_ONLY_HINT,
     // confirm：确认框（设置读回来之前先挂着但不显示，宿主一打开就有确认框可用）；deleting：不确认直接删；
@@ -84,15 +89,11 @@ export default {
       // 不确认直接删却没删掉：亮出确认框和原因，让用户重试或取消。
       if (this.stage === 'deleting') this.stage = 'confirm';
     },
-    // 设置读不出来时按开关的默认值（开）处理：先确认再删。
+    // 与洞察、下载页同一处读设置（utils/trashConfirm.js）；读不出来时按默认值：先确认再删、不删原文件。
     async loadSettings() {
-      try {
-        const settings = await GetSettings();
-        this.confirmFirst = settings?.confirm_before_delete !== false;
-        this.deleteOriginal = Boolean(settings?.delete_original_file);
-      } catch (_err) {
-        this.confirmFirst = true;
-      }
+      const { confirmFirst, deleteOriginal } = await readDeletePreferences();
+      this.confirmFirst = confirmFirst;
+      this.deleteOriginal = deleteOriginal;
     },
     async confirm() {
       if (this.busy) return;
@@ -126,20 +127,12 @@ export default {
       }
       this.undoToastID = notifyUndoable(text, () => this.undoDelete(kind, batchIDs, restorableIDs));
     },
-    // 撤销：按批次恢复（与 TrashUndoBanner 的「撤销本次删除」同一组接口与口径）。有项没回来时整体算失败
+    // 撤销：按批次恢复（与片库、图片页删除后的撤销同一段 restoreTrashBatches）。有项没回来时整体算失败
     // （提示「撤销失败：…」，「最近操作」里留着可以再试），并让宿主以回收站为准重读。
     async undoDelete(kind, batchIDs, restorableIDs) {
       this.undoing = true;
       try {
-        let restored = 0;
-        const failures = [];
-        for (const batchID of batchIDs) {
-          const result = await RestoreTrashBatch(kind, batchID);
-          for (const item of result?.items || []) {
-            if (isTrashItemSuccess(item.code)) restored += 1;
-            else failures.push({ id: item.id, code: item.code, text: trashResultText(item.code, item.message) });
-          }
-        }
+        const { restored, failures } = await restoreTrashBatches(kind, batchIDs);
         if (failures.length) {
           this.afterRestore(kind, []);
           throw new Error(`恢复 ${restored} 项，${failures.length} 项未恢复：${summarizeTrashFailures(failures)}`);
@@ -156,8 +149,11 @@ export default {
     bannerFor(kind) {
       return kind === 'video' ? this.$refs.videoTrashUndo : this.$refs.imageTrashUndo;
     },
+    // 挂着时照常发 restored；已卸下时 $emit 送不到，直接调宿主的同一个监听（onRestored）。
     afterRestore(kind, ids) {
-      this.$emit('restored', { kind, ids: [...(ids || [])] });
+      const payload = { kind, ids: [...(ids || [])] };
+      if (this.disposed) this.onRestored?.(payload);
+      else this.$emit('restored', payload);
     }
   }
 };

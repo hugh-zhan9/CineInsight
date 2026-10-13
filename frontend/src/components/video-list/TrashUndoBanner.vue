@@ -65,6 +65,21 @@ function emptyOutcome(kind, deleteFile) {
   };
 }
 
+// 按批次恢复一次删除留下的全部条目（RestoreTrashBatch），返回恢复数与没恢复的项；调用本身失败时抛出。
+// 不依赖组件实例：人物页的删除对话框（PersonMediaDeleteDialog）关掉以后从「最近操作」撤销也走这一段。
+export async function restoreTrashBatches(kind, batchIDs) {
+  let restored = 0;
+  const failures = [];
+  for (const batchID of batchIDs || []) {
+    const result = await RestoreTrashBatch(kind, batchID);
+    for (const item of result?.items || []) {
+      if (isTrashItemSuccess(item.code)) restored += 1;
+      else failures.push({ id: item.id, code: item.code, text: trashResultText(item.code, item.message) });
+    }
+  }
+  return { restored, failures };
+}
+
 // 删除流程的宿主（片库页与图片页共用）：批量删除的进度与取消（D-PC51）、卷不支持废纸篓时的
 // 二选一（D-PC02）、删除后的撤销（按 delete_batch_id 整批撤销，D-PC04）与回收站对话框。
 // 撤销的出口（统一设计 D-UD-07/09）：删除成功后出带「撤销」的全局提示（8 秒），同时记进任务中心「最近操作」
@@ -272,18 +287,8 @@ export default {
     },
     // 撤销提示是全局的，本组件没有页内条可收；保留给宿主调用（人物页删除在换一种媒体时会先收起另一个）。
     dismissNotice() {},
-    // 按批次恢复一次删除留下的全部条目（RestoreTrashBatch），返回恢复数与没恢复的项；调用本身失败时抛出。
-    async restoreNoticeBatches(notice) {
-      let restored = 0;
-      const failures = [];
-      for (const batchID of notice.batchIDs) {
-        const result = await RestoreTrashBatch(notice.kind, batchID);
-        for (const item of result?.items || []) {
-          if (isTrashItemSuccess(item.code)) restored += 1;
-          else failures.push({ id: item.id, code: item.code, text: trashResultText(item.code, item.message) });
-        }
-      }
-      return { restored, failures };
+    restoreNoticeBatches(notice) {
+      return restoreTrashBatches(notice.kind, notice.batchIDs);
     },
     async finishRestore(notice, { restored, failures }) {
       if (failures.length) {

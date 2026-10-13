@@ -42,6 +42,12 @@ vi.mock('../../wailsjs/go/main/App', () => api);
 import PhotoLibraryPage, { PHOTO_DISPLAY_MODES, normalizePhotoDisplayMode } from './PhotoLibraryPage.vue';
 import { photoCleanupStore, resetPhotoCleanupReview, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
 import { commandList } from '../utils/commandRegistry.js';
+import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
+
+// 删除结果的撤销是全局提示（D-UD-07/09）：notifyUndoable 不在被替换的几个函数里，提示真的进 feedbackState，
+// 同一条也记进任务中心「最近操作」。两处都是模块级状态，beforeEach 清空。
+const undoToast = () => feedbackState.toasts.find(toast => toast.action?.label === '撤销');
 
 function makeImage(id, overrides = {}) {
   return {
@@ -112,6 +118,8 @@ async function openPhotoFilter(wrapper) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearToasts();
+  recentOperations.clear();
   window.localStorage?.removeItem?.('cineinsight-photo-display-mode');
   api.GetAllImageDirectories.mockResolvedValue([{ id: 1, alias: '相册', path: '/photos' }]);
   api.SearchImagePage.mockResolvedValue(makePage([]));
@@ -1343,6 +1351,26 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(api.BatchDeleteImages).not.toHaveBeenCalled();
   });
 
+  it('LIB-12 离开清理审阅以后再从「最近操作」撤销清理页的删除：图片库照样重载', async () => {
+    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
+    api.DeleteImagesWithResult.mockResolvedValueOnce(okDeleteResult([2], 'b-clean'));
+    await confirmCleanupDelete(wrapper);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([2], true, expect.any(String));
+    expect(photoCleanupStore.review.deletedIDs).toEqual([2]);
+    await wrapper.get('[data-test="cleanup-back"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(false);
+
+    api.RestoreTrashBatch.mockResolvedValueOnce({ batch_id: 'b-clean', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: [{ id: 2, code: 'ok' }] });
+    api.SearchImagePage.mockClear();
+    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'b-clean');
+    expect(api.SearchImagePage).toHaveBeenCalled();
+    expect(photoCleanupStore.review.deletedIDs).toEqual([]);
+    wrapper.unmount();
+  });
+
   // P-032 评审 Minor 5：删除进行中「返回图片库」禁用，命令等其他关闭路径也不能把清理页卸载掉。
   it('D-PC49 删除进行中不能离开清理审阅：返回禁用，命令打开 AI 审阅被拒并提示', async () => {
     const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
@@ -2027,7 +2055,7 @@ describe('PhotoLibraryPage 工具栏收纳', () => {
 
 // P-030：图片页的删除反馈、撤销、文案与回收站入口。
 describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
-  it('IMG-09 删除图片后给撤销条，「撤销本次删除」按批次恢复并重新加载', async () => {
+  it('IMG-09 删除图片后给带「撤销」的提示，撤销按批次恢复并重新加载', async () => {
     api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
     api.DeleteImagesWithResult.mockResolvedValueOnce(okDeleteResult([1], 'b-img'));
     const wrapper = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: true } });
@@ -2035,22 +2063,26 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     await wrapper.findAll('[data-test="photo-card-delete"]')[0].trigger('click');
     await flushPromises();
 
-    const banner = wrapper.get('[data-test="delete-undo-banner"]');
-    expect(banner.text()).toContain('已移到废纸篓 1 张图片');
-    expect(banner.get('[data-test="delete-undo"]').text()).toBe('撤销本次删除（1 项）');
+    // 页内撤销条已去掉（D-UD-07/09）：撤销是全局提示，同一条也在任务中心「最近操作」里。
+    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    const toast = undoToast();
+    expect(toast.message).toContain('已移到废纸篓 1 张图片');
+    expect(toast.action.label).toBe('撤销');
+    expect(recentOperations.list().map(item => item.label)).toEqual([toast.message]);
 
     api.RestoreTrashBatch.mockResolvedValueOnce({ batch_id: 'b-img', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: [{ id: 91, code: 'ok' }] });
     api.SearchImagePage.mockClear();
-    await banner.get('[data-test="delete-undo"]').trigger('click');
+    expect(await runToastAction(toast.id)).toBe(true);
     await flushPromises();
 
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'b-img');
     expect(api.SearchImagePage).toHaveBeenCalled();
-    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    expect(undoToast()).toBeUndefined();
+    expect(recentOperations.list()).toEqual([]);
     wrapper.unmount();
   });
 
-  it('IMG-02 只删记录的删除在撤销条上写明文件保留，同样可以撤销', async () => {
+  it('IMG-02 只删记录的删除在撤销提示上写明文件保留，同样可以撤销', async () => {
     api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
     const wrapper = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: false } });
 
@@ -2058,9 +2090,19 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     await flushPromises();
 
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([1], false, expect.any(String));
-    const banner = wrapper.get('[data-test="delete-undo-banner"]');
-    expect(banner.text()).toContain('已从图片库移除 1 张图片（文件保留）');
-    expect(banner.find('[data-test="delete-undo"]').exists()).toBe(true);
+    const toast = undoToast();
+    expect(toast.message).toContain('已从图片库移除 1 张图片（文件保留）');
+    expect(toast.message).not.toContain('废纸篓');
+    expect(toast.action.label).toBe('撤销');
+
+    api.RestoreTrashBatch.mockResolvedValueOnce({ batch_id: 'batch-1', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: [{ id: 1, code: 'ok' }] });
+    api.SearchImagePage.mockClear();
+    // 任务中心「最近操作」里的撤销与提示里的是同一条。
+    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-1');
+    expect(api.SearchImagePage).toHaveBeenCalled();
+    expect(recentOperations.list()).toEqual([]);
     wrapper.unmount();
   });
 
@@ -2121,7 +2163,9 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     expect(wrapper.vm.images.map(image => image.id)).toEqual([2]);
     expect(wrapper.vm.selectedImageIDs).toEqual([2]);
     expect(wrapper.vm.error).toContain('所在磁盘未连接或不可访问');
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已移到废纸篓 1 张图片');
+    // 撤销提示只报成功的那一张，失败的原因在页内错误条上。
+    expect(undoToast().message).toContain('已移到废纸篓 1 张图片');
+    expect(undoToast().message).not.toContain('磁盘');
     wrapper.unmount();
   });
 

@@ -17,6 +17,8 @@ const api = vi.hoisted(() => ({
   // P-034：人物页删除媒体改走带结果码的批量删除（PersonMediaDeleteDialog + TrashUndoBanner）。
   DeleteImagesWithResult: vi.fn(),
   DeleteVideosWithResult: vi.fn(),
+  RestoreTrashBatch: vi.fn(),
+  GetSettings: vi.fn(),
   GetAllTags: vi.fn(),
   BatchAddTagToImages: vi.fn(),
   PlayVideo: vi.fn(),
@@ -53,6 +55,8 @@ vi.mock('./PreviewDrawer.vue', () => ({
 
 import EntityLibraryPage from './EntityLibraryPage.vue';
 import { commandList } from '../utils/commandRegistry.js';
+import { clearToasts } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -533,6 +537,32 @@ describe('EntityLibraryPage 撤销删除后的刷新', () => {
     expect(api.GetPersonDetail).toHaveBeenLastCalledWith(7, 0, 30);
     expect(w.vm.entityImages.map(image => image.id)).toEqual([11]);
     expect(drawerReload).toHaveBeenCalledWith({ kind: 'image', ids: [11] }, false);
+    w.unmount();
+  });
+
+  it('LIB-12 删除对话框关掉以后再从「最近操作」撤销：照样恢复，本页重读当前人物', async () => {
+    clearToasts();
+    recentOperations.clear();
+    // 「删除前确认」关着：不弹框，直接只删记录。
+    api.GetSettings.mockResolvedValueOnce({ confirm_before_delete: false, delete_original_file: false });
+    api.DeleteImagesWithResult.mockResolvedValueOnce({ batch_id: 'b-person', items: [{ id: 11, code: 'ok' }] });
+    api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 11, code: 'ok' }] });
+    const { w } = await openPerson();
+    w.vm.personMediaDeleteTarget = { kind: 'image', media: { id: 11, name: 'a.jpg', size: 200 }, personID: 7 };
+    await flushPromises();
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));
+    expect(w.vm.entityImages).toEqual([]);
+    // 撤销提示到时收起：对话框关掉、卸下。
+    clearToasts();
+    await flushPromises();
+    expect(w.findComponent({ name: 'PersonMediaDeleteDialog' }).exists()).toBe(false);
+
+    const calls = api.GetPersonDetail.mock.calls.length;
+    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'b-person');
+    expect(api.GetPersonDetail.mock.calls.length).toBe(calls + 1);
+    expect(api.GetPersonDetail).toHaveBeenLastCalledWith(7, 0, 30);
     w.unmount();
   });
 

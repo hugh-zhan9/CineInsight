@@ -16,8 +16,13 @@ vi.mock('./AIQualityPanel.vue', () => ({ default: { template: '<div data-test="q
 vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data-test="face-panel-stub">face panel</div>' } }));
 
 import AITagReviewDialog from './AITagReviewDialog.vue';
+import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
 
 enableAutoUnmount(afterEach);
+
+// 删除结果的撤销是全局提示（D-UD-07/09），同一条也记进任务中心「最近操作」；两处都是模块级状态，每个用例前清空。
+const undoToast = () => feedbackState.toasts.find(toast => toast.action?.label === '撤销');
 
 // 后端按 id 游标分页，游标非零时可以继续读取。
 const candidatePage = (items, nextID = 0) => ({ items, next_id: nextID });
@@ -35,6 +40,8 @@ const tagCandidate = (overrides = {}) => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  clearToasts();
+  recentOperations.clear();
   api.GetAITaggingStatusSummary.mockResolvedValue({ config_available: true });
   api.ListAITagCandidatePage.mockResolvedValue(candidatePage([]));
   api.SearchAITagCandidatePage.mockResolvedValue(candidatePage([]));
@@ -260,12 +267,14 @@ describe('AITagReviewDialog same-source review', () => {
     await deleteA.trigger('click');
     await flushPromises();
 
-    // P-034：改走带结果码的删除，仍只删记录；删完给整批撤销条（D-PC04）。
+    // P-034：改走带结果码的删除，仍只删记录；删完给整批撤销（D-PC04），撤销是全局提示（D-UD-07/09）。
     expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([7], false, expect.any(String));
     expect(api.DeleteVideo).not.toHaveBeenCalled();
     expect(wrapper.vm.sameSourceDeleteConfirm.show).toBe(false);
     expect(wrapper.find('.same-source-row').exists()).toBe(false);
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已从片库移除 1 个视频（文件保留）');
+    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    expect(undoToast().message).toContain('已从片库移除 1 个视频（文件保留）');
+    expect(recentOperations.list().map(item => item.label)).toEqual([undoToast().message]);
   });
 
   it('LIB-12 同源删除后可以整批撤销，撤销后重取同源与候选', async () => {
@@ -283,12 +292,41 @@ describe('AITagReviewDialog same-source review', () => {
     await wrapper.findAll('.same-source-row button').find(button => button.text() === '从片库移除 B').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('changed')).toHaveLength(1);
+    expect(undoToast().action.label).toBe('撤销');
 
-    await wrapper.get('[data-test="delete-undo"]').trigger('click');
+    expect(await runToastAction(undoToast().id)).toBe(true);
     await flushPromises();
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'batch-9');
     expect(wrapper.emitted('changed')).toHaveLength(2);
     expect(wrapper.find('.same-source-row').exists()).toBe(true);
+    expect(recentOperations.list()).toEqual([]);
+  });
+
+  it('LIB-12 关掉审阅以后再从「最近操作」撤销同源删除：照样按批次恢复，并发 changed 让片库重载', async () => {
+    const relation = {
+      id: 14, video_a_id: 7, video_a: { id: 7, name: 'Left.mp4', path: '/media/Left.mp4' },
+      video_b_id: 8, video_b: { id: 8, name: 'Right.mp4', path: '/media/Right.mp4' }, confidence: 'high', is_unread: false,
+    };
+    api.ListSameSourceRelations.mockResolvedValueOnce([relation]).mockResolvedValueOnce([]).mockResolvedValue([relation]);
+    api.DeleteVideosWithResult.mockResolvedValueOnce({ batch_id: 'batch-10', items: [{ id: 8, code: 'ok' }] });
+    api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 8, code: 'ok' }] });
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    await wrapper.findAll('.same-source-row button').find(button => button.text() === '从片库移除 B').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+    // 关掉审阅：弹窗内容（连同里面的删除宿主）卸下，审阅组件本身仍挂在片库页上。
+    await wrapper.setProps({ visible: false });
+    await flushPromises();
+    expect(wrapper.find('[data-test="ai-tag-review-dialog"]').exists()).toBe(false);
+
+    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'batch-10');
+    expect(wrapper.emitted('changed')).toHaveLength(2);
+    expect(recentOperations.list()).toEqual([]);
   });
 
   it('同源删除失败时保留这一对并说明原因', async () => {

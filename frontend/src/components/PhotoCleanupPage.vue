@@ -591,8 +591,13 @@ function emptyDeleteConfirm() {
 export default {
   name: 'PhotoCleanupPage',
   components: { AppBanner, AppIcon, DialogShell, EmptyState, PageHeader, ProgressBar, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
-  // deleted：清理页改动了图片库（删除，或在撤销条 / 回收站里撤销了删除），图片库据此重载。
-  emits: ['close', 'deleted'],
+  props: {
+    // 宿主的 @deleted：清理页改动了图片库（删除，或在撤销提示 / 「最近操作」/ 回收站里撤销了删除），图片库据此重载。
+    // 声明成 prop 而不是放进 emits：离开清理页之后再从「最近操作」撤销时本页已经卸下，Vue 会丢掉它的 $emit，
+    // 拿着宿主传进来的这个监听才能照样让图片库重载。宿主写法不变，仍是 @deleted。
+    onDeleted: { type: Function, default: null }
+  },
+  emits: ['close'],
   data() {
     return {
       UNKNOWN_DIRECTORY,
@@ -899,6 +904,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.disposed = true;
     window.removeEventListener('keydown', this.handleKeydown);
     if (this.unsubscribePerceptualHash) {
       this.unsubscribePerceptualHash();
@@ -1348,7 +1354,7 @@ export default {
         this.processing = false;
       }
       if (!outcome || outcome.removedIDs.length === 0) return;
-      this.$emit('deleted');
+      this.notifyLibraryChanged();
       // 让工具栏徽标与"结果可能过期"跟上这次删除。
       refreshPhotoCleanupStatus();
       // 不静默重跑：先问一句，让用户决定是继续审阅还是刷新候选。
@@ -1365,8 +1371,13 @@ export default {
     async afterTrashRestore(imageIDs) {
       const restored = new Set((imageIDs || []).map(Number));
       this.review.deletedIDs = restored.size ? this.deletedIDs.filter(id => !restored.has(Number(id))) : [];
-      this.$emit('deleted');
+      this.notifyLibraryChanged();
       await refreshPhotoCleanupStatus();
+    },
+    // 挂着时照常发 deleted；已卸下时 $emit 送不到，直接调宿主的同一个监听（onDeleted）。
+    notifyLibraryChanged() {
+      if (this.disposed) this.onDeleted?.();
+      else this.$emit('deleted');
     },
     async dismissGroup(entry) {
       if (this.dismissing || this.editLocked) return;

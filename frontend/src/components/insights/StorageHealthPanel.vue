@@ -260,9 +260,13 @@ export default {
   name: 'StorageHealthPanel',
   components: { AppBanner, AppIcon, BucketChart, DialogShell, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
   // open-video-id：打开片库详情；run-command：按固定命令 ID 打开清理中心；
-  // videos-changed：这里删除或撤销删除了视频，片库与顶栏计数据此刷新；
   // status-change：{ loading, processing }，宿主据此显示刷新状态、删除进行中不让离开。
-  emits: ['open-video-id', 'run-command', 'videos-changed', 'status-change'],
+  emits: ['open-video-id', 'run-command', 'status-change'],
+  props: {
+    // 宿主的 @videos-changed：这里删除或撤销删除了视频，片库与顶栏计数据此刷新。声明成 prop 而不是放进 emits：
+    // 离开体检页之后再从提示或「最近操作」撤销时本面板已经卸下，Vue 会丢掉它的 $emit，拿着这个监听才能照样通知。
+    onVideosChanged: { type: Function, default: null }
+  },
   data() {
     return {
       SIZE_OPTIONS,
@@ -350,6 +354,7 @@ export default {
     undoing() { this.emitStatus(); }
   },
   beforeUnmount() {
+    this.disposed = true;
     if (this._resolveDelete) this._resolveDelete(false);
   },
   mounted() {
@@ -530,7 +535,7 @@ export default {
       const gone = new Set(removed);
       this.selection = this.selection.filter(id => !gone.has(id));
       this.removedIDs = [...new Set([...this.removedIDs, ...removed])];
-      this.$emit('videos-changed', { removedIDs: removed });
+      this.notifyVideosChanged({ removedIDs: removed });
       await this.refresh();
       // 重取会清空提示：部分失败的原因要留给用户看（撤销条只报成功的那部分）。
       if (failureNotice) this.error = failureNotice;
@@ -540,8 +545,14 @@ export default {
     async afterTrashRestore(videoIDs) {
       const restored = new Set((videoIDs || []).map(Number));
       this.removedIDs = restored.size ? this.removedIDs.filter(id => !restored.has(id)) : [];
-      this.$emit('videos-changed', { removedIDs: [] });
-      await this.refresh();
+      this.notifyVideosChanged({ removedIDs: [] });
+      // 已卸下（离开体检页之后才撤销）：体检下次进来会重新取，不在这里白取一次。
+      if (!this.disposed) await this.refresh();
+    },
+    // 挂着时照常发 videos-changed；已卸下时 $emit 送不到，直接调宿主的同一个监听（onVideosChanged）。
+    notifyVideosChanged(payload) {
+      if (this.disposed) this.onVideosChanged?.(payload);
+      else this.$emit('videos-changed', payload);
     }
   }
 };

@@ -1,5 +1,5 @@
-import { flushPromises, mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushPromises, mount as mountComponent } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // 应用内确认框：默认答"确定"，需要"取消"的用例单独覆盖。
 const feedback = vi.hoisted(() => ({
@@ -24,6 +24,28 @@ vi.mock('../../wailsjs/go/main/App', () => api);
 
 import PhotoCleanupPage from './PhotoCleanupPage.vue';
 import { photoCleanupStore, resetPhotoCleanupReview, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
+import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
+
+// 用例中途失败时末尾的 wrapper.unmount() 走不到：漏下的实例还盯着模块级的 photoCleanupStore，下一个用例的 beforeEach
+// 一换 status，它的 analysisKey 侦听就抢先按那份结果重置审阅（key 被它占了、勾选只剩它算的），新挂的实例以为是
+// 同一轮、不再自动勾选，后面的用例跟着失败。所以挂过的都记下来，afterEach 把还挂着的卸掉
+// （不用 enableAutoUnmount：多数用例自己会卸，再卸一次 Vue 会警告）。
+const liveWrappers = [];
+function mount(...args) {
+  const wrapper = mountComponent(...args);
+  liveWrappers.push(wrapper);
+  return wrapper;
+}
+afterEach(() => {
+  for (const wrapper of liveWrappers.splice(0)) {
+    if (!wrapper.vm.$.isUnmounted) wrapper.unmount();
+  }
+});
+
+// 删除结果的撤销是全局提示（D-UD-07/09）：notifyUndoable 不在被替换的几个函数里，提示真的进 feedbackState，
+// 同一条也记进「最近操作」。两处都是模块级状态，每个用例前清空。
+const undoToast = () => feedbackState.toasts.find(toast => toast.action?.label === '撤销');
 
 function makeMember(id, name, extra = {}) {
   return { id, name, path: `/p/${name}`, directory: '/p', width: 1000, height: 1000, file_size: 500000, ...extra };
@@ -65,10 +87,10 @@ function okResult(ids, batchID = 'batch-1') {
   return { batch_id: batchID, requested: ids.length, succeeded: ids.length, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) };
 }
 
-async function mountWith(status) {
+async function mountWith(status, props = {}) {
   photoCleanupStore.status = status;
   api.GetImageCleanupStatus.mockResolvedValue(status);
-  const wrapper = mount(PhotoCleanupPage, { attachTo: document.body });
+  const wrapper = mount(PhotoCleanupPage, { attachTo: document.body, props });
   await flushPromises();
   return wrapper;
 }
@@ -86,6 +108,8 @@ async function clickDelete(wrapper) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearToasts();
+  recentOperations.clear();
   delete window.runtime;
   document.body.innerHTML = '';
   stopPhotoCleanupPolling();
@@ -299,7 +323,7 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     wrapper.unmount();
   });
 
-  it('IMG-03 默认先合并元数据到保留项，再经删除宿主移到废纸篓（*WithResult + 撤销条）', async () => {
+  it('IMG-03 默认先合并元数据到保留项，再经删除宿主移到废纸篓（*WithResult + 撤销提示）', async () => {
     feedback.confirmAction.mockResolvedValue(false);
     const calls = [];
     api.MergeMediaMetadata.mockImplementation(async (...args) => { calls.push(['merge', ...args]); return { warnings: [] }; });
@@ -314,7 +338,10 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     expect(calls[1].slice(0, 3)).toEqual(['delete', [12], true]);
     expect(calls[1][3]).toMatch(/^[0-9a-f]{32}$/);
     expect(api.BatchDeleteImages).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已移到废纸篓 1 张图片');
+    // 撤销走全局提示（D-UD-07/09），同一条记进「最近操作」；页内不再有撤销条。
+    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    expect(undoToast().message).toContain('已移到废纸篓 1 张图片');
+    expect(recentOperations.list().map(item => item.label)).toEqual([undoToast().message]);
     expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
     expect(wrapper.vm.selection).toEqual([]);
     expect(wrapper.emitted('deleted')).toHaveLength(1);
@@ -410,7 +437,13 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
 
     expect(api.DeleteImagesWithResult).toHaveBeenLastCalledWith([12], false, '');
     expect(wrapper.vm.deletedIDs).toEqual([12]);
-    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已从图片库移除 1 张图片（文件保留）');
+    expect(undoToast().message).toContain('已从图片库移除 1 张图片（文件保留）');
+    // 两个批次（不支持废纸篓的那次与改成只删记录的那次）一起撤销。
+    api.RestoreTrashBatch.mockResolvedValue(okResult([12], 'b-2'));
+    expect(await runToastAction(undoToast().id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch.mock.calls).toEqual([['image', 'b-1'], ['image', 'b-2']]);
+    expect(wrapper.vm.deletedIDs).toEqual([]);
     wrapper.unmount();
   });
 
@@ -431,7 +464,7 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     wrapper.unmount();
   });
 
-  it('LIB-12 在清理页的撤销条上整批撤销后，放掉已删除标记并通知图片库重载', async () => {
+  it('LIB-12 在清理页的撤销提示上整批撤销后，放掉已删除标记并通知图片库重载', async () => {
     feedback.confirmAction.mockResolvedValue(false);
     api.RestoreTrashBatch.mockResolvedValue(okResult([12], 'batch-1'));
     const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
@@ -439,13 +472,42 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
     await flushPromises();
     expect(wrapper.vm.deletedIDs).toEqual([12]);
+    expect(undoToast().action.label).toBe('撤销');
 
-    await wrapper.get('[data-test="delete-undo"]').trigger('click');
+    expect(await runToastAction(undoToast().id)).toBe(true);
     await flushPromises();
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-1');
     expect(wrapper.vm.deletedIDs).toEqual([]);
     expect(wrapper.emitted('deleted')).toHaveLength(2);
+    // 提示与「最近操作」是同一条记录：撤销成功后两边都没了。
+    expect(undoToast()).toBeUndefined();
+    expect(recentOperations.list()).toEqual([]);
     wrapper.unmount();
+  });
+});
+
+describe('离开清理页之后的撤销', () => {
+  it('LIB-12 清理页卸下后再从「最近操作」撤销：照样恢复、放掉已删除标记，并经 @deleted 让图片库重载', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    api.RestoreTrashBatch.mockResolvedValue(okResult([12], 'batch-1'));
+    const onDeleted = vi.fn();
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }), { onDeleted });
+    await clickDelete(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+    expect(photoCleanupStore.review.deletedIDs).toEqual([12]);
+    // 返回图片库：清理页卸下。
+    wrapper.unmount();
+
+    api.GetImageCleanupStatus.mockClear();
+    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-1');
+    expect(photoCleanupStore.review.deletedIDs).toEqual([]);
+    expect(onDeleted).toHaveBeenCalledTimes(2);
+    expect(api.GetImageCleanupStatus).toHaveBeenCalled();
+    expect(recentOperations.list()).toEqual([]);
   });
 });
 

@@ -74,6 +74,39 @@ describe('PersonMediaDeleteDialog', () => {
     w.unmount();
   });
 
+  it('提示收起、对话框被宿主卸下之后从「最近操作」撤销：照样按批次恢复，并经 @restored 通知宿主重读', async () => {
+    api.DeleteImagesWithResult.mockResolvedValueOnce(okResult([11], 'batch-7'));
+    api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 11, code: 'ok' }] });
+    const onRestored = vi.fn();
+    const w = await mountLive({ onRestored });
+    await body().get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    // 提示到时收起：对话框发 close，宿主（v-if）把它卸下。
+    clearToasts(); await flushPromises();
+    expect(w.emitted('close')).toHaveLength(1);
+    w.unmount();
+
+    const [entry] = recentOperations.list();
+    expect(await recentOperations.undo(entry.id)).toBe(true);
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-7');
+    expect(onRestored.mock.calls).toEqual([[{ kind: 'image', ids: [11] }]]);
+    expect(recentOperations.list()).toEqual([]);
+  });
+
+  it('卸下之后撤销有项没恢复：仍让宿主以回收站为准重读，「最近操作」留着可再试', async () => {
+    api.DeleteImagesWithResult.mockResolvedValueOnce(okResult([11], 'batch-8'));
+    api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 11, code: 'restore_conflict', message: '原位置已有同名文件' }] });
+    const onRestored = vi.fn();
+    const w = await mountLive({ onRestored });
+    await body().get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    clearToasts(); await flushPromises();
+    w.unmount();
+
+    const [entry] = recentOperations.list();
+    await expect(recentOperations.undo(entry.id)).rejects.toThrow('恢复 0 项，1 项未恢复');
+    expect(onRestored.mock.calls).toEqual([[{ kind: 'image', ids: [] }]]);
+    expect(recentOperations.list().map(item => item.id)).toEqual([entry.id]);
+  });
+
   it('撤销有项没恢复时报「撤销失败」，宿主以回收站为准重读，「最近操作」留着可再试', async () => {
     api.DeleteImagesWithResult.mockResolvedValueOnce(okResult([11], 'batch-1'));
     api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 11, code: 'restore_conflict', message: '原位置已有同名文件' }] });

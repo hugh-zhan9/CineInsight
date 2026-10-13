@@ -3084,9 +3084,12 @@ export default {
       await this.reloadCurrentView();
       if (fromTrashDialog) await this.refreshCleanupStatus();
     },
+    // 审阅开着时只记下来，关掉时一起重载；已经关了（例如关掉审阅后从提示或「最近操作」撤销了同源删除）
+    // 就没有「关闭时重载」可等，立即重载，不然恢复回来的视频要等下次刷新才出现。
     async handleAITagCandidatesChanged() {
-      this.aiTagReviewDialog.dirty = true;
+      if (this.aiTagReviewDialog.show) this.aiTagReviewDialog.dirty = true;
       this.$emit('reload-tags');
+      if (!this.aiTagReviewDialog.show) await this.reloadCurrentView();
     },
     // 审阅里确认同源后点「去清理」（D-PC27）：关掉审阅、打开清理中心，按 relationId 定位这一对
     // （P-032 约定：面板自己定位；这一对不在结果里时由面板说明）。

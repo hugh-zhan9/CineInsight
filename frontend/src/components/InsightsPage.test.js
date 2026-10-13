@@ -208,6 +208,22 @@ describe('InsightsPage 观看记录（P-037，D-PC43）', () => {
 });
 
 describe('InsightsPage 存储体检页签（2026-10-12）', () => {
+  it('离开洞察页之后体检面板才报 videos-changed（例如从「最近操作」撤销了删除）：照样转给宿主，不再重取概览', async () => {
+    GetLibraryInsights.mockResolvedValue(baseStats);
+    const onVideosChanged = vi.fn();
+    const wrapper = shallowMount(InsightsPage, { props: { onVideosChanged }, global: { stubs: { PageHeader: false } } });
+    await flushPromises();
+    await wrapper.get('[data-test="insights-tab-storage"]').trigger('click');
+    // 宿主模板里的 @videos-changed 就是面板拿到的这个监听。
+    const relay = wrapper.findComponent({ name: 'StorageHealthPanel' }).props('onVideosChanged');
+    wrapper.unmount();
+
+    const insightsCalls = GetLibraryInsights.mock.calls.length;
+    relay({ removedIDs: [] });
+    expect(onVideosChanged).toHaveBeenCalledWith({ removedIDs: [] });
+    expect(GetLibraryInsights.mock.calls.length).toBe(insightsCalls);
+  });
+
   it('切到「存储体检」只挂体检面板，事件原样转给宿主；切回概览面板卸掉', async () => {
     GetLibraryInsights.mockResolvedValue(baseStats);
     const wrapper = mountWith(baseStats);

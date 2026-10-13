@@ -185,10 +185,13 @@ export default {
   name: 'InsightsPage',
   components: { AppBanner, BucketChart, EmptyState, PageHeader, SkeletonBlock, StorageHealthPanel },
   // busy-change：存储体检正在删除视频，App 据此不让切走（撤销条挂在本页上）。
-  emits: ['open-video-id', 'run-command', 'videos-changed', 'busy-change'],
+  emits: ['open-video-id', 'run-command', 'busy-change'],
   props: {
     // 卷可用性由扫描目录与监听状态推出，不再单开一条后端统计。
-    directories: { type: Array, default: () => [] }
+    directories: { type: Array, default: () => [] },
+    // 宿主的 @videos-changed（存储体检删除或撤销删除了视频）。声明成 prop 而不是放进 emits：离开洞察页之后
+    // 再从提示或「最近操作」撤销时本页已经卸下，Vue 会丢掉它的 $emit，拿着这个监听才能照样让 App 刷新片库。
+    onVideosChanged: { type: Function, default: null }
   },
   data() {
     return {
@@ -343,6 +346,7 @@ export default {
     }]);
   },
   beforeUnmount() {
+    this.disposed = true;
     unregisterCommands('insights-page');
     // 页面整个被卸掉时（正常切页在删除中会被 App 拦下）别把「删除进行中」留在 App 里。
     if (this.storageStatus.processing) this.$emit('busy-change', false);
@@ -363,6 +367,11 @@ export default {
     },
     // 存储体检删除或撤销了视频：概览的总数也跟着重取，再交给 App 刷新片库与顶栏。
     handleVideosChanged(payload) {
+      // 已卸下（离开洞察页之后才撤销）：概览不用重取，$emit 也送不到，直接调宿主的同一个监听。
+      if (this.disposed) {
+        this.onVideosChanged?.(payload);
+        return;
+      }
       this.refresh();
       this.$emit('videos-changed', payload);
     },

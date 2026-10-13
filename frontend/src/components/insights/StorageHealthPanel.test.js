@@ -12,6 +12,7 @@ vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import StorageHealthPanel from './StorageHealthPanel.vue';
 import { feedbackState, resetFeedback } from '../../utils/feedback.js';
+import * as recentOperations from '../../utils/recentOperations.js';
 
 const GIB = 1024 ** 3;
 const item = (id, size, extra = {}) => ({
@@ -39,8 +40,8 @@ function okResult(ids) {
   return { batch_id: 'batch-1', requested: ids.length, succeeded: ids.length, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) };
 }
 
-async function mountPanel() {
-  const wrapper = mount(StorageHealthPanel, { attachTo: document.body });
+async function mountPanel(props = {}) {
+  const wrapper = mount(StorageHealthPanel, { attachTo: document.body, props });
   await flushPromises();
   return wrapper;
 }
@@ -50,6 +51,7 @@ const tileText = (wrapper, key) => wrapper.get(`[data-test="storage-tile-${key}"
 beforeEach(() => {
   vi.clearAllMocks();
   resetFeedback();
+  recentOperations.clear();
   document.body.innerHTML = '';
   api.GetStorageReport.mockResolvedValue(report());
   api.GetCleanupStatus.mockResolvedValue({
@@ -317,6 +319,27 @@ describe('存储体检复审修复（部分失败、撤销中、清理结果乱�
     expect(wrapper.get('[data-test="storage-error"]').text()).toContain('有 1 个视频没有移到废纸篓');
     expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [1] }]]);
     wrapper.unmount();
+  });
+
+  it('离开体检页（面板卸下）之后再从「最近操作」撤销：照样按批次恢复，并经 @videos-changed 让片库刷新，不再白取体检', async () => {
+    api.GetSettings.mockResolvedValueOnce({ confirm_before_delete: false });
+    api.RestoreTrashBatch.mockResolvedValueOnce(okResult([2]));
+    const onVideosChanged = vi.fn();
+    const wrapper = await mountPanel({ onVideosChanged });
+    await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[1].setValue(true);
+    await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([2], true, expect.any(String));
+    expect(onVideosChanged.mock.calls).toEqual([[{ removedIDs: [2] }]]);
+    wrapper.unmount();
+
+    api.GetStorageReport.mockClear();
+    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'batch-1');
+    expect(onVideosChanged.mock.calls).toEqual([[{ removedIDs: [2] }], [{ removedIDs: [] }]]);
+    expect(api.GetStorageReport).not.toHaveBeenCalled();
+    expect(recentOperations.list()).toEqual([]);
   });
 
   it('撤销条正在撤销时也报 processing，宿主据此不让切走', async () => {
