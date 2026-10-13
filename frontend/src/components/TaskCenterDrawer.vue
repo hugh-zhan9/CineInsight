@@ -12,13 +12,8 @@
         <button type="button" class="btn-icon btn--sm task-center__close" aria-label="关闭任务中心" data-test="task-center-close" @click="$emit('close')"><AppIcon name="close" :size="16" /></button>
       </header>
 
-      <nav class="task-center__tabs" aria-label="任务中心内容">
-        <button type="button" class="btn btn--ghost btn--sm" :aria-pressed="section === 'tasks'" data-test="task-center-tab-tasks" @click="section = 'tasks'">任务</button>
-        <button type="button" class="btn btn--ghost btn--sm" :aria-pressed="section === 'recent'" data-test="task-center-tab-recent" @click="section = 'recent'">
-          最近操作<AppBadge v-if="operations.length" :count="operations.length" />
-        </button>
-        <button type="button" class="btn btn--ghost btn--sm" :aria-pressed="section === 'health'" data-test="task-center-tab-health" @click="section = 'health'">运行状态与诊断</button>
-      </nav>
+      <!-- 三个分区（D-UD-06 AppTabs），每个页签带 task-center-tab-* 钩子；「最近操作」的条数写在徽标里。 -->
+      <AppTabs v-model="section" class="task-center__tabs" :tabs="sectionTabs" aria-label="任务中心内容" />
       <div v-if="section === 'health'" class="task-center__body">
         <SystemHealthPanel @run-command="runHealthCommand" />
       </div>
@@ -148,9 +143,9 @@ import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 import { findCommand, isCommandEnabled } from '../utils/commandRegistry.js';
 import * as recentOperations from '../utils/recentOperations.js';
 import SystemHealthPanel from './SystemHealthPanel.vue';
-import AppBadge from './ui/AppBadge.vue';
 import AppBanner from './ui/AppBanner.vue';
 import AppIcon from './ui/AppIcon.vue';
+import AppTabs from './ui/AppTabs.vue';
 import EmptyState from './ui/EmptyState.vue';
 import ProgressBar from './ui/ProgressBar.vue';
 
@@ -237,7 +232,7 @@ export function relativeTimeText(at, now = Date.now()) {
 // 撤销走同一条记录（recentOperations.undo），失败时记录留着并提示原因。
 export default {
   name: 'TaskCenterDrawer',
-  components: { AppBadge, AppBanner, AppIcon, EmptyState, ProgressBar, SystemHealthPanel },
+  components: { AppBanner, AppIcon, AppTabs, EmptyState, ProgressBar, SystemHealthPanel },
   mixins: [runtimeEventsMixin],
   props: {
     open: { type: Boolean, default: false }
@@ -257,6 +252,13 @@ export default {
     // 新的在前（recentOperations.list 的顺序）；读的是响应式状态，别处记下或撤销后这里跟着变。
     operations() {
       return recentOperations.list();
+    },
+    sectionTabs() {
+      return [
+        { key: 'tasks', label: '任务', dataTest: 'task-center-tab-tasks' },
+        { key: 'recent', label: '最近操作', count: this.operations.length || null, dataTest: 'task-center-tab-recent' },
+        { key: 'health', label: '运行状态与诊断', dataTest: 'task-center-tab-health' }
+      ];
     },
     items() {
       return asArray(this.snapshot.items);
@@ -534,8 +536,7 @@ export default {
 </script>
 
 <style scoped>
-.task-center__tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--hairline); }
-.task-center__tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
+.task-center__tabs { flex: none; padding: 0 var(--space-4); }
 .task-center-overlay {
   position: fixed;
   inset: 0;

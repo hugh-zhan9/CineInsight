@@ -1,7 +1,7 @@
 <template>
   <div class="image-batch-tags" data-test="image-batch-tags">
     <span class="image-batch-tags__count">已选 {{ selectedIDs.length }} 张</span>
-    <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="image-batch-select-all" @click="$emit('update:selectedIDs', allSelected ? [] : imageIDs)">{{ allSelected ? '取消选择' : '全选已加载' }}</button>
+    <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="image-batch-select-all" @click="$emit('update:selectedIDs', allSelected ? [] : imageIDs)">{{ allSelected ? '取消选择' : selectAllLabel }}</button>
     <button type="button" class="btn btn--secondary btn--sm" :disabled="!selectedIDs.length || busy" data-test="image-batch-tag-open" @click="open">批量添加标签</button>
     <div v-if="opened" class="image-batch-tags__picker">
       <input v-model="keyword" class="search-input" placeholder="搜索标签" aria-label="搜索批量添加的标签" :disabled="busy" />
@@ -17,6 +17,8 @@
 </template>
 <script>
 import { GetAllTags, BatchAddTagToImages } from '../../wailsjs/go/main/App';
+import { selectAllMatchingLabel } from './ui/SelectionBar.vue';
+// 「全选当前结果（N）」（D-UD-10 实施修订）：这里没有结果总数，当前结果就是列出来的 imageIDs，N 是它们的张数。
 export default {
   name: 'ImageBatchTagControls',
   props: { imageIDs: { type: Array, required: true }, selectedIDs: { type: Array, required: true } },
@@ -24,6 +26,7 @@ export default {
   data: () => ({ tags: [], keyword: '', opened: false, loading: false, busy: false, error: '', notice: '' }),
   computed: {
     allSelected() { return this.imageIDs.length > 0 && this.imageIDs.every(id => this.selectedIDs.includes(id)); },
+    selectAllLabel() { return selectAllMatchingLabel(this.imageIDs.length); },
     filteredTags() { const q = this.keyword.trim().toLowerCase(); return this.tags.filter(tag => !tag.automatic_kind && tag.name.toLowerCase().includes(q)); }
   },
   beforeUnmount() { this._disposed = true; },

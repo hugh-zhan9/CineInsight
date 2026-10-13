@@ -137,8 +137,10 @@ assert.match(componentSource, /renameConfirm/);
 assert.match(componentSource, /ListSameSourceRelations/);
 assert.match(componentSource, /MarkSameSourceRelationRead/);
 assert.match(componentSource, /RejectSameSourceRelation/);
-assert.match(componentSource, /data-test="ai-candidate-review-tab"/, 'AI tag candidates should have a dedicated workbench tab');
-assert.match(componentSource, /data-test="same-source-review-tab"/, 'same-source candidates should have a dedicated workbench tab');
+// 三个待审工作台是 AppTabs（D-UD-06），钩子写在页签的 dataTest 字段里（AppTabs 渲染成该页签的 data-test）。
+assert.match(componentSource, /<AppTabs v-model="reviewSection"/, 'the workbench sections should be the shared AppTabs');
+assert.match(componentSource, /key: 'tags', [^}]*dataTest: 'ai-candidate-review-tab'/, 'AI tag candidates should have a dedicated workbench tab');
+assert.match(componentSource, /key: 'same-source', [^}]*dataTest: 'same-source-review-tab'/, 'same-source candidates should have a dedicated workbench tab');
 assert.match(componentSource, /relation\.video_a\?\.path/, 'same-source review should show the original A path');
 assert.match(componentSource, /relation\.video_b\?\.path/, 'same-source review should show the original B path');
 assert.match(componentSource, /thumbnailURL\(relation\.video_a_id\)/, 'same-source review should show the A thumbnail');

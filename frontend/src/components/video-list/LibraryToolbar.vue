@@ -7,18 +7,14 @@
          第二行放跟着列表内容走的标签筛选与选择动作。 -->
     <div class="toolbar">
       <div class="toolbar-row">
-        <div class="segmented" role="group" aria-label="搜索模式">
-          <button
-            v-for="mode in searchModeOptions"
-            :key="mode.value"
-            type="button"
-            :class="['segmented__btn', { active: searchMode === mode.value }]"
-            :disabled="mode.value === 'semantic' && !semanticAvailable"
-            :title="mode.value === 'semantic' && !semanticAvailable ? semanticUnavailableNotice : null"
-            :data-test="`search-mode-${mode.value}`"
-            @click="$emit('set-search-mode', mode.value)"
-          >{{ mode.label }}</button>
-        </div>
+        <!-- 搜索模式（D-UD-06 SegmentedControl）：每个选项带 search-mode-* 钩子；语义能力不可用时置灰并说明原因。 -->
+        <SegmentedControl
+          class="search-mode"
+          label="搜索模式"
+          :options="searchModeSegments"
+          :model-value="searchMode"
+          @update:model-value="$emit('set-search-mode', $event)"
+        />
 
         <div class="search-field">
           <input
@@ -499,6 +495,18 @@ export default {
     selectAllButtonLabel() {
       if (this.allMatchingSelected && !this.selectingAll) return '取消选择';
       return selectAllMatchingLabel(this.selectAllTotal, this.selectingAll);
+    },
+    // 搜索模式的分段选项：语义能力不可用时那一项置灰，悬停说明原因。
+    searchModeSegments() {
+      return this.searchModeOptions.map(mode => {
+        const unavailable = mode.value === 'semantic' && !this.semanticAvailable;
+        return {
+          ...mode,
+          disabled: unavailable,
+          title: unavailable ? this.semanticUnavailableNotice : '',
+          dataTest: `search-mode-${mode.value}`
+        };
+      });
     },
 	tagGroups() {
 	  const groups = new Map();
@@ -1020,39 +1028,6 @@ export default {
 .tag-category-label__count { color: var(--text-muted); font-size: var(--fs-caption); }
 .tag-browser__empty { color: var(--text-muted); font-size: var(--fs-caption); }
 
-/* 搜索模式分段器：每个选项带 data-test（search-mode-* 在 data-test 基线里），统一的 SegmentedControl
-   还不能逐项带 data-test，先保留这一份、外观与它一致（缺口已报，C 组加透传后换掉）。布局与行高已用 SegmentedControl。 */
-.segmented {
-  display: inline-flex;
-  flex: none;
-  height: var(--h-unit);
-  padding: 2px;
-  gap: 2px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-}
-
-.segmented__btn {
-  padding: 0 var(--space-3);
-  border: 0;
-  border-radius: calc(var(--radius-sm) - 2px);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--fs-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.segmented__btn:hover:not(:disabled) { color: var(--text-primary); }
-.segmented__btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.segmented__btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
-
-.segmented__btn.active {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-weight: var(--fw-semibold);
-  box-shadow: var(--shadow-segment);
-}
 
 .search-field {
   position: relative;

@@ -1,5 +1,5 @@
 <template>
-  <button type="button" class="notes-thumb" :disabled="!clickable" :title="title" data-test="notes-thumb" @click="$emit('open')">
+  <button type="button" class="btn-plain notes-thumb" :disabled="!clickable" :title="title" data-test="notes-thumb" @click="$emit('open')">
     <img v-if="src && !failed" :src="src" alt="" loading="lazy" decoding="async" data-test="notes-thumb-image" @error="failed = true" />
     <span v-else class="notes-thumb__fallback" data-test="notes-thumb-fallback">{{ src ? '暂无预览' : fallback }}</span>
   </button>

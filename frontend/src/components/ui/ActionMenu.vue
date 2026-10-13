@@ -2,7 +2,7 @@
   <div class="action-menu" @click.stop>
     <button
       type="button"
-      class="btn-secondary action-menu__trigger"
+      class="btn btn--secondary action-menu__trigger"
       :aria-expanded="open ? 'true' : 'false'"
       @click="toggle"
     >
@@ -56,14 +56,14 @@ export default {
 .action-menu__chevron {
   margin-left: 2px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .action-menu__panel {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 160;
+  z-index: var(--z-menu);
   min-width: 168px;
   padding: 6px;
   border-radius: var(--radius-md);

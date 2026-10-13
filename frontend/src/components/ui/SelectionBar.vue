@@ -5,11 +5,11 @@
       v-if="canSelectAllMatching"
       type="button"
       class="btn-link"
-      data-test="selection-bar-select-all-matching"
+      :data-test="selectAllDataTest"
       :disabled="selectingAll"
       @click="$emit('select-all-matching')"
     >{{ selectAllLabel }}</button>
-    <button type="button" class="btn-link" data-test="selection-bar-clear" @click="$emit('clear')">
+    <button type="button" class="btn-link" :data-test="clearDataTest" @click="$emit('clear')">
       取消选择<kbd v-if="clearOnEscape" class="ui-selection-bar__kbd">Esc</kbd>
     </button>
     <div v-if="$slots.actions" class="ui-selection-bar__actions"><slot name="actions" /></div>
@@ -29,6 +29,8 @@ export function selectAllMatchingLabel(total, selecting = false) {
 // 文案全站固定；Esc 发 clear（有对话框开着、焦点在输入框里、按键已被别人处理、或宿主被 v-show 藏起来时不抢）。
 // 清理审阅的勾选是审阅结果而不是临时选择，宿主传 clear-on-escape=false 关掉 Esc 清空（「取消选择」照旧）。
 // actions 插槽放批量动作按钮（主操作放最后）。宿主负责把它放在滚动内容的末尾，吸底靠 position: sticky。
+// 两个内置链接的 data-test 默认是 selection-bar-select-all-matching / selection-bar-clear；宿主要保留自己原有的
+// 测试钩子时用 select-all-data-test / clear-data-test 换掉（例如图片库的 photo-select-all / photo-clear-selection）。
 export default {
   name: 'SelectionBar',
   props: {
@@ -37,7 +39,9 @@ export default {
     allMatchingSelected: { type: Boolean, default: false },
     // 宿主正在为「全选当前结果」补取剩余的页：按钮禁用并写「正在选择…」。
     selectingAll: { type: Boolean, default: false },
-    clearOnEscape: { type: Boolean, default: true }
+    clearOnEscape: { type: Boolean, default: true },
+    selectAllDataTest: { type: String, default: 'selection-bar-select-all-matching' },
+    clearDataTest: { type: String, default: 'selection-bar-clear' }
   },
   emits: ['select-all-matching', 'clear'],
   computed: {

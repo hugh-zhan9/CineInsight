@@ -7,12 +7,7 @@
     "vars": {},
     "dialogs": {},
     "page-header": {},
-    "wording": {
-      "components/ImageBatchTagControls.vue": 1,
-      "components/PhotoLibraryPage.vue": 1
-    },
-    "buttons": {
-      "components/PhotoLibraryPage.vue": 5
-    }
+    "wording": {},
+    "buttons": {}
   }
 }

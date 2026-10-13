@@ -20,11 +20,8 @@
            352px 常驻只读面板。判断一条候选值不值得批准时，命中率就在旁边。 -->
       <div :class="['ai-review-split', { 'ai-review-split--with-quality': qualityEnabled }]">
         <div class="ai-review-main">
-        <nav class="ai-review-type-tabs" aria-label="待审工作台类型">
-          <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ pendingCandidateTotal }}</span></button>
-          <button type="button" :class="{ active: reviewSection === 'same-source' }" data-test="same-source-review-tab" @click="reviewSection = 'same-source'">视频同源待审 <span>{{ pendingSameSourceCount }}</span></button>
-          <button type="button" :class="{ active: reviewSection === 'face' }" data-test="face-cluster-review-tab" @click="reviewSection = 'face'">人物候选</button>
-        </nav>
+        <!-- 三个待审工作台（D-UD-06 AppTabs）：条数写全（后端汇总的总数，META-08），不截成 99+。 -->
+        <AppTabs v-model="reviewSection" class="ai-review-type-tabs" :tabs="reviewTabs" aria-label="待审工作台类型" />
 
         <!-- 人物候选自带说明与刷新（它的数据与 AI 标签候选不是同一批），
              所以这一行工具条只属于另外两个页签。 -->
@@ -292,6 +289,7 @@ import ReviewCandidateWindow from './ReviewCandidateWindow.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import AppIcon from './ui/AppIcon.vue';
+import AppTabs from './ui/AppTabs.vue';
 import DialogShell from './ui/DialogShell.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { appendCandidates, applyReviewCandidateRefresh, reviewOutcomeCandidateIDs, approvableCandidateIDs, candidateTagOptions, confidenceMeta, createRejectVideoConfirm, filterCandidatesByAttributes, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia, removeCandidatesForManualTags } from '../utils/aiTagReview.js';
@@ -300,7 +298,7 @@ import { confirmAction } from '../utils/feedback.js';
 
 export default {
   name: 'AITagReviewDialog',
-  components: { ReviewCandidateWindow, AIReviewBatchControls, AddTagDialog, AIQualityPanel, AppIcon, DialogShell, FaceClusterReviewPanel, TrashUndoBanner },
+  components: { ReviewCandidateWindow, AIReviewBatchControls, AddTagDialog, AIQualityPanel, AppIcon, AppTabs, DialogShell, FaceClusterReviewPanel, TrashUndoBanner },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] },
@@ -375,6 +373,13 @@ export default {
       return [...options.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
     // 待审总数取后端汇总（META-08）；汇总还没回来时退回已加载条数。
+    reviewTabs() {
+      return [
+        { key: 'tags', label: 'AI 标签待审', count: String(this.pendingCandidateTotal), dataTest: 'ai-candidate-review-tab' },
+        { key: 'same-source', label: '视频同源待审', count: String(this.pendingSameSourceCount), dataTest: 'same-source-review-tab' },
+        { key: 'face', label: '人物候选', dataTest: 'face-cluster-review-tab' }
+      ];
+    },
     pendingCandidateTotal() {
       if (typeof this.summary?.pending === 'number') return this.summary.pending;
       return `${this.candidates.length}${this.candidateCursor ? '+' : ''}`;
@@ -908,43 +913,7 @@ export default {
   min-width: 0;
 }
 
-.ai-review-type-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding-top: 12px;
-}
-
-.ai-review-type-tabs button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 38px;
-  padding: 0 10px;
-  white-space: nowrap;
-  border: 1px solid var(--border-color);
-  border-radius: 9px;
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.ai-review-type-tabs button.active {
-  border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
-  background: var(--accent-soft);
-  color: var(--accent-color);
-  font-weight: 700;
-}
-
-.ai-review-type-tabs span {
-  min-width: 22px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-size: var(--fs-caption);
-}
+.ai-review-type-tabs { margin-top: var(--space-3); }
 
 .same-source-help {
   flex: 1;

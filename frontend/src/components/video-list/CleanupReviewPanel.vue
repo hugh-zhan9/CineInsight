@@ -22,26 +22,32 @@
         </div>
       </div>
 
-      <div v-if="!cleanupDialog.loading" class="cleanup-filter-bar">
+      <!-- 类别筛选（D-UD-06 FilterChip）：一次只看一类，条数写在名字后面；还没算完的类别再跟一段覆盖度。 -->
+      <div v-if="!cleanupDialog.loading" class="cleanup-filter-bar" role="group" aria-label="按类别查看">
         <template v-if="cleanupDialog.analysis">
-          <button
+          <FilterChip
             v-for="option in cleanupCategoryOptions"
             :key="option.key"
-            type="button"
-            :class="['cleanup-chip', { active: cleanupCategory === option.key }]"
+            :label="option.label"
+            :active="cleanupCategory === option.key"
+            :count="option.key !== 'all' ? option.count : null"
             :title="option.hint"
-            data-test="cleanup-category"
-            @click="selectCleanupCategory(option.key)"
-          >{{ option.label }}<span v-if="option.key !== 'all'" class="cleanup-chip__count">{{ option.count }}</span><span v-if="option.coverage" class="cleanup-chip__coverage" data-test="cleanup-coverage-chip">{{ option.coverage }}</span></button>
+            toggle-data-test="cleanup-category"
+            @toggle="selectCleanupCategory(option.key)"
+          >
+            <template v-if="option.coverage" #count>
+              <span>{{ option.count }}</span><span class="cleanup-chip__coverage" data-test="cleanup-coverage-chip">{{ option.coverage }}</span>
+            </template>
+          </FilterChip>
         </template>
         <!-- 「已忽略」页签（D-PC31）：不依赖本轮结果，分析被取消或失败时也能进来撤销。 -->
-        <button
-          type="button"
-          :class="['cleanup-chip', { active: cleanupCategory === 'dismissed' }]"
+        <FilterChip
+          label="已忽略"
+          :active="cleanupCategory === 'dismissed'"
           title="「不是重复」「移出本组」「忽略」留下的记录，可以撤销"
-          data-test="cleanup-dismissed-tab"
-          @click="selectCleanupCategory('dismissed')"
-        >已忽略</button>
+          toggle-data-test="cleanup-dismissed-tab"
+          @toggle="selectCleanupCategory('dismissed')"
+        />
         <div class="cleanup-header__spacer"></div>
         <button type="button" class="btn btn--secondary btn--sm" :disabled="cleanupDialog.loading || cleanupDialog.processing" @click="reanalyzeCleanupCandidates">重新分析</button>
       </div>
@@ -496,6 +502,7 @@ import {
 } from '../../../wailsjs/go/main/App';
 import AppBanner from '../ui/AppBanner.vue';
 import DialogShell from '../ui/DialogShell.vue';
+import FilterChip from '../ui/FilterChip.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import CleanupConsolidationDialog from './CleanupConsolidationDialog.vue';
@@ -536,7 +543,7 @@ function emptyDeleteConfirm() {
 // 这样原来的 await 顺序不用拆散。
 export default {
   name: 'CleanupReviewPanel',
-  components: { AppBanner, DialogShell, ProgressBar, SegmentedControl, CleanupThumbnail, CleanupConsolidationDialog },
+  components: { AppBanner, DialogShell, FilterChip, ProgressBar, SegmentedControl, CleanupThumbnail, CleanupConsolidationDialog },
   mixins: [runtimeEventsMixin],
   props: {
     // 「重算感知哈希」按钮的运行态来自父组件的后台任务状态条。
@@ -1794,26 +1801,6 @@ export default {
   background: var(--panel-subtle-bg);
 }
 
-.cleanup-chip {
-  min-height: 26px;
-  height: auto;
-  padding: 3px 10px;
-  flex: none;
-  white-space: nowrap;
-  line-height: 18px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--panel-bg);
-  color: var(--text-secondary);
-  font-size: var(--fs-caption);
-  cursor: pointer;
-}
-
-.cleanup-chip.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
-.cleanup-chip__count { font-family: var(--font-mono); }
 
 
 .cleanup-split { display: grid; grid-template-columns: 268px minmax(0, 1fr); min-height: 0; height: 100%; }

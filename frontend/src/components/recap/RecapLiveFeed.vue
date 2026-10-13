@@ -3,7 +3,7 @@
     <li v-for="item in items" :key="itemKey(item)" class="recap-feed__item">
       <button
         type="button"
-        class="recap-feed__open"
+        class="btn-plain recap-feed__open"
         :disabled="!item.available"
         :data-test="`recap-feed-${item.kind}`"
         @click="$emit('open', item)"

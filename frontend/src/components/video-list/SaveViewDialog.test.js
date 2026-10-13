@@ -78,6 +78,22 @@ describe('保存视图弹窗（D-PC35）', () => {
     wrapper.unmount();
   });
 
+  it('保存方式是 SegmentedControl：点「重命名」切到改名并带出最近应用的视图名，点当前方式不重置已改的名字', async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.open();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[role="radiogroup"]').attributes('aria-label')).toBe('保存方式');
+    expect(wrapper.get('[data-test="save-view-mode-create"]').attributes('aria-checked')).toBe('true');
+    await wrapper.get('[data-test="save-view-mode-rename"]').trigger('click');
+    expect(wrapper.vm.saveViewDialog.mode).toBe('rename');
+    expect(wrapper.vm.saveViewDialog.name).toBe('收藏大文件');
+    expect(wrapper.get('[data-test="save-view-mode-rename"]').attributes('aria-checked')).toBe('true');
+    await wrapper.get('[data-test="save-view-name"]').setValue('收藏的大文件');
+    await wrapper.get('[data-test="save-view-mode-rename"]').trigger('click');
+    expect(wrapper.vm.saveViewDialog.name).toBe('收藏的大文件');
+    wrapper.unmount();
+  });
+
   it('还没有保存视图时只能新建，不显示模式切换', async () => {
     const wrapper = mountDialog({ savedViews: [], activeViewId: 0 });
     wrapper.vm.open('update');

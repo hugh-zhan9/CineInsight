@@ -2,8 +2,9 @@
   <main class="page-content viewing-notes-page" data-test="viewing-notes-page">
     <PageHeader title="观看笔记" subtitle="观影日记、片段书签，以及无法确认观看的播放记录。">
       <template #actions><button type="button" class="btn btn--primary" data-test="diary-add" @click="editor = {}">手动补记</button></template>
+      <!-- 三个分区（D-UD-06 AppTabs），每个页签带 notes-tab-* 钩子。 -->
+      <template #below><AppTabs v-model="tab" :tabs="tabs" aria-label="观看笔记分类" /></template>
     </PageHeader>
-    <nav class="notes-tabs" aria-label="观看笔记分类"><button v-for="item in tabs" :key="item.key" type="button" :class="['notes-tabs__tab', { 'notes-tabs__tab--on': tab === item.key }]" :aria-pressed="tab === item.key" :data-test="`notes-tab-${item.key}`" @click="tab = item.key">{{ item.label }}</button></nav>
     <BookmarkPanel v-if="tab === 'bookmarks'" :page-active="pageActive" @open-bookmark="$emit('open-bookmark', $event)" @open-video="$emit('open-video', $event)" />
     <template v-else>
       <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reset">刷新</button></div>
@@ -50,13 +51,14 @@ import { ListViewingDiary, DeleteViewingDiary, GetViewingYearReview, ListUnconfi
 import BookmarkPanel from './BookmarkPanel.vue';
 import DiaryEditor from './DiaryEditor.vue';
 import NotesThumb from './NotesThumb.vue';
+import AppTabs from './ui/AppTabs.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction } from '../utils/feedback.js';
 export default {
-  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
-  data: () => ({ tabs: [{ key: 'diary', label: '观影日记' }, { key: 'bookmarks', label: '片段书签' }, { key: 'history', label: '播放记录' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
+  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { AppTabs, BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
+  data: () => ({ tabs: [{ key: 'diary', label: '观影日记', dataTest: 'notes-tab-diary' }, { key: 'bookmarks', label: '片段书签', dataTest: 'notes-tab-bookmarks' }, { key: 'history', label: '播放记录', dataTest: 'notes-tab-history' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
   watch: { pageActive(active) { if (active) { this.load(); this.loadReview(); } }, tab() { this.reset(); }, year() { this.reset(); }, keyword() { this.reset(); } },
   mounted() { this.reset(); }, beforeUnmount() { this.generation++; this.reviewGeneration++; this._disposed = true; },
   methods: {
@@ -96,13 +98,6 @@ export default {
 </script>
 <style scoped>
 .viewing-notes-page { display: grid; gap: 12px; align-content: start; overflow: auto; box-sizing: border-box; }
-/* 外观照 AppTabs（页签要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
-   AppTabs 支持逐项钩子后换成组件，删掉这几条）。 */
-.notes-tabs { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-5); border-bottom: 1px solid var(--hairline); }
-.notes-tabs__tab { display: inline-flex; align-items: center; gap: 6px; height: var(--h-unit); margin-bottom: -1px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-body); font-weight: var(--fw-medium); cursor: pointer; white-space: nowrap; }
-.notes-tabs__tab:hover { color: var(--text-primary); }
-.notes-tabs__tab--on { border-bottom-color: var(--accent-color); color: var(--text-primary); font-weight: var(--fw-semibold); }
-.notes-tabs__tab:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; border-radius: var(--radius-sm); }
 .notes-filters { margin-bottom: 0; }
 .notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; }
 .notes-year .number-input { width: 96px; }

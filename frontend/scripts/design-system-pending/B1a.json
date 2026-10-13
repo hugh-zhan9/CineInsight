@@ -11,10 +11,6 @@
     "dialogs": {},
     "page-header": {},
     "wording": {},
-    "buttons": {
-      "components/TrashCenterDialog.vue": 1,
-      "components/video-list/CleanupReviewPanel.vue": 2,
-      "components/video-list/LibraryToolbar.vue": 1
-    }
+    "buttons": {}
   }
 }

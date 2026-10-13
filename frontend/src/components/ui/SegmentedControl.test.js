@@ -104,6 +104,27 @@ describe('SegmentedControl', () => {
     wrapper.unmount();
   });
 
+  it('each option carries its own dataTest as data-test; the group keeps the host data-test', async () => {
+    const options = [
+      { value: 'name', label: '文件名', dataTest: 'photo-mode-name' },
+      { value: 'semantic', label: '语义', dataTest: 'photo-mode-semantic', disabled: true, title: '语义搜索不可用' },
+      { value: 'other', label: '其他' }
+    ];
+    const wrapper = mountControl('name', { options });
+    const radios = wrapper.findAll('[role="radio"]');
+    expect(radios.map(radio => radio.attributes('data-test'))).toEqual(['photo-mode-name', 'photo-mode-semantic', undefined]);
+    expect(wrapper.attributes('data-test')).toBe('view-switch');
+    const semantic = wrapper.get('[data-test="photo-mode-semantic"]');
+    expect(semantic.attributes('disabled')).toBeDefined();
+    expect(semantic.attributes('title')).toBe('语义搜索不可用');
+    await semantic.trigger('click');
+    await wrapper.get('[data-test="photo-mode-name"]').trigger('click');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+    await radios[2].trigger('click');
+    expect(wrapper.emitted('update:modelValue')).toEqual([['other']]);
+    wrapper.unmount();
+  });
+
   it('← on the first option wraps to the last one', async () => {
     const wrapper = mountControl('list');
     await wrapper.get('[role="radiogroup"]').trigger('keydown', { key: 'ArrowLeft' });

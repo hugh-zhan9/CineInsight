@@ -9,16 +9,11 @@
       "components/CommandPalette.vue": 4,
       "components/QuitConfirmDialog.vue": 5,
       "components/WallpaperStatusBar.vue": 1,
-      "components/ui/ActionMenu.vue": 1,
-      "components/ui/BaseMenu.vue": 4,
-      "components/ui/StatTile.vue": 9,
       "styles/components.css": 56
     },
     "z-index": {
       "App.vue": 2,
       "components/AppFeedback.vue": 2,
-      "components/ui/ActionMenu.vue": 1,
-      "components/ui/BasePopover.vue": 1,
       "styles/components.css": 1
     },
     "vars": {},
@@ -33,9 +28,7 @@
       "App.vue": 7,
       "components/CommandPalette.vue": 1,
       "components/QuitConfirmDialog.vue": 2,
-      "components/WallpaperStatusBar.vue": 1,
-      "components/ui/ActionMenu.vue": 1,
-      "components/ui/BaseMenu.vue": 1
+      "components/WallpaperStatusBar.vue": 1
     }
   }
 }

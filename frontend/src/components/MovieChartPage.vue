@@ -11,14 +11,8 @@
         </select>
       </label>
 
-      <div class="movie-chart-sort" role="group" aria-label="榜单排序">
-        <button type="button" :class="['movie-chart-sort-btn', { active: sort === 'release' }]"
-          :disabled="busy || loading" data-test="movie-chart-sort-release"
-          @click="switchSort('release')">按上映时间</button>
-        <button type="button" :class="['movie-chart-sort-btn', { active: sort === 'rating' }]"
-          :disabled="busy || loading" data-test="movie-chart-sort-rating"
-          @click="switchSort('rating')">按评分</button>
-      </div>
+      <!-- 排序（D-UD-06 SegmentedControl），每项带 movie-chart-sort-* 钩子；取数时锁住。 -->
+      <SegmentedControl label="榜单排序" :options="sortOptions" :model-value="sort" @update:model-value="switchSort" />
 
       <label class="movie-chart-toggle">
         <input v-model="showMarked" type="checkbox" :disabled="busy || loading"
@@ -117,6 +111,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
@@ -151,7 +146,7 @@ const EMPTY_BACKFILL = { pending: 0, total: 0 };
 
 export default {
   name: 'MovieChartPage',
-  components: { EmptyState, PageHeader, SkeletonBlock },
+  components: { EmptyState, PageHeader, SegmentedControl, SkeletonBlock },
   data() {
     const currentYear = new Date().getFullYear();
     return {
@@ -178,6 +173,13 @@ export default {
     };
   },
   computed: {
+    sortOptions() {
+      const disabled = this.busy || this.loading;
+      return [
+        { value: 'release', label: '按上映时间', disabled, dataTest: 'movie-chart-sort-release' },
+        { value: 'rating', label: '按评分', disabled, dataTest: 'movie-chart-sort-rating' }
+      ];
+    },
     totalPages() {
       return Math.max(1, Math.ceil(this.total / (this.pageSize || 20)));
     },
@@ -484,12 +486,6 @@ export default {
 .movie-chart-field .select-input { width: auto; min-width: 108px; }
 /* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
    SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
-.movie-chart-sort { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
-.movie-chart-sort-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
-.movie-chart-sort-btn:hover:not(:disabled) { color: var(--text-primary); }
-.movie-chart-sort-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.movie-chart-sort-btn.active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
-.movie-chart-sort-btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 .movie-chart-toggle { display: flex; align-items: center; gap: 6px; font-size: var(--fs-secondary); }
 .movie-chart-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
 .movie-chart-toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }

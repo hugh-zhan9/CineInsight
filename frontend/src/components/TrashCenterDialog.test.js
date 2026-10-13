@@ -84,8 +84,21 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     expect(usage).toContain('废纸篓中占用 2.0 GB');
     expect(usage).toContain('旧版回收站目录');
     expect(usage).toContain('1 条的文件已从废纸篓清除');
-    expect(wrapper.get('[data-test="trash-tab-video"]').text()).toBe('视频（3）');
-    expect(wrapper.get('[data-test="trash-tab-staged"]').text()).toBe('迁移残留（1）');
+    // 页签是 AppTabs：名称后面是条数徽标（写全，不截成 99+）；扫描隐藏没有条数。
+    expect(wrapper.get('[data-test="trash-tab-video"]').attributes('role')).toBe('tab');
+    expect(wrapper.get('[data-test="trash-tab-video"]').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('[data-test="trash-tab-video"]').text()).toBe('视频3');
+    expect(wrapper.get('[data-test="trash-tab-video"] .ui-tabs__count').text()).toBe('3');
+    expect(wrapper.get('[data-test="trash-tab-staged"]').text()).toBe('迁移残留1');
+    expect(wrapper.find('[data-test="trash-tab-hidden"] .ui-tabs__count').exists()).toBe(false);
+    expect(wrapper.get('[role="tabpanel"]').attributes('aria-labelledby')).toBe('trash-center-tab-video');
+    await wrapper.get('[data-test="trash-tab-staged"]').trigger('click');
+    await flushPromises();
+    expect(api.ListStagedSources).toHaveBeenCalled();
+    expect(wrapper.get('[data-test="trash-tab-staged"]').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('[role="tabpanel"]').attributes('id')).toBe('trash-center-panel-staged');
+    await wrapper.get('[data-test="trash-tab-video"]').trigger('click');
+    await flushPromises();
 
     api.ListTrashEntries.mockResolvedValueOnce(page([entry(7)]));
     await wrapper.get('[data-test="trash-load-more"]').trigger('click');

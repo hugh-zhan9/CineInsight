@@ -6,21 +6,10 @@
     <p v-if="usageError" class="trash-center-usage trash-center-error" role="alert">{{ usageError }}</p>
     <p v-else-if="usageText" class="trash-center-usage" data-test="trash-usage">{{ usageText }}</p>
 
-    <!-- 页签每项带 data-test（trash-tab-*），统一的 AppTabs 还不能逐项带，先保留这一份、样式与 AppTabs 一致（缺口已报）。 -->
-    <div class="trash-center-tabs" role="tablist" aria-label="回收站分类">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        type="button"
-        role="tab"
-        :aria-selected="activeTab === tab.key"
-        :class="['trash-center-tab', { 'trash-center-tab--active': activeTab === tab.key }]"
-        :data-test="`trash-tab-${tab.key}`"
-        @click="selectTab(tab.key)"
-      >{{ tab.label }}<template v-if="tab.count != null">（{{ tab.count }}）</template></button>
-    </div>
+    <!-- 页签（D-UD-06 AppTabs）：每项带 trash-tab-* 钩子；条数写全（不截成 99+），用量取回之前不显示。 -->
+    <AppTabs class="trash-center-tabs" :tabs="tabs" :model-value="activeTab" id-prefix="trash-center" aria-label="回收站分类" @update:model-value="selectTab" />
 
-    <section v-if="isEntryTab" class="trash-center-panel" role="tabpanel">
+    <section v-if="isEntryTab" v-bind="tabPanelAttrs" class="trash-center-panel">
       <div class="trash-center-filters">
         <select v-model="currentFilter.mode" class="select-input" aria-label="删除方式" data-test="trash-filter-mode" @change="reloadEntries(activeTab)">
           <option v-for="option in modeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
@@ -119,7 +108,7 @@
       </div>
     </section>
 
-    <section v-else-if="activeTab === 'hidden'" class="trash-center-panel" role="tabpanel">
+    <section v-else-if="activeTab === 'hidden'" v-bind="tabPanelAttrs" class="trash-center-panel">
       <p class="trash-center-muted">扫描时文件不在原处、所在磁盘未连接或目录已移出扫描范围的图片会被隐藏，这里列出它们和原因。图片暂不支持单独检查，「重新检查」会重新扫描全部图片目录，文件回来的图片自动恢复。</p>
       <div class="trash-center-bulk">
         <label class="trash-center-select-all">
@@ -159,7 +148,7 @@
       </div>
     </section>
 
-    <section v-else class="trash-center-panel" role="tabpanel">
+    <section v-else v-bind="tabPanelAttrs" class="trash-center-panel">
       <p class="trash-center-muted">跨盘迁移时，原位置保留了一份隐藏的源文件作为保险。确认新位置的文件正常后，可以把它移到废纸篓，或直接永久删除。</p>
       <div class="trash-center-bulk">
         <label class="trash-center-select-all">
@@ -229,6 +218,7 @@ import { deletionActor } from '../utils/deletionActor.js';
 import { confirmAction, confirmTextMatches, feedbackState } from '../utils/feedback.js';
 import AppBanner from './ui/AppBanner.vue';
 import AppSpinner from './ui/AppSpinner.vue';
+import AppTabs from './ui/AppTabs.vue';
 import DialogShell from './ui/DialogShell.vue';
 import EmptyState from './ui/EmptyState.vue';
 
@@ -305,7 +295,7 @@ const TAB_KEYS = ['video', 'image', 'hidden', 'staged'];
 
 export default {
   name: 'TrashCenterDialog',
-  components: { AppBanner, AppSpinner, DialogShell, EmptyState },
+  components: { AppBanner, AppSpinner, AppTabs, DialogShell, EmptyState },
   props: {
     visible: { type: Boolean, default: false },
     // 打开时停在哪个页签：video / image / hidden / staged。
@@ -346,12 +336,17 @@ export default {
   computed: {
     tabs() {
       const usage = this.usage;
+      const count = value => (usage ? String(Number(value?.count || 0)) : null);
       return [
-        { key: 'video', label: '视频', count: usage ? Number(usage.video?.count || 0) : null },
-        { key: 'image', label: '图片', count: usage ? Number(usage.image?.count || 0) : null },
-        { key: 'hidden', label: '扫描隐藏', count: null },
-        { key: 'staged', label: '迁移残留', count: usage ? Number(usage.staged?.count || 0) : null }
+        { key: 'video', label: '视频', count: count(usage?.video), dataTest: 'trash-tab-video' },
+        { key: 'image', label: '图片', count: count(usage?.image), dataTest: 'trash-tab-image' },
+        { key: 'hidden', label: '扫描隐藏', count: null, dataTest: 'trash-tab-hidden' },
+        { key: 'staged', label: '迁移残留', count: count(usage?.staged), dataTest: 'trash-tab-staged' }
       ];
+    },
+    // 当前页签对应的面板：与 AppTabs 的 id-prefix 对上（trash-center-tab-* / trash-center-panel-*）。
+    tabPanelAttrs() {
+      return { id: `trash-center-panel-${this.activeTab}`, role: 'tabpanel', 'aria-labelledby': `trash-center-tab-${this.activeTab}` };
     },
     isEntryTab() {
       return this.activeTab === 'video' || this.activeTab === 'image';
@@ -910,40 +905,7 @@ export default {
 .trash-center-hint,
 .trash-center-usage { margin-bottom: var(--space-3); }
 
-/* 页签：与 AppTabs 同一外观（下划线式）。 */
-.trash-center-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-5);
-  margin-bottom: var(--space-3);
-  border-bottom: 1px solid var(--hairline);
-}
-
-.trash-center-tab {
-  display: inline-flex;
-  align-items: center;
-  height: var(--h-unit);
-  margin-bottom: -1px;
-  padding: 0 2px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--fs-body);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-}
-
-.trash-center-tab:hover { color: var(--text-primary); }
-.trash-center-tab:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; border-radius: var(--radius-sm); }
-
-.trash-center-tab--active {
-  border-bottom-color: var(--accent-color);
-  color: var(--text-primary);
-  font-weight: var(--fw-semibold);
-}
+.trash-center-tabs { margin-bottom: var(--space-3); }
 
 .trash-center-panel {
   min-height: 0;

@@ -61,6 +61,14 @@ describe('RecapPage', () => {
     const wrapper = await mountPage();
     expect(api.GetRecap).toHaveBeenCalledWith(thisMonth);
     expect(wrapper.get('[data-test="recap-hero-title"]').text()).toBe('《影片1》');
+    // 大图文字层是 HeroHeader（页面标题在 PageHeader，这里是 h3）；标签芯片是带颜色圆点的 TagPill。
+    expect(wrapper.get('[data-test="recap-hero-title"]').element.tagName).toBe('H3');
+    const tagChip = wrapper.get('[data-test="recap-hero-tag"]');
+    expect(tagChip.classes()).toEqual(expect.arrayContaining(['ui-tag-pill', 'recap-chip']));
+    expect(tagChip.find('.ui-tag-pill__leading .recap-chip__dot').exists()).toBe(true);
+    expect(tagChip.text()).toBe('科幻');
+    // 回顾范围是 SegmentedControl：当前月度 aria-checked。
+    expect(wrapper.get('[data-test="recap-tab-month"]').attributes('aria-checked')).toBe('true');
     expect(wrapper.get('[data-test="recap-stats"]').text()).toContain('播放次数');
     expect(wrapper.get('[data-test="recap-stats"]').text()).toContain('↑ 50%');
     expect(wrapper.findAll('[data-test="recap-title"]')).toHaveLength(1);

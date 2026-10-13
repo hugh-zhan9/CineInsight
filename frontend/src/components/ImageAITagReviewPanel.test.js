@@ -103,6 +103,9 @@ describe('ImageAITagReviewPanel server search', () => {
       await wrapper.get('[data-test="image-ai-tag-confidence-high"]').trigger('click');
       await flushPromises();
       expect(api.SearchImageAITagCandidatePage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '海岸', confidence: 'high', cursor_id: 0 }));
+      // 置信度筛选是 SegmentedControl（D-UD-06）：选中项 aria-checked。
+      expect(wrapper.get('[data-test="image-ai-tag-confidence-high"]').attributes('aria-checked')).toBe('true');
+      expect(wrapper.get('[data-test="image-ai-tag-confidence-all"]').attributes('aria-checked')).toBe('false');
       expect(api.ListImageAITagCandidatePage).toHaveBeenCalledTimes(1);
     } finally { wrapper.unmount(); vi.useRealTimers(); }
   });

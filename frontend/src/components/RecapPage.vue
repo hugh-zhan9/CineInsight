@@ -3,17 +3,8 @@
     <PageHeader class="recap-head" title="观看回顾" subtitle="只统计真实的播放与看图记录，不推算观看时长">
       <template #actions>
         <div class="recap-head__controls">
-          <nav class="recap-tabs" aria-label="回顾范围">
-            <button
-              v-for="item in tabs"
-              :key="item.key"
-              type="button"
-              :class="['recap-tabs__option', { 'recap-tabs__option--on': tab === item.key }]"
-              :aria-pressed="tab === item.key"
-              :data-test="`recap-tab-${item.key}`"
-              @click="setTab(item.key)"
-            >{{ item.label }}</button>
-          </nav>
+          <!-- 回顾范围（D-UD-06 SegmentedControl），每项带 recap-tab-* 钩子。 -->
+          <SegmentedControl label="回顾范围" :options="tabOptions" :model-value="tab" @update:model-value="setTab" />
           <div v-if="tab !== 'live'" class="recap-period">
             <button type="button" class="btn btn--secondary btn--sm" :disabled="!canBack" data-test="recap-prev" @click="shift(-1)"><AppIcon name="chevron-left" /> 上一{{ unit }}</button>
             <strong class="recap-period__label" data-test="recap-period-label">{{ periodLabel }}</strong>
@@ -39,20 +30,21 @@
 
     <template v-if="result && result.period === 'live'">
       <RecapBackdrop v-if="liveHero" :key="`live-${liveHero.video.id}`" size="medium" :frames="framesFor(liveHero.video)" :fallback="videoThumbnail(liveHero.video.id)" data-test="recap-live-hero">
+        <!-- 大图区的文字层是 HeroHeader（D-UD-06）；页面标题在上面的 PageHeader，这里用 h3。 -->
         <div class="recap-hero__body">
-          <p class="recap-hero__eyebrow"><RecapIcon name="live" /> {{ liveHero.eyebrow }}</p>
-          <h3 class="recap-hero__title">{{ liveHero.video.title || '已删除的视频' }}</h3>
-          <p class="recap-hero__meta">{{ liveHero.meta }}</p>
-          <div class="recap-hero__actions">
-            <button type="button" class="btn btn--primary" :disabled="!liveHero.video.available" data-test="recap-live-open" @click="openVideo(liveHero.video)"><AppIcon name="play" /> 打开详情</button>
-          </div>
+          <HeroHeader :title="liveHero.video.title || '已删除的视频'" :meta="liveHero.meta" :heading-level="3">
+            <template #eyebrow><RecapIcon name="live" /> {{ liveHero.eyebrow }}</template>
+            <template #actions>
+              <button type="button" class="btn btn--primary" :disabled="!liveHero.video.available" data-test="recap-live-open" @click="openVideo(liveHero.video)"><AppIcon name="play" /> 打开详情</button>
+            </template>
+          </HeroHeader>
         </div>
       </RecapBackdrop>
       <RecapBackdrop v-else size="small" data-test="recap-live-idle">
         <div class="recap-hero__body">
-          <p class="recap-hero__eyebrow"><RecapIcon name="live" /> 实时</p>
-          <h3 class="recap-hero__title recap-hero__title--quiet">{{ result.empty ? '今天还没有观看记录' : '今天的记录都在下面' }}</h3>
-          <p class="recap-hero__meta">播放一部片或在图片页看图，这里会即时更新。</p>
+          <HeroHeader quiet :title="result.empty ? '今天还没有观看记录' : '今天的记录都在下面'" meta="播放一部片或在图片页看图，这里会即时更新。" :heading-level="3">
+            <template #eyebrow><RecapIcon name="live" /> 实时</template>
+          </HeroHeader>
         </div>
       </RecapBackdrop>
 
@@ -96,22 +88,25 @@
       <template v-else>
         <RecapBackdrop v-if="hero" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="recap-hero">
           <div class="recap-hero__layout">
-            <div class="recap-hero__body">
-              <p class="recap-hero__eyebrow"><RecapIcon name="heart" /> {{ result.label }}{{ result.in_progress ? '（进行中）' : '' }} · {{ hero.eyebrow }}</p>
-              <h3 class="recap-hero__title" data-test="recap-hero-title">{{ hero.title }}</h3>
-              <p class="recap-hero__meta">{{ hero.meta }}</p>
+            <HeroHeader class="recap-hero__body" :title="hero.title" :meta="hero.meta" :heading-level="3" title-data-test="recap-hero-title">
+              <template #eyebrow><RecapIcon name="heart" /> {{ result.label }}{{ result.in_progress ? '（进行中）' : '' }} · {{ hero.eyebrow }}</template>
+              <!-- 这一期的标签、人物与作品集（D-UD-06 TagPill，前面是颜色圆点 / 头像 / 图标），点了去对应的结果。 -->
               <div v-if="hero.tags.length || hero.people.length || hero.collections.length" class="recap-hero__chips">
-                <button v-for="tag in hero.tags" :key="`t${tag.id}`" type="button" class="recap-chip" :style="{ '--chip-color': tag.color || 'var(--accent-color)' }" data-test="recap-hero-tag" @click="openTag(tag)"><i class="recap-chip__dot"></i>{{ tag.name }}</button>
-                <button v-for="person in hero.people" :key="`p${person.id}`" type="button" class="recap-chip recap-chip--person" @click="openEntity('person', person)">
-                  <img v-if="person.image_url" :src="person.image_url" alt="" /><RecapIcon v-else name="person" />{{ person.name }}
-                </button>
-                <button v-for="item in hero.collections" :key="`c${item.id}`" type="button" class="recap-chip" @click="openEntity('collection', item)"><RecapIcon name="collection" />{{ item.name }}</button>
+                <TagPill v-for="tag in hero.tags" :key="`t${tag.id}`" clickable class="recap-chip" :label="tag.name" :style="{ '--chip-color': tag.color || 'var(--accent-color)' }" data-test="recap-hero-tag" @click="openTag(tag)">
+                  <template #leading><i class="recap-chip__dot"></i></template>
+                </TagPill>
+                <TagPill v-for="person in hero.people" :key="`p${person.id}`" clickable class="recap-chip recap-chip--person" :label="person.name" @click="openEntity('person', person)">
+                  <template #leading><img v-if="person.image_url" :src="person.image_url" alt="" /><RecapIcon v-else name="person" /></template>
+                </TagPill>
+                <TagPill v-for="item in hero.collections" :key="`c${item.id}`" clickable class="recap-chip" :label="item.name" @click="openEntity('collection', item)">
+                  <template #leading><RecapIcon name="collection" /></template>
+                </TagPill>
               </div>
-              <div class="recap-hero__actions">
+              <template #actions>
                 <button type="button" class="btn btn--primary" :disabled="!hero.available" data-test="recap-hero-open" @click="hero.open()"><AppIcon name="play" /> {{ hero.action }}</button>
                 <span v-if="!hero.available" class="recap-hero__note">原文件已不在库中，记录仍然保留</span>
-              </div>
-            </div>
+              </template>
+            </HeroHeader>
             <div class="recap-hero__count" aria-hidden="true"><RecapCountUp :value="hero.count" /><small>次</small></div>
           </div>
         </RecapBackdrop>
@@ -179,7 +174,7 @@
                   v-for="item in result.top_tags"
                   :key="item.tag.id"
                   type="button"
-                  class="recap-cloud__tag"
+                  class="btn-plain recap-cloud__tag"
                   :style="{ '--chip-color': item.tag.color || 'var(--accent-color)', fontSize: `${tagCloudScale(item.weight, tagMax)}rem` }"
                   :title="`${item.tag.name} · ${item.weight} 次播放 · ${item.videos} 部`"
                   data-test="recap-tag"
@@ -190,14 +185,14 @@
             <section v-if="result.top_people.length || result.top_collections.length" v-reveal="2" class="recap-panel">
               <header class="recap-section__head"><h3><RecapIcon name="person" /> 人物与作品集</h3></header>
               <div class="recap-people">
-                <button v-for="item in result.top_people" :key="`p${item.entity.id}`" type="button" class="recap-person" :title="`${item.weight} 次播放 · ${item.videos} 部`" @click="openEntity('person', item.entity)">
+                <button v-for="item in result.top_people" :key="`p${item.entity.id}`" type="button" class="btn-plain recap-person" :title="`${item.weight} 次播放 · ${item.videos} 部`" @click="openEntity('person', item.entity)">
                   <span class="recap-person__avatar"><img v-if="item.entity.image_url" :src="item.entity.image_url" alt="" loading="lazy" /><b v-else>{{ initial(item.entity.name) }}</b></span>
                   <strong>{{ item.entity.name }}</strong><small>{{ item.weight }} 次</small>
                 </button>
               </div>
               <ul v-if="result.top_collections.length" class="recap-collections">
                 <li v-for="item in result.top_collections" :key="`c${item.entity.id}`">
-                  <button type="button" class="recap-collection" @click="openEntity('collection', item.entity)">
+                  <button type="button" class="btn-plain recap-collection" @click="openEntity('collection', item.entity)">
                     <span class="recap-collection__cover"><img v-if="item.entity.image_url" :src="item.entity.image_url" alt="" loading="lazy" /><RecapIcon v-else name="collection" /></span>
                     <strong>{{ item.entity.name }}</strong><small>{{ item.weight }} 次 · {{ item.videos }} 部</small>
                   </button>
@@ -317,7 +312,9 @@ import RecapMonthStrip from './recap/RecapMonthStrip.vue';
 import AppBanner from './ui/AppBanner.vue';
 import AppIcon from './ui/AppIcon.vue';
 import EmptyState from './ui/EmptyState.vue';
+import HeroHeader from './ui/HeroHeader.vue';
 import PageHeader from './ui/PageHeader.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import StatTile from './ui/StatTile.vue';
 import TagPill from './ui/TagPill.vue';
@@ -336,8 +333,8 @@ export default {
   name: 'RecapPage',
   mixins: [runtimeEventsMixin],
   components: {
-    AppBanner, AppIcon, EmptyState, PageHeader, RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon, RecapLiveFeed,
-    RecapMediaCard, RecapMonthStrip, SkeletonBlock, StatTile, TagPill
+    AppBanner, AppIcon, EmptyState, HeroHeader, PageHeader, RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon,
+    RecapLiveFeed, RecapMediaCard, RecapMonthStrip, SegmentedControl, SkeletonBlock, StatTile, TagPill
   },
   directives: { reveal },
   props: { pageActive: { type: Boolean, default: true } },
@@ -346,6 +343,7 @@ export default {
     return { tabs: RECAP_TABS, tab: 'month', cursor: currentCursor(), result: null, resultKey: '', loading: false, error: '', generation: 0, nowTick: Date.now() };
   },
   computed: {
+    tabOptions() { return this.tabs.map(item => ({ value: item.key, label: item.label, dataTest: `recap-tab-${item.key}` })); },
     request() { return recapRequest(this.tab, this.cursor); },
     key() { return requestKey(this.request); },
     unit() { return this.tab === 'year' ? '年' : '月'; },
@@ -580,12 +578,6 @@ export default {
 .recap-head__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
 /* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
    SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
-.recap-tabs { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
-.recap-tabs__option { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
-.recap-tabs__option:hover:not(:disabled) { color: var(--text-primary); }
-.recap-tabs__option:disabled { opacity: 0.45; cursor: not-allowed; }
-.recap-tabs__option--on { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
-.recap-tabs__option:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 .recap-period { display: inline-flex; align-items: center; gap: 10px; }
 .recap-period__label { min-width: 92px; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-align: center; font-variant-numeric: tabular-nums; }
 .recap-period__note { color: var(--text-muted); font-size: var(--fs-caption); }
@@ -614,23 +606,27 @@ export default {
   text-shadow: 0 6px 40px var(--recap-scrim);
 }
 .recap-hero__count small { font-size: var(--fs-body); font-weight: var(--fw-bold); letter-spacing: 0; color: var(--recap-hero-muted); }
-.recap-chip {
-  display: inline-flex;
-  align-items: center;
+/* 大图里的芯片是 TagPill（D-UD-06），落在压暗的画面上：两主题都是白字、半透明底（与整页详情的标签同一套 --recap-hero-*）。
+   选择器带上 .recap-hero__chips，压过 TagPill 自己的默认外观。 */
+.recap-hero__chips .recap-chip {
   gap: 6px;
+  max-width: none;
   height: 30px;
   padding: 0 12px;
-  border: 1px solid var(--recap-hero-chip-border);
-  border-radius: var(--radius-pill);
+  border-color: var(--recap-hero-chip-border);
   background: var(--recap-hero-chip);
   color: var(--recap-hero-fg);
   font-size: var(--fs-secondary);
   font-weight: var(--fw-semibold);
-  cursor: pointer;
   backdrop-filter: blur(6px);
   transition: background var(--transition), transform var(--transition);
 }
-.recap-chip:hover { background: color-mix(in srgb, var(--recap-hero-fg) 24%, transparent); transform: translateY(-1px); }
+.recap-hero__chips .recap-chip:hover {
+  border-color: var(--recap-hero-chip-border);
+  background: color-mix(in srgb, var(--recap-hero-fg) 24%, transparent);
+  color: var(--recap-hero-fg);
+  transform: translateY(-1px);
+}
 .recap-chip__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--chip-color) 35%, transparent); }
 .recap-chip--person img { width: 20px; height: 20px; margin-left: -6px; border-radius: 50%; object-fit: cover; }
 
@@ -785,6 +781,6 @@ export default {
   .recap-reveal, .recap-bars__plays, .recap-bars__views { transition: none; }
   .recap-reveal { opacity: 1; transform: none; }
   .recap-live-dot { animation: none; }
-  .recap-chip, .recap-cloud__tag { transition: none; }
+  .recap-hero__chips .recap-chip, .recap-cloud__tag { transition: none; }
 }
 </style>

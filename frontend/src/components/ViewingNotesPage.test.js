@@ -26,7 +26,10 @@ describe('ViewingNotesPage', () => {
   });
   it('history prefills only a title and saving a manual entry returns to its own year', async () => {
     api.ListUnconfirmedPlaybackHistory.mockResolvedValue({ items: [{ id: 7, video_id: 5, title: '过去的播放', played_at: '2020-01-01T00:00:00Z', source: 'desktop_play' }] });
-    const wrapper = shallowMount(ViewingNotesPage); await wrapper.get('[data-test="notes-tab-history"]').trigger('click'); await flushPromises();
+    // 分区页签是 PageHeader below 插槽里的 AppTabs（D-UD-06）：两者都不桩掉才点得到。
+    const wrapper = shallowMount(ViewingNotesPage, { global: { stubs: { PageHeader: false, AppTabs: false } } });
+    await wrapper.get('[data-test="notes-tab-history"]').trigger('click'); await flushPromises();
+    expect(wrapper.get('[data-test="notes-tab-history"]').attributes('aria-selected')).toBe('true');
     const button = wrapper.findAll('[data-test="playback-history-row"] button').find(b => b.text() === '手动补记'); await button.trigger('click');
     expect(wrapper.getComponent(DiaryEditor).props('entry')).toEqual({ title: '过去的播放' });
     wrapper.getComponent(DiaryEditor).vm.$emit('saved', { id: 88, watched_on: '2022-10-10' }); await flushPromises();

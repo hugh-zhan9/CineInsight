@@ -12,6 +12,7 @@
       :tabindex="index === focusIndex ? 0 : -1"
       :disabled="tab.disabled || undefined"
       :data-tab="tab.key"
+      :data-test="tab.dataTest || undefined"
       @click="select(tab)"
     >
       <span>{{ tab.label }}</span>
@@ -29,6 +30,9 @@ import { badgeCountText } from './AppBadge.vue';
 // 焦点照样一路往后走，不会卡在选中项上。
 // 传 idPrefix 时每个页签带 id `${idPrefix}-tab-${key}` 与 aria-controls `${idPrefix}-panel-${key}`，
 // 宿主给对应面板写 role="tabpanel"、同名 id 与 aria-labelledby。
+// 页签 { key, label, count?, disabled?, dataTest? }：dataTest 落在这个页签按钮上（data-test，宿主保留测试钩子用）；
+// count 是数字时按 AppBadge 的口径显示（超过 99 写 99+），是字符串时原样显示（「21+」这类还有下一页的数，
+// 或者必须写全的总数）。
 export default {
   name: 'AppTabs',
   props: {
@@ -46,8 +50,10 @@ export default {
     }
   },
   methods: {
-    hasCount(tab) { return typeof tab.count === 'number' && Number.isFinite(tab.count); },
-    countText(count) { return badgeCountText(count); },
+    hasCount(tab) {
+      return (typeof tab.count === 'number' && Number.isFinite(tab.count)) || (typeof tab.count === 'string' && tab.count !== '');
+    },
+    countText(count) { return typeof count === 'string' ? count : badgeCountText(count); },
     select(tab) {
       if (!tab.disabled && tab.key !== this.modelValue) this.$emit('update:modelValue', tab.key);
     },

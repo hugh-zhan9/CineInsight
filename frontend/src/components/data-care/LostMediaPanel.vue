@@ -2,17 +2,8 @@
   <!-- 失联数据（docs/loopx/design/2026-10-12-data-care，D-LD-*）：按扫描根 → 目录分组，找回、清除与孤儿文件回收。 -->
   <section class="data-care-panel lost-media" data-test="data-care-panel-lost">
     <div class="lost-toolbar">
-      <div class="lost-kinds" role="group" aria-label="媒体类型">
-        <button
-          v-for="option in KINDS"
-          :key="option.key"
-          type="button"
-          :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': kind === option.key }]"
-          :disabled="busy"
-          :data-test="`lost-kind-${option.key}`"
-          @click="setKind(option.key)"
-        >{{ option.label }}</button>
-      </div>
+      <!-- 视频 / 图片（D-UD-06 SegmentedControl），每项带 lost-kind-* 钩子；处理中锁住。 -->
+      <SegmentedControl label="媒体类型" :options="kindOptions" :model-value="kind" @update:model-value="setKind" />
       <span class="lost-muted">卷未挂载、读取出错的只展示，接上盘或下次扫描会自动恢复</span>
       <span class="lost-spacer"></span>
       <button
@@ -161,6 +152,7 @@ import { formatBytes } from '../../utils/mediaDetails.js';
 import { collectLostItems, LOST_REASON_LABELS, lostMediaErrorText, reasonChips } from '../../utils/lostMedia.js';
 import AppBanner from '../ui/AppBanner.vue';
 import EmptyState from '../ui/EmptyState.vue';
+import SegmentedControl from '../ui/SegmentedControl.vue';
 import SelectionBar from '../ui/SelectionBar.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import LostPurgeDialog from './LostPurgeDialog.vue';
@@ -174,7 +166,7 @@ const SELECTION_PENDING_TITLE = '已勾选条目，请用底部操作条';
 
 export default {
   name: 'LostMediaPanel',
-  components: { AppBanner, EmptyState, LostPurgeDialog, LostRelinkDialog, OrphanFilesSection, SelectionBar, SkeletonBlock },
+  components: { AppBanner, EmptyState, LostPurgeDialog, LostRelinkDialog, OrphanFilesSection, SegmentedControl, SelectionBar, SkeletonBlock },
   props: { directories: { type: Array, default: () => [] } },
   emits: ['open-video-id', 'run-command', 'videos-changed', 'open-library-missing', 'navigate'],
   data() {
@@ -198,6 +190,9 @@ export default {
     };
   },
   computed: {
+    kindOptions() {
+      return KINDS.map(option => ({ value: option.key, label: option.label, disabled: this.busy, dataTest: `lost-kind-${option.key}` }));
+    },
     kindNoun() {
       return this.kind === 'image' ? '图片' : '视频';
     }
@@ -350,7 +345,6 @@ export default {
 <style scoped>
 .lost-media { display: grid; gap: var(--space-4); }
 .lost-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
-.lost-kinds { display: inline-flex; gap: 6px; }
 .lost-spacer { flex: 1; }
 .lost-muted { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 .lost-loading { padding: var(--space-5) 0; }

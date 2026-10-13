@@ -65,7 +65,7 @@
 
     <template v-if="!selectedEntity">
       <section class="entity-library__grid">
-        <button v-for="item in items" :key="entityID(item)" type="button" class="entity-card glass-surface" @click="openEntity(item)">
+        <button v-for="item in items" :key="entityID(item)" type="button" class="btn-plain entity-card glass-surface" @click="openEntity(item)">
           <img v-if="assetURL(item)" :src="assetURL(item)" alt="" />
           <div v-else class="entity-card__placeholder">{{ isPeople ? '人物' : '作品集' }}</div>
           <div>
@@ -88,7 +88,7 @@
     <template v-else>
       <section v-if="entityVideos.length" class="entity-video-grid" aria-label="相关视频">
         <article v-for="video in entityVideos" :key="video.id" class="entity-video-card glass-surface">
-          <button type="button" class="entity-video-card__preview" @click="openVideoDetails(video)">
+          <button type="button" class="btn-plain entity-video-card__preview" @click="openVideoDetails(video)">
             <img :src="`/preview/thumbnail/${video.id}`" :alt="`${video.name} 缩略图`" loading="lazy" />
           </button>
           <div class="entity-video-card__copy">
@@ -113,7 +113,7 @@
         <div v-if="entityImages.length" class="entity-image-grid">
           <figure v-for="image in entityImages" :key="image.id" class="entity-image-card glass-surface">
             <label class="entity-image-card__select"><input v-model="selectedPersonImageIDs" type="checkbox" :value="image.id" :aria-label="`选择 ${image.name}`" />选择</label>
-            <button type="button" class="entity-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
+            <button type="button" class="btn-plain entity-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
             <figcaption :title="image.name">{{ image.name }}</figcaption>
             <small v-if="image.size > 0" class="entity-image-card__size">{{ formatBytes(image.size) }}</small>
             <div class="entity-image-card__actions">

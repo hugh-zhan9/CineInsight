@@ -1,14 +1,15 @@
 <template>
   <section class="page-content viewer-home" data-test="viewer-home">
-    <!-- 观看首页（D-UI-04）：各区块并行取数、各自加载与失败；没有数据的区块不显示。 -->
+    <!-- 观看首页（D-UI-04）：各区块并行取数、各自加载与失败；没有数据的区块不显示。
+         大图区的文字层就是本页的页头（D-UD-06 HeroHeader）；标题沿用 h2。 -->
     <RecapBackdrop v-if="hero.state === 'ready'" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="home-hero">
       <div class="recap-hero__body">
-        <p class="recap-hero__eyebrow"><RecapIcon :name="hero.icon" /> {{ hero.eyebrow }}</p>
-        <h2 class="recap-hero__title" data-test="home-hero-title">{{ hero.title }}</h2>
-        <p v-if="hero.meta" class="recap-hero__meta" data-test="home-hero-meta">{{ hero.meta }}</p>
-        <div class="recap-hero__actions">
-          <button type="button" class="btn btn--primary" data-test="home-hero-open" @click="openVideo(hero.video)"><AppIcon name="play" /> 打开详情</button>
-        </div>
+        <HeroHeader :title="hero.title" :meta="hero.meta" :heading-level="2" title-data-test="home-hero-title" meta-data-test="home-hero-meta">
+          <template #eyebrow><RecapIcon :name="hero.icon" /> {{ hero.eyebrow }}</template>
+          <template #actions>
+            <button type="button" class="btn btn--primary" data-test="home-hero-open" @click="openVideo(hero.video)"><AppIcon name="play" /> 打开详情</button>
+          </template>
+        </HeroHeader>
       </div>
     </RecapBackdrop>
     <RecapBackdrop v-else-if="hero.state === 'pending'" size="small" data-test="home-hero-loading">
@@ -16,12 +17,12 @@
     </RecapBackdrop>
     <RecapBackdrop v-else-if="hero.state === 'guide'" size="small" data-test="home-guide">
       <div class="recap-hero__body">
-        <h2 class="recap-hero__title recap-hero__title--quiet">还没有可以接着看或推荐的视频</h2>
-        <p class="recap-hero__meta">先添加扫描目录把视频收进片库，或者直接去片库里挑一部。</p>
-        <div class="recap-hero__actions">
-          <button type="button" class="btn btn--primary" data-test="home-guide-scan" @click="$emit('navigate', 'settings')">去添加扫描目录</button>
-          <button type="button" class="btn btn--secondary" data-test="home-guide-library" @click="$emit('navigate', 'videos')">去片库</button>
-        </div>
+        <HeroHeader quiet title="还没有可以接着看或推荐的视频" meta="先添加扫描目录把视频收进片库，或者直接去片库里挑一部。" :heading-level="2">
+          <template #actions>
+            <button type="button" class="btn btn--primary" data-test="home-guide-scan" @click="$emit('navigate', 'settings')">去添加扫描目录</button>
+            <button type="button" class="btn btn--secondary" data-test="home-guide-library" @click="$emit('navigate', 'videos')">去片库</button>
+          </template>
+        </HeroHeader>
       </div>
     </RecapBackdrop>
 
@@ -97,7 +98,7 @@
           v-for="item in topPeople"
           :key="item.entity.id"
           type="button"
-          class="recap-person"
+          class="btn-plain recap-person"
           :title="`${item.weight} 次播放 · ${item.videos} 部`"
           data-test="home-person"
           @click="openPerson(item.entity)"
@@ -153,6 +154,7 @@ import RecapCountUp from '../recap/RecapCountUp.vue';
 import RecapIcon from '../recap/RecapIcon.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import AppIcon from '../ui/AppIcon.vue';
+import HeroHeader from '../ui/HeroHeader.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import StatTile from '../ui/StatTile.vue';
 import { translateBackendError } from '../../utils/feedback.js';
@@ -191,7 +193,7 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
-  components: { AppIcon, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile },
+  components: { AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、最近添加、本月回顾；期间可能看过片），
   // 取回之前保留现有内容。今晚看什么只在「换一批」时重抽，大图定下后不再换。
   props: { pageActive: { type: Boolean, default: true } },

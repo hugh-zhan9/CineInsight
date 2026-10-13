@@ -23,4 +23,11 @@ describe('EmptyState', () => {
     expect(wrapper.find('svg').exists()).toBe(false);
     expect(wrapper.find('.ui-empty__actions').exists()).toBe(false);
   });
+
+  it('messageDataTest puts a hook on the message line; the host data-test stays on the root', () => {
+    const wrapper = mount(EmptyState, { props: { title: '没有候选', message: '换个阈值再试。', messageDataTest: 'cleanup-empty-detail' }, attrs: { 'data-test': 'cleanup-empty' } });
+    expect(wrapper.attributes('data-test')).toBe('cleanup-empty');
+    expect(wrapper.get('[data-test="cleanup-empty-detail"]').text()).toBe('换个阈值再试。');
+    expect(mount(EmptyState, { props: { title: 'a', message: 'b' } }).get('.ui-empty__message').attributes('data-test')).toBeUndefined();
+  });
 });

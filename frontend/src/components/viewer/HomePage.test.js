@@ -112,6 +112,9 @@ describe('HomePage hero', () => {
     const wrapper = await mountPage();
     expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片1');
     expect(wrapper.get('[data-test="home-hero-meta"]').text()).toBe('看到 01:15 / 10:00');
+    // 大图区的文字层是本页的页头 HeroHeader（D-UD-06），标题沿用 h2。
+    expect(wrapper.get('[data-test="home-hero-title"]').element.tagName).toBe('H2');
+    expect(wrapper.get('[data-test="home-hero"] .ui-hero-header [data-test="home-hero-open"]').exists()).toBe(true);
     expect(api.GetVideoDetails).toHaveBeenCalledWith(1);
   });
 
