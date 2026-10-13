@@ -1,17 +1,16 @@
 <template>
-  <BaseModal class="notes-modal" :close-on-overlay="false" @close="close">
-    <form class="notes-editor" @submit.prevent="save" data-test="diary-editor">
+  <DialogShell :title="entry?.id ? '修订观影日记' : '手动补记'" size="md" :busy="saving" :close-on-overlay="false" @close="close">
+    <form :id="formID" class="notes-editor" @submit.prevent="save" data-test="diary-editor">
       <fieldset :disabled="saving" class="notes-editor-fields">
-      <h3>{{ entry?.id ? '修订观影日记' : '手动补记' }}</h3>
       <p v-if="entry?.origin && entry.origin !== 'manual'" class="help-text">保留原始观看事实；日期、评分与短评可以修订。</p>
       <template v-if="!entry?.id">
         <label>记录来源<select v-model="mode" class="select-input" :disabled="saving" data-test="diary-source"><option value="manual">手填片名</option><option value="library">选择片库视频</option></select></label>
         <div v-if="mode === 'library'">
-          <div class="notes-toolbar"><input v-model="keyword" class="search-input notes-search" aria-label="查找片库视频" placeholder="输入片名或文件名" :disabled="saving" /><button type="button" class="btn-secondary btn-compact" :disabled="searching || saving" @click="search(false)">查找</button></div>
+          <div class="notes-toolbar"><input v-model="keyword" class="search-input notes-search" aria-label="查找片库视频" placeholder="输入片名或文件名" :disabled="saving" /><button type="button" class="btn btn--secondary btn--sm" :disabled="searching || saving" @click="search(false)">查找</button></div>
           <p v-if="searchError" class="notes-alert" role="alert">{{ searchError }}</p>
           <p v-if="searched && !searching && !searchError && !videos.length" class="empty-hint">没有找到视频</p>
           <button v-for="video in videos" :key="video.id" type="button" class="diary-video-choice" :disabled="saving" :aria-pressed="selected?.id === video.id" @click="selected = video">{{ video.display_title || video.name }}</button>
-          <button v-if="nextCursor" type="button" class="btn-secondary btn-compact" :disabled="searching || saving" @click="search(true)">下一页视频</button>
+          <button v-if="nextCursor" type="button" class="btn btn--secondary btn--sm" :disabled="searching || saving" @click="search(true)">下一页视频</button>
           <p v-if="selected" class="help-text">已选择：{{ selected.display_title || selected.name }}</p>
         </div>
       </template>
@@ -20,17 +19,23 @@
       <label>本次评分（可不填，0–10）<input v-model="rating" class="number-input" type="number" min="0" max="10" step="0.5" data-test="diary-rating" /></label>
       <label>短评<textarea v-model="note" class="text-input settings-textarea" rows="6" data-test="diary-note" /></label>
       <p v-if="error" class="notes-alert" role="alert">{{ error }}</p>
-      <footer class="notes-toolbar"><button type="submit" class="btn-primary" :disabled="saving" data-test="diary-save">{{ saving ? '保存中…' : '保存日记' }}</button><button type="button" class="btn-secondary" :disabled="saving" @click="close">取消</button></footer>
       </fieldset>
     </form>
-  </BaseModal>
+    <!-- 底部按钮在表单外（DialogShell 的 footer 插槽），保存靠 form 属性提交同一张表单。 -->
+    <template #footer>
+      <button type="button" class="btn btn--secondary" :disabled="saving" @click="close">取消</button>
+      <button type="submit" :form="formID" class="btn btn--primary" :disabled="saving" data-test="diary-save">{{ saving ? '保存中…' : '保存日记' }}</button>
+    </template>
+  </DialogShell>
 </template>
 <script>
 import { SaveViewingDiary, SearchLibraryVideoPage } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
+
+let formSeq = 0;
 export default {
-  name: 'DiaryEditor', components: { BaseModal }, props: { entry: { type: Object, default: null }, active: { type: Boolean, default: true } }, emits: ['close', 'saved'],
-  data() { return { mode: 'manual', title: this.entry?.title || '', date: this.entry?.watched_on || '', rating: this.entry?.rating ?? '', note: this.entry?.note || '', selected: null, keyword: '', videos: [], nextCursor: null, searched: false, searching: false, searchError: '', searchGeneration: 0, saving: false, error: '' }; },
+  name: 'DiaryEditor', components: { DialogShell }, props: { entry: { type: Object, default: null }, active: { type: Boolean, default: true } }, emits: ['close', 'saved'],
+  data() { formSeq += 1; return { formID: `diary-editor-form-${formSeq}`, mode: 'manual', title: this.entry?.title || '', date: this.entry?.watched_on || '', rating: this.entry?.rating ?? '', note: this.entry?.note || '', selected: null, keyword: '', videos: [], nextCursor: null, searched: false, searching: false, searchError: '', searchGeneration: 0, saving: false, error: '' }; },
   beforeUnmount() { this.searchGeneration++; this._disposed = true; },
   methods: {
     close() { if (!this.saving && this.active) this.$emit('close'); },
@@ -58,7 +63,9 @@ export default {
 };
 </script>
 <style scoped>
-.diary-video-choice { display: block; width: 100%; margin: 4px 0; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--control-bg); color: var(--text-primary); font-size: 13px; text-align: left; cursor: pointer; }
+/* 编辑框的正文由 DialogShell 负责滚动，表单本身不再限高、不再单独出滚动条。 */
+.notes-editor { max-height: none; overflow: visible; }
+.diary-video-choice { display: block; width: 100%; margin: 4px 0; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--control-bg); color: var(--text-primary); font-size: var(--fs-secondary); text-align: left; cursor: pointer; }
 .diary-video-choice:hover:not(:disabled) { background: var(--control-hover-bg); }
 .diary-video-choice[aria-pressed=true] { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 </style>

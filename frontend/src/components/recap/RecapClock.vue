@@ -64,7 +64,7 @@ export default {
 .recap-clock__plays { stroke: color-mix(in srgb, var(--accent-color) 70%, transparent); stroke-width: 7; stroke-linecap: round; }
 .recap-clock__plays.is-peak { stroke: var(--accent-color); stroke-width: 9; }
 .recap-clock__views { stroke: var(--warning-color); stroke-width: 7; stroke-linecap: round; }
-.recap-clock__mark { fill: var(--text-muted); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
-.recap-clock__center { fill: var(--text-primary); font-size: 26px; font-weight: 800; text-anchor: middle; }
-.recap-clock__caption { fill: var(--text-secondary); font-size: 11px; text-anchor: middle; }
+.recap-clock__mark { fill: var(--text-muted); font-size: var(--fs-caption); text-anchor: middle; dominant-baseline: middle; }
+.recap-clock__center { fill: var(--text-primary); font-size: var(--fs-display); font-weight: var(--fw-bold); text-anchor: middle; }
+.recap-clock__caption { fill: var(--text-secondary); font-size: var(--fs-caption); text-anchor: middle; }
 </style>

@@ -1,8 +1,7 @@
 <template>
   <Teleport to="body">
-    <BaseModal class="quote-card-dialog" aria-label="台词卡" data-test="quote-card-dialog" @close="$emit('close')">
-      <div class="quote-card-dialog__header">
-        <h3>台词卡</h3>
+    <DialogShell title="台词卡" size="xl" data-test="quote-card-dialog" @close="$emit('close')">
+      <div class="quote-card-dialog__content">
         <div class="quote-card-dialog__templates" role="radiogroup" aria-label="版式">
           <button
             v-for="option in templates"
@@ -10,54 +9,54 @@
             type="button"
             role="radio"
             :aria-checked="template === option.value"
-            :class="['btn-secondary', 'btn-compact', { 'quote-card-dialog__template--active': template === option.value }]"
+            :class="['quote-card-dialog__template', { 'quote-card-dialog__template--active': template === option.value }]"
             :data-test="`quote-card-template-${option.value}`"
             @click="template = option.value"
           >{{ option.label }}</button>
         </div>
-        <button type="button" class="btn-secondary btn-compact" data-test="quote-card-close" @click="$emit('close')">关闭</button>
+
+        <div class="quote-card-dialog__stage">
+          <canvas v-show="frameState === 'ready'" ref="canvas" class="quote-card-dialog__canvas" data-test="quote-card-canvas" :data-template="template"></canvas>
+          <p v-if="frameState === 'loading'" class="quote-card-dialog__hint" data-test="quote-card-loading">正在读取这一刻的画面…</p>
+          <p v-else-if="frameState === 'error'" class="quote-card-dialog__error" role="alert" data-test="quote-card-frame-error">{{ frameError }}</p>
+        </div>
+
+        <label class="quote-card-dialog__field">
+          <span>台词</span>
+          <textarea
+            v-model="text"
+            class="text-input settings-textarea quote-card-dialog__quote"
+            rows="3"
+            :maxlength="maxLength"
+            placeholder="输入或修改要放在卡片上的台词，可以换行"
+            data-test="quote-card-quote"
+          ></textarea>
+        </label>
+        <p class="quote-card-dialog__meta" data-test="quote-card-meta">
+          <span>{{ metaText }}</span>
+          <span>{{ text.length }}/{{ maxLength }}</span>
+        </p>
+        <p v-if="truncated" class="quote-card-dialog__hint" data-test="quote-card-truncated">台词太长，卡片上只显示前 {{ maxLines }} 行。</p>
+        <p
+          v-if="status"
+          :class="['quote-card-dialog__status', `quote-card-dialog__status--${status.kind}`]"
+          :role="status.kind === 'error' ? 'alert' : 'status'"
+          data-test="quote-card-status"
+        >{{ status.text }}</p>
       </div>
 
-      <div class="quote-card-dialog__stage">
-        <canvas v-show="frameState === 'ready'" ref="canvas" class="quote-card-dialog__canvas" data-test="quote-card-canvas" :data-template="template"></canvas>
-        <p v-if="frameState === 'loading'" class="quote-card-dialog__hint" data-test="quote-card-loading">正在读取这一刻的画面…</p>
-        <p v-else-if="frameState === 'error'" class="quote-card-dialog__error" role="alert" data-test="quote-card-frame-error">{{ frameError }}</p>
-      </div>
-
-      <label class="quote-card-dialog__field">
-        <span>台词</span>
-        <textarea
-          v-model="text"
-          class="text-input settings-textarea quote-card-dialog__quote"
-          rows="3"
-          :maxlength="maxLength"
-          placeholder="输入或修改要放在卡片上的台词，可以换行"
-          data-test="quote-card-quote"
-        ></textarea>
-      </label>
-      <p class="quote-card-dialog__meta" data-test="quote-card-meta">
-        <span>{{ metaText }}</span>
-        <span>{{ text.length }}/{{ maxLength }}</span>
-      </p>
-      <p v-if="truncated" class="quote-card-dialog__hint" data-test="quote-card-truncated">台词太长，卡片上只显示前 {{ maxLines }} 行。</p>
-      <p
-        v-if="status"
-        :class="['quote-card-dialog__status', `quote-card-dialog__status--${status.kind}`]"
-        :role="status.kind === 'error' ? 'alert' : 'status'"
-        data-test="quote-card-status"
-      >{{ status.text }}</p>
-
-      <div class="modal-actions">
-        <button type="button" class="btn-primary" data-test="quote-card-copy" :disabled="!canExport" @click="copyImage">{{ busy === 'copy' ? '复制中…' : '复制图片' }}</button>
-        <button type="button" class="btn-secondary" data-test="quote-card-save" :disabled="!canExport" @click="saveImage">{{ busy === 'save' ? '保存中…' : '保存为 PNG' }}</button>
-      </div>
-    </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="quote-card-close" @click="$emit('close')">关闭</button>
+        <button type="button" class="btn btn--secondary" data-test="quote-card-save" :disabled="!canExport" @click="saveImage">{{ busy === 'save' ? '保存中…' : '保存为 PNG' }}</button>
+        <button type="button" class="btn btn--primary" data-test="quote-card-copy" :disabled="!canExport" @click="copyImage">{{ busy === 'copy' ? '复制中…' : '复制图片' }}</button>
+      </template>
+    </DialogShell>
   </Teleport>
 </template>
 
 <script>
 import { markRaw } from 'vue';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { SaveQuoteCard } from '../../wailsjs/go/main/App';
 import { formatSceneTime } from '../utils/sceneSearch.js';
 import {
@@ -82,7 +81,7 @@ function errorText(err) {
 // 画面读不出来时只报错并禁用导出，不出纯文字卡。宿主每次打开都重新挂载本组件（v-if）。
 export default {
   name: 'QuoteCardDialog',
-  components: { BaseModal },
+  components: { DialogShell },
   props: {
     videoID: { type: Number, required: true },
     atMS: { type: Number, default: 0 },
@@ -215,19 +214,25 @@ export default {
 </script>
 
 <style scoped>
-:deep(.quote-card-dialog) { width: min(880px, 94vw); max-width: 94vw; max-height: 92vh; display: flex; flex-direction: column; gap: 10px; overflow: auto; }
-.quote-card-dialog__header { display: flex; align-items: center; gap: 12px; }
-.quote-card-dialog__header h3 { margin: 0; margin-right: auto; }
-.quote-card-dialog__templates { display: inline-flex; gap: 6px; }
-.quote-card-dialog__template--active { border-color: var(--accent-color); color: var(--accent-text); background: var(--accent-soft); }
+/* 尺寸由 DialogShell 的 xl（940）给出；正文纵向排开，DialogShell 的正文区负责滚动。 */
+.quote-card-dialog__content { display: flex; flex-direction: column; gap: 10px; }
+/* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
+   SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
+.quote-card-dialog__templates { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
+.quote-card-dialog__template { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
+.quote-card-dialog__template:hover:not(:disabled) { color: var(--text-primary); }
+.quote-card-dialog__template:disabled { opacity: 0.45; cursor: not-allowed; }
+.quote-card-dialog__template--active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
+.quote-card-dialog__template:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
+.quote-card-dialog__templates { align-self: flex-start; }
 .quote-card-dialog__stage { display: grid; place-items: center; min-height: 200px; border-radius: var(--radius); background: var(--thumb-bg); overflow: hidden; }
 .quote-card-dialog__canvas { display: block; max-width: 100%; max-height: 56vh; width: auto; height: auto; }
-.quote-card-dialog__field { display: grid; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.quote-card-dialog__field { display: grid; gap: 6px; font-size: var(--fs-secondary); color: var(--text-secondary); }
 .quote-card-dialog__quote { line-height: 1.5; }
-.quote-card-dialog__meta { display: flex; justify-content: space-between; gap: 12px; margin: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.quote-card-dialog__hint { margin: 0; font-size: 12px; color: var(--text-secondary); }
-.quote-card-dialog__error { margin: 0; padding: 0 16px; text-align: center; color: var(--danger-color); }
-.quote-card-dialog__status { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.quote-card-dialog__meta { display: flex; justify-content: space-between; gap: 12px; margin: 0; font-size: var(--fs-caption); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.quote-card-dialog__hint { margin: 0; font-size: var(--fs-caption); color: var(--text-secondary); }
+.quote-card-dialog__error { margin: 0; padding: 0 16px; text-align: center; color: var(--danger-text); }
+.quote-card-dialog__status { margin: 0; font-size: var(--fs-secondary); overflow-wrap: anywhere; }
 .quote-card-dialog__status--success { color: var(--text-secondary); }
-.quote-card-dialog__status--error { color: var(--danger-color); }
+.quote-card-dialog__status--error { color: var(--danger-text); }
 </style>

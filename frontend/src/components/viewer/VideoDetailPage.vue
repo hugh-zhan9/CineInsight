@@ -3,19 +3,18 @@
     <!-- 观看侧整页详情（D-UI-05，详细设计「整页详情」）：只读展示 + 常用动作；改资料去管理侧的抽屉。
          注释放在根元素里面：放在外面开发模式会变成多根片段，宿主的 v-show 与 $el 都会失效。 -->
     <nav class="viewer-detail__nav">
-      <button type="button" class="btn-secondary btn-compact" data-test="detail-back" @click="$emit('back')"><RecapIcon name="arrow" class="viewer-detail__back-icon" /> 返回</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="detail-back" @click="$emit('back')"><AppIcon name="chevron-left" /> 返回</button>
     </nav>
 
     <RecapBackdrop v-if="loading && !details" size="small" data-test="detail-loading">
       <div class="recap-hero__body"><p class="recap-hero__meta">正在读取视频详情…</p></div>
     </RecapBackdrop>
-    <div v-else-if="error && !details" class="recap-panel viewer-detail__failure" role="alert" data-test="detail-error">
-      <p>{{ error }}</p>
-      <div class="recap-hero__actions">
-        <button type="button" class="btn-secondary btn-compact" data-test="detail-retry" @click="load">重试</button>
-        <button type="button" class="btn-secondary btn-compact" data-test="detail-go-library" @click="$emit('navigate', 'videos')">去片库</button>
-      </div>
-    </div>
+    <AppBanner v-else-if="error && !details" tone="danger" :title="error" data-test="detail-error">
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="detail-retry" @click="load">重试</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="detail-go-library" @click="$emit('navigate', 'videos')">去片库</button>
+      </template>
+    </AppBanner>
 
     <template v-else-if="details">
       <!-- 背景区：背景图或画面帧轮播；「在应用内播放」时播放器就地展开在这里。 -->
@@ -42,10 +41,10 @@
             <div v-if="notesProxyNotice || notesProxyError || canCreateProxy || bookmarkRangeFinished" class="viewer-detail__player-notes">
               <p v-if="notesProxyNotice" data-test="detail-proxy-notice">{{ notesProxyNotice }}</p>
               <p v-if="notesProxyError" class="viewer-detail__error" role="alert" data-test="detail-proxy-error">{{ notesProxyError }}</p>
-              <button v-if="canCreateProxy" type="button" class="btn-secondary btn-compact" data-test="detail-proxy-create" :disabled="proxyBusy || proxyPending" @click="player.createPlaybackProxy()">{{ proxyCreateLabel }}</button>
+              <button v-if="canCreateProxy" type="button" class="btn btn--secondary btn--sm" data-test="detail-proxy-create" :disabled="proxyBusy || proxyPending" @click="player.createPlaybackProxy()">{{ proxyCreateLabel }}</button>
               <span v-if="bookmarkRangeFinished" class="viewer-detail__range-end" data-test="detail-bookmark-range-end">
                 已到书签区间末尾
-                <button type="button" class="btn-secondary btn-compact" @click="continueBookmarkPlayback">继续整片</button>
+                <button type="button" class="btn btn--secondary btn--sm" @click="continueBookmarkPlayback">继续整片</button>
               </span>
             </div>
           </div>
@@ -60,30 +59,31 @@
               <span v-for="fact in facts" :key="fact.key" :data-test="`detail-fact-${fact.key}`">{{ fact.text }}</span>
             </p>
             <div v-if="tags.length" class="viewer-detail__tags">
-              <button
+              <TagPill
                 v-for="tag in tags"
                 :key="tag.id"
-                type="button"
-                class="tag-badge viewer-detail__tag"
+                clickable
+                class="viewer-detail__tag"
+                :label="tag.name"
                 :style="{ backgroundColor: tagColor(tag.color) }"
                 :title="`在片库里看「${tag.name}」`"
                 :data-test="`detail-tag-${tag.id}`"
                 @click="$emit('open-tag', Number(tag.id))"
-              ><span class="tag-badge__name">{{ tag.name }}</span></button>
+              />
             </div>
             <!-- 动作：播放与抽屉「播放」同一调用（PlayVideo，记一次正式播放）；收藏、已看、评分点了即存。 -->
             <div class="recap-hero__actions" data-test="detail-actions">
-              <button type="button" class="btn-primary" data-test="detail-play" :disabled="actionBusy === 'play'" @click="playExternally"><RecapIcon name="play" /> {{ actionBusy === 'play' ? '启动中…' : '播放' }}</button>
-              <button type="button" class="btn-secondary" data-test="detail-inline-play" @click="toggleInlinePlayer">{{ playerOpen ? '收起播放器' : '在应用内播放' }}</button>
+              <button type="button" class="btn btn--primary" data-test="detail-play" :disabled="actionBusy === 'play'" @click="playExternally"><AppIcon name="play" /> {{ actionBusy === 'play' ? '启动中…' : '播放' }}</button>
+              <button type="button" class="btn btn--secondary" data-test="detail-inline-play" @click="toggleInlinePlayer">{{ playerOpen ? '收起播放器' : '在应用内播放' }}</button>
               <QueueActionButton :video-ids="[Number(video.id)]" label="加入待播" />
-              <button type="button" :class="['btn-secondary', { 'viewer-detail__toggle--on': video.is_favorite }]" :aria-pressed="!!video.is_favorite" data-test="detail-favorite" :disabled="!!actionBusy" @click="toggleState('favorite')">{{ video.is_favorite ? '已收藏' : '收藏' }}</button>
-              <button type="button" :class="['btn-secondary', { 'viewer-detail__toggle--on': video.is_watched }]" :aria-pressed="!!video.is_watched" data-test="detail-watched" :disabled="!!actionBusy" @click="toggleState('watched')">{{ video.is_watched ? '已看过' : '标记已看' }}</button>
+              <button type="button" :class="['btn', 'btn--secondary', { 'viewer-detail__toggle--on': video.is_favorite }]" :aria-pressed="!!video.is_favorite" data-test="detail-favorite" :disabled="!!actionBusy" @click="toggleState('favorite')">{{ video.is_favorite ? '已收藏' : '收藏' }}</button>
+              <button type="button" :class="['btn', 'btn--secondary', { 'viewer-detail__toggle--on': video.is_watched }]" :aria-pressed="!!video.is_watched" data-test="detail-watched" :disabled="!!actionBusy" @click="toggleState('watched')">{{ video.is_watched ? '已看过' : '标记已看' }}</button>
             </div>
             <RatingStars :value="rating" :disabled="ratingSaving" @rate="saveRating" />
             <div class="recap-hero__actions viewer-detail__more">
-              <button type="button" class="btn-secondary btn-compact" data-test="detail-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
-              <button type="button" class="btn-secondary btn-compact" data-test="detail-find-similar" @click="findSimilarScenes">找相似画面</button>
-              <button type="button" class="btn-secondary btn-compact" data-test="detail-edit" @click="$emit('edit-in-manage', Number(video.id))">编辑资料</button>
+              <button type="button" class="btn btn--secondary btn--sm" data-test="detail-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
+              <button type="button" class="btn btn--secondary btn--sm" data-test="detail-find-similar" @click="findSimilarScenes">找相似画面</button>
+              <button type="button" class="btn btn--secondary btn--sm" data-test="detail-edit" @click="$emit('edit-in-manage', Number(video.id))">编辑资料</button>
             </div>
             <p v-if="actionError" class="viewer-detail__error" role="alert" data-test="detail-action-error">{{ actionError }}</p>
           </div>
@@ -138,8 +138,8 @@
             </div>
             <span v-if="Number(member.video_id) === Number(video.id)" class="viewer-detail__current">当前</span>
             <template v-else>
-              <button type="button" class="btn-secondary btn-compact" :data-test="`detail-version-compare-${member.video_id}`" @click="compareVersion(member.video_id)">对比画质</button>
-              <button type="button" class="btn-secondary btn-compact" :data-test="`detail-version-open-${member.video_id}`" :disabled="member.is_stale" @click="openVideo(member.video_id)">打开</button>
+              <button type="button" class="btn btn--secondary btn--sm" :data-test="`detail-version-compare-${member.video_id}`" @click="compareVersion(member.video_id)">对比画质</button>
+              <button type="button" class="btn btn--secondary btn--sm" :data-test="`detail-version-open-${member.video_id}`" :disabled="member.is_stale" @click="openVideo(member.video_id)">打开</button>
             </template>
           </article>
         </div>
@@ -150,7 +150,7 @@
         <div class="viewer-detail__rows">
           <article v-for="item in collectionItems" :key="item.id" class="recap-panel viewer-detail__collection" :data-test="`detail-collection-${item.id}`">
             <div class="viewer-detail__row-copy">
-              <button type="button" class="viewer-detail__link" :data-test="`detail-collection-open-${item.id}`" @click="openEntity('collection', item.id, item.name)">{{ item.name }}</button>
+              <button type="button" class="btn-link viewer-detail__link" :data-test="`detail-collection-open-${item.id}`" @click="openEntity('collection', item.id, item.name)">{{ item.name }}</button>
               <small v-if="item.state === 'loading'">正在读取…</small>
               <small v-else-if="item.state === 'error'" class="viewer-detail__error" role="alert">{{ item.error }}</small>
               <small v-else-if="item.position" :data-test="`detail-collection-position-${item.id}`">第 {{ item.position }} 部 · 共 {{ item.total }} 部{{ item.next ? '' : ' · 已是最后一部' }}</small>
@@ -200,7 +200,10 @@ import InlineVideoPlayer from '../player/InlineVideoPlayer.vue';
 import RecapBackdrop from '../recap/RecapBackdrop.vue';
 import RecapIcon from '../recap/RecapIcon.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
+import AppBanner from '../ui/AppBanner.vue';
+import AppIcon from '../ui/AppIcon.vue';
 import StatTile from '../ui/StatTile.vue';
+import TagPill from '../ui/TagPill.vue';
 import RatingStars from './RatingStars.vue';
 import { translateBackendError } from '../../utils/feedback.js';
 import { subtitleCueAt } from '../../utils/quoteCard.js';
@@ -227,7 +230,10 @@ function errorText(err) {
 
 export default {
   name: 'VideoDetailPage',
-  components: { BookmarkPanel, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon, RecapMediaCard, StatTile },
+  components: {
+    AppBanner, AppIcon, BookmarkPanel, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon, RecapMediaCard,
+    StatTile, TagPill
+  },
   props: {
     // 要展示的视频 ID 与可选的起播位置（毫秒，场景检索进来时有）。
     videoId: { type: Number, default: 0 },
@@ -620,9 +626,7 @@ export default {
   padding-bottom: 56px;
 }
 .viewer-detail__nav { display: flex; align-items: center; gap: 12px; }
-.viewer-detail__back-icon { transform: rotate(180deg); }
-.viewer-detail__failure p { margin: 0; color: var(--danger-text); }
-.viewer-detail__error { margin: 0; color: var(--danger-text); font-size: 13px; }
+.viewer-detail__error { margin: 0; color: var(--danger-text); font-size: var(--fs-secondary); }
 .viewer-detail__hero { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 8px 28px; align-items: end; padding: 32px 0 0 40px; }
 .viewer-detail__hero--playing { grid-template-columns: minmax(0, 1fr); padding: 24px 24px 0; }
 .viewer-detail__poster {
@@ -635,7 +639,7 @@ export default {
   border-radius: var(--radius-lg);
   background: var(--player-bg);
   color: var(--recap-hero-muted);
-  font-size: 32px;
+  font-size: var(--fs-display);
   box-shadow: 0 18px 40px var(--recap-scrim);
 }
 .viewer-detail__poster img { width: 100%; height: 100%; object-fit: cover; }
@@ -644,13 +648,15 @@ export default {
 .viewer-detail__player { display: grid; gap: 10px; width: 100%; max-width: 1100px; justify-self: center; }
 /* 播放器的占位与报错框原本放在浅色抽屉里：落在深色背景区上时给它一层面板底色，两种主题下都看得清。 */
 .viewer-detail__player :deep(.preview-drawer__placeholder) { border-color: var(--hairline); background: var(--panel-bg); color: var(--text-secondary); }
-.viewer-detail__player-notes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--recap-hero-muted); font-size: 12.5px; }
+.viewer-detail__player-notes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--recap-hero-muted); font-size: var(--fs-secondary); }
 .viewer-detail__player-notes p { margin: 0; }
 .viewer-detail__range-end { display: inline-flex; align-items: center; gap: 8px; }
 .viewer-detail__facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-variant-numeric: tabular-nums; }
 .viewer-detail__tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.viewer-detail__tag { color: var(--recap-hero-fg); font-family: inherit; cursor: pointer; }
-.viewer-detail__tag:hover { border-color: var(--recap-hero-muted); }
+/* 标签是 TagPill，落在大图压暗层上：两主题都用白字与压暗层上的描边（与回顾页大图里的芯片同一套 --recap-hero-*），
+   有颜色的标签再叠一层它自己的半透明底色（:style）。 */
+.viewer-detail__tags .viewer-detail__tag { border-color: var(--recap-hero-chip-border); background-color: var(--recap-hero-chip); color: var(--recap-hero-fg); }
+.viewer-detail__tags .viewer-detail__tag:hover { border-color: var(--recap-hero-muted); background-color: color-mix(in srgb, var(--recap-hero-fg) 24%, transparent); color: var(--recap-hero-fg); }
 .viewer-detail__toggle--on { border-color: var(--accent-color); color: var(--accent-text); }
 .viewer-detail__more { margin-top: 0; }
 .viewer-detail__description { max-width: 860px; margin: 0; color: var(--text-secondary); line-height: 1.75; white-space: pre-line; }
@@ -658,11 +664,11 @@ export default {
 .viewer-detail__row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; }
 .viewer-detail__row-copy { display: grid; flex: 1; gap: 4px; min-width: 0; }
 .viewer-detail__row-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.viewer-detail__row-copy small { color: var(--text-muted); font-size: 12px; }
-.viewer-detail__current { color: var(--accent-text); font-size: 12px; font-weight: 650; }
+.viewer-detail__row-copy small { color: var(--text-muted); font-size: var(--fs-caption); }
+.viewer-detail__current { color: var(--accent-text); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .viewer-detail__collection { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 200px); align-items: center; gap: 16px; padding: 14px 18px; }
-.viewer-detail__link { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-weight: 700; cursor: pointer; }
-.viewer-detail__link:hover { color: var(--accent-text); }
+/* 作品集名是文字链接（.btn-link），比普通链接字大一号、加粗，好认出是这一块的标题。 */
+.viewer-detail__link { justify-self: start; font-size: var(--fs-body); font-weight: var(--fw-bold); }
 .viewer-detail__stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
 @media (max-width: 900px) {
   .viewer-detail__hero { grid-template-columns: minmax(0, 1fr); padding: 24px 24px 0; }

@@ -1,15 +1,12 @@
 <template>
   <section class="page-content watched-movies-page">
-    <header class="watched-movies-heading">
-      <!-- 改名「观影记录」（D-PC52）：原来的「已看」与片库的「已看」视图同名，被当成同一回事。 -->
-      <h2>观影记录</h2>
-      <p>你在年度榜单上标过「已看」的电影，按影片上映年份从新到旧分组。</p>
-    </header>
+    <!-- 改名「观影记录」（D-PC52）：原来的「已看」与片库的「已看」视图同名，被当成同一回事。 -->
+    <PageHeader title="观影记录" subtitle="你在年度榜单上标过「已看」的电影，按影片上映年份从新到旧分组。" />
 
     <div class="watched-movies-toolbar">
       <span class="watched-movies-summary" data-test="watched-movies-summary">共 {{ total }} 部</span>
-      <button class="btn-secondary btn-compact" type="button" :disabled="loading"
-        data-test="watched-movies-reload" @click="load">重新读取</button>
+      <button class="btn btn--secondary btn--sm" type="button" :disabled="loading"
+        data-test="watched-movies-reload" @click="load">刷新</button>
     </div>
 
     <!-- 渲染的仍然只是 ListWatchedMovies 的返回值（榜单标记），一条不多。D-PC52 推翻了
@@ -21,12 +18,17 @@
     <p v-if="error" class="watched-movies-error" role="alert" data-test="watched-movies-error">{{ error }}</p>
     <p v-if="actionError" class="watched-movies-error" role="alert" data-test="watched-movies-action-error">{{ actionError }}</p>
 
-    <p v-if="loading && !groups.length" class="watched-movies-hint" role="status"
-      data-test="watched-movies-loading">正在读取…</p>
+    <SkeletonBlock v-if="loading && !groups.length" class="watched-movies-skeleton" :lines="4"
+      data-test="watched-movies-loading" />
 
     <!-- 读失败不落到空态：「还没标过」和「这次没读出来」是两件事，后者已经在上面报了。 -->
-    <p v-else-if="!groups.length && !error" class="watched-movies-empty"
-      data-test="watched-movies-empty">还没有标记过已看</p>
+    <EmptyState v-else-if="!groups.length && !error" class="watched-movies-empty" icon="inbox" title="还没有标记过已看"
+      message="在年度榜单上把看过的电影标成「已看」，就会出现在这里。" data-test="watched-movies-empty">
+      <template #actions>
+        <button class="btn btn--secondary btn--sm" type="button" data-test="watched-movies-empty-chart"
+          @click="$emit('navigate', 'movie-chart')">去榜单</button>
+      </template>
+    </EmptyState>
 
     <!-- 后端已按年份倒序分组、组内按标记时间倒序（services/movie_chart_query.go 的
          ListWatched），这里**原样渲染**：不重排、不重新分组、也不合并同年份的组。 -->
@@ -50,21 +52,21 @@
               <span class="watched-movies-library__label">片库中可能已有：</span>
               <span v-for="suggestion in suggestionsOf(movie)" :key="suggestion.video_id" class="watched-movies-library__match">
                 {{ suggestion.display_title || suggestion.name }}
-                <button class="btn-secondary btn-compact" type="button" :disabled="busy"
+                <button class="btn btn--secondary btn--sm" type="button" :disabled="busy"
                   :data-test="`watched-movies-link-${movie.douban_id}-${suggestion.video_id}`"
                   @click="linkSuggestion(movie, suggestion)">关联</button>
               </span>
             </div>
           </div>
           <div class="watched-movies-actions">
-            <button v-if="linkedIDs(movie).length" class="btn-secondary btn-compact" type="button" :disabled="busy"
+            <button v-if="linkedIDs(movie).length" class="btn btn--secondary btn--sm" type="button" :disabled="busy"
               :data-test="`watched-movies-open-${movie.douban_id}`" @click="openInLibrary(movie)">在片库打开</button>
             <!-- 关联错了要能撤回（D-PC52）：只断开同步，两边已有的已看标记都不动。 -->
-            <button v-if="linkedIDs(movie).length" class="btn-secondary btn-compact" type="button" :disabled="busy"
+            <button v-if="linkedIDs(movie).length" class="btn btn--secondary btn--sm" type="button" :disabled="busy"
               :data-test="`watched-movies-unlink-${movie.douban_id}`" @click="unlink(movie)">取消关联</button>
-            <button class="btn-secondary btn-compact" type="button" :disabled="busy"
+            <button class="btn btn--secondary btn--sm" type="button" :disabled="busy"
               :data-test="`watched-movies-chart-${movie.douban_id}`" @click="$emit('navigate', 'movie-chart')">去榜单</button>
-            <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy"
+            <button class="btn btn--danger btn--sm" type="button" :disabled="busy"
               :data-test="`watched-movies-unwatch-${movie.douban_id}`" @click="unwatch(movie)">取消已看</button>
           </div>
         </li>
@@ -79,6 +81,9 @@
 import {
   ClearMovieChartMark, GetVideosByIDs, LinkMovieToVideo, ListWatchedMovies, SuggestLibraryMatchesBatch, UnlinkMovieVideo
 } from '../../wailsjs/go/main/App';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
 // 与后端 services.LibraryMatchKey 一致：「片名|年份」，年份未知为 0。
@@ -90,6 +95,7 @@ function libraryMatchKey(title, year) {
 // navigate(pageKey) 与 open-video(video)，由 App.vue 接（pageKey 与 currentPage 同一套取值）。
 export default {
   name: 'WatchedMoviesPage',
+  components: { EmptyState, PageHeader, SkeletonBlock },
   emits: ['navigate', 'open-video'],
   data() {
     return {
@@ -276,30 +282,29 @@ export default {
 
 <style scoped>
 .watched-movies-page { max-width: 1000px; margin: 0 auto; padding: 24px 28px 40px; }
-.watched-movies-heading h2 { margin: 0 0 6px; }
-.watched-movies-heading p, .watched-movies-hint, .watched-movies-note { color: var(--text-secondary); font-size: 13px; }
-.watched-movies-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 20px 0 12px; }
-.watched-movies-summary { color: var(--text-secondary); font-size: 13px; }
-.watched-movies-toolbar .btn-secondary { margin-left: auto; }
+.watched-movies-note { color: var(--text-secondary); font-size: var(--fs-secondary); }
+.watched-movies-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
+.watched-movies-summary { color: var(--text-secondary); font-size: var(--fs-secondary); }
+.watched-movies-toolbar .btn { margin-left: auto; }
 .watched-movies-note { margin: 0 0 14px; line-height: 1.6; }
-.watched-movies-error { color: var(--danger-color); overflow-wrap: anywhere; }
-.watched-movies-empty { padding: 40px 16px; text-align: center; color: var(--text-secondary); }
+.watched-movies-error { color: var(--danger-text); overflow-wrap: anywhere; }
+.watched-movies-skeleton, .watched-movies-empty { margin-top: var(--space-2); }
 .watched-movies-group { margin-bottom: 22px; }
-.watched-movies-group-title { margin: 0 0 10px; font-size: 14px; color: var(--text-secondary); font-weight: 600; }
+.watched-movies-group-title { margin: 0 0 10px; font-size: var(--fs-body); color: var(--text-secondary); font-weight: var(--fw-semibold); }
 .watched-movies-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .watched-movies-item { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-faint); }
 /* 与榜单页同形：按高度定尺寸、宽度随原图比例走，横版剧照不会被裁成一条。 */
 .watched-movies-poster { flex: 0 0 auto; align-self: flex-start; height: 108px; width: auto; max-width: 90px; border-radius: var(--radius); object-fit: contain; background: var(--surface-muted, transparent); }
 .watched-movies-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
-.watched-movies-title { font-size: 15px; overflow-wrap: anywhere; }
-.watched-movies-marked-at { color: var(--text-secondary); font-size: 12px; }
+.watched-movies-title { font-size: var(--fs-body); overflow-wrap: anywhere; }
+.watched-movies-marked-at { color: var(--text-secondary); font-size: var(--fs-caption); }
 .watched-movies-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
-.watched-movies-library { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--text-secondary); }
-.watched-movies-library__label { color: var(--text-primary); font-weight: 600; }
+.watched-movies-library { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); font-size: var(--fs-secondary); color: var(--text-secondary); }
+.watched-movies-library__label { color: var(--text-primary); font-weight: var(--fw-semibold); }
 .watched-movies-library__match { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 
 @media (max-width: 560px) {
   .watched-movies-poster { height: 84px; max-width: 70px; }
-  .watched-movies-toolbar .btn-secondary { margin-left: 0; }
+  .watched-movies-toolbar .btn { margin-left: 0; }
 }
 </style>

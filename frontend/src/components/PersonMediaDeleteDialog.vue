@@ -1,22 +1,20 @@
 <template>
   <Teleport to="body">
-    <div :class="['person-media-delete-layer', { 'person-media-delete-layer--notice': stage === 'done' }]">
-      <BaseModal v-if="stage === 'confirm'" aria-label="确认删除媒体" data-test="person-media-delete-dialog" @close="close">
-        <h3>删除{{ kindLabel }}</h3>
+    <div :class="['person-media-delete-layer', { 'person-media-delete-layer--notice': stage !== 'confirm', 'person-media-delete-layer--pending': confirmFirst === null }]">
+      <DialogShell v-if="stage === 'confirm'" :title="actionTitle" size="sm" :busy="busy" data-test="person-media-delete-dialog" @close="close">
         <p>{{ target.media.name }} · {{ formatBytes(target.media.size) }}</p>
-        <p>删除后，该{{ kindLabel }}会从片库及所有人物的活跃作品中移除。</p>
+        <p>移除后，该{{ kindLabel }}会从{{ libraryLabel }}及所有人物的活跃作品中移除。</p>
         <label class="person-media-delete-option"><input v-model="deleteFile" type="checkbox" :disabled="busy" data-test="person-media-delete-file" />同时把原文件移到废纸篓</label>
         <!-- 两种后果与片库删除确认框同一口径（D-PC01/03）。 -->
         <p data-test="person-media-delete-consequence">{{ deleteFile ? trashHint : recordOnlyHint }}</p>
-        <p v-if="error" role="alert">{{ error }}</p>
-        <div class="modal-actions">
-          <button type="button" class="btn-danger" :disabled="busy" data-test="person-media-delete-confirm" @click="confirm">{{ busy ? '删除中…' : '确认删除' }}</button>
-          <button type="button" class="btn-secondary" :disabled="busy" @click="close">取消</button>
-        </div>
-      </BaseModal>
-      <!-- 删除走带结果码的批量接口（D-PC02/04）：不支持废纸篓时二选一、删完给整批撤销条。
-           撤销条消失之前本组件保持挂载，关掉之后才通知宿主收起。视频与图片各一个撤销条、种类固定：
-           宿主在撤销条还在时换成另一种媒体，前一次的撤销仍按原来的种类恢复。 -->
+        <p v-if="error" class="person-media-delete-error" role="alert">{{ error }}</p>
+        <template #footer>
+          <button type="button" class="btn btn--secondary" :disabled="busy" @click="close">取消</button>
+          <button type="button" class="btn btn--danger" :disabled="busy" data-test="person-media-delete-confirm" @click="confirm">{{ busy ? '处理中…' : actionLabel }}</button>
+        </template>
+      </DialogShell>
+      <!-- 删除宿主（D-PC02/04）：批量删除的进度、不支持废纸篓时二选一、从回收站恢复。视频与图片各一个、种类固定。
+           删完的撤销走全局提示（notifyUndoable），不再用这里的页内撤销条。 -->
       <div class="person-media-delete-notice">
         <TrashUndoBanner ref="videoTrashUndo" kind="video" :after-restore="ids => afterRestore('video', ids)" />
         <TrashUndoBanner ref="imageTrashUndo" kind="image" :after-restore="ids => afterRestore('image', ids)" />
@@ -25,33 +23,77 @@
   </Teleport>
 </template>
 <script>
-import BaseModal from './ui/BaseModal.vue';
+import { GetSettings, RestoreTrashBatch } from '../../wailsjs/go/main/App';
+import DialogShell from './ui/DialogShell.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
+import { isTrashItemSuccess, summarizeTrashFailures, trashResultText } from './TrashCenterDialog.vue';
+import { feedbackState, notifyUndoable } from '../utils/feedback.js';
 import { formatBytes } from '../utils/mediaDetails.js';
+
+// 人物页 / 抽屉里删一部视频或一张图片（宿主：EntityLibraryPage、PreviewDrawer）。
+// 先确认还是直接删跟片库删除同一个开关（设置「删除前确认」，默认开；2026-10-13 集成裁决：开关优先于 D-UD-07）：
+//   开：照旧弹确认框（DialogShell），在框里选「同时把原文件移到废纸篓」；
+//   关：不弹框，按设置里的「删除原文件」直接删；删不掉时才把确认框连同原因亮出来，可以重试或取消。
+// 删除走带结果码的批量接口（TrashUndoBanner 的 runDelete：进度、不支持废纸篓时二选一，D-PC02/04）。
+// 删完用全局提示带「撤销」（notifyUndoable，同时记进任务中心「最近操作」），撤销按批次调 RestoreTrashBatch。
+// 提示还在或正在撤销时本组件保持挂载（撤销完要通知宿主重读），提示收起后才发 close；
+// 之后从「最近操作」撤销时本组件已经卸下，只恢复数据，宿主下次读取时才看到。
 export default {
-  name: 'PersonMediaDeleteDialog', components: { BaseModal, TrashUndoBanner },
+  name: 'PersonMediaDeleteDialog', components: { DialogShell, TrashUndoBanner },
   props: { target: { type: Object, required: true } },
   // restored：撤销或从回收站恢复了这一类媒体，载荷 { kind, ids }（ids 为空表示以回收站为准重读）。
   emits: ['close', 'deleted', 'restored'],
-  data: () => ({ deleteFile: false, busy: false, error: '', stage: 'confirm', trashHint: DELETE_TRASH_HINT, recordOnlyHint: DELETE_RECORD_ONLY_HINT }),
-  computed: { kindLabel() { return this.target.kind === 'video' ? '视频' : '图片'; } },
+  data: () => ({
+    deleteFile: false, busy: false, error: '', trashHint: DELETE_TRASH_HINT, recordOnlyHint: DELETE_RECORD_ONLY_HINT,
+    // confirm：确认框（设置读回来之前先挂着但不显示，宿主一打开就有确认框可用）；deleting：不确认直接删；
+    // done：删完、等撤销提示收起。confirmFirst 为 null 表示设置还没读回来。
+    stage: 'confirm', confirmFirst: null, deleteOriginal: false, undoToastID: null, undoing: false
+  }),
+  computed: {
+    kindLabel() { return this.target.kind === 'video' ? '视频' : '图片'; },
+    libraryLabel() { return this.target.kind === 'video' ? '片库' : '图片库'; },
+    // 删除用词（D-UD-08）：勾了「同时把原文件移到废纸篓」就是移到废纸篓，否则只从库里移除记录、文件不动。
+    actionLabel() { return this.deleteFile ? '移到废纸篓' : `从${this.libraryLabel}移除`; },
+    actionTitle() { return this.deleteFile ? `把${this.kindLabel}移到废纸篓` : `从${this.libraryLabel}移除${this.kindLabel}`; },
+    undoToastShown() { return this.undoToastID !== null && feedbackState.toasts.some(toast => toast.id === this.undoToastID); }
+  },
   watch: {
-    // 撤销条还在时宿主又打开了另一条的删除：回到确认步骤，撤销条留给新的一次删除覆盖。
-    target() { this.stage = 'confirm'; this.deleteFile = false; this.error = ''; }
+    // 上一次删除的撤销提示还在时宿主又打开了另一条：重新开始（按同一个开关决定先确认还是直接删）。
+    target() { this.start(); },
+    undoToastShown() { this.closeAfterNotice(); }
   },
   mounted() {
     window.addEventListener('keydown', this.escape, true);
-    this.$watch(() => [this.$refs.videoTrashUndo?.undoNotice, this.$refs.imageTrashUndo?.undoNotice], notices => {
-      if (this.stage === 'done' && !notices.some(Boolean)) this.$emit('close');
-    });
+    this.start();
   },
-  beforeUnmount() { window.removeEventListener('keydown', this.escape, true); },
+  beforeUnmount() { this.disposed = true; window.removeEventListener('keydown', this.escape, true); },
   methods: {
     formatBytes,
     close() { if (!this.busy) this.$emit('close'); },
-    // 只在确认步骤里接管 Esc；撤销条阶段不拦别的弹窗与抽屉的 Esc。
+    // 只在确认步骤里接管 Esc；其余阶段不拦别的弹窗与抽屉的 Esc。
     escape(event) { if (this.stage === 'confirm' && event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); this.close(); } },
+    async start() {
+      this.error = ''; this.deleteFile = false; this.undoToastID = null; this.stage = 'confirm';
+      if (this.confirmFirst === null) await this.loadSettings();
+      // 设置读回来之前已经在确认框里点了删除（或已卸下）：按已经开始的那次走。
+      if (this.disposed || this.confirmFirst || this.busy || this.stage !== 'confirm') return;
+      this.stage = 'deleting';
+      this.deleteFile = this.deleteOriginal;
+      await this.confirm();
+      // 不确认直接删却没删掉：亮出确认框和原因，让用户重试或取消。
+      if (this.stage === 'deleting') this.stage = 'confirm';
+    },
+    // 设置读不出来时按开关的默认值（开）处理：先确认再删。
+    async loadSettings() {
+      try {
+        const settings = await GetSettings();
+        this.confirmFirst = settings?.confirm_before_delete !== false;
+        this.deleteOriginal = Boolean(settings?.delete_original_file);
+      } catch (_err) {
+        this.confirmFirst = true;
+      }
+    },
     async confirm() {
       if (this.busy) return;
       const target = this.target;
@@ -68,13 +110,48 @@ export default {
           return;
         }
         this.$emit('deleted', target);
-        // 同一时刻只留一个撤销条（两个会叠在同一个位置）：换了种类就收起另一种的。
-        this.bannerFor(target.kind === 'video' ? 'image' : 'video')?.dismissNotice();
-        banner.showDeleteNotice(outcome, { reportFailures: false });
-        if (banner.undoNotice) this.stage = 'done';
-        else this.$emit('close');
+        this.stage = 'done';
+        this.showUndo(outcome, banner.noticeText(outcome));
       } catch (err) { this.error = `删除失败：${err}`; }
       finally { this.busy = false; }
+    },
+    // 只删记录与移到废纸篓的项可以整批撤销；文件本就不在、或已永久删除的没有可撤销的批次，只提示结果。
+    showUndo(outcome, text) {
+      const kind = outcome.kind || this.target.kind;
+      const batchIDs = [...outcome.batchIDs];
+      const restorableIDs = [...outcome.trashed, ...outcome.recordOnly];
+      if (!text || !batchIDs.length || !restorableIDs.length) {
+        this.$emit('close');
+        return;
+      }
+      this.undoToastID = notifyUndoable(text, () => this.undoDelete(kind, batchIDs, restorableIDs));
+    },
+    // 撤销：按批次恢复（与 TrashUndoBanner 的「撤销本次删除」同一组接口与口径）。有项没回来时整体算失败
+    // （提示「撤销失败：…」，「最近操作」里留着可以再试），并让宿主以回收站为准重读。
+    async undoDelete(kind, batchIDs, restorableIDs) {
+      this.undoing = true;
+      try {
+        let restored = 0;
+        const failures = [];
+        for (const batchID of batchIDs) {
+          const result = await RestoreTrashBatch(kind, batchID);
+          for (const item of result?.items || []) {
+            if (isTrashItemSuccess(item.code)) restored += 1;
+            else failures.push({ id: item.id, code: item.code, text: trashResultText(item.code, item.message) });
+          }
+        }
+        if (failures.length) {
+          this.afterRestore(kind, []);
+          throw new Error(`恢复 ${restored} 项，${failures.length} 项未恢复：${summarizeTrashFailures(failures)}`);
+        }
+        this.afterRestore(kind, restorableIDs);
+      } finally {
+        this.undoing = false;
+        this.closeAfterNotice();
+      }
+    },
+    closeAfterNotice() {
+      if (this.stage === 'done' && !this.undoing && !this.undoToastShown && !this.disposed) this.$emit('close');
     },
     bannerFor(kind) {
       return kind === 'video' ? this.$refs.videoTrashUndo : this.$refs.imageTrashUndo;
@@ -87,15 +164,14 @@ export default {
 </script>
 <style scoped>
 .person-media-delete-layer { position: fixed; inset: 0; z-index: 1500; }
-/* 撤销条阶段不再挡住页面：只有撤销条（以及从它打开的回收站、二选一弹窗）可以点。
-   容器本身不定位、不做 transform：否则里面的 fixed 弹窗会以它为参照，层级也会被它困住。 */
+/* 设置读回来之前确认框先挂着但不显示：开关关着时不会闪一下确认框。 */
+.person-media-delete-layer--pending { visibility: hidden; }
+/* 确认框以外的阶段（直接删、等撤销提示收起）不挡住页面：只有删除进度、不支持废纸篓时的二选一
+   与回收站可以点。里面的容器不定位、不做 transform：否则里面的 fixed 弹窗会以它为参照，层级也会被它困住。
+   z-index 1500 暂不换刻度：从 ImageSourceDialog（1300）上打开时要压在它上面，等对话框层统一换到 --z-modal 再一起改。 */
 .person-media-delete-layer--notice { pointer-events: none; }
 .person-media-delete-notice { pointer-events: auto; }
-.person-media-delete-notice :deep(.undo-delete-banner) {
-  position: fixed; left: 16px; right: 16px; bottom: 72px; z-index: 1;
-  max-width: 640px; margin: 0 auto;
-  background: var(--panel-bg); box-shadow: var(--shadow-modal);
-}
 .person-media-delete-option { display: flex; align-items: center; gap: 8px; }
 .person-media-delete-option input { width: auto; margin: 0; }
+.person-media-delete-error { color: var(--danger-text); }
 </style>

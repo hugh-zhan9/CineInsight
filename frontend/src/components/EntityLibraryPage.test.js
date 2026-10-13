@@ -245,7 +245,8 @@ describe('EntityLibraryPage', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.findAll('.entity-video-card')).toHaveLength(2);
 
-    await wrapper.find('.entity-video-card__actions .btn-primary').trigger('click');
+    // 按钮换成统一按钮类（统一设计 D-UD-06）：主操作是 .btn--primary。
+    await wrapper.find('.entity-video-card__actions .btn--primary').trigger('click');
     expect(api.PlayVideo).toHaveBeenCalledWith(2);
   });
 

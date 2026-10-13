@@ -1,9 +1,6 @@
 <template>
   <section class="page-content watchlist-page">
-    <header class="watchlist-heading">
-      <h2>想看</h2>
-      <p>记下想看但还没收进片库的影片，选好类型后自动去对应的资料源补全信息。</p>
-    </header>
+    <PageHeader title="想看" subtitle="记下想看但还没收进片库的影片，选好类型后自动去对应的资料源补全信息。" />
 
     <form class="watchlist-form" data-test="watchlist-form" @submit.prevent="save">
       <label for="watchlist-title">{{ editID ? '修改片名' : '添加想看的影片' }}</label>
@@ -14,10 +11,10 @@
         </select>
         <input id="watchlist-title" ref="titleInput" v-model="title" class="text-input" type="text"
           placeholder="输入片名或番号，回车添加" :disabled="busy" data-test="watchlist-title" />
-        <button class="btn-primary" type="submit" :disabled="!canSave" data-test="watchlist-save">
+        <button class="btn btn--primary" type="submit" :disabled="!canSave" data-test="watchlist-save">
           {{ busy ? '处理中…' : editID ? '保存修改' : '添加' }}
         </button>
-        <button v-if="editID" class="btn-secondary" type="button" :disabled="busy"
+        <button v-if="editID" class="btn btn--secondary" type="button" :disabled="busy"
           data-test="watchlist-cancel" @click="resetDraft">取消</button>
       </div>
     </form>
@@ -25,13 +22,23 @@
     <div class="watchlist-search-row">
       <input v-model="keyword" class="text-input" type="search" placeholder="搜索片名" aria-label="搜索想看片名"
         :disabled="busy" data-test="watchlist-search" @input="search" />
-      <button class="btn-secondary" type="button" :disabled="loading || busy" @click="load()">刷新</button>
+      <button class="btn btn--secondary" type="button" :disabled="loading || busy" @click="load()">刷新</button>
     </div>
     <p v-if="error" class="watchlist-error" role="alert" data-test="watchlist-error">{{ error }}</p>
-    <p v-if="loading" class="watchlist-hint" role="status">正在读取…</p>
-    <p v-else-if="loaded && !entries.length && !nextID && !error" class="watchlist-empty" data-test="watchlist-empty">
-      {{ keyword.trim() ? '没有匹配的片名' : '还没有想看的影片，先记下一部吧。' }}
-    </p>
+    <p v-if="loading && entries.length" class="watchlist-hint" role="status">正在读取…</p>
+    <SkeletonBlock v-else-if="loading" class="watchlist-skeleton" :lines="4" data-test="watchlist-loading" />
+    <EmptyState
+      v-else-if="loaded && !entries.length && !nextID && !error"
+      class="watchlist-empty"
+      icon="inbox"
+      :title="keyword.trim() ? '没有匹配的片名' : '还没有想看的影片，先记下一部吧。'"
+      :message="keyword.trim() ? '换个关键词再搜，或者清空搜索看全部。' : '在上面输入片名或番号，回车就能添加。'"
+      data-test="watchlist-empty"
+    >
+      <template v-if="keyword.trim()" #actions>
+        <button class="btn btn--secondary btn--sm" type="button" data-test="watchlist-clear-search" @click="clearSearch">清空搜索</button>
+      </template>
+    </EmptyState>
 
     <ul class="watchlist-list">
       <li v-for="entry in entries" :key="entry.id" class="watchlist-entry" data-test="watchlist-entry">
@@ -63,9 +70,9 @@
             <div v-if="linkedText(entry)" class="watchlist-library" :data-test="`watchlist-linked-${entry.id}`">
               <span>{{ linkedText(entry) }}</span>
               <!-- 关联错了要能撤回（D-PC52）：只断开已看同步，不动片单条目与视频本身。 -->
-              <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading"
+              <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
                 :data-test="`watchlist-unlink-${entry.id}`" @click="unlink(entry)">取消关联</button>
-              <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy || loading"
+              <button class="btn btn--danger btn--sm" type="button" :disabled="busy || loading"
                 :data-test="`watchlist-remove-after-link-${entry.id}`" @click="remove(entry)">移除（片单）</button>
             </div>
             <div v-else-if="suggestionsOf(entry).length" class="watchlist-library" :data-test="`watchlist-suggestions-${entry.id}`">
@@ -73,30 +80,30 @@
               <span v-for="suggestion in suggestionsOf(entry)" :key="suggestion.video_id" class="watchlist-library__match"
                 :data-test="`watchlist-suggestion-${entry.id}-${suggestion.video_id}`">
                 {{ suggestion.display_title || suggestion.name }}
-                <button v-if="doubanIDOf(entry)" class="btn-secondary btn-compact" type="button" :disabled="busy || loading"
+                <button v-if="doubanIDOf(entry)" class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
                   :data-test="`watchlist-link-${entry.id}-${suggestion.video_id}`" @click="linkSuggestion(entry, suggestion)">关联</button>
               </span>
-              <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy || loading"
+              <button class="btn btn--danger btn--sm" type="button" :disabled="busy || loading"
                 :data-test="`watchlist-remove-suggested-${entry.id}`" @click="remove(entry)">移除（片单）</button>
               <span v-if="!doubanIDOf(entry)" class="watchlist-library__hint">补全到豆瓣条目后才能关联片库视频。</span>
             </div>
           </div>
         </div>
         <div class="watchlist-actions">
-          <button v-if="entry.enrichment_status === 'failed'" class="btn-secondary btn-compact" type="button"
+          <button v-if="entry.enrichment_status === 'failed'" class="btn btn--secondary btn--sm" type="button"
             :disabled="busy || loading" :data-test="`watchlist-retry-${entry.id}`" @click="retry(entry)">重试补全</button>
-          <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading"
+          <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
             :data-test="`watchlist-candidates-${entry.id}`" @click="openCandidates(entry)">重选结果</button>
-          <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading"
+          <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
             :data-test="`watchlist-edit-${entry.id}`" @click="startEdit(entry)">改名</button>
-          <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy || loading"
+          <button class="btn btn--danger btn--sm" type="button" :disabled="busy || loading"
             :data-test="`watchlist-remove-${entry.id}`" @click="remove(entry)">移除</button>
         </div>
 
         <div v-if="candidateEntryID === entry.id" class="watchlist-candidates" data-test="watchlist-candidate-panel">
           <div class="watchlist-candidates-head">
             <strong>为「{{ entry.title }}」重选匹配结果</strong>
-            <button class="btn-secondary btn-compact" type="button" data-test="watchlist-candidate-close"
+            <button class="btn btn--secondary btn--sm" type="button" data-test="watchlist-candidate-close"
               @click="closeCandidates">关闭</button>
           </div>
           <p v-if="candidateLoading" class="watchlist-hint" role="status">正在查询候选…</p>
@@ -117,14 +124,14 @@
                 </span>
                 <span v-if="candidate.overview" class="watchlist-candidate-overview">{{ candidate.overview }}</span>
               </div>
-              <button class="btn-primary btn-compact" type="button" :disabled="busy"
+              <button class="btn btn--primary btn--sm" type="button" :disabled="busy"
                 :data-test="`watchlist-candidate-apply-${index}`" @click="applyCandidate(candidate)">用这个</button>
             </li>
           </ul>
         </div>
       </li>
     </ul>
-    <button v-if="nextID" class="btn-secondary watchlist-more" type="button" :disabled="loading || busy"
+    <button v-if="nextID" class="btn btn--secondary watchlist-more" type="button" :disabled="loading || busy"
       data-test="watchlist-more" @click="load(true)">加载更多</button>
   </section>
 </template>
@@ -134,6 +141,9 @@ import {
   ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, LinkMovieToVideo, ListMovieVideoLinks, ListWatchlist,
   ListWatchlistCandidates, RetryWatchlistEnrichment, SuggestLibraryMatchesBatch, UnlinkMovieVideo, UpdateWatchlistEntry
 } from '../../wailsjs/go/main/App';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
 // D-WM02 的五个类型，顺序即下拉框顺序，默认落在第一个（电影）。
@@ -197,6 +207,7 @@ function libraryMatchKey(title, year) {
 
 export default {
   name: 'WatchlistPage',
+  components: { EmptyState, PageHeader, SkeletonBlock },
   data() {
     return {
       entries: [], nextID: 0, keyword: '', title: '', kind: DEFAULT_KIND, kindTouched: false,
@@ -251,6 +262,11 @@ export default {
       } finally {
         if (requestID === this.requestID) this.loading = false;
       }
+    },
+    // 空结果里的「清空搜索」：回到全部条目。
+    clearSearch() {
+      this.keyword = '';
+      this.search();
     },
     search() {
       this.entries = [];
@@ -573,10 +589,10 @@ export default {
 
 <style scoped>
 .watchlist-page { max-width: 960px; margin: 0 auto; padding: 24px 28px 40px; }
-.watchlist-heading h2 { margin: 0 0 6px; }
-.watchlist-heading p, .watchlist-hint { color: var(--text-secondary); font-size: 13px; }
-.watchlist-form { margin: 24px 0; padding: 18px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-faint); }
-.watchlist-form label { display: block; margin-bottom: 10px; font-weight: 600; font-size: 13px; }
+.watchlist-hint { color: var(--text-secondary); font-size: var(--fs-secondary); }
+.watchlist-skeleton { margin-top: var(--space-2); }
+.watchlist-form { margin: 0 0 24px; padding: 18px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-faint); }
+.watchlist-form label { display: block; margin-bottom: 10px; font-weight: var(--fw-semibold); font-size: var(--fs-secondary); }
 .watchlist-form-row, .watchlist-search-row, .watchlist-actions { display: flex; align-items: center; gap: 10px; }
 .watchlist-form-row { flex-wrap: wrap; }
 .watchlist-form-row .text-input, .watchlist-search-row .text-input { flex: 1; min-width: 0; }
@@ -613,28 +629,28 @@ export default {
   .watchlist-poster { height: 120px; max-width: 190px; }
 }
 .watchlist-entry-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
-.watchlist-entry-info strong { overflow-wrap: anywhere; font-size: 15px; }
+.watchlist-entry-info strong { overflow-wrap: anywhere; font-size: var(--fs-body); }
 /* 源站片名：只读补充，视觉上明确弱于用户手输的主标题。
    长片名在窄屏上会占掉整行，所以允许换行而不是省略号——它本身就是信息。 */
-.watchlist-source-title { color: var(--text-secondary); font-size: 13px; line-height: 1.4; word-break: break-word; }
+.watchlist-source-title { color: var(--text-secondary); font-size: var(--fs-secondary); line-height: 1.4; word-break: break-word; }
 
-.watchlist-entry-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
-.watchlist-kind-tag, .watchlist-status, .watchlist-origin-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; }
-.watchlist-library { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--text-secondary); }
-.watchlist-library__label { color: var(--text-primary); font-weight: 600; }
+.watchlist-entry-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--fs-caption); }
+.watchlist-kind-tag, .watchlist-status, .watchlist-origin-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: var(--radius-pill); }
+.watchlist-library { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); font-size: var(--fs-secondary); color: var(--text-secondary); }
+.watchlist-library__label { color: var(--text-primary); font-weight: var(--fw-semibold); }
 .watchlist-library__match { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
-.watchlist-library__hint { flex-basis: 100%; font-size: 12px; }
-.watchlist-failure { margin: 0; color: var(--danger-color); font-size: 12px; overflow-wrap: anywhere; }
-.watchlist-detail-line { margin: 0; color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.watchlist-overview { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.watchlist-library__hint { flex-basis: 100%; font-size: var(--fs-caption); }
+.watchlist-failure { margin: 0; color: var(--danger-text); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.watchlist-detail-line { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.watchlist-overview { margin: 0; font-size: var(--fs-secondary); line-height: 1.5; overflow-wrap: anywhere; }
 .watchlist-candidates { flex: 1 0 100%; margin-top: 4px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-color, transparent); }
 .watchlist-candidates-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .watchlist-candidate-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .watchlist-candidate { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); }
 .watchlist-candidate-info { display: grid; gap: 4px; min-width: 0; }
-.watchlist-candidate-meta { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.watchlist-candidate-overview { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.watchlist-empty { padding: 40px 16px; text-align: center; color: var(--text-secondary); }
-.watchlist-error { color: var(--danger-color); overflow-wrap: anywhere; }
+.watchlist-candidate-meta { color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.watchlist-candidate-overview { font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.watchlist-empty { margin-top: var(--space-2); }
+.watchlist-error { color: var(--danger-text); overflow-wrap: anywhere; }
 .watchlist-more { display: block; margin: 20px auto 0; }
 </style>

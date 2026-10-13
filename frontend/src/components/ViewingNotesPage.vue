@@ -1,10 +1,12 @@
 <template>
   <main class="page-content viewing-notes-page" data-test="viewing-notes-page">
-    <header class="notes-header"><h2>观看笔记</h2><button type="button" class="btn-primary" data-test="diary-add" @click="editor = {}">手动补记</button></header>
-    <nav class="notes-tabs" aria-label="观看笔记分类"><button v-for="item in tabs" :key="item.key" type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': tab === item.key }]" :aria-pressed="tab === item.key" :data-test="`notes-tab-${item.key}`" @click="tab = item.key">{{ item.label }}</button></nav>
+    <PageHeader title="观看笔记" subtitle="观影日记、片段书签，以及无法确认观看的播放记录。">
+      <template #actions><button type="button" class="btn btn--primary" data-test="diary-add" @click="editor = {}">手动补记</button></template>
+    </PageHeader>
+    <nav class="notes-tabs" aria-label="观看笔记分类"><button v-for="item in tabs" :key="item.key" type="button" :class="['notes-tabs__tab', { 'notes-tabs__tab--on': tab === item.key }]" :aria-pressed="tab === item.key" :data-test="`notes-tab-${item.key}`" @click="tab = item.key">{{ item.label }}</button></nav>
     <BookmarkPanel v-if="tab === 'bookmarks'" :page-active="pageActive" @open-bookmark="$emit('open-bookmark', $event)" @open-video="$emit('open-video', $event)" />
     <template v-else>
-      <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn-secondary btn-compact" :disabled="loading" @click="reset">刷新</button></div>
+      <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reset">刷新</button></div>
       <template v-if="tab === 'diary'">
         <p class="help-text">每次有效观看独立记录，按观看日期汇总；记录数不代表完整看完的电影数。手动补记与自动记录各自保留。</p>
         <p class="help-text">第三方播放器只有提供独立、可靠的观看会话才能自动记入；无法确认的重看可手动补记。</p>
@@ -17,7 +19,10 @@
         </section>
       </template>
       <p v-else class="help-text">这里仅能确认曾启动播放，无法据此推算观看时长。补记时请确认观看日期；原始播放记录仍保留。</p>
-      <p v-if="error" class="notes-alert" role="alert">{{ error }}</p><p v-if="loading" class="empty-hint">正在读取…</p><p v-else-if="!error && !items.length" class="empty-hint">当前条件没有记录</p>
+      <p v-if="error" class="notes-alert" role="alert">{{ error }}</p>
+      <SkeletonBlock v-if="loading && !items.length" :lines="3" data-test="notes-loading" />
+      <p v-else-if="loading" class="empty-hint">正在读取…</p>
+      <EmptyState v-else-if="!error && !items.length" title="当前条件没有记录" :message="tab === 'diary' ? '换个年份或关键词试试，也可以用「手动补记」记下一次观看。' : '换个关键词试试。'" data-test="notes-empty" />
       <template v-for="(item, index) in items" :key="item.id">
         <h3 v-if="tab === 'diary' && (index === 0 || item.watched_on !== items[index - 1].watched_on)" class="notes-date">{{ item.watched_on }}</h3>
         <article class="notes-entry notes-entry--media" :data-test="tab === 'diary' ? 'diary-row' : 'playback-history-row'">
@@ -28,14 +33,14 @@
           <p v-else>{{ formatDate(item.played_at) }} · {{ sourceName(item.source) }}</p>
           <p v-if="item.video_id && !item.source_available" class="notes-unavailable">原片不可用，记录仍保留</p>
           <div class="notes-toolbar">
-            <button v-if="item.video_id && item.source_available" type="button" class="row-btn" @click="$emit('open-video-id', item.video_id)">打开原片</button>
-            <button type="button" class="row-btn" @click="editor = tab === 'diary' ? item : { title: item.title }">{{ tab === 'diary' ? '修订日记' : '手动补记' }}</button>
-            <button v-if="tab === 'diary'" type="button" class="row-btn" @click="remove(item)">删除日记</button>
+            <button v-if="item.video_id && item.source_available" type="button" class="btn btn--secondary btn--sm" @click="$emit('open-video-id', item.video_id)">打开原片</button>
+            <button type="button" class="btn btn--secondary btn--sm" @click="editor = tab === 'diary' ? item : { title: item.title }">{{ tab === 'diary' ? '修订日记' : '手动补记' }}</button>
+            <button v-if="tab === 'diary'" type="button" class="btn btn--secondary btn--sm" @click="remove(item)">删除日记</button>
           </div>
           </div>
         </article>
       </template>
-      <nav class="notes-toolbar notes-pager" aria-label="记录分页"><button type="button" class="btn-secondary btn-compact" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn-secondary btn-compact" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
+      <nav class="notes-toolbar notes-pager" aria-label="记录分页"><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
     </template>
     <DiaryEditor v-if="editor" :key="editor.id || 'new'" :entry="editor" :active="pageActive" @close="editor = null" @saved="saved" />
   </main>
@@ -45,9 +50,12 @@ import { ListViewingDiary, DeleteViewingDiary, GetViewingYearReview, ListUnconfi
 import BookmarkPanel from './BookmarkPanel.vue';
 import DiaryEditor from './DiaryEditor.vue';
 import NotesThumb from './NotesThumb.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction } from '../utils/feedback.js';
 export default {
-  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { BookmarkPanel, DiaryEditor, NotesThumb }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
+  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
   data: () => ({ tabs: [{ key: 'diary', label: '观影日记' }, { key: 'bookmarks', label: '片段书签' }, { key: 'history', label: '播放记录' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
   watch: { pageActive(active) { if (active) { this.load(); this.loadReview(); } }, tab() { this.reset(); }, year() { this.reset(); }, keyword() { this.reset(); } },
   mounted() { this.reset(); }, beforeUnmount() { this.generation++; this.reviewGeneration++; this._disposed = true; },
@@ -88,20 +96,24 @@ export default {
 </script>
 <style scoped>
 .viewing-notes-page { display: grid; gap: 12px; align-content: start; overflow: auto; box-sizing: border-box; }
-.notes-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.notes-header h2 { margin: 0; font-size: 18px; }
-.notes-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 外观照 AppTabs（页签要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
+   AppTabs 支持逐项钩子后换成组件，删掉这几条）。 */
+.notes-tabs { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-5); border-bottom: 1px solid var(--hairline); }
+.notes-tabs__tab { display: inline-flex; align-items: center; gap: 6px; height: var(--h-unit); margin-bottom: -1px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-body); font-weight: var(--fw-medium); cursor: pointer; white-space: nowrap; }
+.notes-tabs__tab:hover { color: var(--text-primary); }
+.notes-tabs__tab--on { border-bottom-color: var(--accent-color); color: var(--text-primary); font-weight: var(--fw-semibold); }
+.notes-tabs__tab:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; border-radius: var(--radius-sm); }
 .notes-filters { margin-bottom: 0; }
-.notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+.notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; }
 .notes-year .number-input { width: 96px; }
 .viewing-notes-page > .help-text { margin: 0; }
 .diary-recap { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
 .diary-recap p { margin: 0; }
-.diary-recap__summary { font-weight: 600; }
-.diary-recap details { font-size: 13px; color: var(--text-secondary); }
+.diary-recap__summary { font-weight: var(--fw-semibold); }
+.diary-recap details { font-size: var(--fs-secondary); color: var(--text-secondary); }
 .diary-months { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; padding-top: 4px; }
 .diary-months > div { display: grid; gap: 5px; text-align: center; min-width: 38px; }
 .diary-months span { background: var(--accent-color); border-radius: 4px 4px 0 0; }
-.diary-months small { color: var(--text-muted); font-size: 11px; }
-.notes-date { margin: 8px 0 0; font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+.diary-months small { color: var(--text-muted); font-size: var(--fs-caption); }
+.notes-date { margin: 8px 0 0; font-size: var(--fs-secondary); color: var(--text-secondary); font-weight: var(--fw-semibold); }
 </style>

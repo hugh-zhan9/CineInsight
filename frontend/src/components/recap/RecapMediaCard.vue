@@ -110,15 +110,15 @@ export default {
   height: 100%;
   background: var(--thumb-fallback-bg);
   color: var(--thumb-fg);
-  font-size: 28px;
+  font-size: var(--fs-display);
 }
 .recap-card__rank {
   position: absolute;
   left: 8px;
   bottom: 2px;
   color: var(--recap-hero-fg);
-  font-size: 34px;
-  font-weight: 800;
+  font-size: var(--fs-display);
+  font-weight: var(--fw-bold);
   line-height: 1;
   letter-spacing: -0.04em;
   text-shadow: 0 2px 12px var(--recap-scrim);
@@ -128,15 +128,15 @@ export default {
   top: 8px;
   right: 8px;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--media-badge-bg);
   color: var(--media-badge-fg);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
 }
 .recap-card__text { display: grid; gap: 2px; min-width: 0; }
-.recap-card__text strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.recap-card__text small { color: var(--text-secondary); font-size: 12px; }
+.recap-card__text strong { overflow: hidden; font-size: var(--fs-secondary); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.recap-card__text small { color: var(--text-secondary); font-size: var(--fs-caption); }
 .recap-card--tile .recap-card__media { border-radius: var(--radius); }
 @media (prefers-reduced-motion: reduce) {
   .recap-card__media, .recap-card__media img { transition: none; }

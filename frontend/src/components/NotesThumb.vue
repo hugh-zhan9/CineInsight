@@ -31,5 +31,5 @@ export default {
 .notes-thumb:disabled { cursor: default; }
 .notes-thumb:not(:disabled):hover { border-color: var(--border-strong); }
 .notes-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.notes-thumb__fallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: var(--thumb-fallback-bg); color: var(--thumb-fg); font-size: 12px; }
+.notes-thumb__fallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: var(--thumb-fallback-bg); color: var(--thumb-fg); font-size: var(--fs-caption); }
 </style>
