@@ -2615,7 +2615,8 @@ describe('P-032 评审 I-3 的父组件用例', () => {
     api.PermanentlyDeleteVideos.mockResolvedValue({ items: [{ id: 7, code: 'ok' }] });
     const wrapper = await mountPage({}, {
       attachTo: document.body,
-      global: { stubs: { TrashUndoBanner: false, TrashUnsupportedDialog: false, BaseModal: false } }
+      // 二选一出现时 teleport 到 body（见 tokens.css「层级」）；teleport 桩让它留在页面子树里查。
+      global: { stubs: { teleport: true, TrashUndoBanner: false, TrashUnsupportedDialog: false, BaseModal: false } }
     });
     wrapper.vm.videos = [{ id: 1, name: 'keep.mp4', tags: [] }];
 

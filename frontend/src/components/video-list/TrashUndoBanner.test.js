@@ -38,10 +38,11 @@ function result(items, batchID = 'batch-1') {
   return { batch_id: batchID, requested: items.length, succeeded: ok, cancelled, failed: items.length - ok - cancelled, items };
 }
 
+// 「不支持废纸篓」二选一出现时才 teleport 到 body（层级按打开先后，见 tokens.css「层级」）：用 teleport 桩留在子树里查。
 function mountBanner(props = {}) {
   return mount(TrashUndoBanner, {
     props: { afterRestore: vi.fn().mockResolvedValue(), ...props },
-    global: { stubs: { TrashCenterDialog: { props: ['visible', 'initialTab'], template: '<div class="trash-center-stub" />' } } }
+    global: { stubs: { teleport: true, TrashCenterDialog: { props: ['visible', 'initialTab'], template: '<div class="trash-center-stub" />' } } }
   });
 }
 

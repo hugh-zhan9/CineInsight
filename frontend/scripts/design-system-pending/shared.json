@@ -1,39 +1,22 @@
 {
   "owner": "App 外壳与公共层（App.vue、styles/、AppFeedback、CommandPalette、QuitConfirmDialog、WallpaperStatusBar、components/ui/）；第 0 步 C 组清零",
   "pending": {
-    "colors": {
-      "styles/components.css": 2
-    },
+    "colors": {},
     "font-scale": {
-      "App.vue": 14,
-      "components/CommandPalette.vue": 4,
-      "components/QuitConfirmDialog.vue": 5,
-      "components/WallpaperStatusBar.vue": 1,
       "components/ui/ActionMenu.vue": 1,
       "components/ui/BaseMenu.vue": 4,
       "components/ui/StatTile.vue": 9,
-      "styles/components.css": 56
+      "styles/components.css": 3
     },
     "z-index": {
-      "App.vue": 2,
-      "components/AppFeedback.vue": 2,
       "components/ui/ActionMenu.vue": 1,
-      "components/ui/BasePopover.vue": 1,
-      "styles/components.css": 1
+      "components/ui/BasePopover.vue": 1
     },
     "vars": {},
-    "dialogs": {
-      "App.vue": 1,
-      "components/CommandPalette.vue": 1,
-      "components/QuitConfirmDialog.vue": 1
-    },
+    "dialogs": {},
     "page-header": {},
     "wording": {},
     "buttons": {
-      "App.vue": 7,
-      "components/CommandPalette.vue": 1,
-      "components/QuitConfirmDialog.vue": 2,
-      "components/WallpaperStatusBar.vue": 1,
       "components/ui/ActionMenu.vue": 1,
       "components/ui/BaseMenu.vue": 1
     }

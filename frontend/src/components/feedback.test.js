@@ -20,6 +20,10 @@ function listSourceFiles(dir) {
 
 afterEach(() => resetFeedback());
 
+// 确认框打开时 teleport 到 body 末尾（层级按打开先后，见 tokens.css「层级」与 layering.test.js）。
+// 只看确认框本身的用例用 teleport 桩，让它留在组件子树里查。
+const KEEP_CONFIRM_INSIDE = { stubs: { teleport: true } };
+
 describe('应用内提示', () => {
   it('错误提示常驻直到手动关闭，普通提示会自己消失', async () => {
     const wrapper = mount(AppFeedback);
@@ -39,7 +43,7 @@ describe('应用内提示', () => {
   });
 
   it('确认框返回用户的选择，而不是像 window.confirm 那样恒为 false', async () => {
-    const wrapper = mount(AppFeedback);
+    const wrapper = mount(AppFeedback, { global: KEEP_CONFIRM_INSIDE });
 
     const accepted = confirmAction({ title: '删除扫描目录', message: '确定要删除此目录配置吗？' });
     await flushPromises();
@@ -75,7 +79,7 @@ describe('应用内提示', () => {
   });
 
   it('D-UD-07 确认框是 DialogShell：标题、影响说明、取消在左主操作在右；普通确认不要输入', async () => {
-    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const wrapper = mount(AppFeedback, { attachTo: document.body, global: KEEP_CONFIRM_INSIDE });
     const answer = confirmAction({ title: '从片库移除', message: '移除 3 部视频的记录。', confirmText: '从片库移除', impact: '文件不动，只删记录', danger: true });
     await flushPromises();
     const dialog = wrapper.get('[data-test="app-confirm"]');
@@ -91,7 +95,7 @@ describe('应用内提示', () => {
   });
 
   it('D-UD-07 不可逆确认：输入按钮上的原文前不能点，回车也不放行；对上后才能确认', async () => {
-    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const wrapper = mount(AppFeedback, { attachTo: document.body, global: KEEP_CONFIRM_INSIDE });
     const answer = confirmAction({ title: '永久删除', message: '这 2 条记录会被永久删除。', confirmText: '永久删除', level: 'irreversible' });
     await flushPromises();
     const ok = wrapper.get('[data-test="app-confirm-ok"]');
@@ -131,7 +135,7 @@ describe('应用内提示', () => {
   });
 
   it('D-UD-07 不可逆确认：输入法组字中的回车不算确认', async () => {
-    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const wrapper = mount(AppFeedback, { attachTo: document.body, global: KEEP_CONFIRM_INSIDE });
     const answer = confirmAction({ title: '永久删除', confirmText: '永久删除', level: 'irreversible' });
     await flushPromises();
     const input = wrapper.get('[data-test="app-confirm-input"]');
@@ -147,7 +151,7 @@ describe('应用内提示', () => {
   });
 
   it('D-UD-13 不含表单的普通确认点遮罩等于取消；不可逆确认有输入框，点遮罩不关', async () => {
-    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const wrapper = mount(AppFeedback, { attachTo: document.body, global: KEEP_CONFIRM_INSIDE });
     const plain = confirmAction({ title: '从片库移除', message: '移除 3 部视频的记录。' });
     await flushPromises();
     await wrapper.get('.modal-overlay').trigger('click');
@@ -164,7 +168,7 @@ describe('应用内提示', () => {
   });
 
   it('换一个确认框时输入清空', async () => {
-    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const wrapper = mount(AppFeedback, { attachTo: document.body, global: KEEP_CONFIRM_INSIDE });
     const first = confirmAction({ confirmText: '清空', level: 'irreversible' });
     await flushPromises();
     await wrapper.get('[data-test="app-confirm-input"]').setValue('清空');

@@ -160,12 +160,13 @@ export default {
 };
 </script>
 <style scoped>
-.person-media-delete-layer { position: fixed; inset: 0; z-index: 1500; }
+.person-media-delete-layer { position: fixed; inset: 0; z-index: var(--z-modal); }
 /* 设置读回来之前确认框先挂着但不显示：「同时把原文件移到废纸篓」的默认勾选不会闪一下。 */
 .person-media-delete-layer--pending { visibility: hidden; }
-/* 确认框以外的阶段（等撤销提示收起）不挡住页面：只有删除进度、不支持废纸篓时的二选一
-   与回收站可以点。里面的容器不定位、不做 transform：否则里面的 fixed 弹窗会以它为参照，层级也会被它困住。
-   z-index 1500 暂不换刻度：从 ImageSourceDialog（1300）上打开时要压在它上面，等对话框层统一换到 --z-modal 再一起改。 */
+/* 确认框以外的阶段（等撤销提示收起）不挡住页面：只有删除进度与回收站可以点（不支持废纸篓时的二选一出现时
+   自己 teleport 到 body 末尾）。里面的容器不定位、不做 transform：否则里面的 fixed 弹窗会以它为参照，层级也会被它困住。
+   整层与对话框同在 --z-modal：本组件挂载时才 teleport 到 body 末尾，从原图（ImageSourceDialog，同样 teleport）
+   上打开时排在它后面，自然压在它上面（层级规则见 tokens.css「层级」）。 */
 .person-media-delete-layer--notice { pointer-events: none; }
 .person-media-delete-notice { pointer-events: auto; }
 .person-media-delete-option { display: flex; align-items: center; gap: 8px; }

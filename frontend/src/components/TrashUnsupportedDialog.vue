@@ -1,6 +1,5 @@
 <template>
-  <!-- 删除往往是从另一个弹窗（确认框、清理审阅）发起的：这一层要压在它们上面，但让开应用确认框（1500）。 -->
-  <div v-if="visible" class="trash-unsupported-layer">
+  <Teleport v-if="visible" to="body">
     <DialogShell
       :title="step === 'choose' ? '该磁盘不支持废纸篓' : '确认永久删除'"
       size="md"
@@ -60,7 +59,7 @@
         </template>
       </template>
     </DialogShell>
-  </div>
+  </Teleport>
 </template>
 
 <script>
@@ -72,6 +71,8 @@ const PERMANENT_CONFIRM_WORD = '永久删除';
 
 // 卷不支持废纸篓（D-PC02）时让用户二选一：永久删除（列出文件名，输入确认词后才能点），或从片库移除（只删记录）。
 // 这里只收集选择，真正的删除由宿主（TrashUndoBanner）调用；取消即什么都不做，记录保持原样。
+// 删除常从另一个对话框或查看器里发起（清理审阅、图片查看器、人物媒体删除），宿主 TrashUndoBanner 在页面里的位置
+// 却可能排在它们前面：出现时才 teleport 到 body 末尾，DOM 顺序就是打开顺序，同在 --z-modal 也压在它们上面。
 export default {
   name: 'TrashUnsupportedDialog',
   components: { DialogShell },
@@ -135,10 +136,6 @@ export default {
 </script>
 
 <style scoped>
-.trash-unsupported-layer :deep(.modal-overlay) {
-  z-index: 1100;
-}
-
 .trash-unsupported-names {
   max-height: 180px;
   overflow-y: auto;

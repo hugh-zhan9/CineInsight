@@ -117,9 +117,9 @@ export default {
 .face-source-dialog__row img,.face-source-dialog__fallback { width: 88px; height: 88px; object-fit: contain; border-radius: var(--radius-sm); }
 .face-source-dialog__path { overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--fs-caption); }
 .face-source-dialog__remove { margin-left: var(--space-2); }
-/* 全屏看视频片段：要压在打开着的审阅对话框上面。旧的 .modal-overlay（components.css）还在 z-index 1000，
-   层级刻度里没有比它高的档，等公共层把遮罩换成 --z-modal 后改成 var(--z-modal)（见统一设计第 0 步 B3b 交接）。 */
-.face-source-video { position: fixed; inset: 0; z-index: 1200; background: var(--overlay-strong); }
+/* 全屏看视频片段：全屏查看器与对话框同在 --z-modal。本组件挂载时才 teleport 到 body 末尾，排在打开它的
+   审阅对话框后面，自然压在它上面（层级规则见 tokens.css「层级」）。 */
+.face-source-video { position: fixed; inset: 0; z-index: var(--z-modal); background: var(--overlay-strong); }
 .face-source-video :deep(.preview-drawer) { width: min(900px, 94vw); max-width: 94vw; }
 .face-source-video__error { position: absolute; bottom: 15px; right: 20px; z-index: 1; padding: var(--space-3); background: var(--panel-bg); }
 </style>

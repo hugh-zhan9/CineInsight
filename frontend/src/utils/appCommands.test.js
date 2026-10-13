@@ -145,7 +145,7 @@ describe('应用级命令注册', () => {
     expect(pageArea('no-such-page')).toBeNull();
     // 管理侧的三个动作入口走既有命令。
     expect(MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => page.command).map(page => [page.label, page.command])).toEqual([
-      ['待处理', 'action:pending-work'], ['清理中心', 'action:cleanup'], ['任务与诊断', 'action:task-center']
+      ['待处理', 'action:pending-work'], ['清理中心', 'action:cleanup'], ['任务中心', 'action:task-center']
     ]);
   });
 

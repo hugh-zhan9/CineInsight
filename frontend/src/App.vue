@@ -1,16 +1,17 @@
 <template>
   <div id="app" class="app-shell glass-app-shell">
-    <div class="header glass-surface">
+    <div class="header">
       <div class="header-left">
         <h1>析微影策</h1>
       </div>
       <!-- 顶栏两套导航（D-UI-02、D-UI-09）：区域由当前页面推出，只显示这一侧的导航；组间分隔，
            「片单」收成下拉；「下载」只在开启浏览器插件桥接时出现。页面清单与命令面板同一份
            （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的三项是动作：
-           执行命令面板里同 ID 的既有命令，打开待处理、清理中心与任务中心。 -->
+           执行命令面板里同 ID 的既有命令，打开待处理、清理中心与任务中心。
+           导航项是 .btn .btn--ghost，尺寸与选中态由下面的 .header .nav-btn 收窄。 -->
       <nav class="header-nav" aria-label="页面导航" :data-test="`nav-area-${area}`">
         <template v-if="area === 'manage'">
-          <button type="button" class="nav-btn" data-test="nav-back-to-viewer" @click="navigateTo('home')">返回观看</button>
+          <button type="button" class="btn btn--ghost nav-btn" data-test="nav-back-to-viewer" @click="navigateTo('home')">返回观看</button>
           <span class="header-nav__divider" aria-hidden="true"></span>
         </template>
         <template v-for="(group, index) in visibleNavGroups" :key="group.key">
@@ -19,7 +20,7 @@
             <button
               v-if="group.menu"
               type="button"
-              :class="['nav-btn', { active: group.pages.some(page => page.key === currentPage) }]"
+              :class="['btn', 'btn--ghost', 'nav-btn', { active: group.pages.some(page => page.key === currentPage) }]"
               aria-haspopup="menu"
               :aria-expanded="navMenu && navMenu.key === group.key ? 'true' : 'false'"
               :data-test="`nav-menu-${group.key}`"
@@ -30,7 +31,7 @@
                 v-for="page in group.pages"
                 :key="page.key"
                 type="button"
-                :class="['nav-btn', { active: currentPage === page.key }]"
+                :class="['btn', 'btn--ghost', 'nav-btn', { active: currentPage === page.key }]"
                 :data-test="page.command ? `open-${page.key}` : `nav-${page.key}`"
                 :aria-label="page.key === 'task-center' ? `${page.label}${taskIndicatorStatus}` : undefined"
                 @click="selectNavItem(page)"
@@ -59,8 +60,8 @@
       />
       <!-- 观看区右侧：待播队列与「管理」入口，待处理数量作为角标挂在「管理」上（D-UI-02）。 -->
       <div v-if="!startupError && area === 'viewer'" class="header-tools">
-        <button type="button" class="header-tool-btn" data-test="open-playback-queue" @click="playbackQueueOpen = true">待播队列</button>
-        <button type="button" class="header-tool-btn" data-test="open-manage" @click="navigateTo('manage-home')">
+        <button type="button" class="btn btn--secondary btn--sm header-tool-btn" data-test="open-playback-queue" @click="playbackQueueOpen = true">待播队列</button>
+        <button type="button" class="btn btn--secondary btn--sm header-tool-btn" data-test="open-manage" @click="navigateTo('manage-home')">
           管理
           <span v-if="pendingWorkTotal > 0" class="header-badge" data-test="manage-pending-badge">{{ badgeText(pendingWorkTotal) }}</span>
         </button>
@@ -84,7 +85,7 @@
         <p v-else class="startup-error-hint" data-test="startup-error-postgres-hint">
           当前使用 Postgres 数据库：如果你是双击启动应用，请优先检查 macOS 是否已允许“析微影策”访问本地网络，并确认 Postgres 地址和端口可达。
         </p>
-        <button type="button" class="btn-secondary" data-test="startup-open-diagnostics" @click="startupDiagnosticsOpen = true">运行状态与诊断</button>
+        <button type="button" class="btn btn--secondary" data-test="startup-open-diagnostics" @click="startupDiagnosticsOpen = true">运行状态与诊断</button>
       </div>
     </div>
 
@@ -264,16 +265,25 @@
         <p class="relaunch-text">{{ relaunchMessage || '数据库后端已切换，重启应用后生效；在此之前数据库保持只读。' }}</p>
         <p v-if="relaunchDownloadsActive" class="relaunch-note" data-test="relaunch-downloads">进行中的下载会中断，重启后需回浏览器重新推送。</p>
         <p v-if="relaunchError" class="relaunch-error" data-test="relaunch-error">{{ relaunchError }}</p>
-        <button type="button" class="btn btn-primary" :disabled="relaunching" data-test="relaunch-now" @click="relaunchNow">
+        <button type="button" class="btn btn--primary" :disabled="relaunching" data-test="relaunch-now" @click="relaunchNow">
           {{ relaunching ? '正在重启…' : '立即重启' }}
         </button>
       </div>
     </div>
 
-    <BaseModal v-if="startupError && startupDiagnosticsOpen" class="startup-diagnostics" close-on-overlay @close="startupDiagnosticsOpen = false">
-      <header class="startup-diagnostics__head"><h2>运行状态与诊断</h2><button type="button" class="btn-secondary btn-compact" data-test="startup-close-diagnostics" @click="startupDiagnosticsOpen = false">关闭</button></header>
+    <DialogShell
+      v-if="startupError && startupDiagnosticsOpen"
+      title="运行状态与诊断"
+      size="lg"
+      close-on-overlay
+      class="startup-diagnostics"
+      @close="startupDiagnosticsOpen = false"
+    >
       <SystemHealthPanel :actions-enabled="false" />
-    </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="startup-close-diagnostics" @click="startupDiagnosticsOpen = false">关闭</button>
+      </template>
+    </DialogShell>
 
     <!-- 全局提示宿主：webview 的 alert/confirm 是哑的，所有错误提示和危险操作确认都走这里 -->
     <AppFeedback />
@@ -308,7 +318,7 @@ import VersionCompareDialog from './components/VersionCompareDialog.vue';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
 import BaseMenu from './components/ui/BaseMenu.vue';
-import BaseModal from './components/ui/BaseModal.vue';
+import DialogShell from './components/ui/DialogShell.vue';
 import AppBadge from './components/ui/AppBadge.vue';
 import AppSpinner from './components/ui/AppSpinner.vue';
 import SystemHealthPanel from './components/SystemHealthPanel.vue';
@@ -340,7 +350,7 @@ export default {
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
     MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
-    BaseMenu, BaseModal, AppBadge, AppSpinner, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
+    BaseMenu, DialogShell, AppBadge, AppSpinner, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoDetailPage, ManageHomePage
   },
   data() {
@@ -472,10 +482,19 @@ export default {
   },
   beforeUnmount() {
     this.detachForegroundReporting();
+    document.body.classList.remove('surface-cinema');
   },
   watch: {
     'settings.theme'() {
       this.applyTheme();
+    },
+    // 影院表面（D-UD-02）打在 <body> 上而不是外壳节点上：顶栏、页面、App 里的浮层与抽屉在 body 之内，
+    // teleport 到 body 的对话框、确认框与浮层菜单也在，和打开它们的区域用同一个表面。
+    cinemaSurface: {
+      immediate: true,
+      handler(on) {
+        document.body.classList.toggle('surface-cinema', on);
+      }
     },
     // 「下载」页只在开启浏览器插件桥接时出现在顶栏与命令面板（D-PC59）。
     'settings.browser_bridge_enabled'() {
@@ -509,6 +528,11 @@ export default {
     // 当前区域（D-UI-09）：由当前页面推出，不单独存。
     area() {
       return pageArea(this.currentPage) || 'viewer';
+    },
+    // 观看区（含「视频」「图片」与整页详情）不论系统深浅都用影院深色，管理区跟随系统主题（D-UD-02）。
+    // 启动失败页不属于哪个区，跟随系统主题。
+    cinemaSurface() {
+      return !this.startupError && this.area === 'viewer';
     },
     visibleNavGroups() {
       return (this.area === 'manage' ? MANAGE_NAV_GROUPS : VIEWER_NAV_GROUPS)
@@ -855,7 +879,7 @@ export default {
       }
       this.navMenu = { key: group.key, label: group.label, anchor: event?.currentTarget || null };
     },
-    // 顶栏一项：页面就切页；动作（待处理、清理中心、任务与诊断）执行命令面板里同 ID 的既有命令。
+    // 顶栏一项：页面就切页；动作（待处理、清理中心、任务中心）执行命令面板里同 ID 的既有命令。
     selectNavItem(item) {
       if (!item.command) return this.navigateTo(item.key);
       const command = findCommand(item.command);
@@ -995,16 +1019,11 @@ export default {
 };
 </script>
 
-<style scoped>
-:deep(.startup-diagnostics) { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; }
-</style>
-
 <style>
-.startup-diagnostics__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.startup-diagnostics__head h2 { margin: 0; }
 /* --- Header ---
    原型 A1：52px 通栏、不透明面板、底部一条发丝线；导航是 32px 胶囊，
-   选中态直接填主色，不再靠投影和浅底区分。 */
+   选中态直接填主色，不再靠投影和浅底区分。（不再挂 .glass-surface：它在 components.css 里排在后面，
+   会把四边描上发丝线、把底色换成 --panel-bg。） */
 .header {
   height: 52px;
   flex: none;
@@ -1016,11 +1035,11 @@ export default {
   border-bottom: 1px solid var(--hairline);
   border-radius: 0;
   background: var(--header-bg);
-  z-index: 100;
+  z-index: var(--z-sticky);
   --wails-draggable: drag;
 }
 .header-left { flex: none; pointer-events: none; }
-.header h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-primary); white-space: nowrap; }
+.header h1 { font-size: var(--fs-section); font-weight: 700; letter-spacing: 0.02em; color: var(--text-primary); white-space: nowrap; }
 /* 顶栏项一律不折行：窗口变窄时先收紧间距与字号、再隐藏库规模计数，仍放不下时导航横向滚动，
    不能把「视频」挤成「视/频」两行。 */
 .header-nav {
@@ -1038,26 +1057,16 @@ export default {
 .nav-btn {
   position: relative;
   flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  white-space: nowrap;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 13.5px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--transition), color var(--transition);
 }
-.nav-btn.active { color: var(--accent-on); background: var(--accent-color); font-weight: 600; }
-.nav-btn:hover:not(.active) { color: var(--text-primary); background: var(--panel-muted-bg); }
+/* 导航项在 .btn .btn--ghost 的基础上收窄：32px 高、无边框、中等字重；悬停与选中压过 .btn--ghost 的悬停
+   （components.css 在构建产物里排在组件样式后面，这里多一层 .header 才生效）。 */
+.header .nav-btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--fs-secondary); font-weight: var(--fw-medium); }
+.header .nav-btn:hover:not(:disabled) { color: var(--text-primary); background: var(--panel-muted-bg); }
+.header .nav-btn.active,
+.header .nav-btn.active:hover:not(:disabled) { color: var(--accent-on); background: var(--accent-color); font-weight: var(--fw-semibold); }
 
-/* 「片单」下拉按钮的箭头；管理侧动作项（待处理、任务与诊断）沿用右侧入口的角标与红点。 */
-.nav-btn__caret { margin-left: -2px; font-size: 10px; opacity: 0.7; }
+/* 「片单」下拉按钮的箭头；管理侧动作项（待处理、任务中心）沿用右侧入口的角标与红点。 */
+.nav-btn__caret { margin-left: -2px; font-size: var(--fs-caption); opacity: 0.7; }
 
 /* 顶栏分组（D-PC59、D-UI-02）：组内按钮紧挨，组间一条竖向发丝线。 */
 .header-nav__group { display: flex; gap: 2px; align-items: center; }
@@ -1081,20 +1090,7 @@ export default {
 .header-tool-btn {
   position: relative;
   flex: none;
-  white-space: nowrap;
-  height: 30px;
-  padding: 0 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  cursor: pointer;
 }
-.header-tool-btn:hover { color: var(--text-primary); background: var(--control-hover-bg); }
 .header-badge {
   min-width: 18px;
   padding: 0 5px;
@@ -1102,7 +1098,7 @@ export default {
   background: var(--accent-color);
   color: var(--accent-on);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 18px;
   text-align: center;
 }
@@ -1122,7 +1118,7 @@ export default {
   margin-left: auto;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   white-space: nowrap;
   --wails-draggable: none;
 }
@@ -1132,19 +1128,19 @@ export default {
 }
 @media (max-width: 1360px) {
   .header { gap: 12px; }
-  .nav-btn { padding: 0 8px; }
+  .header .nav-btn { padding: 0 8px; }
   .header-nav__divider { margin: 0 4px; }
 }
 @media (max-width: 1140px) {
-  .nav-btn { padding: 0 6px; font-size: 12.5px; }
-  .header-tool-btn { padding: 0 8px; }
+  .header .nav-btn { padding: 0 6px; font-size: var(--fs-caption); }
+  .header .header-tool-btn { padding: 0 8px; }
 }
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .relaunch-overlay {
   position: fixed;
   inset: 0;
-  z-index: 3000;
+  z-index: var(--z-critical);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1160,23 +1156,23 @@ export default {
   padding: 24px 28px;
 }
 .relaunch-card h2 {
-  font-size: 18px;
+  font-size: var(--fs-section);
   margin-bottom: 10px;
   color: var(--text-primary);
 }
 .relaunch-text {
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   color: var(--text-primary);
   margin-bottom: 16px;
 }
 .relaunch-error {
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   color: var(--danger-color);
   margin-bottom: 12px;
 }
 .relaunch-note {
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   line-height: 1.6;
   color: var(--warning-text);
   margin-bottom: 12px;
@@ -1197,19 +1193,19 @@ export default {
   padding: 28px 32px;
 }
 .startup-error-card h2 {
-  font-size: 22px;
+  font-size: var(--fs-title);
   margin-bottom: 12px;
   color: var(--danger-color);
 }
 .startup-error-text {
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   color: var(--text-primary);
   word-break: break-word;
 }
 .startup-error-hint {
   margin-top: 14px;
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   line-height: 1.6;
   color: var(--text-secondary);
 }

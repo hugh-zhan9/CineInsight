@@ -120,7 +120,8 @@ assert.match(scanDirectoriesSource, /class="directories-list"/, 'settings direct
 
 assert.match(
   componentCss,
-  /\.tag-chip\s*{[^}]*height:\s*24px;[^}]*padding:\s*0 8px;[^}]*font-size:\s*11px;/s,
+  // 字号用刻度里最小的一档（统一设计 D-UD-05：原 11px 并入 --fs-caption）。
+  /\.tag-chip\s*{[^}]*height:\s*24px;[^}]*padding:\s*0 8px;[^}]*font-size:\s*var\(--fs-caption\);/s,
   'tag filter chips should stay compact when tag count grows'
 );
 assert.match(

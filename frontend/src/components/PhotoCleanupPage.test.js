@@ -31,9 +31,12 @@ import * as recentOperations from '../utils/recentOperations.js';
 // 一换 status，它的 analysisKey 侦听就抢先按那份结果重置审阅（key 被它占了、勾选只剩它算的），新挂的实例以为是
 // 同一轮、不再自动勾选，后面的用例跟着失败。所以挂过的都记下来，afterEach 把还挂着的卸掉
 // （不用 enableAutoUnmount：多数用例自己会卸，再卸一次 Vue 会警告）。
+// 「不支持废纸篓」二选一出现时才 teleport 到 body（层级按打开先后，见 tokens.css「层级」）：本文件按组件子树查它，
+// 统一挂 teleport 桩，让它留在子树里。
 const liveWrappers = [];
-function mount(...args) {
-  const wrapper = mountComponent(...args);
+function mount(component, options = {}) {
+  const global = { ...options.global, stubs: { teleport: true, ...options.global?.stubs } };
+  const wrapper = mountComponent(component, { ...options, global });
   liveWrappers.push(wrapper);
   return wrapper;
 }
