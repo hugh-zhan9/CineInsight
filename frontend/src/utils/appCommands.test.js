@@ -15,7 +15,7 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import {
-  appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS, DEFAULT_LIST_TAB, isListTab,
+  ACTION_COMMAND_PAGES, appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS, DEFAULT_LIST_TAB, isListTab,
   LIST_TABS, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea, resolvePageRoute, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS
 } from './appCommands.js';
 import { commandList, findCommand, registerCommands, unregisterCommands } from './commandRegistry.js';
@@ -118,7 +118,8 @@ describe('应用级命令注册', () => {
 
   // 顶栏有入口、命令面板没有，是榜单与已看两页当初漏掉的那种失配。现在顶栏直接渲染两个区域的
   // 导航组（D-UI-09），这条钉住两件事：App.vue 真的按这两份清单渲染；两边每一页在命令面板都有条目。
-  // 管理侧带 command 的三项是动作，不是页面：走既有的同 ID 命令，不另开导航命令。
+  // 管理侧带 command 的两项是动作，不是页面：走既有的同 ID 命令，不另开导航命令。由动作改成页面的（待处理，D-P3-01）
+  // 在命令面板里仍由原来的动作命令代表（ACTION_COMMAND_PAGES），也不另开导航命令。
   it('APP-12 顶栏与命令面板读同一份页面清单，两个区域的每一页在导航组里都有条目', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/App.vue'), 'utf8');
     expect(source).toMatch(/VIEWER_NAV_GROUPS/);
@@ -128,7 +129,7 @@ describe('应用级命令注册', () => {
     const keys = COMMAND_PALETTE_PAGES.map(page => page.key);
     for (const group of [...VIEWER_NAV_GROUPS, ...MANAGE_NAV_GROUPS]) {
       for (const page of group.pages) {
-        if (page.command) expect(keys, page.key).not.toContain(page.key);
+        if (page.command || ACTION_COMMAND_PAGES[page.key]) expect(keys, page.key).not.toContain(page.key);
         else expect(keys, page.key).toContain(page.key);
       }
     }
@@ -141,19 +142,20 @@ describe('应用级命令注册', () => {
     const viewer = VIEWER_NAV_GROUPS.flatMap(group => group.pages).map(page => page.key);
     const manage = MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => !page.command).map(page => page.key);
     expect(viewer).toEqual(['home', 'videos', 'people', 'collections', 'photos', 'lists', 'recap', 'scenes']);
-    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'entities-manage', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
+    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'entities-manage', 'pending-work', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
     expect(viewer.filter(key => manage.includes(key))).toEqual([]);
     for (const key of viewer) expect(pageArea(key), key).toBe('viewer');
     for (const key of manage) expect(pageArea(key), key).toBe('manage');
     expect(pageArea(VIDEO_DETAIL_PAGE)).toBe('viewer');
     // 片单的四个别名同属观看区：拿旧 key 当来源的「打开一部片」照旧进整页详情。
     for (const tab of LIST_TABS) expect(pageArea(tab.key), tab.key).toBe('viewer');
-    expect(pageArea('pending-work')).toBeNull();
     expect(pageArea('no-such-page')).toBeNull();
-    // 管理侧的三个动作入口走既有命令。
+    // 管理侧的两个动作入口走既有命令；「待处理」三期起是管理侧页面（D-P3-01）。
     expect(MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => page.command).map(page => [page.label, page.command])).toEqual([
-      ['待处理', 'action:pending-work'], ['清理中心', 'action:cleanup'], ['任务中心', 'action:task-center']
+      ['清理中心', 'action:cleanup'], ['任务中心', 'action:task-center']
     ]);
+    expect(pageArea('pending-work')).toBe('manage');
+    expect(ACTION_COMMAND_PAGES).toEqual({ 'pending-work': 'action:pending-work' });
   });
 
   // D-UI-09：命令面板列出两个区域的全部页面；拆分前就有的导航命令 ID 一个不少、不改名。
@@ -165,7 +167,9 @@ describe('应用级命令注册', () => {
       expect(commandByID(`nav:page:${key}`), key).not.toBeNull();
     }
     expect(commandByID('nav:page:video-detail')).toBeNull();
+    // 待处理页在面板里只有原来那条动作命令（命令 ID 不变），不出现两条「打开待处理」。
     expect(commandByID('nav:page:pending-work')).toBeNull();
+    expect(commandList().filter(command => command.label === '打开待处理').map(command => command.id)).toEqual(['action:pending-work']);
 
     commandByID('nav:page:manage-home').run();
     expect(wrapper.vm.currentPage).toBe('manage-home');

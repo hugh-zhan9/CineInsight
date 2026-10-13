@@ -1,6 +1,6 @@
 // App.vue 的命令面板接线（D-029、D-PC60、D-UD-03）：全局 ⌘K 与 ⌘⇧P（命令面板）、⌘⇧K（清理中心）、面板开关、导航组与
 // 应用级动作组、以及跟着事件刷新的任务组；另外收口顶栏的信息架构（D-PC59）与「按固定命令 ID
-// 跳到宿主页」（待处理工作台与全局命令共用，详细设计 §6.1）。
+// 跳到宿主页」（待处理页与全局命令共用，详细设计 §6.1）。
 //
 // 做成 mixin 而不是直接写在 App.vue 里：App.vue 是多个切片共同修改的文件，
 // 命令面板只在那里留最小的挂载点（mixins、一个组件标签、两个 ref）。
@@ -10,7 +10,7 @@
 //   this.navigateTo(page, params?)：切页（别名 key 由它换成真正的页面，见 resolvePageRoute）；params 是交给目标页的一次性参数
 //     （「视频」认 { keyword } / { watch } / { tagId }；片单认 { tab }；人物 / 作品集认 { keyword }；场景检索认 { query, mode } / { image }）。
 //     能直接切时同步返回 true；设置页有未保存修改时返回 Promise，用户放弃切页时 resolve 为 false（见下面的 whenNavigated）
-//   this.openTaskCenter() / this.openPendingWork()：打开任务中心抽屉与待处理工作台
+//   this.openTaskCenter() / this.openPendingWork()：打开任务中心抽屉与待处理页（D-P3-01 起是管理侧页面 pending-work）
 //   this.openVideo(video, { from })：打开一部片，按调用方区域分流到整页详情或片库管理的抽屉（D-UI-07）
 // 以及 App.vue 的 debugLog()。
 
@@ -61,8 +61,9 @@ export const VIEWER_NAV_GROUPS = [
 
 export const SETTINGS_NAV_PAGE = { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] };
 
-// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的三项（待处理、清理中心、任务中心）
+// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的两项（清理中心、任务中心）
 // 是动作不是页面：点了执行命令面板里同 ID 的既有命令，打开现有弹窗或面板。顶栏与命令面板都叫「任务中心」（用词表 D-UD-14）。
+// 「待处理」三期起是页面（D-P3-01，manage/PendingWorkPage.vue）；命令面板里仍由既有命令 action:pending-work 代表（见 ACTION_COMMAND_PAGES）。
 export const MANAGE_NAV_GROUPS = [
   {
     key: 'manage-library',
@@ -79,7 +80,7 @@ export const MANAGE_NAV_GROUPS = [
     key: 'manage-review',
     label: '待处理与清理',
     pages: [
-      { key: 'pending-work', label: '待处理', command: 'action:pending-work' },
+      { key: 'pending-work', label: '待处理' },
       { key: 'cleanup', label: '清理中心', command: 'action:cleanup' }
     ]
   },
@@ -160,11 +161,15 @@ export const DATA_CARE_COMMANDS = [
   { tab: 'health', label: '体检', keywords: ['health', 'check', '体检', '一致性'] }
 ];
 
+// 原先是动作、后来改成页面的导航项 → 命令面板里代表它的既有动作命令（命令 ID 不变）。这些页面不另生成
+// nav:page:<key> 命令，免得面板里出现两条「打开待处理」；动作命令执行时打开这一页。
+export const ACTION_COMMAND_PAGES = Object.freeze({ 'pending-work': 'action:pending-work' });
+
 // 页面导航的全集：两个区域的全部页面（含设置），先观看后管理。片单的四个别名紧跟「片单」，
 // 原有的 nav:page:watchlist 等命令 ID 照旧注册，执行时由 App 的 navigateTo 换成对应标签。
 const COMMAND_PAGES = [
   ...navPages(VIEWER_NAV_GROUPS).flatMap(page => (page.key === LISTS_PAGE ? [page, ...LIST_TABS] : [page])),
-  ...navPages(MANAGE_NAV_GROUPS)
+  ...navPages(MANAGE_NAV_GROUPS).filter(page => !ACTION_COMMAND_PAGES[page.key])
 ];
 
 export function isNavPageVisible(page, settings) {

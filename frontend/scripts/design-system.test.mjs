@@ -142,6 +142,8 @@ const PAGE_FILES = {
   recap: 'components/RecapPage.vue',
   scenes: 'components/ScenesPage.vue',
   'manage-home': 'components/manage/ManageHomePage.vue',
+  // 待处理（D-P3-01）：原先是弹窗动作，三期起是管理侧页面。
+  'pending-work': 'components/manage/PendingWorkPage.vue',
   downloads: 'components/DownloadsPage.vue',
   'video-workbench': 'components/VideoWorkbenchPage.vue',
   insights: 'components/InsightsPage.vue',
@@ -155,7 +157,7 @@ function navPageKeys() {
   const end = source.indexOf('export const VIDEO_DETAIL_PAGE');
   assert.ok(start !== -1 && end > start, 'appCommands.js 的导航清单位置变了，守卫 6 需要跟着改');
   const keys = [];
-  for (const match of source.slice(start, end).matchAll(/\{\s*key:\s*'([\w-]+)',\s*label:\s*'[^']*'(?:,\s*(command|keywords|requiresBrowserBridge)\b[^}]*)?\}/g)) {
+  for (const match of source.slice(start, end).matchAll(/\{\s*key:\s*'([\w-]+)',\s*label:\s*'[^']*'(?:,\s*(command|keywords|requiresBrowserBridge)\b[^}]*)?\s*\}/g)) {
     if (match[2] !== 'command') keys.push(match[1]);
   }
   return keys;

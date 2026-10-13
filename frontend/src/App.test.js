@@ -6,7 +6,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'SyncScanDirectories', 'SyncImageDirectories', 'GetLibraryCounts', 'LogFrontend',
   'SetWindowForeground', 'GetVideosByIDs',
   'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople',
-  'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus', 'ListDownloadTasks', 'RelaunchApp'
+  'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus', 'ListDownloadTasks', 'RelaunchApp', 'GetPendingWorkSummary'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../wailsjs/go/main/App', () => api);
@@ -37,6 +37,7 @@ beforeEach(() => {
   api.ListPeople.mockResolvedValue([]);
   api.GetDatabaseSwitchStatus.mockResolvedValue({ running: false, completed: false, failed: false });
   api.ListDownloadTasks.mockResolvedValue([]);
+  api.GetPendingWorkSummary.mockResolvedValue({ total: 0 });
   // jsdom 的 hasFocus 行为随实现变动，前后台用例自己钉住它。
   document.hasFocus = vi.fn(() => true);
   resetFeedback();
@@ -571,7 +572,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(wrapper.findAll('.header-nav__divider')).toHaveLength(2);
     expect(wrapper.find('[data-test="nav-back-to-viewer"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="nav-settings"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="open-pending-work"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-pending-work"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="open-task-center"]').exists()).toBe(false);
     expect(wrapper.findAll('.header-tools .header-tool-btn').map(button => button.text())).toEqual(['待播队列', '管理']);
 
@@ -770,21 +771,21 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(false);
   });
 
-  // D-UI-02：观看区的待处理数量挂在「管理」按钮上，来源仍是工作台报上来的总数（GetPendingWorkSummary）。
-  it('META-08 观看区「管理」按钮的角标来自工作台的总数，超过 99 显示 99+，点了进管理首页', async () => {
+  // D-UI-02：观看区的待处理数量挂在「管理」按钮上。待处理工作台改成页面（D-P3-01）之后，角标由 App 自己读
+  // GetPendingWorkSummary 的总数（启动时一次、之后每分钟一次），读失败清零。
+  it('META-08 观看区「管理」按钮的角标是待处理总数，超过 99 显示 99+，读失败清零，点了进管理首页', async () => {
+    api.GetPendingWorkSummary.mockResolvedValue({ total: 5 });
     const wrapper = await mountApp();
-    const hub = wrapper.findComponent({ name: 'PendingWorkHub' });
-    expect(wrapper.find('[data-test="manage-pending-badge"]').exists()).toBe(false);
-
-    hub.vm.$emit('badge-change', 5);
-    await flushPromises();
+    expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
     expect(wrapper.get('[data-test="manage-pending-badge"]').text()).toBe('5');
 
-    hub.vm.$emit('badge-change', 120);
+    api.GetPendingWorkSummary.mockResolvedValue({ total: 120 });
+    await wrapper.vm.refreshPendingWorkTotal();
     await flushPromises();
     expect(wrapper.get('[data-test="manage-pending-badge"]').text()).toBe('99+');
 
-    hub.vm.$emit('badge-change', 0);
+    api.GetPendingWorkSummary.mockRejectedValue('数据库后端已切换，请重启应用后再查看');
+    await wrapper.vm.refreshPendingWorkTotal();
     await flushPromises();
     expect(wrapper.find('[data-test="manage-pending-badge"]').exists()).toBe(false);
 
@@ -793,22 +794,83 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.findComponent({ name: 'ManageHomePage' }).exists()).toBe(true);
   });
 
-  it('META-08 管理导航「待处理」带同一个角标，点了打开待处理工作台（既有命令 action:pending-work）', async () => {
+  it('META-08 角标每分钟重读一次；卸载后不再读', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const wrapper = await mountApp();
+      expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
+      api.GetPendingWorkSummary.mockResolvedValue({ total: 3 });
+      vi.advanceTimersByTime(60000);
+      await flushPromises();
+      expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(2);
+      expect(wrapper.get('[data-test="manage-pending-badge"]').text()).toBe('3');
+
+      wrapper.unmount();
+      vi.advanceTimersByTime(120000);
+      expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('D-P3-01 管理导航「待处理」是页面：带同一个角标，点了切到待处理页；页面读到的总数同步角标、晚到的定时读取不覆盖它', async () => {
+    api.GetPendingWorkSummary.mockResolvedValue({ total: 120 });
     const wrapper = await mountApp();
     await enterManage(wrapper);
-    const hub = wrapper.findComponent({ name: 'PendingWorkHub' });
-
-    hub.vm.$emit('badge-change', 120);
-    await flushPromises();
     expect(wrapper.get('[data-test="pending-work-badge"]').text()).toBe('99+');
+    expect(wrapper.find('[data-test="open-pending-work"]').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'PendingWorkPage' }).exists()).toBe(false);
 
-    hub.vm.$emit('badge-change', 0);
+    await wrapper.get('[data-test="nav-pending-work"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('pending-work');
+    expect(wrapper.vm.area).toBe('manage');
+    expect(wrapper.get('[data-test="nav-pending-work"]').classes()).toContain('active');
+    const page = wrapper.findComponent({ name: 'PendingWorkPage' });
+    expect(page.exists()).toBe(true);
+
+    let resolveStale;
+    api.GetPendingWorkSummary.mockReturnValueOnce(new Promise(resolve => { resolveStale = resolve; }));
+    const stale = wrapper.vm.refreshPendingWorkTotal();
+    page.vm.$emit('badge-change', 0);
+    resolveStale({ total: 120 });
+    await stale;
     await flushPromises();
     expect(wrapper.find('[data-test="pending-work-badge"]').exists()).toBe(false);
 
-    await wrapper.get('[data-test="open-pending-work"]').trigger('click');
+    page.vm.$emit('badge-change', 4);
     await flushPromises();
-    expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(true);
+    expect(wrapper.get('[data-test="pending-work-badge"]').text()).toBe('4');
+
+    // 离开就卸载，下次进来重新读。
+    await wrapper.get('[data-test="nav-manage-home"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'PendingWorkPage' }).exists()).toBe(false);
+  });
+
+  it('D-P3-01 命令 action:pending-work 打开待处理页（命令 ID 不变），任务中心开着时先收起', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ taskCenterOpen: true });
+
+    await findCommand('action:pending-work').run();
+    await flushPromises();
+
+    expect(wrapper.vm.currentPage).toBe('pending-work');
+    expect(wrapper.vm.taskCenterOpen).toBe(false);
+    expect(wrapper.findComponent({ name: 'PendingWorkPage' }).exists()).toBe(true);
+    expect(findCommand('nav:page:pending-work')).toBeNull();
+  });
+
+  it('D-P3-01 待处理页的事件接到既有入口：去管理首页、打开任务中心', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'pending-work' });
+    const page = wrapper.findComponent({ name: 'PendingWorkPage' });
+
+    page.vm.$emit('open-task-center');
+    await flushPromises();
+    expect(wrapper.vm.taskCenterOpen).toBe(true);
+
+    page.vm.$emit('navigate', 'manage-home');
+    await flushPromises();
     expect(wrapper.vm.currentPage).toBe('manage-home');
   });
 
@@ -827,12 +889,12 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
   });
 
   // D-P2-06：人物观看页只看不改，人脸审阅在管理侧「人物与作品集」（过渡期挂 EntityLibraryPage 的人物那一种）。
-  it('APP-11 工作台「处理」先切到宿主页（管理侧人物与作品集按需挂载），再按固定命令 ID 执行', async () => {
+  it('APP-11 按固定命令 ID 打开工具：先切到宿主页（管理侧人物与作品集按需挂载），再执行', async () => {
     const wrapper = await mountApp();
     const run = vi.fn();
     registerCommands('test-face-host', [{ id: 'people.openFaceReview', group: 'action', label: '人脸审阅', hidden: true, run }]);
 
-    wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'people.openFaceReview', '人脸待命名');
+    await wrapper.vm.runPendingCommand('people.openFaceReview', '人脸待命名');
     await flushPromises();
 
     expect(wrapper.vm.currentPage).toBe('entities-manage');
@@ -857,14 +919,29 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it('APP-11 宿主页没有注册该命令时给出中文提示，不静默失败', async () => {
+  it('APP-11 待处理页「打开图片 AI 审阅」：宿主页没有注册该命令时给出中文提示，不静默失败', async () => {
     const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'pending-work' });
 
-    wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'photos.openAIReview', '图片 AI 标签待审阅');
+    wrapper.findComponent({ name: 'PendingWorkPage' }).vm.$emit('run-command', 'photos.openAIReview', 'AI 图片标签');
     await flushPromises();
 
     expect(wrapper.vm.currentPage).toBe('photos-manage');
-    expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('「图片 AI 标签待审阅」暂时打不开');
+    expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('「AI 图片标签」暂时打不开');
+  });
+
+  it('D-P3-01 待处理页「打开清理中心」走全局命令 action:cleanup（之后由它决定去哪儿）', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'pending-work' });
+    const run = vi.fn();
+    registerCommands('test-pending-cleanup', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+
+    wrapper.findComponent({ name: 'PendingWorkPage' }).vm.$emit('run-command', 'action:cleanup', '清理候选');
+    await flushPromises();
+
+    unregisterCommands('test-pending-cleanup');
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   // D-UI-07：任务中心属于管理侧，仍是「切到片库管理 + 详情抽屉」。
@@ -898,7 +975,9 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
 
     expect(wrapper.findComponent({ name: 'QuitConfirmDialog' }).exists()).toBe(true);
     expect(wrapper.find('[data-test="open-task-center"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="open-pending-work"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-pending-work"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="manage-pending-badge"]').exists()).toBe(false);
+    expect(api.GetPendingWorkSummary).not.toHaveBeenCalled();
   });
 });
 
@@ -1284,7 +1363,8 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
 
     const run = vi.fn();
     registerCommands('test-hidden-library', [{ id: 'library.openAIReview', group: 'action', label: 'AI 审阅', hidden: true, run }]);
-    wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'library.openAIReview', 'AI 标签待审阅');
+    await wrapper.setData({ currentPage: 'pending-work' });
+    wrapper.findComponent({ name: 'PendingWorkPage' }).vm.$emit('run-command', 'library.openAIReview', 'AI 视频标签');
     await flushPromises();
     expect(wrapper.vm.currentPage).toBe('library-manage');
     expect(run).toHaveBeenCalledTimes(1);
@@ -1302,17 +1382,21 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
     const home = wrapper.findComponent({ name: 'ManageHomePage' });
     // 占位组件还没声明 pageActive，首页工人的版本声明了：看 App 传下去的 vnode props，两种都成立。
     expect(home.vm.$.vnode.props['page-active']).toBe(true);
-    home.vm.$emit('open-pending-work');
-    await flushPromises();
-    expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(true);
     home.vm.$emit('open-task-center');
     await flushPromises();
     expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(true);
-    expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(false);
+    // 待处理卡片：打开待处理页（D-P3-01），任务中心先收起。
+    home.vm.$emit('open-pending-work');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('pending-work');
+    expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(false);
+    await wrapper.setData({ currentPage: 'manage-home' });
+    await flushPromises();
+    const homeAgain = wrapper.findComponent({ name: 'ManageHomePage' });
 
     const run = vi.fn();
     registerCommands('test-manage-home', [{ id: 'photos.openCleanup', group: 'action', label: '图片清理', hidden: true, run }]);
-    home.vm.$emit('run-command', 'photos.openCleanup', '图片清理');
+    homeAgain.vm.$emit('run-command', 'photos.openCleanup', '图片清理');
     await flushPromises();
     unregisterCommands('test-manage-home');
     expect(wrapper.vm.currentPage).toBe('photos-manage');
