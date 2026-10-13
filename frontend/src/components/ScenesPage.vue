@@ -184,6 +184,8 @@ export default {
     pageActive: { type: Boolean, default: true },
     // 片库工具栏「在当前筛选中搜场景」带来的范围：{ filter, token }；为空表示全部视频。
     // 详情抽屉「找相似画面」另带 similar：{ videoID, atMS, title }，进来直接按这一刻的画面检索。
+    // ⌘K 统一搜索的「查看全部」（D-P2-05，navigateTo('scenes', 参数)）带 query + mode（台词 dialogue / 画面 visual），
+    // 进来直接按这句话、这个模式检索；以图带 image：{ dataURL, name }，进来直接按这张图检索。
     scopeRequest: { type: Object, default: null }
   },
   emits: ['open-video-at'],
@@ -309,6 +311,8 @@ export default {
         this.resetResults();
         this.loadCoverage();
         if (request?.similar?.videoID) this.searchSimilar(request.similar);
+        else if (request?.image?.dataURL) this.searchImage({ dataURL: request.image.dataURL, name: request.image.name || '' });
+        else if (request && (typeof request.query === 'string' || request.mode)) this.applyInitialQuery(request);
       }
     },
     pageActive(active) {
@@ -369,6 +373,12 @@ export default {
       if (mode === this.mode) return;
       this.mode = mode;
       if (this.searched && this.canSearch) this.search();
+    },
+    // 带进来的查询（统一搜索「查看全部」）：认得的模式才换，查询词按页面上限截断；有词就直接检索。
+    applyInitialQuery({ query, mode } = {}) {
+      if (this.modes.some(option => option.value === mode)) this.mode = mode;
+      if (typeof query === 'string') this.query = query.trim().slice(0, SCENE_QUERY_MAX_LENGTH);
+      if (this.canSearch) this.search();
     },
     // 文字检索：清掉以图搜片的查询来源。
     search() {
