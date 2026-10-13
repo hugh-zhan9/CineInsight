@@ -432,6 +432,9 @@ export default {
   name: 'PreviewDrawer',
   components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog, InlineVideoPlayer, AppBanner, AppIcon, SkeletonBlock },
   props: {
+    // 宿主的 @media-restored（见 handlePersonMediaRestored）。声明成 prop 而不是放进 emits：从「最近操作」撤销人物媒体删除时
+    // 抽屉可能早已关掉，Vue 会丢掉已卸下组件的 $emit，拿着宿主传进来的这个监听才能照样通知到宿主。宿主写法不变。
+    onMediaRestored: { type: Function, default: null },
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
     session: { type: Object, default: null },
@@ -443,7 +446,7 @@ export default {
   // watch-progress 载荷：{ videoID, positionSeconds, completed, origin: resume|start|jump, durationSeconds（未知为 0）}（D-PC42）。
   // media-restored：人物媒体删除后被撤销或从回收站恢复，载荷 { kind, ids }，宿主据此重读列表。
   // playback-attempted：动作条「播放」的 PlaybackAttemptResult，宿主可按自己的列表口径处理失效与重定位。
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'media-restored', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'find-similar-scenes', 'shortcut', 'preview-session-stale', 'playback-attempted'],
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'find-similar-scenes', 'shortcut', 'preview-session-stale', 'playback-attempted'],
   data() {
     return {
       selectedPersonImageIDs: [], imagePreview: null, avatarPickerOpen: false, avatarSaving: false, avatarError: '',
@@ -610,6 +613,7 @@ export default {
     this.loadRelatedVideoDirectories(); this.resetRootEntry(); window.addEventListener('keydown', this.handleReviewShortcut);
   },
   beforeUnmount() {
+    this.disposed = true;
     // 播放器卸载时自己补报最后一次进度、清空媒体元素并退订代理事件。
     window.removeEventListener('keydown', this.handleReviewShortcut);
   },
@@ -691,7 +695,13 @@ export default {
     // 删除被撤销、或从撤销条打开的回收站里恢复了（PersonMediaDeleteDialog 的 restored）：恢复的媒体回到人物名下，
     // 当前停在人物详情就整页重读（视频、图片与计数一起），并告诉宿主刷新它自己的列表。
     async handlePersonMediaRestored(payload, notify = true) {
-      if (notify) this.$emit('media-restored', { kind: payload?.kind || '', ids: [...(payload?.ids || [])] });
+      const restored = { kind: payload?.kind || '', ids: [...(payload?.ids || [])] };
+      // 抽屉已关（卸下）：$emit 送不到，直接调宿主的同一个监听；抽屉自己不必再重读。
+      if (this.disposed) {
+        if (notify) this.onMediaRestored?.(restored);
+        return;
+      }
+      if (notify) this.$emit('media-restored', restored);
       if (this.currentEntry?.type === 'person') await this.loadCurrentEntry();
     },
 	handleReviewShortcut(event) {

@@ -230,6 +230,22 @@ describe('批量编辑的撤销入口（D-UD-09）', () => {
     expect(recentOperations.list()).toEqual([]);
   });
 
+  it('对话框关掉后从「最近操作」撤销：接口照常只调一次，宿主照样收到 undone', async () => {
+    const onUndone = vi.fn();
+    const wrapper = mountDialog({ onUndone });
+    await applyYear(wrapper);
+    wrappers.splice(wrappers.indexOf(wrapper), 1);
+    wrapper.unmount();
+
+    const [entry] = recentOperations.list();
+    expect(await recentOperations.undo(entry.id)).toBe(true);
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledTimes(1);
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledWith(7);
+    expect(onUndone).toHaveBeenCalledTimes(1);
+    expect(onUndone).toHaveBeenCalledWith(expect.objectContaining({ batch_id: 7, restored: 1 }));
+    expect(recentOperations.list()).toEqual([]);
+  });
+
   it('撤销中途停止时最近操作留着这一条，提示说明可以再撤销', async () => {
     api.UndoMetadataBatchEdit.mockResolvedValueOnce({ batch_id: 7, restored: 1, changed_since: 0, cancelled: true });
     const wrapper = mountDialog();

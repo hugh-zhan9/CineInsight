@@ -145,10 +145,13 @@ export default {
     // 全部标签（标签候选在本地过滤，自动标签不出现）。
     tags: { type: Array, default: () => [] },
     // 片库列表折叠了版本：「当前筛选的全部结果」仍按全部版本取，总数会比列表上的多，要说清楚。
-    collapsedVersions: { type: Boolean, default: false }
+    collapsedVersions: { type: Boolean, default: false },
+    // 宿主的 @undone（撤销完成，宿主按当前条件重取列表）。声明成 prop 而不是放进 emits：从提示或「最近操作」撤销时
+    // 对话框可能早已关掉，Vue 会丢掉已卸下组件的 $emit，拿着宿主传进来的这个监听才能照样通知到宿主。宿主写法不变。
+    onUndone: { type: Function, default: null }
   },
   // applied / undone：数据变了，宿主按当前条件重取列表；applied 的参数为 null 表示中途失败、已提交的部分保留。
-  emits: ['close', 'applied', 'undone'],
+  emits: ['close', 'applied'],
   data() {
     const fields = BATCH_EDIT_FIELDS[this.kind] || BATCH_EDIT_FIELDS.video;
     return {
@@ -165,6 +168,9 @@ export default {
       error: '',
       ratingOptions: BATCH_RATING_OPTIONS
     };
+  },
+  beforeUnmount() {
+    this.disposed = true;
   },
   computed: {
     kindLabel() {
@@ -311,7 +317,8 @@ export default {
         const undoResult = await UndoMetadataBatchEdit(batchID);
         this.undone = !undoResult?.cancelled;
         this.undoMessage = undoResultText(undoResult);
-        this.$emit('undone', undoResult);
+        if (this.disposed) this.onUndone?.(undoResult);
+        else this.$emit('undone', undoResult);
         return undoResult;
       } catch (err) {
         logFrontend('metadataBatchEdit', 'UndoMetadataBatchEdit failed', { err: String(err) }, true);

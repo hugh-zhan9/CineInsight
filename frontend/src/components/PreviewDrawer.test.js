@@ -1350,6 +1350,23 @@ describe('P-037 人物媒体删除撤销后的刷新', () => {
     expect(api.GetPersonDetail).toHaveBeenCalledTimes(2);
     expect(w.emitted('media-restored')).toEqual([[{ kind: 'video', ids: [1] }]]);
   });
+
+  it('抽屉关掉后才撤销（从「最近操作」）：照样通知宿主刷新，抽屉自己不再重读', async () => {
+    api.GetPersonDetail.mockResolvedValue({
+      person: { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 0 },
+      videos: [{ id: 1, name: 'clip.mp4' }], images: []
+    });
+    const onMediaRestored = vi.fn();
+    const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 }, onMediaRestored }, global: { stubs: { teleport: true } } });
+    await flushPromises();
+    const restore = w.vm.handlePersonMediaRestored;
+    w.unmount();
+
+    await restore({ kind: 'image', ids: [5] });
+    expect(onMediaRestored).toHaveBeenCalledTimes(1);
+    expect(onMediaRestored).toHaveBeenCalledWith({ kind: 'image', ids: [5] });
+    expect(api.GetPersonDetail).toHaveBeenCalledTimes(1);
+  });
 });
 
 
