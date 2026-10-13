@@ -1,10 +1,9 @@
 <template>
-  <BaseModal v-if="subtitlePreview.show" class="subtitle-preview-modal" @close="subtitlePreview.show = false">
-      <h3>字幕预览</h3>
-      <p class="cleanup-intro" v-if="subtitlePreview.video">{{ subtitlePreview.video.name }}</p>
+  <DialogShell v-if="subtitlePreview.show" title="字幕预览" size="lg" class="subtitle-preview-modal" @close="subtitlePreview.show = false">
+      <p v-if="subtitlePreview.video" class="subtitle-preview-name">{{ subtitlePreview.video.name }}</p>
 
-      <div v-if="subtitlePreview.loading" class="cleanup-loading">正在读取字幕片段...</div>
-      <div v-else-if="subtitlePreview.error" class="cleanup-error" data-test="subtitle-preview-error">{{ subtitlePreview.error }}</div>
+      <SkeletonBlock v-if="subtitlePreview.loading" class="subtitle-preview-loading" :lines="4" />
+      <p v-else-if="subtitlePreview.error" class="subtitle-preview-error" role="alert" data-test="subtitle-preview-error">{{ subtitlePreview.error }}</p>
       <div v-else-if="subtitlePreview.segments.length" class="subtitle-preview-list">
         <div
           v-for="segment in subtitlePreview.segments"
@@ -13,22 +12,25 @@
         >
           <div class="subtitle-segment-time">
             {{ formatTimestamp(segment.start_time_ms) }} - {{ formatTimestamp(segment.end_time_ms) }}
-            <span v-if="segmentMatchesKeyword(segment)" class="subtitle-match-badge">命中</span>
+            <AppBadge v-if="segmentMatchesKeyword(segment)" tone="accent" class="subtitle-match-badge">命中</AppBadge>
           </div>
           <div class="subtitle-segment-text">{{ segment.text }}</div>
         </div>
       </div>
-      <div v-else class="cleanup-empty">当前视频还没有可预览的字幕片段。</div>
+      <EmptyState v-else title="当前视频还没有可预览的字幕片段" />
 
-      <div class="modal-actions">
-        <button @click="subtitlePreview.show = false" class="btn-primary">关闭</button>
-      </div>
-  </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="subtitlePreview.show = false">关闭</button>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { GetSubtitleSegments } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import AppBadge from '../ui/AppBadge.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import EmptyState from '../ui/EmptyState.vue';
+import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import { subtitleExceptionText } from '../../utils/subtitleTools.js';
 
 const MISSING_SIDECAR_TEXT = '这个视频没有同名 .srt 字幕。内嵌字幕或其他格式（.ass、.vtt 等）的字幕暂不支持在这里预览、编辑或翻译。';
@@ -37,7 +39,7 @@ const MISSING_SIDECAR_TEXT = '这个视频没有同名 .srt 字幕。内嵌字�
 // 所以这两项作为 prop 传进来。
 export default {
   name: 'SubtitlePreviewModal',
-  components: { BaseModal },
+  components: { AppBadge, DialogShell, EmptyState, SkeletonBlock },
   props: {
     searchKeyword: { type: String, default: '' },
     searchMode: { type: String, default: 'file' }
@@ -87,23 +89,21 @@ export default {
 </script>
 
 <style scoped>
-:deep(.subtitle-preview-modal) {
-  width: 760px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 48px);
-  overflow-y: auto;
-  padding: 28px;
+.subtitle-preview-name {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
+  overflow-wrap: anywhere;
 }
 .subtitle-preview-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 16px;
 }
 .subtitle-segment {
   border: 1px solid var(--review-border-color);
-  border-radius: 10px;
-  padding: 12px 14px;
+  border-radius: var(--radius);
+  padding: var(--space-3) 14px;
   background: var(--review-solid-bg);
 }
 .subtitle-segment-match {
@@ -111,7 +111,10 @@ export default {
   background: var(--review-accent-soft);
 }
 .subtitle-segment-time {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-caption);
   color: var(--review-text-muted);
   margin-bottom: 6px;
 }
@@ -119,19 +122,9 @@ export default {
   white-space: pre-wrap;
   line-height: 1.5;
 }
-.subtitle-match-badge {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--review-accent-badge-bg);
-  color: var(--accent-deep);
-}
-.cleanup-error,
-.cleanup-intro,
-.cleanup-loading,
-.cleanup-empty {
-  color: var(--review-text-muted);
-  font-size: 13px;
+.subtitle-preview-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-secondary);
 }
 </style>

@@ -1,6 +1,5 @@
 <template>
-  <BaseModal class="tonight-picker" @close="$emit('close')">
-    <header class="tonight-picker__header"><h3>今晚看什么</h3><button type="button" class="btn-secondary btn-compact" @click="$emit('close')">关闭</button></header>
+  <DialogShell title="今晚看什么" size="lg" class="tonight-picker" @close="$emit('close')">
     <p class="help-text">沿用打开弹窗时的片库筛选，包括关键词、标签、人物、评分和智能视图。需要改变这些条件时，可关闭后调整。</p>
     <p v-if="filter.keyword" class="help-text">当前关键词：{{ filter.keyword }}</p>
     <form class="tonight-picker__form" @submit.prevent="reroll">
@@ -14,8 +13,8 @@
       </label>
       <label><input v-model="favoritesOnly" type="checkbox" data-test="tonight-favorites" />仅收藏</label>
       <span class="tonight-picker__actions">
-        <button type="submit" class="btn-secondary" :disabled="loading" data-test="tonight-reroll">{{ loading ? '正在抽…' : '换一批' }}</button>
-        <button type="button" class="btn-primary" :disabled="loading" data-test="tonight-play-random" @click="$emit('play-random')">随机播放一部</button>
+        <button type="submit" class="btn btn--secondary" :disabled="loading" data-test="tonight-reroll">{{ loading ? '正在抽…' : '换一批' }}</button>
+        <button type="button" class="btn btn--primary" :disabled="loading" data-test="tonight-play-random" @click="$emit('play-random')">随机播放一部</button>
       </span>
     </form>
     <p class="help-text">和「随机播放」是同一套条件与算法：按播放次数均衡随机，播放越少越容易被抽到，最近 {{ recentLimit }} 次随机播放过的不参与；这里改的条件也会用于「随机播放」。时长按整片计算，0 表示不限，有上限时排除时长未知的视频。</p>
@@ -33,12 +32,12 @@
         <p class="help-text">{{ item.reasons.join(' · ') }}</p>
       </article>
     </div>
-  </BaseModal>
+  </DialogShell>
 </template>
 
 <script>
 import { SuggestTonightVideos } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { tagBackgroundColor } from '../utils/tagColor.js';
 import { normalizeRandomConditions, randomConditionFields, RANDOM_RECENT_LIMIT, validRandomMinutes } from '../utils/randomPlayback.js';
@@ -49,7 +48,7 @@ const TONIGHT_LIMIT = 6;
 // 条件改动回写给片库页（随机播放主键随之改用），播放候选仍是普通播放。
 export default {
   name: 'TonightPickerDialog',
-  components: { BaseModal, RelatedVideoItem },
+  components: { DialogShell, RelatedVideoItem },
   props: {
     filter: { type: Object, required: true },
     // 共用的随机条件 { watchState, favoritesOnly, maxMinutes }，只在打开时读一次。
@@ -107,17 +106,13 @@ export default {
 </script>
 
 <style scoped>
-:deep(.tonight-picker) { width: min(700px, calc(100vw - 40px)); max-width: min(700px, calc(100vw - 40px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; }
-.tonight-picker__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.tonight-picker__form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.tonight-picker__form label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+.tonight-picker__form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; }
+.tonight-picker__form label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; }
 .tonight-picker__form .number-input { width: 96px; }
 .tonight-picker__watch { width: auto; min-width: 120px; }
 .tonight-picker__form input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
-.tonight-picker__actions { display: flex; gap: 8px; margin-left: auto; }
-.tonight-picker__header h3 { margin: 0; font-size: 17px; }
-.tonight-picker__results { overflow-y: auto; min-height: 0; }
+.tonight-picker__actions { display: flex; gap: var(--space-2); margin-left: auto; }
 .tonight-picker__results article { margin: 10px 0; }
-.tonight-picker__tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; }
-.tonight-picker__error { color: var(--danger-text); font-size: 13px; }
+.tonight-picker__tags { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 6px 0 0; }
+.tonight-picker__error { color: var(--danger-text); font-size: var(--fs-secondary); }
 </style>

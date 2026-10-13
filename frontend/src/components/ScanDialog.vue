@@ -1,12 +1,12 @@
 <template>
-  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks @close="$emit('close')">
-      <h2>扫描视频目录</h2>
+  <DialogShell v-if="visible" title="扫描视频目录" size="md" class="scan-dialog" @close="$emit('close')">
       <div class="scan-dir-group">
-        <button @click="selectDir" :disabled="scanProgress.scanning" class="btn-primary">选择目录</button>
+        <button type="button" class="btn btn--secondary" :disabled="scanProgress.scanning" data-test="scan-select-dir" @click="selectDir">选择目录</button>
         <p v-if="scanDirectory" class="selected-dir">{{ scanDirectory }}</p>
       </div>
 
       <div v-if="scanProgress.scanning" class="scan-progress">
+        <ProgressBar :value="scanProgress.phase === 'processing' && scanProgress.total > 0 ? scanProgress.processed / scanProgress.total : null" />
         <p data-test="scan-phase">{{ phaseLabel }} · 已用时 {{ elapsedSeconds }} 秒</p>
         <template v-if="scanProgress.phase === 'reading'">
           <p data-test="scan-discovery">已检查 {{ scanProgress.visited }} 个文件，已发现 {{ scanProgress.found }} 个视频</p>
@@ -30,27 +30,28 @@
         <p>扫描完成后，要把「{{ rootConfirm.label }}」加入扫描目录吗？加入后启动扫描与实时同步也会覆盖它。</p>
         <p v-if="rootConfirm.nestedIn" class="scan-root-confirm__hint" data-test="scan-root-nested">它位于已有扫描目录「{{ rootConfirm.nestedIn }}」之内，里面的视频本来就会被扫描，一般不必再加入。</p>
         <p v-if="rootConfirm.contains.length" class="scan-root-confirm__hint" data-test="scan-root-contains">它包含已有扫描目录「{{ rootConfirm.contains.join('」「') }}」，加入后这些目录会被重复覆盖。</p>
-        <div class="modal-actions">
-          <button type="button" class="btn-secondary" data-test="scan-only" @click="chooseRoot(false)">仅扫描不加入</button>
-          <button type="button" class="btn-primary" data-test="scan-and-add" @click="chooseRoot(true)">扫描并加入扫描目录</button>
+        <div class="scan-root-confirm__actions">
+          <button type="button" class="btn btn--secondary btn--sm" data-test="scan-only" @click="chooseRoot(false)">仅扫描不加入</button>
+          <button type="button" class="btn btn--primary btn--sm" data-test="scan-and-add" @click="chooseRoot(true)">扫描并加入扫描目录</button>
         </div>
       </div>
       <p v-if="validationError" class="scan-result scan-result--error" role="alert" data-test="scan-validation-error">{{ validationError }}</p>
 
-      <div class="modal-actions">
-        <button @click="startScan" :disabled="!scanDirectory || scanProgress.scanning || !!rootConfirm || validating" class="btn-primary">
-          {{ scanProgress.statusMessage ? '重新扫描' : '开始扫描' }}
-        </button>
-        <button @click="$emit('close')" class="btn-secondary">
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="$emit('close')">
           {{ scanProgress.scanning ? '后台继续' : scanProgress.statusMessage ? '关闭' : '取消' }}
         </button>
-      </div>
-  </BaseModal>
+        <button type="button" class="btn btn--primary" :disabled="!scanDirectory || scanProgress.scanning || !!rootConfirm || validating" @click="startScan">
+          {{ scanProgress.statusMessage ? '重新扫描' : '开始扫描' }}
+        </button>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { SelectDirectory, SyncDirectoryWithProgress, AddDirectory, ValidateScanDirectory } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
+import ProgressBar from './ui/ProgressBar.vue';
 import TaskFailureList from './video-list/TaskFailureList.vue';
 import { formatSkipBreakdown } from './video-list/IncrementalScanBar.vue';
 import { notify, notifyError } from '../utils/feedback.js';
@@ -64,7 +65,7 @@ let scanRequestSequence = 0;
 
 export default {
   name: 'ScanDialog',
-  components: { BaseModal, TaskFailureList },
+  components: { DialogShell, ProgressBar, TaskFailureList },
   props: {
     visible: { type: Boolean, default: false },
     directories: { type: Array, default: () => [] },
@@ -310,23 +311,23 @@ export default {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .selected-dir {
   margin: 0;
   min-width: 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   overflow-wrap: anywhere;
 }
 
 .scan-progress {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   margin-top: 14px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .scan-progress p { margin: 0; }
@@ -336,31 +337,33 @@ export default {
 .scan-result {
   margin-top: 14px;
   color: var(--success-color);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   overflow-wrap: anywhere;
 }
 
 .scan-result p { margin: 0; }
 
 .scan-result .scan-result__detail {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   color: var(--text-secondary);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 
 .scan-root-confirm {
   margin-top: 14px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .scan-root-confirm p { margin: 0 0 6px; }
 
-.scan-root-confirm__hint { color: var(--warning-color); }
+.scan-root-confirm__hint { color: var(--warning-text); }
 
-.scan-result--error { color: var(--danger-color); }
+.scan-root-confirm__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
+.scan-result--error { color: var(--danger-text); }
 </style>

@@ -1,58 +1,58 @@
 <template>
-  <BaseModal class="suggestion-modal" @close="$emit('close')">
-    <div class="suggestion-header">
-      <h3>建议作品集</h3>
-      <span class="suggestion-header__meta">
+  <DialogShell title="建议作品集" size="xl" class="suggestion-modal" @close="$emit('close')">
+    <div class="suggestion-toolbar">
+      <span class="suggestion-toolbar__meta">
         <template v-if="suggestions.length">共 {{ suggestions.length }} 组候选</template>
         <template v-else>暂无候选</template>
       </span>
-      <div class="suggestion-header__spacer"></div>
       <button
         v-if="status.running"
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         data-test="collection-suggestion-cancel"
         @click="cancelAnalysis"
       >取消分析</button>
       <button
         v-else
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         data-test="collection-suggestion-analyze"
         :disabled="loading"
         @click="startAnalysis"
       >分析剧集</button>
-      <button type="button" class="suggestion-header__close" aria-label="关闭" @click="$emit('close')">✕</button>
     </div>
 
     <div v-if="status.running" class="suggestion-progress" data-test="collection-suggestion-progress">
-      正在按文件名分析剧集…… 已扫 {{ status.scanned }} / {{ status.total }}
-      <span v-if="status.matched"> · 命中 {{ status.matched }} 个文件</span>
+      <ProgressBar
+        :value="status.total > 0 ? status.scanned / status.total : null"
+        :label="`正在按文件名分析剧集… 已扫 ${status.scanned} / ${status.total}${status.matched ? ` · 命中 ${status.matched} 个文件` : ''}`"
+      />
     </div>
-    <div v-else-if="status.last_error" class="suggestion-progress suggestion-progress--error" data-test="collection-suggestion-error">
+    <p v-else-if="status.last_error" class="suggestion-progress suggestion-progress--error" role="alert" data-test="collection-suggestion-error">
       上次分析失败：{{ status.last_error }}
-    </div>
+    </p>
 
     <div class="suggestion-body">
-      <div v-if="loading" class="suggestion-placeholder">正在读取候选……</div>
-      <div v-else-if="!suggestions.length" class="suggestion-placeholder" data-test="collection-suggestion-empty">
-        <p>还没有可确认的剧集候选。</p>
-        <p class="help-text">
-          候选按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。
-          同一扫描根下同名系列凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。
-        </p>
-      </div>
+      <SkeletonBlock v-if="loading" class="suggestion-placeholder" :lines="4" />
+      <EmptyState
+        v-else-if="!suggestions.length"
+        class="suggestion-empty"
+        title="还没有可确认的剧集候选"
+        message="候选按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。同一扫描根下同名系列凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。"
+        data-test="collection-suggestion-empty"
+      />
       <template v-else>
         <nav class="suggestion-list" aria-label="剧集候选">
           <button
             v-for="suggestion in suggestions"
             :key="suggestion.id"
             type="button"
-            :class="['suggestion-list__item', { active: suggestion.id === activeID }]"
+            :class="['btn', 'btn--ghost', 'suggestion-list__item', { active: suggestion.id === activeID }]"
+            :aria-current="suggestion.id === activeID ? 'true' : undefined"
             data-test="collection-suggestion-item"
             @click="activeID = suggestion.id"
           >
-            <span class="suggestion-list__name">{{ suggestion.series_name }}<span v-if="isAppend(suggestion)" class="suggestion-list__badge" :data-test="`collection-suggestion-append-badge-${suggestion.id}`">追加</span></span>
+            <span class="suggestion-list__name">{{ suggestion.series_name }}<AppBadge v-if="isAppend(suggestion)" tone="accent" class="suggestion-list__badge" :data-test="`collection-suggestion-append-badge-${suggestion.id}`">追加</AppBadge></span>
             <span class="suggestion-list__meta">{{ isAppend(suggestion) ? `新增 ${suggestion.member_count} 集 → 「${suggestion.target_collection_name}」` : `${suggestion.member_count} 集` }} · {{ suggestion.scan_root }}</span>
           </button>
         </nav>
@@ -96,12 +96,12 @@
                 <span class="suggestion-member__name" :title="member.path">{{ member.name }}</span>
                 <span class="suggestion-member__meta">
                   {{ episodeLabel(member) }}<template v-if="member.size > 0"> · {{ formatBytes(member.size) }}</template>
-                  <span v-if="member.multiple_versions" class="suggestion-member__badge">同集多版本</span>
+                  <AppBadge v-if="member.multiple_versions" tone="warning" class="suggestion-member__badge">同集多版本</AppBadge>
                 </span>
               </div>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 data-test="collection-suggestion-remove-member"
                 @click="toggleMember(member.video_id)"
               >{{ isExcluded(member.video_id) ? '放回' : '去掉' }}</button>
@@ -111,27 +111,26 @@
       </template>
     </div>
 
-    <div v-if="activeSuggestion" class="suggestion-footer">
+    <template v-if="activeSuggestion" #footer>
       <span class="suggestion-footer__meta" data-test="collection-suggestion-selection">
         将写入 {{ keptVideoIDs.length }} / {{ activeSuggestion.members.length }} 集
       </span>
-      <div class="suggestion-header__spacer"></div>
       <button
         type="button"
-        class="btn-secondary"
+        class="btn btn--secondary"
         data-test="collection-suggestion-dismiss"
         :disabled="processing"
         @click="dismiss"
       >忽略这一组</button>
       <button
         type="button"
-        class="btn-primary"
+        class="btn btn--primary"
         data-test="collection-suggestion-confirm"
         :disabled="!canConfirm"
         @click="confirm"
       >{{ isAppend(activeSuggestion) ? '追加到作品集' : '确认建作品集' }}</button>
-    </div>
-  </BaseModal>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
@@ -143,7 +142,11 @@ import {
   ListCollectionSuggestions,
   StartCollectionSuggestionAnalysis
 } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppBadge from './ui/AppBadge.vue';
+import DialogShell from './ui/DialogShell.vue';
+import EmptyState from './ui/EmptyState.vue';
+import ProgressBar from './ui/ProgressBar.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notifyError, notifySuccess } from '../utils/feedback.js';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
@@ -155,7 +158,7 @@ import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 // 写入，标题与文件名一律不动。
 export default {
   name: 'CollectionSuggestionPanel',
-  components: { BaseModal },
+  components: { AppBadge, DialogShell, EmptyState, ProgressBar, SkeletonBlock },
   mixins: [runtimeEventsMixin],
   emits: ['close', 'confirmed'],
   data() {
@@ -326,57 +329,41 @@ export default {
 </script>
 
 <style scoped>
-:deep(.suggestion-modal) {
-  width: min(880px, calc(100vw - 32px));
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 48px);
-  overflow: hidden;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.suggestion-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: none;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--hairline-soft);
-}
-.suggestion-header h3 { margin: 0; font-size: 15px; }
-.suggestion-header__meta { color: var(--text-secondary); font-size: 12px; }
-.suggestion-header__spacer { flex: 1; }
-.suggestion-header__close { border: 0; background: transparent; color: var(--text-muted); font-size: 16px; cursor: pointer; }
+.suggestion-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: var(--space-3); }
+.suggestion-toolbar__meta { color: var(--text-secondary); font-size: var(--fs-caption); }
 
 .suggestion-progress {
-  flex: none;
   max-height: 96px;
+  margin: 0 0 var(--space-3);
   overflow-y: auto;
   overflow-wrap: anywhere;
-  padding: 8px 18px;
-  border-bottom: 1px solid var(--hairline-faint);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline-faint);
+  border-radius: var(--radius-sm);
   background: var(--panel-subtle-bg);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
-.suggestion-progress--error { background: var(--warning-soft); border-bottom-color: var(--warning-border); color: var(--warning-text); }
+.suggestion-progress--error { background: var(--warning-soft); border-color: var(--warning-border); color: var(--warning-text); }
 
+/* 左列表右详情各自滚动：两栏占定高，对话框正文不跟着一起滚。 */
 .suggestion-body {
   display: flex;
-  min-height: 0;
-  flex: 1;
+  height: min(520px, calc(100vh - 300px));
+  min-height: 240px;
   overflow: hidden;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius);
 }
 
-.suggestion-placeholder { padding: 28px 18px; color: var(--text-secondary); font-size: 13px; }
-.suggestion-placeholder p { margin: 0 0 8px; }
+.suggestion-placeholder { flex: 1; padding: 28px 18px; }
+.suggestion-empty { flex: 1; border: 0; border-radius: 0; }
 
 .suggestion-list {
   width: 240px;
   flex: none;
   overflow-y: auto;
-  padding: 8px;
+  padding: var(--space-2);
   border-right: 1px solid var(--hairline-soft);
   background: var(--panel-subtle-bg);
 }
@@ -384,24 +371,25 @@ export default {
   display: grid;
   gap: 2px;
   width: 100%;
-  padding: 8px 10px;
+  height: auto;
+  padding: var(--space-2) 10px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
+  border-radius: var(--radius-sm);
+  font-weight: var(--fw-regular);
   text-align: left;
-  cursor: pointer;
+  white-space: normal;
+  justify-content: stretch;
 }
-.suggestion-list__item.active { border-color: var(--accent-border); background: var(--accent-soft); }
-.suggestion-list__name { color: var(--text-primary); font-size: 13px; }
-.suggestion-list__badge { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; }
-.suggestion-append-target { margin: 0 0 6px; color: var(--text-primary); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-.suggestion-list__meta { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.suggestion-list__item.btn.active { border-color: var(--accent-border); background: var(--accent-soft); }
+.suggestion-list__name { display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: var(--fs-secondary); }
+.suggestion-append-target { margin: 0 0 6px; color: var(--text-primary); font-size: var(--fs-secondary); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+.suggestion-list__meta { overflow: hidden; color: var(--text-muted); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
 
 .suggestion-detail { min-width: 0; flex: 1; overflow-y: auto; padding: 14px 18px; }
 .suggestion-name { display: grid; gap: 6px; }
-.suggestion-name span { color: var(--text-secondary); font-size: 12px; }
+.suggestion-name span { color: var(--text-secondary); font-size: var(--fs-caption); }
 
-.suggestion-members { display: grid; gap: 8px; margin-top: 14px; }
+.suggestion-members { display: grid; gap: var(--space-2); margin-top: 14px; }
 .suggestion-member {
   display: flex;
   align-items: center;
@@ -412,20 +400,11 @@ export default {
   background: var(--control-bg);
 }
 .suggestion-member.excluded { opacity: 0.5; }
-.suggestion-member__thumb { width: 64px; height: 36px; flex: none; border-radius: 4px; background: var(--neutral-softer); object-fit: cover; }
+.suggestion-member__thumb { width: 64px; height: 36px; flex: none; border-radius: var(--radius-sm); background: var(--neutral-softer); object-fit: cover; }
 .suggestion-member__info { min-width: 0; flex: 1; display: grid; gap: 2px; }
-.suggestion-member__name { overflow: hidden; color: var(--text-primary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.suggestion-member__meta { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
-.suggestion-member__badge { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--warning-soft); color: var(--warning-text); font-family: inherit; }
+.suggestion-member__name { overflow: hidden; color: var(--text-primary); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+.suggestion-member__meta { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-caption); }
+.suggestion-member__badge { font-family: inherit; }
 
-.suggestion-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  padding: 10px 18px;
-  border-top: 1px solid var(--hairline-soft);
-  background: var(--panel-subtle-bg);
-}
-.suggestion-footer__meta { color: var(--text-secondary); font-size: 12px; }
+.suggestion-footer__meta { color: var(--text-secondary); font-size: var(--fs-caption); }
 </style>

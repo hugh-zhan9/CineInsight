@@ -1,25 +1,25 @@
 <template>
   <!-- 后台继续翻译（D-PC22、MEDIA-12）：弹窗收起后在片库页留一条进度，随时可以回看或取消。 -->
-  <div v-if="background && video" class="subtitle-translate-bar glass-surface" role="status" data-test="subtitle-translate-bar">
+  <div v-if="background && video" class="subtitle-translate-bar" role="status" data-test="subtitle-translate-bar">
     <span class="subtitle-translate-bar__text">正在后台翻译「{{ videoLabel }}」的字幕 · {{ dialog.percent }}%</span>
-    <button type="button" class="btn-secondary btn-compact" data-test="subtitle-translate-show" @click="showProgress">查看进度</button>
-    <button type="button" class="btn-danger btn-compact" :disabled="cancelling" data-test="subtitle-translate-bar-cancel" @click="cancelTranslate">
+    <ProgressBar class="subtitle-translate-bar__progress" :value="dialog.percent / 100" />
+    <button type="button" class="btn btn--secondary btn--sm" data-test="subtitle-translate-show" @click="showProgress">查看进度</button>
+    <button type="button" class="btn btn--danger btn--sm" :disabled="cancelling" data-test="subtitle-translate-bar-cancel" @click="cancelTranslate">
       {{ cancelling ? '正在取消…' : '取消翻译' }}
     </button>
   </div>
 
-  <BaseModal v-if="dialog.show" class="subtitle-translate-modal" data-test="subtitle-translate-dialog" @close="handleClose">
-    <h3>{{ dialog.title }}</h3>
+  <DialogShell v-if="dialog.show" :title="dialog.title" size="sm" class="subtitle-translate-modal" data-test="subtitle-translate-dialog" @close="handleClose">
     <p class="modal-lead" data-test="subtitle-translate-msg">{{ dialog.msg }}</p>
 
     <div v-if="dialog.mode === 'confirm'" class="translate-form">
       <label class="dialog-field-label">翻译为</label>
-      <select v-model="targetLang" class="search-input dialog-select">
+      <select v-model="targetLang" class="select-input dialog-select">
         <option v-for="option in targetLangOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
 
       <label class="dialog-field-label dialog-field-label--spaced">字幕当前语言</label>
-      <select v-model="sourceLang" class="search-input dialog-select">
+      <select v-model="sourceLang" class="select-input dialog-select">
         <option v-for="option in sourceLangOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
       <p class="dialog-field-hint">保持「自动识别」即可；指定原语言可以让翻译更稳。</p>
@@ -54,42 +54,40 @@
     </div>
 
     <template v-if="dialog.mode === 'progress'">
-      <div class="progress-bar-container">
-        <div class="progress-bar" :style="{ width: dialog.percent + '%' }"></div>
-      </div>
-      <p class="progress-text">{{ dialog.percent }}%</p>
+      <ProgressBar class="translate-progress" :value="dialog.percent / 100" label="翻译进度" />
       <p class="progress-hint">字幕按批送去翻译，条数多时需要几分钟。可以「后台继续」去做别的事，完成后会提示。</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" data-test="subtitle-translate-background" @click="runInBackground">后台继续</button>
-        <button type="button" class="btn-danger" data-test="subtitle-translate-cancel" :disabled="cancelling" @click="cancelTranslate">
-          {{ cancelling ? '正在取消…' : '取消翻译' }}
-        </button>
-      </div>
     </template>
 
-    <div v-if="dialog.mode === 'confirm'" class="modal-actions">
-      <button type="button" class="btn-secondary" @click="close">取消</button>
-      <button type="button" class="btn-primary" data-test="subtitle-translate-start" :disabled="sameLanguageSelected" @click="startTranslate">开始翻译</button>
-    </div>
-    <div v-if="dialog.mode === 'encoding'" class="modal-actions">
-      <button type="button" class="btn-secondary" @click="close">取消</button>
+    <template v-if="dialog.mode === 'progress'" #footer>
+      <button type="button" class="btn btn--secondary" data-test="subtitle-translate-background" @click="runInBackground">后台继续</button>
+      <button type="button" class="btn btn--danger" data-test="subtitle-translate-cancel" :disabled="cancelling" @click="cancelTranslate">
+        {{ cancelling ? '正在取消…' : '取消翻译' }}
+      </button>
+    </template>
+    <template v-else-if="dialog.mode === 'confirm'" #footer>
+      <button type="button" class="btn btn--secondary" @click="close">取消</button>
+      <button type="button" class="btn btn--primary" data-test="subtitle-translate-start" :disabled="sameLanguageSelected" @click="startTranslate">开始翻译</button>
+    </template>
+    <template v-else-if="dialog.mode === 'encoding'" #footer>
+      <button type="button" class="btn btn--secondary" @click="close">取消</button>
       <button
         type="button"
-        class="btn-primary"
+        class="btn btn--primary"
         data-test="subtitle-translate-convert"
         :disabled="encoding.converting || encoding.unknown"
         @click="convertEncoding"
       >{{ encoding.converting ? '正在转换…' : '转换为 UTF-8' }}</button>
-    </div>
-    <div v-if="dialog.mode === 'result'" class="modal-actions">
-      <button type="button" class="btn-primary" @click="close">确定</button>
-    </div>
-  </BaseModal>
+    </template>
+    <template v-else-if="dialog.mode === 'result'" #footer>
+      <button type="button" class="btn btn--primary" @click="close">确定</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { TranslateSubtitle, CancelSubtitleTranslation, ConvertSubtitleToUTF8, GetSubtitleSegments } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 import { notify, notifyError } from '../../utils/feedback.js';
 import { SUBTITLE_BACKUP_NOTE, subtitleEncodingLabel, subtitleEncodingPrompt, subtitleErrorText, subtitleExceptionText } from '../../utils/subtitleTools.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
@@ -105,7 +103,7 @@ function emptyEncoding() {
 // 这里的目标语言与输出形态按次指定，产物同样覆盖同名 .srt（写入前先备份，D-PC13）。
 export default {
   name: 'SubtitleTranslateDialog',
-  components: { BaseModal },
+  components: { DialogShell, ProgressBar },
   mixins: [runtimeEventsMixin],
   emits: ['translated', 'translating-change', 'translate-progress'],
   data() {
@@ -278,7 +276,8 @@ export default {
       }
     },
     // 收尾：弹窗开着就显示结果；已「后台继续」就改用提示条告知（MEDIA-12）。
-    finish({ icon = '', title, msg, error = false }) {
+    // 标题只用文字说结果（统一设计：对话框标题不带字符图标）。
+    finish({ title, msg, error = false }) {
       if (this.background) {
         const text = `${title}：「${this.videoLabel}」。${msg}`;
         if (error) notifyError(text);
@@ -287,7 +286,7 @@ export default {
         return;
       }
       this.dialog.mode = 'result';
-      this.dialog.title = icon ? `${icon} ${title}` : title;
+      this.dialog.title = title;
       this.dialog.msg = msg;
     },
     async startTranslate() {
@@ -297,7 +296,7 @@ export default {
       this.$emit('translating-change', video.id);
       this.dialog.mode = 'progress';
       this.dialog.title = '正在翻译字幕';
-      this.dialog.msg = '准备翻译...';
+      this.dialog.msg = '准备翻译…';
       this.dialog.percent = 0;
       try {
         const result = await TranslateSubtitle({
@@ -318,21 +317,21 @@ export default {
           return;
         }
         if (result?.error_code) {
-          this.finish({ icon: '❌', title: '无法翻译这个字幕', msg: subtitleErrorText(result.error_code, result.message), error: true });
+          this.finish({ title: '无法翻译这个字幕', msg: subtitleErrorText(result.error_code, result.message), error: true });
           return;
         }
         const warnings = Array.isArray(result?.warnings) && result.warnings.length > 0
           ? `\n\n注意：\n${result.warnings.join('\n')}`
           : '';
         const backup = result?.backup_id ? `\n${SUBTITLE_BACKUP_NOTE}` : '';
-        this.finish({ icon: '✅', title: '字幕翻译完成', msg: `已翻译 ${result?.entries || 0} 条字幕，写回同名字幕文件。${backup}${warnings}` });
+        this.finish({ title: '字幕翻译完成', msg: `已翻译 ${result?.entries || 0} 条字幕，写回同名字幕文件。${backup}${warnings}` });
         this.$emit('translated', { video, result });
       } catch (err) {
         const cancelled = this.cancelling || String(err).includes('已取消');
         this.cancelling = false;
         this.$emit('translating-change', null);
-        if (cancelled) this.finish({ icon: '⏹️', title: '已取消翻译', msg: '原字幕没有改动。' });
-        else this.finish({ icon: '❌', title: '字幕翻译失败', msg: subtitleExceptionText(err), error: true });
+        if (cancelled) this.finish({ title: '已取消翻译', msg: '原字幕没有改动。' });
+        else this.finish({ title: '字幕翻译失败', msg: subtitleExceptionText(err), error: true });
       }
     }
   }
@@ -340,19 +339,17 @@ export default {
 </script>
 
 <style scoped>
-:deep(.subtitle-translate-modal) {
-  width: 400px;
-  padding: 30px;
-  text-align: center;
-}
 .subtitle-translate-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 12px 0;
-  padding: 10px 16px;
-  font-size: 13px;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: 10px var(--space-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  font-size: var(--fs-secondary);
 }
 .subtitle-translate-bar__text {
   flex: 1 1 auto;
@@ -361,98 +358,71 @@ export default {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.subtitle-translate-bar__progress {
+  flex: 0 1 160px;
+}
 .modal-lead {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   line-height: 1.6;
   white-space: pre-line;
 }
 .translate-form {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .dialog-field-label {
   display: block;
-  margin-bottom: 8px;
-  text-align: left;
+  margin-bottom: var(--space-2);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 .dialog-field-label--spaced {
-  margin-top: 12px;
-}
-.dialog-select {
-  height: var(--h-unit);
-  padding: 0 10px;
-  text-align: left;
+  margin-top: var(--space-3);
 }
 .dialog-field-hint {
   margin-top: 5px;
-  text-align: left;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 .mode-option {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
   margin-bottom: 6px;
-  text-align: left;
   cursor: pointer;
 }
 .mode-option-text {
   display: flex;
   flex-direction: column;
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 .mode-option-text em {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-style: normal;
 }
 .mode-option-text .encoding-preview {
   white-space: pre-line;
 }
 .dialog-warning {
-  margin-top: 12px;
-  text-align: left;
+  margin-top: var(--space-3);
   color: var(--danger-text);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 .dialog-note {
-  margin-top: 12px;
-  text-align: left;
+  margin-top: var(--space-3);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.6;
 }
-.progress-bar-container {
-  width: 100%;
-  height: 10px;
-  margin: 20px 0;
-  border-radius: 5px;
-  background-color: var(--review-progress-track-bg);
-  overflow: hidden;
-}
-.progress-bar {
-  height: 100%;
-  background-color: var(--success-bright);
-  transition: width 0.3s ease;
-}
-.progress-text {
-  margin: 0;
-  color: var(--review-text-muted);
-  font-size: 0.9em;
+.translate-progress {
+  margin: var(--space-4) 0 var(--space-2);
 }
 .progress-hint {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--review-text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.6;
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
 }
 </style>

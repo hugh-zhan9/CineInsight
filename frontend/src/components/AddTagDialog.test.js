@@ -35,8 +35,9 @@ describe('添加标签输入', () => {
     await input.setValue('动作');
     await wrapper.get('.clickable-tag-item').trigger('click');
     expect(input.element.value).toBe('');
-    expect(wrapper.findAll('.selected-tag-pill').map(tag => tag.text())).toEqual(['旅行×', '动作×']);
-    await wrapper.get('.modal-actions .btn-primary').trigger('click');
+    expect(wrapper.findAll('.selected-tag-pill').map(tag => tag.text())).toEqual(['旅行', '动作']);
+    expect(wrapper.findAll('.selected-tag-pill .remove-selected-tag').map(button => button.attributes('aria-label'))).toEqual(['取消选择 旅行', '取消选择 动作']);
+    await wrapper.get('[data-test="add-tag-apply"]').trigger('click');
     await flushPromises();
     const calls = mode === 'batch' ? api.BatchAddTagToVideos : api.AddTagToVideo;
     expect(calls.mock.calls).toEqual(mode === 'batch' ? [[[10, 11], 1], [[10, 11], 2]] : [[10, 1], [10, 2]]);
@@ -82,7 +83,7 @@ describe('添加标签输入', () => {
     } });
     expect(wrapper.findAll('.clickable-tag-item').map(tag => tag.text())).toEqual(['短视频+', '低清+']);
     await wrapper.findAll('.clickable-tag-item')[1].trigger('click');
-    await wrapper.get('.modal-actions .btn-primary').trigger('click');
+    await wrapper.get('[data-test="add-tag-apply"]').trigger('click');
     await flushPromises();
     expect(api.AddTagToVideo).toHaveBeenCalledWith(10, 4);
   });
@@ -141,7 +142,7 @@ describe('META-13 自动标签的手动覆盖', () => {
   it('META-06 reports the video and tag ids that were added', async () => {
     open();
     await wrapper.findAll('.clickable-tag-item')[1].trigger('click');
-    await wrapper.get('.modal-actions .btn-primary').trigger('click');
+    await wrapper.get('[data-test="add-tag-apply"]').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('tag-added')[0][0]).toEqual({ videoIds: [10], tagIds: [2], tags: [{ id: 2, name: '动作' }] });
   });

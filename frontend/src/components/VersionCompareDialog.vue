@@ -2,6 +2,7 @@
   <div class="version-compare" role="dialog" aria-modal="true" aria-label="版本对比播放" data-test="version-compare">
     <header class="version-compare__bar">
       <h2 class="version-compare__title">版本对比</h2>
+      <!-- 两组切换暂用工具栏按钮：SegmentedControl 还不能给每个选项带 data-test（version-compare-mode-* / audio-*），见统一设计待迁移清单。 -->
       <div class="version-compare__group" role="group" aria-label="对比方式">
         <button type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': mode === 'side' }]" :aria-pressed="mode === 'side'" data-test="version-compare-mode-side" @click="mode = 'side'">并排</button>
         <button type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': mode === 'slider' }]" :aria-pressed="mode === 'slider'" data-test="version-compare-mode-slider" @click="mode = 'slider'">滑动对比</button>
@@ -13,15 +14,15 @@
       <!-- 片头长短不一的两个版本：右侧整体提前或推后，只在这次打开内有效。 -->
       <div class="version-compare__group" role="group" aria-label="右侧偏移">
         <span class="version-compare__group-label">右侧偏移</span>
-        <button type="button" class="toolbar-btn toolbar-btn--compact" data-test="version-compare-offset-minus-1" @click="adjustOffset(-1)">-1 秒</button>
-        <button type="button" class="toolbar-btn toolbar-btn--compact" data-test="version-compare-offset-minus-01" @click="adjustOffset(-0.1)">-0.1</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="version-compare-offset-minus-1" @click="adjustOffset(-1)">-1 秒</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="version-compare-offset-minus-01" @click="adjustOffset(-0.1)">-0.1</button>
         <span class="version-compare__offset" data-test="version-compare-offset">{{ offsetText }}</span>
-        <button type="button" class="toolbar-btn toolbar-btn--compact" data-test="version-compare-offset-plus-01" @click="adjustOffset(0.1)">+0.1</button>
-        <button type="button" class="toolbar-btn toolbar-btn--compact" data-test="version-compare-offset-plus-1" @click="adjustOffset(1)">+1 秒</button>
-        <button type="button" class="toolbar-btn toolbar-btn--compact" :disabled="offset === 0" data-test="version-compare-offset-reset" @click="resetOffset">归零</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="version-compare-offset-plus-01" @click="adjustOffset(0.1)">+0.1</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="version-compare-offset-plus-1" @click="adjustOffset(1)">+1 秒</button>
+        <button type="button" class="btn btn--ghost btn--sm" :disabled="offset === 0" data-test="version-compare-offset-reset" @click="resetOffset">归零</button>
       </div>
       <div class="version-compare__spacer"></div>
-      <button type="button" class="btn-secondary btn-compact" data-test="version-compare-close" @click="close">关闭（Esc）</button>
+      <button type="button" class="btn-icon" aria-label="关闭" title="关闭（Esc）" data-test="version-compare-close" @click="close"><AppIcon name="close" :size="20" /></button>
     </header>
 
     <!-- 两个 <video> 在两种方式下是同一对元素，只换布局，切换时不重新加载。
@@ -81,11 +82,11 @@
         :aria-valuenow="Math.round(sliderPercent)"
         data-test="version-compare-divider"
         @keydown="onDividerKey"
-      ><span class="version-compare__handle" aria-hidden="true">⇆</span></div>
+      ><span class="version-compare__handle" aria-hidden="true"><AppIcon name="chevron-left" :size="16" /><AppIcon name="chevron-right" :size="16" /></span></div>
     </div>
 
     <footer class="version-compare__transport">
-      <button type="button" class="btn-primary btn-compact version-compare__play" :disabled="!leaderSide" data-test="version-compare-play" @click="togglePlay">{{ playing ? '暂停' : '播放' }}</button>
+      <button type="button" class="btn btn--primary btn--sm version-compare__play" :disabled="!leaderSide" data-test="version-compare-play" @click="togglePlay">{{ playing ? '暂停' : '播放' }}</button>
       <span class="version-compare__time" data-test="version-compare-time">{{ timeText }}</span>
       <input
         type="range"
@@ -107,6 +108,7 @@
 
 <script>
 import { GetPreviewSession, GetVideoDetails } from '../../wailsjs/go/main/App';
+import AppIcon from './ui/AppIcon.vue';
 import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import {
   COMPARE_SYNC_INTERVAL_MS, applyCompareOffset, compareClipPath, compareDriftSeek, compareFollowerTarget, compareMediaErrorText,
@@ -125,6 +127,7 @@ const emptySide = () => ({
 // 关闭时（按钮、Esc、宿主卸载）两个媒体元素都暂停并清掉 src，后台不留播放。
 export default {
   name: 'VersionCompareDialog',
+  components: { AppIcon },
   props: {
     leftVideoId: { type: Number, required: true },
     rightVideoId: { type: Number, required: true }
@@ -425,11 +428,11 @@ export default {
 </script>
 
 <style scoped>
-/* 全窗口覆盖层：压在抽屉与普通弹窗（1000）之上，留出全局提示（1400/1500）在更上层。 */
+/* 全窗口查看器：与对话框同一层（--z-modal，压在抽屉之上），全局提示在更上层。 */
 .version-compare {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
   background: var(--player-bg);
@@ -441,15 +444,15 @@ export default {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px 14px;
-  padding: 8px 16px;
+  padding: var(--space-2) var(--space-4);
   background: var(--panel-bg);
 }
 .version-compare__bar { border-bottom: 1px solid var(--hairline); }
 .version-compare__transport { border-top: 1px solid var(--hairline); flex-wrap: nowrap; }
-.version-compare__title { margin: 0; font-size: 15px; font-weight: 700; }
-.version-compare__group { display: inline-flex; align-items: center; gap: 4px; }
-.version-compare__group-label { color: var(--text-secondary); font-size: 12px; margin-right: 2px; }
-.version-compare__offset { min-width: 64px; text-align: center; font-family: var(--font-mono); font-size: 12px; }
+.version-compare__title { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-semibold); }
+.version-compare__group { display: inline-flex; align-items: center; gap: var(--space-1); }
+.version-compare__group-label { color: var(--text-secondary); font-size: var(--fs-caption); margin-right: 2px; }
+.version-compare__offset { min-width: 64px; text-align: center; font-family: var(--font-mono); font-size: var(--fs-caption); }
 .version-compare__spacer { flex: 1; }
 
 .version-compare__stage { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; }
@@ -473,25 +476,25 @@ export default {
   border-radius: var(--radius-sm);
   background: var(--media-badge-bg);
   color: var(--media-badge-fg);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   pointer-events: none;
 }
 .version-compare__label--left { left: 10px; }
 .version-compare__proxy-btn { pointer-events: auto; align-self: flex-start; }
 .version-compare__label--right .version-compare__proxy-btn { align-self: flex-end; }
 .version-compare__label--right { right: 10px; text-align: right; }
-.version-compare__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
-.version-compare__side { margin-right: 6px; padding: 0 5px; border-radius: 4px; background: var(--accent-color); color: var(--accent-on); font-size: 11px; }
-.version-compare__facts { font-family: var(--font-mono); font-size: 11.5px; opacity: 0.9; }
-.version-compare__note { font-size: 11.5px; opacity: 0.85; }
-.version-compare__error { color: var(--danger-color); font-size: 12px; white-space: normal; }
+.version-compare__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--fw-semibold); }
+.version-compare__side { margin-right: 6px; padding: 0 5px; border-radius: var(--radius-sm); background: var(--accent-color); color: var(--accent-on); font-size: var(--fs-caption); }
+.version-compare__facts { font-family: var(--font-mono); font-size: var(--fs-caption); opacity: 0.9; }
+.version-compare__note { font-size: var(--fs-caption); opacity: 0.85; }
+.version-compare__error { color: var(--danger-color); font-size: var(--fs-caption); white-space: normal; }
 .version-compare__transport .version-compare__error { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--danger-text); }
 
 .version-compare__divider {
   position: absolute;
   top: 0;
   bottom: 0;
-  z-index: 4;
+  z-index: 3;
   width: 2px;
   margin-left: -1px;
   background: var(--media-badge-fg);
@@ -504,17 +507,17 @@ export default {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
+  width: 34px;
   height: 30px;
   border: 2px solid var(--media-badge-fg);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--media-badge-bg);
   color: var(--media-badge-fg);
-  font-size: 14px;
   transform: translate(-50%, -50%);
 }
+.version-compare__handle > svg + svg { margin-left: -6px; }
 
 .version-compare__play { min-width: 64px; }
-.version-compare__time { flex: none; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.version-compare__time { flex: none; font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary); }
 .version-compare__seek { flex: 1; min-width: 120px; accent-color: var(--accent-color); }
 </style>

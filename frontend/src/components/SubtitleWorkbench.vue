@@ -1,6 +1,8 @@
 <template>
-  <div class="subtitle-workbench-overlay" @click.self="requestClose">
-    <section class="subtitle-workbench" role="dialog" aria-modal="true" aria-label="字幕编辑工作台">
+  <!-- 整窗工作台（不是对话框尺寸，所以不走 DialogShell）：Esc 与右上角 × 都经 requestClose（有未保存修改先确认）；
+       里面全是表单，点遮罩不关（D-UD-13）。 -->
+  <div class="subtitle-workbench-overlay">
+    <section ref="dialog" class="subtitle-workbench" role="dialog" aria-modal="true" aria-label="字幕编辑工作台">
       <header class="subtitle-workbench__header">
         <div class="subtitle-workbench__title">
           <p class="subtitle-workbench__eyebrow">字幕编辑工作台</p>
@@ -10,17 +12,17 @@
           <span :class="['subtitle-workbench__dirty', { 'subtitle-workbench__dirty--active': isDirty }]">
             {{ isDirty ? '有未保存修改' : '已保存' }}
           </span>
-          <button type="button" class="btn-secondary" :disabled="loading" @click="reloadDocument">重新加载</button>
-          <button data-test="close-workbench" type="button" class="btn-secondary" @click="requestClose">关闭</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reloadDocument">刷新</button>
+          <button data-test="close-workbench" type="button" class="btn-icon" aria-label="关闭" title="关闭（Esc）" @click="requestClose"><AppIcon name="close" :size="20" /></button>
         </div>
       </header>
 
-      <div v-if="loading" class="subtitle-workbench__state">正在读取外置 SRT...</div>
+      <div v-if="loading" class="subtitle-workbench__state">正在读取外置 SRT…</div>
       <!-- 还没有字幕（D-PC15、MEDIA-06）：不是死胡同，可以新建空白字幕，保存时才创建文件。 -->
       <div v-else-if="loadErrorCode === 'subtitle_missing'" class="subtitle-workbench__state" data-test="workbench-missing">
         <p>{{ loadError }}</p>
         <p class="subtitle-workbench__state-hint">可以新建一份空白字幕手动编写，保存时才会创建同名 .srt 文件。</p>
-        <button type="button" class="btn-primary" :disabled="creatingBlank" data-test="workbench-create-blank" @click="createBlankDocument">
+        <button type="button" class="btn btn--primary" :disabled="creatingBlank" data-test="workbench-create-blank" @click="createBlankDocument">
           {{ creatingBlank ? '正在新建…' : '新建空白字幕' }}
         </button>
       </div>
@@ -39,7 +41,7 @@
         <p v-if="encoding.error" class="subtitle-workbench__state--error" role="alert">{{ encoding.error }}</p>
         <button
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           :disabled="encoding.converting || encoding.unknown"
           data-test="workbench-convert-utf8"
           @click="convertToUTF8"
@@ -47,13 +49,13 @@
       </div>
       <div v-else-if="loadError" class="subtitle-workbench__state subtitle-workbench__state--error" role="alert" data-test="workbench-load-error">
         <p>{{ loadError }}</p>
-        <button v-if="loadErrorCode !== 'subtitle_not_sidecar_srt'" type="button" class="btn-primary" @click="loadWorkbench">重试</button>
+        <button v-if="loadErrorCode !== 'subtitle_not_sidecar_srt'" type="button" class="btn btn--primary" @click="loadWorkbench">重试</button>
       </div>
 
       <template v-else>
         <div class="subtitle-workbench__layout">
           <aside class="subtitle-workbench__preview">
-            <div v-if="previewLoading" class="subtitle-workbench__state">正在准备视频预览...</div>
+            <div v-if="previewLoading" class="subtitle-workbench__state">正在准备视频预览…</div>
             <template v-else-if="previewSession?.mode === 'inline' && previewSession.inline_source">
               <video
                 ref="videoElement"
@@ -74,7 +76,7 @@
                    proxy-manual（预计产物太大）只给手动生成。 -->
               <p v-if="previewProxy.status" role="status" data-test="workbench-proxy-status">{{ previewProxy.status }}</p>
               <p v-if="previewProxy.alert" role="alert" data-test="workbench-proxy-alert">{{ previewProxy.alert }}</p>
-              <button type="button" class="btn-secondary" @click="previewExternally">用系统播放器预览</button>
+              <button type="button" class="btn btn--secondary" @click="previewExternally">用系统播放器预览</button>
               <button v-if="canGeneratePreviewProxy" type="button" class="btn btn--secondary" data-test="workbench-proxy-generate" @click="generatePreviewProxy">生成播放代理</button>
             </div>
             <div class="subtitle-workbench__playback-status">
@@ -85,18 +87,18 @@
             <section class="subtitle-workbench__tool-section">
               <h3>时间与结构</h3>
               <div class="subtitle-workbench__button-grid">
-                <button type="button" class="btn-secondary" @click="insertEntry">插入</button>
-                <button type="button" class="btn-secondary" :disabled="selectedIDs.length === 0" @click="deleteSelected">删除</button>
-                <button type="button" class="btn-secondary" :disabled="selectedIDs.length !== 1" @click="splitSelected">拆分</button>
-                <button type="button" class="btn-secondary" :disabled="!canMergeSelection" @click="mergeSelected">合并</button>
+                <button type="button" class="btn btn--secondary" @click="insertEntry">插入</button>
+                <button type="button" class="btn btn--secondary" :disabled="selectedIDs.length === 0" @click="deleteSelected">删除</button>
+                <button type="button" class="btn btn--secondary" :disabled="selectedIDs.length !== 1" @click="splitSelected">拆分</button>
+                <button type="button" class="btn btn--secondary" :disabled="!canMergeSelection" @click="mergeSelected">合并</button>
               </div>
               <div class="subtitle-workbench__offset-row">
                 <input v-model.number="offsetMs" type="number" step="100" aria-label="偏移毫秒" />
                 <span>毫秒</span>
               </div>
               <div class="subtitle-workbench__button-grid">
-                <button type="button" class="btn-secondary" :disabled="!validOffset" @click="applyOffset(false)">全局偏移</button>
-                <button type="button" class="btn-secondary" :disabled="!validOffset || selectedIDs.length === 0" @click="applyOffset(true)">选区偏移</button>
+                <button type="button" class="btn btn--secondary" :disabled="!validOffset" @click="applyOffset(false)">全局偏移</button>
+                <button type="button" class="btn btn--secondary" :disabled="!validOffset || selectedIDs.length === 0" @click="applyOffset(true)">选区偏移</button>
               </div>
             </section>
 
@@ -105,7 +107,7 @@
               <input ref="findInput" v-model="findText" type="search" placeholder="查找文本" />
               <input v-model="replaceText" type="text" placeholder="替换为" />
               <label><input v-model="replaceSelectionOnly" type="checkbox" /> 只处理选区</label>
-              <button type="button" class="btn-secondary" :disabled="replaceMatchCount === 0" @click="replaceMatches">
+              <button type="button" class="btn btn--secondary" :disabled="replaceMatchCount === 0" @click="replaceMatches">
                 替换 {{ replaceMatchCount }} 处
               </button>
             </section>
@@ -127,8 +129,8 @@
                 <label><input v-model="retranslateModeModel" type="radio" value="translation_line" data-test="retranslate-mode-translation_line" /> 只替换译文行</label>
                 <label><input v-model="retranslateModeModel" type="radio" value="whole_entry" data-test="retranslate-mode-whole_entry" /> 整条替换</label>
               </div>
-              <button type="button" class="btn-secondary" :disabled="translating || selectedIDs.length === 0" @click="retranslateSelection">
-                {{ translating ? '翻译中...' : `翻译选中 ${selectedIDs.length} 条` }}
+              <button type="button" class="btn btn--secondary" :disabled="translating || selectedIDs.length === 0" @click="retranslateSelection">
+                {{ translating ? '翻译中…' : `翻译选中 ${selectedIDs.length} 条` }}
               </button>
             </section>
 
@@ -140,7 +142,7 @@
                 <select v-model="selectedBackupID" aria-label="选择要恢复的版本" data-test="workbench-backup-select">
                   <option v-for="backup in backups" :key="backup.id" :value="backup.id">{{ backupLabel(backup) }}</option>
                 </select>
-                <button type="button" class="btn-secondary" :disabled="restoringBackup || !selectedBackupID" data-test="workbench-restore-backup" @click="restoreSelectedBackup">
+                <button type="button" class="btn btn--secondary" :disabled="restoringBackup || !selectedBackupID" data-test="workbench-restore-backup" @click="restoreSelectedBackup">
                   {{ restoringBackup ? '正在恢复…' : '恢复所选版本' }}
                 </button>
               </template>
@@ -150,15 +152,15 @@
           <main class="subtitle-workbench__editor">
             <div class="subtitle-workbench__editor-toolbar">
               <div class="subtitle-workbench__history-actions">
-                <button data-test="undo" type="button" class="btn-secondary" :disabled="history.length === 0" @click="undo">撤销</button>
-                <button data-test="redo" type="button" class="btn-secondary" :disabled="future.length === 0" @click="redo">重做</button>
-                <button type="button" class="btn-secondary" @click="toggleAllSelection">{{ allSelected ? '取消全选' : '全选' }}</button>
+                <button data-test="undo" type="button" class="btn btn--secondary btn--sm" :disabled="history.length === 0" @click="undo">撤销</button>
+                <button data-test="redo" type="button" class="btn btn--secondary btn--sm" :disabled="future.length === 0" @click="redo">重做</button>
+                <button type="button" class="btn btn--secondary btn--sm" @click="toggleAllSelection">{{ allSelected ? '取消选择' : '全选' }}</button>
               </div>
               <!-- 问题导航与一键修复（D-PC15、MEDIA-06）：零时长、重叠在加载时是「待修问题」，不是打不开。 -->
               <div v-if="issueEntryIndexes.length" class="subtitle-workbench__issue-actions" data-test="workbench-issues">
                 <span class="subtitle-workbench__issue-count">{{ issueEntryIndexes.length }} 条有问题</span>
-                <button type="button" class="btn-secondary" data-test="workbench-next-issue" @click="goToNextIssue">下一个问题</button>
-                <button type="button" class="btn-secondary" :disabled="timingIssueCount === 0" data-test="workbench-fix-timing" @click="fixTimingIssues">一键修复时间</button>
+                <button type="button" class="btn btn--secondary btn--sm" data-test="workbench-next-issue" @click="goToNextIssue">下一个问题</button>
+                <button type="button" class="btn btn--secondary btn--sm" :disabled="timingIssueCount === 0" data-test="workbench-fix-timing" @click="fixTimingIssues">一键修复时间</button>
               </div>
               <span>共 {{ entries.length }} 条 · 已选 {{ selectedIDs.length }} 条</span>
             </div>
@@ -188,7 +190,7 @@
                     />
                     #{{ item.index + 1 }}
                   </label>
-                  <button type="button" class="subtitle-workbench__seek" @click="seekToEntry(item.entry)">定位</button>
+                  <button type="button" class="btn-link subtitle-workbench__seek" @click="seekToEntry(item.entry)">定位</button>
                 </div>
                 <div class="subtitle-workbench__timing">
                   <label>
@@ -234,16 +236,16 @@
             <p v-else-if="validationIssues.length" class="subtitle-workbench__message subtitle-workbench__message--error">
               当前有 {{ validationIssues.length }} 个校验问题，修正后才能保存；可用「下一个问题」逐条查看。
             </p>
-            <p v-else class="subtitle-workbench__message">序号会在保存时自动重排。快捷键：⌘/Ctrl+S 保存，⌘/Ctrl+Z 撤销。</p>
+            <p v-else class="subtitle-workbench__message">序号会在保存时自动重排。快捷键：⌘/Ctrl+S 保存，⌘/Ctrl+Z 撤销，⌘/Ctrl+⇧+Z 重做，⌘/Ctrl+F 查找，Esc 关闭。</p>
           </div>
           <button
             data-test="save-subtitle"
             type="button"
-            class="btn-primary"
+            class="btn btn--primary"
             :disabled="saving || !isDirty || validationIssues.length > 0"
             @click="saveDocument"
           >
-            {{ saving ? '保存中...' : '保存字幕' }}
+            {{ saving ? '保存中…' : '保存字幕' }}
           </button>
         </footer>
       </template>
@@ -264,6 +266,7 @@ import {
   SaveSubtitleEditDocument
 } from '../../wailsjs/go/main/App';
 import { confirmAction } from '../utils/feedback.js';
+import AppIcon from './ui/AppIcon.vue';
 import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import { formatBytes } from '../utils/mediaDetails.js';
 import {
@@ -297,6 +300,7 @@ function newClientID(counter) {
 
 export default {
   name: 'SubtitleWorkbench',
+  components: { AppIcon },
   props: {
     video: { type: Object, required: true }
   },
@@ -659,7 +663,7 @@ export default {
       this.operationMessage = `已修复 ${fixed} 处时间问题，保存前仍可撤销。`;
     },
     async reloadDocument() {
-      if (this.isDirty && !await confirmAction({ title: '重新加载字幕', message: '重新加载会丢弃当前未保存修改，确定继续？', confirmText: '丢弃并重载', danger: true })) return;
+      if (this.isDirty && !await confirmAction({ title: '刷新字幕', message: '刷新会丢弃当前未保存修改，确定继续？', confirmText: '丢弃并刷新', danger: true })) return;
       await this.loadWorkbench();
     },
     async requestClose() {
@@ -672,6 +676,10 @@ export default {
       event.returnValue = '';
     },
     handleShortcut(event) {
+      if (event.key === 'Escape') {
+        this.handleEscape(event);
+        return;
+      }
       const modifier = event.metaKey || event.ctrlKey;
       if (!modifier) return;
       if (event.key.toLowerCase() === 's') {
@@ -687,6 +695,15 @@ export default {
         event.preventDefault();
         this.$refs.findInput?.focus();
       }
+    },
+    // Esc 关闭工作台（D-UD-13「Esc 总能关」）：走 requestClose，有未保存修改先确认。叠在上面的确认框（BaseModal）
+    // 会先在 document 上收下 Esc，这里收不到；保险起见，别的模态框还开着、输入法正在组字或按键已被处理时也不动。
+    handleEscape(event) {
+      if (event.defaultPrevented || event.isComposing) return;
+      const others = [...document.querySelectorAll('[aria-modal="true"]')].filter(element => element !== this.$refs.dialog);
+      if (others.length) return;
+      event.preventDefault();
+      this.requestClose();
     },
     configureVideo() {
       const video = this.$refs.videoElement;
@@ -976,7 +993,7 @@ export default {
 .subtitle-workbench-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: 16px;
@@ -990,13 +1007,13 @@ export default {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  border-radius: 18px;
+  border-radius: var(--radius-lg);
   background: var(--panel-bg);
   box-shadow: var(--shadow-modal);
 }
 
 .subtitle-workbench__title { min-width: 0; }
-.subtitle-workbench__title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subtitle-workbench__title h2 { overflow: hidden; font-size: var(--fs-section); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .subtitle-workbench__header-actions { flex: none; }
 
 .subtitle-workbench__header,
@@ -1009,7 +1026,7 @@ export default {
 }
 
 .subtitle-workbench__header {
-  padding: 14px 18px;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -1021,7 +1038,7 @@ export default {
 .subtitle-workbench__eyebrow {
   margin: 0 0 3px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .subtitle-workbench__header-actions,
@@ -1036,12 +1053,12 @@ export default {
 
 .subtitle-workbench__dirty {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .subtitle-workbench__dirty--active {
-  color: var(--warning-color);
-  font-weight: 650;
+  color: var(--warning-text);
+  font-weight: var(--fw-semibold);
 }
 
 .subtitle-workbench__layout {
@@ -1062,8 +1079,8 @@ export default {
 .subtitle-workbench__video {
   width: 100%;
   max-height: 260px;
-  border-radius: 10px;
-  background: #000;
+  border-radius: var(--radius);
+  background: var(--player-bg);
 }
 
 .subtitle-workbench__preview-fallback,
@@ -1076,14 +1093,14 @@ export default {
 .subtitle-workbench__state--error,
 .subtitle-workbench__message--error,
 .subtitle-workbench__entry-errors {
-  color: var(--danger-color);
+  color: var(--danger-text);
 }
 
 .subtitle-workbench__state-hint,
 .subtitle-workbench__hint {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .subtitle-workbench__encoding-options {
@@ -1108,7 +1125,7 @@ export default {
 
 .subtitle-workbench__encoding-option em {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-style: normal;
   white-space: pre-line;
 }
@@ -1118,7 +1135,7 @@ export default {
   flex-wrap: wrap;
   gap: 4px 12px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .subtitle-workbench__issue-actions {
@@ -1128,8 +1145,8 @@ export default {
 }
 
 .subtitle-workbench__issue-count {
-  color: var(--danger-color);
-  font-weight: 600;
+  color: var(--danger-text);
+  font-weight: var(--fw-semibold);
 }
 
 .subtitle-workbench__playback-status {
@@ -1138,7 +1155,7 @@ export default {
   gap: 8px;
   margin: 8px 0 12px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .subtitle-workbench__tool-section {
@@ -1147,12 +1164,13 @@ export default {
   margin-top: 12px;
   padding: 12px;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius);
   background: var(--panel-bg);
 }
 
 .subtitle-workbench__tool-section h3 {
-  font-size: 14px;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
 }
 
 .subtitle-workbench__tool-section input[type='text'],
@@ -1163,10 +1181,26 @@ export default {
   min-width: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 7px 8px;
   background: var(--control-bg);
   color: var(--text-primary);
+  font-size: var(--fs-secondary);
+}
+
+.subtitle-workbench__offset-row > span {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
+  white-space: nowrap;
+}
+
+.subtitle-workbench__tool-section > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
 }
 
 .subtitle-workbench__button-grid > * {
@@ -1184,7 +1218,7 @@ export default {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .subtitle-workbench__entries {
@@ -1201,7 +1235,7 @@ export default {
   padding: 10px 12px;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius);
   background: var(--control-bg);
 }
 
@@ -1224,20 +1258,13 @@ export default {
 
 .subtitle-workbench__entry-heading {
   margin-bottom: 7px;
-  font-size: 13px;
-}
-
-.subtitle-workbench__seek {
-  border: 0;
-  background: transparent;
-  color: var(--accent-color);
-  cursor: pointer;
+  font-size: var(--fs-secondary);
 }
 
 .subtitle-workbench__timing label {
   flex: 1;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .subtitle-workbench__timing input,
@@ -1245,7 +1272,7 @@ export default {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 6px 7px;
   background: var(--panel-bg);
   color: var(--text-primary);
@@ -1255,6 +1282,7 @@ export default {
   height: 70px;
   margin-top: 8px;
   resize: none;
+  font-size: var(--fs-body);
   line-height: 1.45;
 }
 
@@ -1264,7 +1292,7 @@ export default {
   padding-left: 18px;
   max-height: 36px;
   overflow-y: auto;
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .subtitle-workbench__footer {
@@ -1279,7 +1307,7 @@ export default {
 .subtitle-workbench__message {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   overflow-wrap: anywhere;
 }
 

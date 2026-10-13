@@ -1,6 +1,5 @@
 <template>
-  <BaseModal v-if="enhanceDialog.show" stop-modal-clicks @close="enhanceDialog.show = false">
-    <h2>视频超分（2×）</h2>
+  <DialogShell v-if="enhanceDialog.show" title="视频超分（2×）" size="md" class="enhance-dialog" @close="enhanceDialog.show = false">
     <!-- 能力不可用 / 没带上视频这两条死胡同分支里原本没有任何按钮，
          这个弹窗又不响应点遮罩，用户会被困在里面出不来。 -->
     <template v-if="!enhanceCapability?.available">
@@ -13,10 +12,7 @@
       <p v-if="formatMediaMeta(enhanceDialog.video).length" class="enhance-source-meta" data-test="enhance-source-meta">{{ formatMediaMeta(enhanceDialog.video).join(' · ') }}</p>
       <div class="setting-item">
         <label>内容类型（决定模型，不会自动判断）</label>
-        <div class="merge-type-switch" role="group" aria-label="超分内容类型">
-          <button type="button" :class="{ active: enhanceDialog.profile === 'general' }" @click="enhanceDialog.profile = 'general'">普通真人</button>
-          <button type="button" :class="{ active: enhanceDialog.profile === 'anime' }" @click="enhanceDialog.profile = 'anime'">动漫</button>
-        </div>
+        <SegmentedControl v-model="enhanceDialog.profile" class="enhance-profile" label="超分内容类型" :options="profileOptions" />
       </div>
       <p class="help-text">输出：<code>{{ enhanceOutputPreview }}</code>（与源同目录）</p>
       <p class="help-text">固定 2× 放大；原文件不会被修改；任务可随时取消，取消或空间不足时进度会保留，重试从断点接着做。运行需要同卷至少约 {{ enhanceDiskFloorText }} 可用空间。</p>
@@ -30,20 +26,10 @@
       <p v-if="retainedTaskForVideo" class="help-text enhance-retained-hint" data-test="enhance-retained-hint">
         这个视频有一个保留了进度的任务。新建任务会清掉那份进度；想接着做，请在下方任务列表里点它的「重试」。
       </p>
-      <p v-if="enhanceDialog.error" class="cleanup-error">{{ enhanceDialog.error }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" @click="enhanceDialog.show = false">取消</button>
-        <button type="button" class="btn-primary" :disabled="enhanceDialog.creating" @click="createEnhancementTask">
-          {{ enhanceDialog.creating ? '创建中...' : '创建超分任务' }}
-        </button>
-      </div>
+      <p v-if="enhanceDialog.error" class="enhance-error" role="alert">{{ enhanceDialog.error }}</p>
     </template>
-    <div v-if="!enhanceCapability?.available || !enhanceDialog.video" class="modal-actions">
-      <button type="button" class="btn-secondary" data-test="enhance-close" @click="enhanceDialog.show = false">关闭</button>
-    </div>
 
     <template v-if="enhanceTasks.length">
-      <div class="divider"></div>
       <h3 class="enhance-task-heading">任务</h3>
       <div v-for="task in enhanceTasks" :key="task.id" class="enhance-task-row" :data-test="`enhance-task-${task.id}`">
         <span class="enhance-task-main">
@@ -51,31 +37,42 @@
           <small v-if="enhanceDetailText(task)" class="enhance-task-detail" data-test="enhance-task-detail">{{ enhanceDetailText(task) }}</small>
         </span>
         <span class="enhance-task-actions">
-          <button v-if="enhancementCancellable(task)" type="button" class="btn-secondary btn-compact" @click="cancelEnhancementTask(task)">取消</button>
-          <button v-if="enhancementRetryable(task)" type="button" class="btn-secondary btn-compact" :data-test="`enhance-retry-${task.id}`" @click="retryEnhancementTask(task)">重试</button>
+          <button v-if="enhancementCancellable(task)" type="button" class="btn btn--secondary btn--sm" @click="cancelEnhancementTask(task)">取消</button>
+          <button v-if="enhancementRetryable(task)" type="button" class="btn btn--secondary btn--sm" :data-test="`enhance-retry-${task.id}`" @click="retryEnhancementTask(task)">重试</button>
           <button
             v-if="enhancementRetainsProgress(task)"
             type="button"
-            class="btn-secondary btn-compact btn-danger-outline"
+            class="btn btn--danger btn--sm"
             :data-test="`enhance-discard-${task.id}`"
             @click="discardEnhancementProgress(task)"
           >放弃保留的进度</button>
           <button
             v-if="task.status === 'completed' && task.output_video_id"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :data-test="`enhance-reveal-${task.id}`"
             @click="revealEnhancementOutput(task)"
-          >查看产物</button>
+          >在访达中显示</button>
         </span>
       </div>
     </template>
-  </BaseModal>
+
+    <template v-if="enhanceCapability?.available && enhanceDialog.video" #footer>
+      <button type="button" class="btn btn--secondary" @click="enhanceDialog.show = false">取消</button>
+      <button type="button" class="btn btn--primary" :disabled="enhanceDialog.creating" data-test="enhance-create" @click="createEnhancementTask">
+        {{ enhanceDialog.creating ? '创建中…' : '创建超分任务' }}
+      </button>
+    </template>
+    <template v-else #footer>
+      <button type="button" class="btn btn--secondary" data-test="enhance-close" @click="enhanceDialog.show = false">关闭</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, DiscardEnhancementProgress, OpenDirectory } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import SegmentedControl from '../ui/SegmentedControl.vue';
 import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.js';
 import { formatMediaMeta } from '../../utils/mediaDetails.js';
 import {
@@ -87,13 +84,14 @@ import { runtimeEventsMixin } from './runtimeEvents.js';
 // 打开（行菜单的「视频超分…」与详情抽屉的 @enhance 两个入口）。
 export default {
   name: 'EnhanceDialog',
-  components: { BaseModal },
+  components: { DialogShell, SegmentedControl },
   mixins: [runtimeEventsMixin],
   data() {
     return {
       enhanceCapability: null,
       enhanceDialog: { show: false, video: null, profile: 'general', copyMetadata: true, creating: false, error: '', preflight: null },
-      enhanceTasks: []
+      enhanceTasks: [],
+      profileOptions: [{ value: 'general', label: '普通真人' }, { value: 'anime', label: '动漫' }]
     };
   },
   mounted() {
@@ -219,7 +217,7 @@ export default {
       try {
         await OpenDirectory(task.output_video_id);
       } catch (err) {
-        notifyError('打开产物所在位置失败: ' + err);
+        notifyError('在访达中显示产物失败: ' + err);
       }
     },
   }
@@ -227,23 +225,19 @@ export default {
 </script>
 
 <style scoped>
-.enhance-source-name { font-weight: 650; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.enhance-source-meta { margin-bottom: 10px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
-.enhance-task-heading { font-size: 14px; margin-bottom: 8px; }
-.enhance-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.enhance-source-name { font-weight: var(--fw-semibold); margin-bottom: var(--space-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enhance-source-meta { margin-bottom: 10px; color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.enhance-profile { margin-top: var(--space-2); }
+.enhance-task-heading { margin: var(--space-4) 0 var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--hairline-soft); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.enhance-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-caption); }
 .enhance-task-main { min-width: 0; display: grid; gap: 2px; }
 .enhance-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.enhance-task-detail { color: var(--text-secondary); font-size: 11.5px; overflow-wrap: anywhere; }
+.enhance-task-detail { color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .enhance-task-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.enhance-copy-metadata { margin-bottom: 12px; }
+.enhance-copy-metadata { margin-bottom: var(--space-3); }
 .enhance-retained-hint { color: var(--warning-text); }
-.cleanup-error {
-  color: var(--review-text-muted);
-  font-size: 13px;
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+.enhance-error {
+  color: var(--danger-text);
+  font-size: var(--fs-secondary);
 }
 </style>

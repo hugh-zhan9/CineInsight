@@ -2,39 +2,41 @@
   <aside class="preview-drawer" role="dialog" aria-modal="false" aria-label="媒体详情抽屉">
     <div class="preview-drawer__header glass-drawer-header">
       <div class="preview-drawer__heading">
-        <button v-if="canGoBack" type="button" class="btn-secondary btn-compact" @click="requestGoBack">返回</button>
+        <button v-if="canGoBack" type="button" class="btn btn--ghost btn--sm" @click="requestGoBack"><AppIcon name="chevron-left" :size="16" />返回</button>
         <div>
           <p class="preview-drawer__eyebrow">{{ entryLabel }}</p>
           <h3>{{ entryTitle }}</h3>
         </div>
       </div>
-      <button type="button" class="preview-drawer__close btn-secondary btn-compact" data-test="preview-drawer-close" @click="requestClose">关闭</button>
+      <button type="button" class="btn-icon preview-drawer__close" aria-label="关闭" data-test="preview-drawer-close" @click="requestClose"><AppIcon name="close" :size="20" /></button>
     </div>
 
     <div class="preview-drawer__body">
-      <div v-if="loading" class="preview-drawer__placeholder">正在读取本地详情...</div>
-      <div v-else-if="error" class="detail-error" role="alert">
-        <p>{{ error }}</p>
-        <button type="button" class="btn-secondary" @click="loadCurrentEntry">重试</button>
+      <div v-if="loading" class="preview-drawer__loading" aria-busy="true" aria-label="正在读取本地详情">
+        <SkeletonBlock shape="card" :lines="3" />
+        <SkeletonBlock :lines="4" />
       </div>
+      <AppBanner v-else-if="error" tone="danger" class="detail-error" role="alert" :title="error">
+        <template #actions><button type="button" class="btn btn--secondary btn--sm" @click="loadCurrentEntry">重试</button></template>
+      </AppBanner>
 
       <template v-else-if="currentEntry?.type === 'video' && details">
         <!-- 动作条（D-PC47、PLAY-14）：播放、收藏、点赞、已看与星级评分都在抽屉顶部，不必只靠快捷键。
              评分点一下即保存（UpdateVideoRating），不经「保存作品信息」。 -->
         <section v-if="actionVideo" class="detail-section drawer-action-bar" data-test="drawer-action-bar" aria-label="常用操作">
           <div class="drawer-action-bar__buttons">
-            <button type="button" class="row-btn row-btn--primary" data-test="drawer-action-play" :disabled="actionBusy === 'play'" @click="playFromDrawer">{{ actionBusy === 'play' ? '启动中...' : '播放' }}</button>
-            <button type="button" :class="['row-btn', { 'row-btn--fav': actionVideo.is_favorite }]" :aria-pressed="!!actionVideo.is_favorite" data-test="drawer-action-favorite" :disabled="!!actionBusy" @click="toggleVideoState('favorite')">收藏</button>
-            <button type="button" :class="['row-btn', { active: actionVideo.is_liked }]" :aria-pressed="!!actionVideo.is_liked" data-test="drawer-action-like" :disabled="!!actionBusy" @click="toggleVideoState('liked')">点赞</button>
-            <button type="button" :class="['row-btn', { active: actionVideo.is_watched }]" :aria-pressed="!!actionVideo.is_watched" data-test="drawer-action-watched" :disabled="!!actionBusy" @click="toggleVideoState('watched')">已看</button>
+            <button type="button" class="btn btn--primary btn--sm" data-test="drawer-action-play" :disabled="actionBusy === 'play'" @click="playFromDrawer"><AppIcon name="play" :size="16" />{{ actionBusy === 'play' ? '启动中…' : '播放' }}</button>
+            <button type="button" class="btn btn--secondary btn--sm drawer-toggle drawer-toggle--favorite" :aria-pressed="!!actionVideo.is_favorite" data-test="drawer-action-favorite" :disabled="!!actionBusy" @click="toggleVideoState('favorite')"><AppIcon name="heart" :size="16" />收藏</button>
+            <button type="button" class="btn btn--secondary btn--sm drawer-toggle" :aria-pressed="!!actionVideo.is_liked" data-test="drawer-action-like" :disabled="!!actionBusy" @click="toggleVideoState('liked')">点赞</button>
+            <button type="button" class="btn btn--secondary btn--sm drawer-toggle" :aria-pressed="!!actionVideo.is_watched" data-test="drawer-action-watched" :disabled="!!actionBusy" @click="toggleVideoState('watched')"><AppIcon name="check" :size="16" />已看</button>
           </div>
           <div class="drawer-stars" role="group" aria-label="个人评分，0 到 10，支持 0.5 分" data-test="drawer-stars">
             <span v-for="star in 10" :key="star" :class="['drawer-star', `drawer-star--${starFill(star)}`]">
-              <button type="button" class="drawer-star__half drawer-star__half--left" :aria-label="`评 ${star - 0.5} 分`" :aria-pressed="ratingValue === star - 0.5" :data-test="`drawer-star-${star - 0.5}`" :disabled="ratingSaving" @click="rateFromStars(star - 0.5)"></button>
-              <button type="button" class="drawer-star__half drawer-star__half--right" :aria-label="`评 ${star} 分`" :aria-pressed="ratingValue === star" :data-test="`drawer-star-${star}`" :disabled="ratingSaving" @click="rateFromStars(star)"></button>
+              <button type="button" class="btn-icon drawer-star__half drawer-star__half--left" :aria-label="`评 ${star - 0.5} 分`" :aria-pressed="ratingValue === star - 0.5" :data-test="`drawer-star-${star - 0.5}`" :disabled="ratingSaving" @click="rateFromStars(star - 0.5)"></button>
+              <button type="button" class="btn-icon drawer-star__half drawer-star__half--right" :aria-label="`评 ${star} 分`" :aria-pressed="ratingValue === star" :data-test="`drawer-star-${star}`" :disabled="ratingSaving" @click="rateFromStars(star)"></button>
             </span>
             <span class="drawer-stars__value" data-test="drawer-stars-value">{{ ratingValue === null ? '未评分' : `${ratingValue.toFixed(1)} / 10` }}</span>
-            <button v-if="ratingValue !== null" type="button" class="btn-secondary btn-compact" data-test="drawer-stars-clear" :disabled="ratingSaving" @click="rateFromStars(null)">清除</button>
+            <button v-if="ratingValue !== null" type="button" class="btn btn--ghost btn--sm" data-test="drawer-stars-clear" :disabled="ratingSaving" @click="rateFromStars(null)">清除</button>
           </div>
           <p v-if="actionError" class="detail-error-text" role="alert" data-test="drawer-action-error">{{ actionError }}</p>
           <WallpaperButton kind="video" :media-id="Number(actionVideo.id)" />
@@ -59,7 +61,7 @@
 
         <QueueActionButton :video-ids="[details.video.id]" />
         <p v-if="bookmarkSourceMismatch" role="alert" data-test="bookmark-preview-changed">原片在打开预览前已改变，请重新核对书签，未套用旧位置。</p>
-        <div v-if="bookmarkRangeFinished" class="detail-action-row" data-test="bookmark-range-finished"><span>已到书签区间末尾</span><button type="button" @click="continueBookmarkPlayback">继续整片</button></div>
+        <div v-if="bookmarkRangeFinished" class="detail-action-row detail-action-row--notice" data-test="bookmark-range-finished"><span>已到书签区间末尾</span><button type="button" class="btn btn--secondary btn--sm" @click="continueBookmarkPlayback">继续整片</button></div>
         <details class="detail-section" @toggle="bookmarkPanelOpen = $event.target.open">
           <summary>片段书签与笔记</summary>
           <BookmarkPanel v-if="bookmarkPanelOpen" :key="details.video.id" :video="details.video" :session="currentSession" :current-position="bookmarkCurrentPosition" :page-active="pageActive" @open-bookmark="applyBookmarkResolution" @open-video="previewCurrentBookmarkVideo" />
@@ -83,15 +85,15 @@
           </label>
           <p class="detail-secondary">原文件：{{ details.video.name }}</p>
           <div class="detail-inline-actions">
-            <button type="button" class="btn-primary" data-test="drawer-save-details" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中...' : '保存作品信息' }}</button>
-            <button type="button" class="btn-secondary" @click="$emit('open-local-metadata', details.video)">导入本地资料</button>
-			<button type="button" class="btn-secondary" @click="$emit('export-local-metadata', details.video)">写出 NFO</button>
-			<button type="button" class="btn-secondary" @click="$emit('enhance', details.video)">视频超分</button>
-			<button type="button" class="btn-secondary" @click="$emit('find-similar', details.video)">找相似</button>
+            <button type="button" class="btn btn--primary" data-test="drawer-save-details" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中…' : '保存作品信息' }}</button>
+            <button type="button" class="btn btn--secondary" @click="$emit('open-local-metadata', details.video)">导入本地资料</button>
+			<button type="button" class="btn btn--secondary" @click="$emit('export-local-metadata', details.video)">写出 NFO</button>
+			<button type="button" class="btn btn--secondary" @click="$emit('enhance', details.video)">视频超分</button>
+			<button type="button" class="btn btn--secondary" @click="$emit('find-similar', details.video)">找相似</button>
 			<!-- 以图搜片（2026-10-12）：用当前播放位置的画面到场景检索里找相似的段。 -->
-			<button type="button" class="btn-secondary" data-test="drawer-find-similar-scenes" @click="findSimilarScenes">找相似画面</button>
+			<button type="button" class="btn btn--secondary" data-test="drawer-find-similar-scenes" @click="findSimilarScenes">找相似画面</button>
 			<!-- 台词卡（2026-10-12）：当前播放位置的画面 + 这一刻的字幕（同名 .srt 里正在显示的那条，没有就留空让人自己填）。 -->
-			<button type="button" class="btn-secondary" data-test="drawer-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
+			<button type="button" class="btn btn--secondary" data-test="drawer-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
           </div>
         </section>
 
@@ -99,24 +101,24 @@
           <!-- 与标签分类「人物」、人物页同一个叫法（META-02）。 -->
           <div class="detail-section__heading"><h4>人物</h4><span>{{ draft.personIDs.length + pendingPeople.length }} 人</span></div>
           <div class="entity-chip-list">
-            <button v-for="item in selectedPeople" :key="item.person.id" type="button" class="entity-chip" @click="openPerson(item.person.id)">
+            <button v-for="item in selectedPeople" :key="item.person.id" type="button" class="btn btn--secondary btn--sm entity-chip" @click="openPerson(item.person.id)">
               <img v-if="item.avatar_url" :src="item.avatar_url" alt="" />
               <span>{{ item.person.display_name }}</span>
-              <span class="entity-chip__remove" title="移除" :data-test="`drawer-person-remove-${item.person.id}`" @click.stop="removePerson(item)">×</span>
+              <span class="entity-chip__remove" title="移除" :data-test="`drawer-person-remove-${item.person.id}`" @click.stop="removePerson(item)"><AppIcon name="close" :size="16" /></span>
             </button>
             <!-- 「新建并加入」只在本地暂存（D-PC32 / META-05），点「保存作品信息」时才新建人物并关联。 -->
             <span v-for="pending in pendingPeople" :key="pending.key" class="entity-chip entity-chip--pending" :data-test="`drawer-pending-person-${pending.key}`">
               <span>{{ pending.displayName }}</span>
               <small>保存后新建</small>
-              <button type="button" class="entity-chip__remove" title="移除" @click="removePendingPerson(pending.key)">×</button>
+              <button type="button" class="btn-icon btn--sm entity-chip__remove" :aria-label="`移除 ${pending.displayName}`" title="移除" @click="removePendingPerson(pending.key)"><AppIcon name="close" :size="16" /></button>
             </span>
           </div>
           <div class="detail-inline-form">
             <input v-model="personKeyword" placeholder="搜索人物姓名" @input="searchPeople" />
-            <button type="button" class="btn-secondary btn-compact" @click="searchPeople">搜索</button>
+            <button type="button" class="btn btn--secondary" @click="searchPeople">搜索</button>
           </div>
           <div v-if="personCandidates.length" class="candidate-list">
-            <button v-for="item in personCandidates" :key="item.person.id" type="button" @click="togglePerson(item.person.id, true)">
+            <button v-for="item in personCandidates" :key="item.person.id" type="button" class="btn btn--ghost candidate-list__item" @click="togglePerson(item.person.id, true)">
               <span>{{ item.person.display_name }}</span><small>{{ item.person.original_name || '无原始姓名' }} · {{ item.active_video_count }} 部作品</small>
             </button>
           </div>
@@ -128,7 +130,7 @@
             <div class="detail-create-box__fields">
               <input v-model="newPerson.displayName" placeholder="显示姓名" maxlength="200" />
               <input v-model="newPerson.originalName" placeholder="原始姓名（可空）" maxlength="200" />
-              <button type="button" class="btn-secondary" data-test="drawer-person-stage" :disabled="creatingPerson || !newPerson.displayName.trim()" @click="createAndSelectPerson">新建并加入</button>
+              <button type="button" class="btn btn--secondary" data-test="drawer-person-stage" :disabled="creatingPerson || !newPerson.displayName.trim()" @click="createAndSelectPerson">新建并加入</button>
               <small class="detail-create-box__hint">点「保存作品信息」时才会真正新建并关联；不保存就不会留下空人物。</small>
             </div>
           </details>
@@ -138,20 +140,20 @@
           <div class="detail-section__heading"><h4>作品集</h4><span>可多选</span></div>
           <div class="detail-inline-form">
             <input v-model="collectionKeyword" placeholder="搜索作品集名称或简介" @keyup.enter="searchCollections(true)" />
-            <button type="button" class="btn-secondary btn-compact" :disabled="collectionSearching" @click="searchCollections(true)">搜索</button>
+            <button type="button" class="btn btn--secondary" :disabled="collectionSearching" @click="searchCollections(true)">搜索</button>
           </div>
           <label v-for="item in collectionCandidates" :key="item.collection.id" class="selection-row">
             <input type="checkbox" :checked="draft.collectionIDs.includes(item.collection.id)" @change="toggleCollection(item.collection.id, $event.target.checked)" />
-            <button type="button" @click.prevent="openCollection(item.collection.id)">{{ item.collection.name }}</button>
+            <button type="button" class="btn-link" @click.prevent="openCollection(item.collection.id)">{{ item.collection.name }}</button>
             <small>{{ item.active_video_count }} 部</small>
           </label>
-          <button v-if="collectionHasMore" type="button" class="btn-secondary" :disabled="collectionSearching" @click="searchCollections(false)">加载更多作品集</button>
+          <button v-if="collectionHasMore" type="button" class="btn btn--secondary btn--sm detail-more" :disabled="collectionSearching" @click="searchCollections(false)">加载更多作品集</button>
         </section>
 
         <section class="detail-section">
           <div class="detail-section__heading">
             <h4>技术信息</h4>
-            <button type="button" class="btn-secondary btn-compact" :disabled="refreshingTechnical" @click="refreshTechnical">{{ refreshingTechnical ? '读取中...' : '重新读取' }}</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="refreshingTechnical" @click="refreshTechnical">{{ refreshingTechnical ? '刷新中…' : '刷新' }}</button>
           </div>
           <p class="technical-status" :class="`technical-status--${details.technical_status?.state}`">{{ technicalStatusLabel }}</p>
           <p v-if="technicalError || details.technical_metadata?.last_error" class="detail-error-text">最近错误：{{ technicalError || details.technical_metadata.last_error }}</p>
@@ -166,7 +168,7 @@
             <div class="detail-action-row">
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 data-test="preview-proxy-create"
                 :disabled="proxyBusy || proxyPending"
                 @click="createPlaybackProxy"
@@ -174,7 +176,7 @@
               <button
                 v-if="playbackProxy"
                 type="button"
-                class="btn-secondary btn-compact btn-danger-outline"
+                class="btn btn--danger btn--sm"
                 data-test="preview-proxy-delete"
                 :disabled="proxyBusy || proxyPending"
                 @click="deletePlaybackProxy"
@@ -213,10 +215,10 @@
           <label class="detail-field">显示姓名<input v-model="personEdit.displayName" maxlength="200" /></label>
           <label class="detail-field">原始姓名<input v-model="personEdit.originalName" maxlength="200" /></label>
           <div class="detail-action-row">
-            <button type="button" class="btn-primary" @click="savePerson">保存姓名</button>
-            <button type="button" class="btn-secondary" @click="replacePersonAvatar" :disabled="avatarSaving">从文件选择头像</button>
-            <button type="button" class="btn-secondary" :disabled="avatarSaving" @click="avatarPickerOpen = true; avatarError = ''">从图片库选择头像</button>
-            <button v-if="personDetail.person.avatar_url" type="button" class="btn-secondary" @click="removePersonAvatar" :disabled="avatarSaving">移除头像</button>
+            <button type="button" class="btn btn--primary" @click="savePerson">保存姓名</button>
+            <button type="button" class="btn btn--secondary" @click="replacePersonAvatar" :disabled="avatarSaving">从文件选择头像</button>
+            <button type="button" class="btn btn--secondary" :disabled="avatarSaving" @click="avatarPickerOpen = true; avatarError = ''">从图片库选择头像</button>
+            <button v-if="personDetail.person.avatar_url" type="button" class="btn btn--secondary" @click="removePersonAvatar" :disabled="avatarSaving">移除头像</button>
           </div>
         </section>
         <p v-if="avatarError" role="alert" class="detail-error-text">{{ avatarError }}</p>
@@ -229,16 +231,16 @@
                 <option v-if="customRelatedVideoDirectory" :value="customRelatedVideoDirectory">已选：{{ customRelatedVideoDirectory }}</option>
                 <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
               </select>
-              <button type="button" class="btn-secondary btn-compact" data-test="related-video-folder-picker" :disabled="relatedVideoSearching" @click="chooseRelatedVideoDirectory">选择子文件夹</button>
+              <button type="button" class="btn btn--secondary" data-test="related-video-folder-picker" :disabled="relatedVideoSearching" @click="chooseRelatedVideoDirectory">选择子文件夹</button>
             </div>
             <p class="related-video-directory-hint">选择父文件夹会包含其中全部子文件夹的已收录视频。</p>
             <div class="detail-inline-form">
               <input v-model="relatedVideoKeyword" placeholder="搜索标题、文件名或路径" @keyup.enter="searchRelatedVideos(true)" />
-              <button type="button" class="btn-secondary btn-compact" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中...' : '搜索视频' }}</button>
+              <button type="button" class="btn btn--secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中…' : '搜索视频' }}</button>
             </div>
             <div v-if="availableRelatedVideoCandidates.length" class="related-video-batch-actions">
-              <button type="button" class="btn-secondary btn-compact" @click="selectAllRelatedVideoCandidates">全选已加载</button>
-              <button type="button" class="btn-primary btn-compact" :disabled="relatedVideoSelection.length === 0 || relatedVideoSearching" @click="addSelectedRelatedVideos">批量关联（{{ relatedVideoSelection.length }}）</button>
+              <button type="button" class="btn btn--ghost btn--sm" data-test="related-video-select-all" @click="selectAllRelatedVideoCandidates">全选当前结果（{{ availableRelatedVideoCandidates.length }}）</button>
+              <button type="button" class="btn btn--primary btn--sm" :disabled="relatedVideoSelection.length === 0 || relatedVideoSearching" @click="addSelectedRelatedVideos">批量关联（{{ relatedVideoSelection.length }}）</button>
             </div>
             <p v-if="relatedVideoError" class="detail-error-text">{{ relatedVideoError }}</p>
             <div v-if="availableRelatedVideoCandidates.length" class="related-video-results">
@@ -252,7 +254,7 @@
                 @select="toggleRelatedVideoSelection(candidate.id, $event)"
               />
             </div>
-            <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
+            <button v-if="relatedVideoHasMore" type="button" class="btn btn--secondary btn--sm detail-more" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中…' : '加载更多搜索结果' }}</button>
             <p v-if="relatedVideoSearchPerformed && !relatedVideoSearching && availableRelatedVideoCandidates.length === 0" class="detail-empty">没有可关联的视频。</p>
           </div>
           <div class="related-video-list">
@@ -260,13 +262,13 @@
               v-for="related in personDetail.videos || []"
               :key="related.id"
               :video="related"
-              :action-label="isRelatedVideoUpdating(related.id) ? '处理中...' : '解除关联'"
+              :action-label="isRelatedVideoUpdating(related.id) ? '处理中…' : '解除关联'"
               :action-disabled="isRelatedVideoUpdating(related.id)"
               destructive
               @open="openVideo(related.id)"
               @action="removeRelatedVideo(related)"
             >
-              <template #actions><button type="button" class="btn-danger btn-compact" :disabled="isRelatedVideoUpdating(related.id)" :data-test="`drawer-person-video-delete-${related.id}`" @click="requestPersonMediaDelete('video', related)">删除</button></template>
+              <template #actions><button type="button" class="btn btn--danger btn--sm" :disabled="isRelatedVideoUpdating(related.id)" :data-test="`drawer-person-video-delete-${related.id}`" @click="requestPersonMediaDelete('video', related)">删除</button></template>
             </RelatedVideoItem>
           </div>
           <p v-if="!(personDetail.videos || []).length" class="detail-empty">当前没有活跃关联视频。软删除视频的关系仍会保留。</p>
@@ -278,29 +280,29 @@
           <div v-if="personImages.length" class="person-image-grid">
             <figure v-for="image in personImages" :key="image.id" class="person-image-card">
               <label class="person-image-card__select"><input v-model="selectedPersonImageIDs" type="checkbox" :value="image.id" :aria-label="`选择 ${image.name}`" />选择</label>
-              <button type="button" class="person-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
+              <button type="button" class="btn-link person-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
               <figcaption :title="image.name">{{ image.name }}</figcaption>
-              <button type="button" class="btn-secondary btn-compact" :disabled="avatarSaving" :data-test="`person-image-avatar-${image.id}`" @click="setAvatarFromImage(image)">设为头像</button>
+              <button type="button" class="btn btn--secondary btn--sm" :disabled="avatarSaving" :data-test="`person-image-avatar-${image.id}`" @click="setAvatarFromImage(image)">设为头像</button>
               <small v-if="image.size > 0" class="person-image-card__size">{{ formatBytes(image.size) }}</small>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :disabled="isPersonImageUpdating(image.id)"
                 :data-test="`person-image-remove-${image.id}`"
                 @click="removePersonImageRelation(image)"
-              >{{ isPersonImageUpdating(image.id) ? '处理中...' : '解除关联' }}</button>
-              <button type="button" class="btn-danger btn-compact" :disabled="isPersonImageUpdating(image.id)" :data-test="`drawer-person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">删除图片</button>
+              >{{ isPersonImageUpdating(image.id) ? '处理中…' : '解除关联' }}</button>
+              <button type="button" class="btn btn--danger btn--sm" :disabled="isPersonImageUpdating(image.id)" :data-test="`drawer-person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">删除图片</button>
             </figure>
           </div>
           <p v-else class="detail-empty">当前没有活跃关联图片。软删除图片的关系仍会保留。</p>
           <button
             v-if="personImageCursor"
             type="button"
-            class="btn-secondary"
+            class="btn btn--secondary btn--sm detail-more"
             :disabled="personImagesLoading"
             data-test="person-image-more"
             @click="loadMorePersonImages"
-          >{{ personImagesLoading ? '加载中...' : '加载更多关联图片' }}</button>
+          >{{ personImagesLoading ? '加载中…' : '加载更多关联图片' }}</button>
         </section>
       </template>
 
@@ -311,10 +313,10 @@
           <label class="detail-field">名称<input v-model="collectionEdit.name" maxlength="200" /></label>
           <label class="detail-field">简介<textarea v-model="collectionEdit.description" maxlength="4000" rows="4"></textarea></label>
           <div class="detail-action-row">
-            <button type="button" class="btn-primary" @click="saveCollection">保存</button>
-            <button type="button" class="btn-secondary" @click="replaceCollectionCover">更换封面</button>
-            <button v-if="collectionDetail.collection.cover_url" type="button" class="btn-secondary" @click="removeCollectionCover">移除封面</button>
-            <button type="button" class="btn-danger" @click="deleteCollection">删除作品集</button>
+            <button type="button" class="btn btn--primary" @click="saveCollection">保存</button>
+            <button type="button" class="btn btn--secondary" @click="replaceCollectionCover">更换封面</button>
+            <button v-if="collectionDetail.collection.cover_url" type="button" class="btn btn--secondary" @click="removeCollectionCover">移除封面</button>
+            <button type="button" class="btn btn--danger" data-test="drawer-collection-delete" @click="deleteCollection">删除作品集</button>
           </div>
         </section>
         <section class="detail-section">
@@ -326,16 +328,16 @@
                 <option v-if="customRelatedVideoDirectory" :value="customRelatedVideoDirectory">已选：{{ customRelatedVideoDirectory }}</option>
                 <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
               </select>
-              <button type="button" class="btn-secondary btn-compact" data-test="related-video-folder-picker" :disabled="relatedVideoSearching" @click="chooseRelatedVideoDirectory">选择子文件夹</button>
+              <button type="button" class="btn btn--secondary" data-test="related-video-folder-picker" :disabled="relatedVideoSearching" @click="chooseRelatedVideoDirectory">选择子文件夹</button>
             </div>
             <p class="related-video-directory-hint">选择父文件夹会包含其中全部子文件夹的已收录视频。</p>
             <div class="detail-inline-form">
               <input v-model="relatedVideoKeyword" placeholder="搜索标题、文件名或路径" @keyup.enter="searchRelatedVideos(true)" />
-              <button type="button" class="btn-secondary btn-compact" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中...' : '搜索视频' }}</button>
+              <button type="button" class="btn btn--secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中…' : '搜索视频' }}</button>
             </div>
             <div v-if="availableRelatedVideoCandidates.length" class="related-video-batch-actions">
-              <button type="button" class="btn-secondary btn-compact" @click="selectAllRelatedVideoCandidates">全选已加载</button>
-              <button type="button" class="btn-primary btn-compact" :disabled="relatedVideoSelection.length === 0 || relatedVideoSearching" @click="addSelectedRelatedVideos">批量加入（{{ relatedVideoSelection.length }}）</button>
+              <button type="button" class="btn btn--ghost btn--sm" data-test="related-video-select-all" @click="selectAllRelatedVideoCandidates">全选当前结果（{{ availableRelatedVideoCandidates.length }}）</button>
+              <button type="button" class="btn btn--primary btn--sm" :disabled="relatedVideoSelection.length === 0 || relatedVideoSearching" @click="addSelectedRelatedVideos">批量加入（{{ relatedVideoSelection.length }}）</button>
             </div>
             <p v-if="relatedVideoError" class="detail-error-text">{{ relatedVideoError }}</p>
             <div v-if="availableRelatedVideoCandidates.length" class="related-video-results">
@@ -349,7 +351,7 @@
                 @select="toggleRelatedVideoSelection(candidate.id, $event)"
               />
             </div>
-            <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
+            <button v-if="relatedVideoHasMore" type="button" class="btn btn--secondary btn--sm detail-more" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中…' : '加载更多搜索结果' }}</button>
             <p v-if="relatedVideoSearchPerformed && !relatedVideoSearching && availableRelatedVideoCandidates.length === 0" class="detail-empty">没有可加入的视频。</p>
           </div>
           <QueueActionButton :collection-id="Number(currentEntry.id)" label="整个作品集加入队尾" />
@@ -359,7 +361,7 @@
               :key="member.video.id"
               :video="member.video"
               :position-label="`${index + 1}. `"
-              :action-label="isRelatedVideoUpdating(member.video.id) ? '处理中...' : '移出'"
+              :action-label="isRelatedVideoUpdating(member.video.id) ? '处理中…' : '移出'"
               :action-disabled="isRelatedVideoUpdating(member.video.id)"
               destructive
               draggable
@@ -405,6 +407,9 @@ import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import QuoteCardDialog from './QuoteCardDialog.vue';
 import InlineVideoPlayer from './player/InlineVideoPlayer.vue';
+import AppBanner from './ui/AppBanner.vue';
+import AppIcon from './ui/AppIcon.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { subtitleCueAt } from '../utils/quoteCard.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { confirmAction } from '../utils/feedback.js';
@@ -425,7 +430,7 @@ const sameIDSet = (a, b) => {
 
 export default {
   name: 'PreviewDrawer',
-  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog, InlineVideoPlayer },
+  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog, InlineVideoPlayer, AppBanner, AppIcon, SkeletonBlock },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -499,6 +504,18 @@ export default {
         || String(saved.personalRating) !== String(draft.personalRating ?? '')
         || !sameIDSet(saved.personIDs, draft.personIDs)
         || !sameIDSet(saved.collectionIDs, draft.collectionIDs);
+    },
+    // 人物 / 作品集条目上改了还没保存的文字（姓名、名称、简介）：离开前同样要提醒（D-UD-13）。
+    hasUnsavedEntityDraft() {
+      if (this.currentEntry?.type === 'person' && this.personDetail) {
+        const person = this.personDetail.person?.person || {};
+        return (person.display_name || '') !== this.personEdit.displayName || (person.original_name || '') !== this.personEdit.originalName;
+      }
+      if (this.currentEntry?.type === 'collection' && this.collectionDetail) {
+        const collection = this.collectionDetail.collection?.collection || {};
+        return (collection.name || '') !== this.collectionEdit.name || (collection.description || '') !== this.collectionEdit.description;
+      }
+      return false;
     },
     relatedVideoIDs() {
       if (this.currentEntry?.type === 'person') return (this.personDetail?.videos || []).map(video => Number(video.id));
@@ -758,10 +775,17 @@ export default {
       }
       return detail;
     },
-    // 离开有未保存修改的视频条目前确认（D-PC32）：关闭抽屉、返回、跳到人物或作品集都会丢掉草稿。
+    // 离开有未保存修改的条目前确认（D-PC32、D-UD-13）：关闭抽屉、返回、跳到别的条目都会丢掉草稿。
+    // 视频条目看作品信息、人物与作品集；人物与作品集条目看姓名、名称与简介。评分与开关是即存的，不在此列。
     async confirmDiscardVideoDraft() {
-      if (!this.hasUnsavedVideoDraft) return true;
-      return confirmAction({ title: '放弃未保存的修改', message: '作品信息、人物或作品集还有未保存的修改，离开后会丢失。确定放弃吗？', confirmText: '放弃修改', danger: true });
+      if (this.hasUnsavedVideoDraft) {
+        return confirmAction({ title: '放弃未保存的修改', message: '作品信息、人物或作品集还有未保存的修改，离开后会丢失。确定放弃吗？', confirmText: '放弃修改', danger: true });
+      }
+      if (this.hasUnsavedEntityDraft) {
+        const fields = this.currentEntry?.type === 'person' ? '姓名' : '名称或简介';
+        return confirmAction({ title: '放弃未保存的修改', message: `${fields}还有未保存的修改，离开后会丢失。确定放弃吗？`, confirmText: '放弃修改', danger: true });
+      }
+      return true;
     },
     async requestClose() { if (await this.confirmDiscardVideoDraft()) this.$emit('close'); },
     async requestGoBack() { if (await this.confirmDiscardVideoDraft()) await this.goBack(); },
@@ -1164,7 +1188,15 @@ export default {
     async replaceCollectionCover() { try { const path = await SelectCollectionCover(); if (path) { await SetCollectionCover(this.currentEntry.id, path); await this.loadCurrentEntry(); } } catch (err) { this.error = String(err); } },
     async removeCollectionCover() { try { await RemoveCollectionCover(this.currentEntry.id); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },
     async deleteCollection() {
-      if (!await confirmAction({ title: '删除作品集', message: '删除作品集？其中的视频不会被删除。', confirmText: '删除', danger: true })) return;
+      // 作品集删除后无法恢复（D-UD-07 第 3 级「不可逆」）：要输入按钮上的文字才能删。
+      const name = this.collectionDetail?.collection?.collection?.name || '';
+      if (!await confirmAction({
+        title: '删除作品集',
+        message: `删除作品集${name ? `「${name}」` : ''}？其中的视频不会被删除。`,
+        impact: '作品集的成员顺序、封面与简介删除后无法恢复。',
+        confirmText: '删除作品集',
+        level: 'irreversible'
+      })) return;
       try { const id = this.currentEntry.id; await DeleteCollection(id); this.$emit('collection-deleted', id); if (this.canGoBack) await this.goBack(); else this.$emit('close'); }
       catch (err) { this.error = String(err); }
     },
@@ -1209,48 +1241,69 @@ export default {
 
 /* 原型 A4：抽屉固定 520px 并排停靠，不再是圆角浮块；
    窗口窄于 1100 改为覆盖式，列表不再收窄（收窄到放不下反而更难用）。 */
-.preview-drawer { position: fixed; top: 52px; right: 0; bottom: 0; width: 520px; border-left: 1px solid var(--hairline); border-radius: 0; background: var(--panel-bg); box-shadow: var(--shadow-drawer); display: flex; flex-direction: column; z-index: 140; overflow: hidden; }
+.preview-drawer { position: fixed; top: 52px; right: 0; bottom: 0; width: 520px; border-left: 1px solid var(--hairline); border-radius: 0; background: var(--panel-bg); box-shadow: var(--shadow-drawer); display: flex; flex-direction: column; z-index: var(--z-drawer); overflow: hidden; }
 @media (max-width: 1100px) { .preview-drawer { width: min(520px, 100vw); } }
-.preview-drawer__header { display: flex; justify-content: space-between; align-items: center; gap: 16px; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--hairline); background: var(--panel-bg); }
+.preview-drawer__header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); height: 48px; padding: 0 var(--space-2) 0 var(--space-4); border-bottom: 1px solid var(--hairline); background: var(--panel-bg); }
 .preview-drawer__heading { display: flex; align-items: center; gap: 10px; min-width: 0; }.preview-drawer__heading > div { min-width: 0; }
-.preview-drawer__eyebrow { margin: 0 0 4px; font-size: 11px; letter-spacing: .08em; color: var(--text-muted); }.preview-drawer__header h3 { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preview-drawer__body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: grid; grid-auto-rows: max-content; align-content: start; gap: 14px; }
-.preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: 12px; color: var(--text-secondary); }
-.detail-section { padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: grid; gap: 12px; }.detail-section--player { min-height: 220px; padding: 0; overflow: hidden; background: var(--player-bg); }
-.detail-section__heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }.detail-section h4 { margin: 0; font-size: 15px; }.detail-section__heading span,.detail-readonly-hint { font-size: 12px; color: var(--text-muted); }
-.detail-field { display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }.detail-field input,.detail-field select,.detail-field textarea,.detail-inline-form input,.detail-create-box input { width: 100%; border: 1px solid var(--border-color); border-radius: 8px; padding: 9px 10px; background: var(--control-bg); color: var(--text-primary); }
-.detail-rating-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; }.detail-rating-input > span { color: var(--text-muted); font-size: 13px; }.detail-field small { color: var(--text-muted); font-size: 11px; font-weight: 400; }
-.detail-secondary,.detail-empty { font-size: 12px; color: var(--text-muted); word-break: break-all; }.detail-error,.detail-error-text { color: var(--danger-color); }.detail-error { padding: 18px; border: 1px solid var(--danger-color); border-radius: 12px; }
-.entity-chip--pending { border-style: dashed; }.entity-chip--pending small { color: var(--text-muted); font-size: 11px; }.entity-chip--pending .entity-chip__remove { border: 0; padding: 0; background: transparent; cursor: pointer; }.detail-create-box__hint { color: var(--text-muted); font-size: 11px; }
-.entity-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }.entity-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-color); border-radius: 999px; padding: 4px 9px 4px 5px; background: var(--control-hover-bg); color: var(--text-primary); }.entity-chip img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }.entity-chip__remove { color: var(--danger-color); font-size: 16px; }
-.detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }.detail-create-box__fields { display: grid; gap: 8px; justify-items: start; }.detail-create-box__fields input { width: 100%; }
-.related-video-editor { display: grid; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: 8px; }
-.related-video-directory-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }.related-video-directory-filter select { min-width: 0; }.related-video-directory-hint { margin: -3px 0 0; color: var(--text-muted); font-size: 11px; }
-.related-video-batch-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.person-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); align-items: start; gap: 8px; }
-.person-image-card { margin: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; justify-items: stretch; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--control-hover-bg); }
-.person-image-card img { width: 100%; height: auto; display: block; object-fit: contain; border-radius: 8px; background: var(--thumb-bg); }
-.person-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
-.person-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }
-.technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: 12px; }.technical-status--current { color: var(--success-color); }.technical-status--stale,.technical-status--error { color: var(--warning-strong); }
-.proxy-block { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }.proxy-block__status { margin: 0; color: var(--text-secondary); font-size: 12px; }
-/* 动作条：按钮沿用行上的 row-btn（收藏 / 已看的按下态与列表一致），星级每颗分左右两半，各是一个按钮。 */
+.preview-drawer__eyebrow { margin: 0 0 2px; font-size: var(--fs-caption); letter-spacing: .08em; color: var(--text-muted); }.preview-drawer__header h3 { font-size: var(--fs-body); font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-drawer__close { flex: none; }
+.preview-drawer__body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px var(--space-4); display: grid; grid-auto-rows: max-content; align-content: start; gap: 14px; }
+.preview-drawer__loading { display: grid; gap: var(--space-4); padding: var(--space-1) 0; }
+.detail-section { padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); display: grid; gap: var(--space-3); }.detail-section--player { min-height: 220px; padding: 0; overflow: hidden; background: var(--player-bg); }
+.detail-section > summary { color: var(--text-primary); font-size: var(--fs-body); font-weight: var(--fw-semibold); cursor: pointer; }
+.detail-section__heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }.detail-section h4 { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-semibold); }.detail-section__heading span,.detail-readonly-hint { font-size: var(--fs-caption); color: var(--text-muted); }
+.detail-field { display: grid; gap: 6px; font-size: var(--fs-caption); color: var(--text-secondary); }.detail-field input,.detail-field select,.detail-field textarea,.detail-inline-form input,.detail-create-box input { width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 9px 10px; background: var(--control-bg); color: var(--text-primary); font-size: var(--fs-secondary); }
+.detail-field input:focus,.detail-field textarea:focus,.detail-inline-form input:focus,.detail-create-box input:focus { border-color: var(--accent-color); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.detail-rating-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; }.detail-rating-input > span { color: var(--text-muted); font-size: var(--fs-secondary); }.detail-field small { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
+.detail-secondary,.detail-empty { font-size: var(--fs-caption); color: var(--text-muted); word-break: break-all; }.detail-error-text { color: var(--danger-text); }
+.entity-chip--pending { border-style: dashed; }.entity-chip--pending small { color: var(--text-muted); font-size: var(--fs-caption); }.detail-create-box__hint { color: var(--text-muted); font-size: var(--fs-caption); }
+.entity-chip-list { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.entity-chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; border: 1px solid var(--border-color); border-radius: var(--radius-pill); padding: 0 6px 0 4px; background: var(--control-hover-bg); color: var(--text-primary); font-weight: var(--fw-regular); }
+span.entity-chip { padding-left: 10px; }
+.entity-chip img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.entity-chip__remove { display: inline-flex; color: var(--text-muted); }
+.entity-chip:hover .entity-chip__remove,.entity-chip__remove:hover { color: var(--danger-text); }
+.entity-chip__remove.btn-icon { width: 22px; height: 22px; }
+.detail-inline-form,.detail-action-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }.detail-inline-form input { flex: 1; }
+.detail-action-row--notice { align-items: center; color: var(--text-secondary); font-size: var(--fs-secondary); }
+.candidate-list { display: grid; gap: 6px; }
+.candidate-list__item { display: flex; justify-content: space-between; align-items: center; gap: 10px; height: auto; min-height: var(--h-unit); padding: var(--space-2) 10px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-weight: var(--fw-regular); text-align: left; white-space: normal; }
+.candidate-list small { color: var(--text-muted); font-size: var(--fs-caption); }
+.detail-create-box { display: grid; gap: var(--space-2); }.detail-create-box summary { cursor: pointer; color: var(--accent-text); font-size: var(--fs-secondary); }.detail-create-box__fields { display: grid; gap: var(--space-2); justify-items: start; }.detail-create-box__fields input { width: 100%; }
+.detail-more { justify-self: start; }
+.related-video-editor { display: grid; gap: 9px; padding-bottom: var(--space-3); border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: var(--space-2); }
+.related-video-directory-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }.related-video-directory-filter select { min-width: 0; }.related-video-directory-hint { margin: -3px 0 0; color: var(--text-muted); font-size: var(--fs-caption); }
+.related-video-batch-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-2); }
+.person-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); align-items: start; gap: var(--space-2); }
+.person-image-card { margin: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; justify-items: stretch; padding: var(--space-2); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--control-hover-bg); }
+.person-image-card img { width: 100%; height: auto; display: block; object-fit: contain; border-radius: var(--radius-sm); background: var(--thumb-bg); }
+.person-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--fs-caption); }
+.person-image-card__select { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-caption); }
+.person-image-card__size { color: var(--text-muted); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--space-2); }.selection-row .btn-link { justify-self: start; text-align: left; }.selection-row small { color: var(--text-muted); font-size: var(--fs-caption); }
+.technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: var(--fs-caption); }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: var(--fs-caption); }.technical-status--current { color: var(--success-color); }.technical-status--stale,.technical-status--error { color: var(--warning-strong); }
+.proxy-block { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }.proxy-block__status { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); }
+/* 动作条（D-UD-13：开关与评分即存）。收藏 / 点赞 / 已看是开关按钮，按下态看 aria-pressed；星级每颗分左右两半，各是一个按钮。 */
 .drawer-action-bar { gap: 10px; }
-.drawer-action-bar__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.drawer-action-bar__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.drawer-toggle[aria-pressed="true"] { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.drawer-toggle--favorite[aria-pressed="true"] { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger-text); }
 .drawer-stars { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
 .drawer-star { position: relative; display: inline-block; width: 20px; height: 20px; flex: none; }
-.drawer-star::before,.drawer-star::after { content: '★'; position: absolute; inset: 0; font-size: 18px; line-height: 20px; text-align: left; pointer-events: none; }
+/* 字形占满 20px 的格子，左半格正好盖住半颗星。 */
+.drawer-star::before,.drawer-star::after { content: '★'; position: absolute; inset: 0; font-size: var(--fs-title); line-height: 20px; text-align: left; pointer-events: none; }
 .drawer-star::before { color: var(--border-strong); }
 .drawer-star::after { width: 0; overflow: hidden; color: var(--accent-color); }
 .drawer-star--half::after { width: 50%; }
 .drawer-star--full::after { width: 100%; }
-.drawer-star__half { position: absolute; top: 0; bottom: 0; width: 50%; z-index: 1; border: 0; padding: 0; background: transparent; cursor: pointer; }
+/* 半颗星的透明按钮：取 .btn-icon 的焦点框与禁用态，尺寸、底色由这里定（悬停不出底色，免得盖住星）。 */
+.drawer-star__half.btn-icon { position: absolute; top: 0; bottom: 0; width: 50%; height: auto; z-index: 1; border: 0; border-radius: 0; padding: 0; background: transparent; cursor: pointer; }
+.drawer-star__half.btn-icon:hover:not(:disabled) { background: transparent; }
 .drawer-star__half--left { left: 0; }.drawer-star__half--right { right: 0; }
-.drawer-star__half:disabled { cursor: progress; }
+.drawer-star__half.btn-icon:disabled { cursor: progress; opacity: 1; }
 .drawer-star__half:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; border-radius: 3px; }
-.drawer-stars__value { margin: 0 6px 0 8px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
-.stream-card { display: grid; gap: 4px; padding: 10px; border-radius: 9px; background: var(--control-hover-bg); font-size: 12px; }.stream-card span { color: var(--text-secondary); word-break: break-word; }
-.entity-identity > img,.entity-avatar-placeholder { width: 96px; height: 96px; object-fit: cover; border-radius: 14px; }.entity-avatar-placeholder { display: grid; place-items: center; background: var(--control-hover-bg); color: var(--text-muted); }
-@media (max-width: 900px) { .preview-drawer { width: 100vw; right: 0; bottom: 0; top: 70px; min-width: 0; border-radius: 18px 18px 0 0; } }
+.drawer-stars__value { margin: 0 6px 0 var(--space-2); color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.stream-card { display: grid; gap: var(--space-1); padding: 10px; border-radius: var(--radius-sm); background: var(--control-hover-bg); font-size: var(--fs-caption); }.stream-card span { color: var(--text-secondary); word-break: break-word; }
+.entity-identity > img,.entity-avatar-placeholder { width: 96px; height: 96px; object-fit: cover; border-radius: var(--radius-lg); }.entity-avatar-placeholder { display: grid; place-items: center; background: var(--control-hover-bg); color: var(--text-muted); }
+@media (max-width: 900px) { .preview-drawer { width: 100vw; right: 0; bottom: 0; top: 70px; min-width: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; } }
 </style>

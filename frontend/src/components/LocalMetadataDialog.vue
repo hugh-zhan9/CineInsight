@@ -1,12 +1,8 @@
 <template>
-  <div v-if="visible" class="local-metadata-overlay" @click.self="$emit('close')">
-    <section class="local-metadata-dialog" role="dialog" aria-label="本地元数据导入">
-      <header>
-        <div><h2>导入本地资料</h2><p>只读取视频同目录的 NFO、poster 和 fanart，不访问网络。</p></div>
-        <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
-      </header>
+  <DialogShell v-if="visible" title="导入本地资料" size="xl" class="local-metadata-dialog" @close="$emit('close')">
+      <p class="local-metadata-lead">只读取视频同目录的 NFO、poster 和 fanart，不访问网络。</p>
 
-      <div v-if="loading" class="local-metadata-empty">正在解析本地资料...</div>
+      <div v-if="loading" class="local-metadata-empty">正在解析本地资料…</div>
       <div v-else-if="error" class="local-metadata-error" role="alert">{{ error }}</div>
       <template v-else>
         <div v-if="forms.length === 0" class="local-metadata-empty">所选视频没有可预览的本地资料。</div>
@@ -16,7 +12,7 @@
           <p>同一个来源名在这一批里只需选一次，勾选了「人物」的视频都按这里的选择关联；选「新建本地人物」只会建一个。</p>
           <label v-for="decision in peopleDecisions" :key="decision.normalized_name" class="local-metadata-batch-people__row">
             <span>{{ decision.source_name }}<small>出现在 {{ decision.video_ids.length }} 个视频</small></span>
-            <select v-model="batchResolutions[decision.normalized_name]" :data-test="`metadata-batch-person-${decision.normalized_name}`">
+            <select v-model="batchResolutions[decision.normalized_name]" class="select-input" :data-test="`metadata-batch-person-${decision.normalized_name}`">
               <option value="">请选择映射</option>
               <option v-for="match in decision.matches" :key="match.id" :value="`existing:${match.id}`">匹配：{{ match.name }}</option>
               <option value="create_new">新建本地人物</option>
@@ -50,7 +46,7 @@
               <div v-if="relation.name !== 'people' && form.selected[relation.name]" class="local-metadata-mappings">
                 <label v-for="candidate in relation.diff.source" :key="candidate.normalized_name">
                   <span>{{ candidate.source_name }}</span>
-                  <select v-model="form.resolutions[relation.name][candidate.normalized_name]" :data-test="`metadata-resolution-${form.diff.video_id}-${relation.name}-${candidate.normalized_name}`">
+                  <select v-model="form.resolutions[relation.name][candidate.normalized_name]" class="select-input" :data-test="`metadata-resolution-${form.diff.video_id}-${relation.name}-${candidate.normalized_name}`">
                     <option value="">请选择映射</option>
                     <option v-for="match in candidate.matches" :key="match.id" :value="`existing:${match.id}`">匹配：{{ match.name }}</option>
                     <option value="create_new">新建本地实体</option>
@@ -72,18 +68,20 @@
         <div v-if="result" class="local-metadata-result" role="status">导入完成：成功 {{ result.succeeded }}，失败 {{ result.failed }}。</div>
       </template>
 
-      <footer>
-        <button data-test="apply-local-metadata" type="button" class="btn-primary" :disabled="loading || applying || !hasSelectedChanges" @click="apply">{{ applying ? '正在导入...' : '应用所选变更' }}</button>
-      </footer>
-    </section>
-  </div>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="$emit('close')">取消</button>
+        <button data-test="apply-local-metadata" type="button" class="btn btn--primary" :disabled="loading || applying || !hasSelectedChanges" @click="apply">{{ applying ? '正在导入…' : '应用所选变更' }}</button>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { ApplyLocalMetadataBatch, PreviewLocalMetadataBatch } from '../../wailsjs/go/main/App';
+import DialogShell from './ui/DialogShell.vue';
 
 export default {
   name: 'LocalMetadataDialog',
+  components: { DialogShell },
   props: { visible: { type: Boolean, default: false }, videoIds: { type: Array, default: () => [] } },
   emits: ['close', 'applied'],
   data() { return { loading: false, applying: false, error: '', forms: [], previewFailures: [], result: null, peopleDecisions: [], batchResolutions: {} }; },
@@ -203,21 +201,22 @@ export default {
 </script>
 
 <style scoped>
-.local-metadata-overlay { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 24px; background: var(--overlay-bg); }
-.local-metadata-dialog { width: min(880px, 96vw); max-height: 92vh; overflow: auto; padding: 20px; border-radius: 16px; background: var(--panel-bg); color: var(--text-primary); }
-.local-metadata-dialog header,.local-metadata-dialog footer,.local-metadata-field { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.local-metadata-dialog header { position: sticky; top: -20px; z-index: 2; padding: 16px 0; background: var(--panel-bg); }
-.local-metadata-dialog h2,.local-metadata-dialog h3,.local-metadata-dialog p { margin: 0; }.local-metadata-dialog header p { color: var(--text-secondary); }
-.local-metadata-video { margin: 14px 0; padding: 14px; border: 1px solid var(--border-color); border-radius: 12px; }
+.local-metadata-lead { margin: 0 0 var(--space-3); color: var(--text-secondary); font-size: var(--fs-secondary); }
+.local-metadata-field { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+/* 封面与背景图这一行没有 __main 包一层：文字块自己占满中间，「确认覆盖」靠右。 */
+.local-metadata-field > span { flex: 1; min-width: 0; }
+.local-metadata-video h3,.local-metadata-batch-people h3,.local-metadata-video p,.local-metadata-batch-people p { margin: 0; }
+.local-metadata-video h3,.local-metadata-batch-people h3 { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.local-metadata-video { margin: 14px 0; padding: 14px; border: 1px solid var(--border-color); border-radius: var(--radius); }
 .local-metadata-video h3 { overflow-wrap: anywhere; }
-.local-metadata-batch-people { display: grid; gap: 8px; margin: 14px 0; padding: 14px; border: 1px solid var(--accent-border); border-radius: 12px; background: var(--accent-soft); }
-.local-metadata-batch-people > p { color: var(--text-secondary); font-size: 12px; }
+.local-metadata-batch-people { display: grid; gap: var(--space-2); margin: 14px 0; padding: 14px; border: 1px solid var(--accent-border); border-radius: var(--radius); background: var(--accent-soft); }
+.local-metadata-batch-people > p { color: var(--text-secondary); font-size: var(--fs-caption); }
 .local-metadata-batch-people__row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(180px, 1.5fr); align-items: center; gap: 10px; }
-.local-metadata-batch-people__row small { display: block; color: var(--text-secondary); font-size: 11px; }
+.local-metadata-batch-people__row small { display: block; color: var(--text-secondary); font-size: var(--fs-caption); }
 .local-metadata-batch-people__row select { min-width: 0; }
-.local-metadata-mapping-hint { margin: 6px 0 0 30px !important; color: var(--text-secondary); font-size: 12px; }
-.local-metadata-field { margin-top: 10px; padding: 10px; border-radius: 8px; background: var(--bg-color); }.local-metadata-field__main { display: flex; flex: 1; min-width: 0; align-items: flex-start; gap: 14px; cursor: pointer; }.local-metadata-field__main > span { flex: 1; min-width: 0; }.local-metadata-field strong,.local-metadata-field small { display: block; }.local-metadata-field small { margin-top: 3px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.local-metadata-overwrite { color: var(--danger-color); font-size: 12px; white-space: nowrap; }.local-metadata-mappings { display: grid; gap: 8px; margin: 8px 0 0 30px; }.local-metadata-mappings label { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(180px, 1.5fr); gap: 10px; }.local-metadata-mappings select { min-width: 0; }
-.local-metadata-error { margin: 12px 0; color: var(--danger-color); }.local-metadata-empty { padding: 18px; color: var(--text-secondary); text-align: center; }.local-metadata-result { margin: 12px 0; color: var(--success-color); }.local-metadata-warnings { color: var(--warning-strong); font-size: 12px; }.local-metadata-dialog footer { position: sticky; bottom: -20px; justify-content: flex-end; padding: 14px 0; background: var(--panel-bg); }
-@media (max-width: 640px) { .local-metadata-overlay { padding: 0; }.local-metadata-dialog { width: 100vw; max-height: 100vh; min-height: 100vh; border-radius: 0; }.local-metadata-field { flex-wrap: wrap; }.local-metadata-mappings label { grid-template-columns: 1fr; } }
+.local-metadata-mapping-hint { margin: 6px 0 0 30px !important; color: var(--text-secondary); font-size: var(--fs-caption); }
+.local-metadata-field { margin-top: 10px; padding: 10px; border-radius: var(--radius-sm); background: var(--bg-color); }.local-metadata-field__main { display: flex; flex: 1; min-width: 0; align-items: flex-start; gap: 14px; cursor: pointer; }.local-metadata-field__main > span { flex: 1; min-width: 0; }.local-metadata-field strong,.local-metadata-field small { display: block; }.local-metadata-field small { margin-top: 3px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.local-metadata-overwrite { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--danger-text); font-size: var(--fs-caption); white-space: nowrap; }.local-metadata-mappings { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0 30px; }.local-metadata-mappings label { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(180px, 1.5fr); gap: 10px; }.local-metadata-mappings select { min-width: 0; }
+.local-metadata-error { margin: var(--space-3) 0; color: var(--danger-text); }.local-metadata-empty { padding: 18px; color: var(--text-secondary); text-align: center; }.local-metadata-result { margin: var(--space-3) 0; color: var(--success-color); }.local-metadata-warnings { color: var(--warning-strong); font-size: var(--fs-caption); }
+@media (max-width: 640px) { .local-metadata-field { flex-wrap: wrap; }.local-metadata-mappings label { grid-template-columns: 1fr; } }
 </style>

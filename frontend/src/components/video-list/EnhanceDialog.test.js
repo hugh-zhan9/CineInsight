@@ -124,7 +124,8 @@ describe('超分任务的原因、进度与产物（D-PC24）', () => {
     const wrapper = await openWith([]);
     const checkbox = wrapper.get('[data-test="enhance-copy-metadata"]');
     expect(checkbox.element.checked).toBe(true);
-    const create = () => wrapper.findAll('.modal-actions button').find(button => button.text().includes('创建超分任务'));
+    const create = () => wrapper.get('[data-test="enhance-create"]');
+    expect(create().text()).toBe('创建超分任务');
 
     await create().trigger('click');
     await flushPromises();

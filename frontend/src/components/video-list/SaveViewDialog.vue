@@ -1,7 +1,7 @@
 <template>
-  <BaseModal v-if="saveViewDialog.show" class="download-modal">
-      <h3>{{ dialogTitle }}</h3>
-      <!-- 三种用法（D-PC35、LIB-15）：另存为新视图、用当前条件覆盖已有视图、只改名字。 -->
+  <DialogShell v-if="saveViewDialog.show" :title="dialogTitle" size="sm" :busy="saveViewDialog.saving" class="save-view-dialog" @close="saveViewDialog.show = false">
+      <!-- 三种用法（D-PC35、LIB-15）：另存为新视图、用当前条件覆盖已有视图、只改名字。
+           分段暂用旧样式：SegmentedControl 还不能给每个选项带 data-test（save-view-mode-*），见统一设计待迁移清单。 -->
       <div v-if="savedViews.length > 0" class="merge-type-switch save-view-modes" role="group" aria-label="保存方式">
         <button type="button" :class="{ active: saveViewDialog.mode === 'create' }" data-test="save-view-mode-create" @click="switchMode('create')">另存为新视图</button>
         <button type="button" :class="{ active: saveViewDialog.mode === 'update' }" data-test="save-view-mode-update" @click="switchMode('update')">用当前条件更新</button>
@@ -22,25 +22,25 @@
         v-model="saveViewDialog.name"
         type="text"
         maxlength="80"
-        class="search-input rename-input"
+        class="text-input save-view-name"
         placeholder="输入视图名称"
         data-test="save-view-name"
         @keyup.enter="saveCurrentView"
       />
       <p v-if="modeHint" class="save-view-hint">{{ modeHint }}</p>
-      <p v-if="saveViewDialog.error" class="cleanup-error" role="alert">{{ saveViewDialog.error }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" @click="saveViewDialog.show = false">取消</button>
-        <button type="button" class="btn-primary" :disabled="saveViewDialog.saving" data-test="save-view-submit" @click="saveCurrentView">
-          {{ saveViewDialog.saving ? '保存中...' : submitLabel }}
+      <p v-if="saveViewDialog.error" class="save-view-error" role="alert">{{ saveViewDialog.error }}</p>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="saveViewDialog.show = false">取消</button>
+        <button type="button" class="btn btn--primary" :disabled="saveViewDialog.saving" data-test="save-view-submit" @click="saveCurrentView">
+          {{ saveViewDialog.saving ? '保存中…' : submitLabel }}
         </button>
-      </div>
-  </BaseModal>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { SaveLibraryView, UpdateSavedLibraryView } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import DialogShell from '../ui/DialogShell.vue';
 
 // 保存视图里的 tag_ids_json / person_ids_json 是 JSON 数组；读不出来按空处理，不让一条坏记录拖垮菜单。
 export function parseSavedViewIDs(json) {
@@ -87,7 +87,7 @@ function saveViewErrorText(err) {
 // 这里通过两个函数 prop 拿到它们，保存流程本身的先后顺序不变。
 export default {
   name: 'SaveViewDialog',
-  components: { BaseModal },
+  components: { DialogShell },
   props: {
     currentLibraryFilter: { type: Function, required: true },
     afterSaved: { type: Function, required: true },
@@ -175,32 +175,25 @@ export default {
 </script>
 
 <style scoped>
-:deep(.download-modal) {
-  width: 400px;
-  text-align: center;
-  padding: 30px;
-}
-.rename-input {
-  margin: 15px 0;
-}
 .save-view-modes {
-  margin-top: 12px;
+  margin-bottom: var(--space-3);
   grid-template-columns: repeat(3, 1fr);
 }
 .save-view-target {
   width: 100%;
-  margin-top: 12px;
+  margin-bottom: var(--space-2);
+}
+.save-view-name {
+  margin-bottom: var(--space-2);
 }
 .save-view-hint {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
-.cleanup-error,
-.cleanup-intro,
-.cleanup-loading,
-.cleanup-empty {
-  color: var(--review-text-muted);
-  font-size: 13px;
+.save-view-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-secondary);
 }
 </style>

@@ -1,6 +1,5 @@
 <template>
-  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks style="max-width: 480px;" @close="$emit('close')">
-      <h2>{{ dialogTitle }}</h2>
+  <DialogShell v-if="visible" :title="dialogTitle" size="md" class="add-tag-dialog" @close="$emit('close')">
 
       <div v-if="isBatchMode" class="batch-summary">
         <div class="batch-summary-title">已选择 {{ videoIds.length }} 个视频</div>
@@ -10,16 +9,15 @@
       <!-- 输入与搜索 -->
       <div class="setting-item">
         <label>{{ isBatchMode ? '添加标签' : '选择标签' }}</label>
-        <div style="display: flex; gap: 8px; margin-top: 8px;">
+        <div class="add-tag-input-row">
           <input
             v-model="newTagName"
             type="text"
             class="text-input"
-            style="flex: 1;"
-            placeholder="输入名称进行搜索或创建..."
+            placeholder="输入名称进行搜索或创建…"
             @keyup.enter="addNewTag"
           />
-          <button @click="addNewTag" class="btn-primary">创建并选中</button>
+          <button type="button" class="btn btn--secondary" @click="addNewTag">创建并选中</button>
         </div>
         <p class="help-text">输入名称可实时过滤已有标签，若不存在则创建新标签并加入本次选择。</p>
       </div>
@@ -40,7 +38,7 @@
           <span class="automatic-override-state">{{ override.present ? '已手动加上' : '已手动去掉' }}</span>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="restoringKinds.includes(override.automatic_kind)"
             :data-test="`automatic-override-restore-${override.automatic_kind}`"
             @click="restoreAutomatic(override)"
@@ -65,7 +63,7 @@
               <span class="tag-name">{{ tag.name }}</span>
               <button
                 type="button"
-                class="btn-danger btn-small"
+                class="btn btn--danger btn--sm"
                 :disabled="processingTagIds.includes(tag.id)"
                 @click="removeCommonTag(tag)"
               >
@@ -89,7 +87,7 @@
         >
           <span class="color-dot" :style="{ backgroundColor: tag.color }"></span>
           <span>{{ tag.name }}</span>
-          <button type="button" class="remove-selected-tag" @click="toggleTag(tag)" :aria-label="`取消选择 ${tag.name}`">×</button>
+          <button type="button" class="btn-icon btn--sm remove-selected-tag" :aria-label="`取消选择 ${tag.name}`" @click="toggleTag(tag)"><AppIcon name="close" :size="16" /></button>
         </span>
       </div>
 
@@ -103,7 +101,8 @@
         >
           <span class="color-dot" :style="{ backgroundColor: tag.color }"></span>
           <span class="tag-name">{{ tag.name }}</span>
-          <span class="add-icon">{{ isTagSelected(tag) ? '✓' : '+' }}</span>
+          <AppIcon v-if="isTagSelected(tag)" class="add-icon" name="check" :size="16" />
+          <span v-else class="add-icon" aria-hidden="true">+</span>
         </div>
         
         <div v-if="filteredTags.length === 0" class="empty-state-mini">
@@ -111,19 +110,20 @@
         </div>
       </div>
 
-      <div class="modal-actions">
-        <button @click="$emit('close')" class="btn-secondary">取消</button>
-        <button @click="applySelectedTags" class="btn-primary" :disabled="selectedTagIds.length === 0 || applying">
-          {{ applying ? '添加中...' : `添加 ${selectedTagIds.length} 个标签` }}
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="$emit('close')">取消</button>
+        <button type="button" class="btn btn--primary" :disabled="selectedTagIds.length === 0 || applying" data-test="add-tag-apply" @click="applySelectedTags">
+          {{ applying ? '添加中…' : `添加 ${selectedTagIds.length} 个标签` }}
         </button>
-      </div>
-  </BaseModal>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { CreateTag, AddTagToVideo, BatchAddTagToVideos, BatchRemoveTagFromVideos, ClearVideoAutomaticTagOverride, GetVideoAutomaticTagOverrides } from '../../wailsjs/go/main/App';
 import { selectedTagsFromIds, toggleSelectedTagId, uniqueTagsById } from '../utils/addTagSelection.js';
-import BaseModal from './ui/BaseModal.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { confirmAction, notifyError } from '../utils/feedback.js';
 
 // 可被手动覆盖的两种自动标签（后端 ClearVideoAutomaticTagOverride 只接受这两种）。
@@ -131,7 +131,7 @@ const AUTOMATIC_KIND_LABELS = { short_video: '短视频', low_resolution: '低�
 
 export default {
   name: 'AddTagDialog',
-  components: { BaseModal },
+  components: { AppIcon, DialogShell },
   props: {
     visible: { type: Boolean, default: false },
     video: { type: Object, default: null },
@@ -347,72 +347,70 @@ export default {
 </script>
 
 <style scoped>
+.add-tag-input-row { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.add-tag-input-row .text-input { flex: 1; }
+
 .batch-summary {
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--bg-color);
   margin-bottom: 14px;
 }
 
 .batch-summary-title {
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   color: var(--text-primary);
 }
 
 .common-tag-list {
-  margin-top: 8px;
+  margin-top: var(--space-2);
   max-height: 160px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: var(--space-1);
 }
 
 .common-tag-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 12px;
+  gap: var(--space-3);
+  padding: 9px var(--space-3);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   margin-bottom: 6px;
   background: var(--panel-solid-bg);
-}
-
-.btn-small {
-  padding: 5px 9px;
-  font-size: 12px;
 }
 
 .automatic-override-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   margin-bottom: 6px;
   background: var(--panel-solid-bg);
 }
 
 .automatic-override-state {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .automatic-override-error {
-  color: var(--danger-color);
+  color: var(--danger-text);
 }
 
 .tag-selector-container {
   max-height: 280px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: var(--space-1);
 }
 
 .selected-tag-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   margin-bottom: 10px;
 }
 
@@ -421,32 +419,23 @@ export default {
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 5px 8px;
+  padding: 2px 2px 2px var(--space-2);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-color);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
-.remove-selected-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
+.remove-selected-tag.btn-icon {
+  width: 22px;
+  height: 22px;
   color: var(--text-muted);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
 }
 
-.remove-selected-tag:hover {
+.remove-selected-tag.btn-icon:hover:not(:disabled) {
   background: var(--danger-soft);
-  color: var(--danger-color);
+  color: var(--danger-text);
 }
 
 .tag-selector-container::-webkit-scrollbar { width: 4px; }
@@ -455,13 +444,13 @@ export default {
 .clickable-tag-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 10px 14px;
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   cursor: pointer;
   transition: var(--transition);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 .clickable-tag-item:hover {
@@ -482,24 +471,25 @@ export default {
 
 .tag-name {
   flex: 1;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
 }
 
 .add-icon {
   color: var(--text-muted);
-  font-size: 18px;
-  font-weight: 300;
+  font-size: var(--fs-section);
+  font-weight: var(--fw-regular);
 }
 
-.clickable-tag-item:hover .add-icon {
-  color: var(--accent-color);
+.clickable-tag-item:hover .add-icon,
+.clickable-tag-item.selected .add-icon {
+  color: var(--accent-text);
 }
 
 .empty-state-mini {
   text-align: center;
   padding: 30px 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 </style>

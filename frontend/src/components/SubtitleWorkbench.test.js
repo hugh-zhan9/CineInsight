@@ -466,3 +466,55 @@ describe('SubtitleWorkbench 不能直放时的播放代理（2026-10-13）', () 
     delete window.runtime;
   });
 });
+
+// 统一设计 D-UD-13 / D-UD-15：整窗工作台是自制遮罩，Esc 要能关；有未保存修改先确认，叠在上面的模态框优先。
+// 前面的用例没有卸载工作台，window 上还挂着它们的监听；这里直接把按键交给本实例的 handleShortcut（mounted 里挂到 window 的那个）。
+describe('SubtitleWorkbench Esc', () => {
+  const escape = () => new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+
+  it('Esc closes a clean workbench and asks before discarding unsaved edits', async () => {
+    const clean = await mountWorkbench();
+    const event = escape();
+    clean.vm.handleShortcut(event);
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(true);
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(clean.emitted('close')).toHaveLength(1);
+    clean.unmount();
+
+    const dirty = await mountWorkbench();
+    await dirty.find('[data-test="entry-text-cue-1"]').setValue('changed');
+    feedback.confirmAction.mockResolvedValue(false);
+    dirty.vm.handleShortcut(escape());
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '关闭字幕工作台' }));
+    expect(dirty.emitted('close')).toBeUndefined();
+    feedback.confirmAction.mockResolvedValue(true);
+    dirty.vm.handleShortcut(escape());
+    await flushPromises();
+    expect(dirty.emitted('close')).toHaveLength(1);
+    dirty.unmount();
+  });
+
+  it('leaves Esc to another modal dialog that is still open, and ignores keys already handled', async () => {
+    const wrapper = await mountWorkbench();
+    const other = document.createElement('div');
+    other.setAttribute('aria-modal', 'true');
+    document.body.appendChild(other);
+    wrapper.vm.handleShortcut(escape());
+    await flushPromises();
+    expect(wrapper.emitted('close')).toBeUndefined();
+    other.remove();
+
+    const handled = escape();
+    handled.preventDefault();
+    wrapper.vm.handleShortcut(handled);
+    await flushPromises();
+    expect(wrapper.emitted('close')).toBeUndefined();
+
+    wrapper.vm.handleShortcut(escape());
+    await flushPromises();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
