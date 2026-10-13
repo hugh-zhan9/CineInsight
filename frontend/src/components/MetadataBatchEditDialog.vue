@@ -1,9 +1,8 @@
 <template>
-  <!-- 元数据批量编辑（D-MC-04 / D-MC-05）：选范围、加若干操作、预览每项实际会改变几条、执行，执行后可撤销。片库与图片库共用。 -->
-  <BaseModal class="batch-edit-modal" data-test="metadata-batch-edit" @close="requestClose">
-    <h3>批量编辑{{ kind === 'image' ? '图片' : '视频' }}</h3>
-
-    <template v-if="!result">
+  <!-- 元数据批量编辑（D-MC-04 / D-MC-05）：选范围、加若干操作、试运行看每项实际会改变几条、执行，执行后可撤销
+       （结果页的「撤销」，或全局提示与任务中心「最近操作」里的「撤销」，D-UD-09）。片库与图片库共用。 -->
+  <DialogShell :title="`批量编辑${kindLabel}`" size="lg" :busy="applying || undoing" class="batch-edit-modal" data-test="metadata-batch-edit" @close="requestClose">
+    <div v-if="!result" class="batch-edit-content">
       <div class="batch-edit-scope" role="radiogroup" aria-label="作用范围">
         <label v-if="selectedIds.length" class="batch-edit-scope__option">
           <input v-model="scope" type="radio" value="selected" :disabled="applying" data-test="batch-edit-scope-selected" />
@@ -15,7 +14,7 @@
         </label>
       </div>
       <p v-if="scope === 'filter'" class="batch-edit-muted">
-        执行时按当前筛选重新取一遍，不只是已加载的这些。先预览确认总数再执行。<template v-if="collapsedVersions">列表折叠了版本，折叠起来的其他版本也会一起改。</template>
+        执行时按当前筛选重新取一遍，不只是已加载的这些。先试运行确认总数再执行。<template v-if="collapsedVersions">列表折叠了版本，折叠起来的其他版本也会一起改。</template>
       </p>
 
       <ul class="batch-edit-ops">
@@ -45,12 +44,12 @@
               <option v-for="rating in ratingOptions" :key="rating" :value="String(rating)">{{ rating }}</option>
             </select>
             <span v-if="preview" class="batch-edit-op__count" data-test="batch-edit-op-count">会改变 {{ countFor(row) }} 项</span>
-            <button type="button" class="row-btn" :disabled="applying || rows.length === 1" data-test="batch-edit-remove-op" @click="removeRow(index)">删除</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="applying || rows.length === 1" data-test="batch-edit-remove-op" @click="removeRow(index)">移除</button>
           </div>
           <div v-if="!isScalar(row.field)" class="batch-edit-picker">
             <span v-for="item in row.items" :key="item.id" class="tag-badge" :data-test="`batch-edit-chosen-${item.id}`">
               {{ item.name }}
-              <button type="button" class="row-btn row-btn--icon batch-edit-chip-remove" :aria-label="`移除 ${item.name}`" :disabled="applying" @click="removeItem(row, item)">×</button>
+              <button type="button" class="btn-icon btn--sm batch-edit-chip-remove" :aria-label="`移除 ${item.name}`" :disabled="applying" @click="removeItem(row, item)"><AppIcon name="close" :size="16" /></button>
             </span>
             <input
               v-model="row.keyword"
@@ -69,7 +68,7 @@
                 :key="option.id"
                 type="button"
                 role="option"
-                class="batch-edit-option"
+                class="btn btn--ghost btn--sm batch-edit-option"
                 :data-test="`batch-edit-option-${option.id}`"
                 @mousedown.prevent="addItem(row, option)"
               >{{ option.name }}</button>
@@ -78,7 +77,7 @@
           </div>
         </li>
       </ul>
-      <button type="button" class="btn-secondary btn-compact" :disabled="applying" data-test="batch-edit-add-op" @click="addRow">添加一项操作</button>
+      <button type="button" class="btn btn--secondary btn--sm batch-edit-add" :disabled="applying" data-test="batch-edit-add-op" @click="addRow">添加一项操作</button>
 
       <p v-if="kind === 'video'" class="batch-edit-muted" data-test="batch-edit-nfo-note">
         已知限制：清空的年份等字段，如果片子旁有 NFO，「补全本地资料」会按「空就补」重新填上。
@@ -90,28 +89,29 @@
         共 {{ preview.target_count }} 项{{ previewIncludesCollapsed ? '（含折叠起来的其他版本）' : '' }}，其中 {{ preview.changed_count }} 项会改变；已经是目标值的不会改动。
       </p>
       <p v-if="error" class="batch-edit-error" role="alert" data-test="batch-edit-error">{{ error }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" :disabled="applying" @click="requestClose">取消</button>
-        <button type="button" class="btn-secondary" :disabled="!requestReady || previewing || applying" data-test="batch-edit-preview-btn" @click="runPreview">{{ previewing ? '预览中…' : '预览' }}</button>
-        <button type="button" class="btn-primary" :disabled="!canApply" data-test="batch-edit-apply" @click="apply">
-          {{ applying ? '执行中…' : `执行（${preview ? preview.changed_count : 0} 项）` }}
-        </button>
-      </div>
-    </template>
+    </div>
 
-    <template v-else>
+    <div v-else class="batch-edit-content">
       <p class="batch-edit-preview" data-test="batch-edit-result">{{ resultText }}</p>
       <ul class="batch-edit-result-ops">
         <li v-for="op in result.ops" :key="`${op.field}:${op.action}`">{{ describeOp(op) }}：{{ op.changes }} 项</li>
       </ul>
       <p v-if="undoMessage" class="batch-edit-preview" data-test="batch-edit-undo-result">{{ undoMessage }}</p>
       <p v-if="error" class="batch-edit-error" role="alert" data-test="batch-edit-error">{{ error }}</p>
-      <div class="modal-actions">
-        <button v-if="result.batch_id && !undone" type="button" class="btn-secondary" :disabled="undoing" data-test="batch-edit-undo" @click="undo">{{ undoing ? '撤销中…' : '撤销' }}</button>
-        <button type="button" class="btn-primary" :disabled="undoing" data-test="batch-edit-done" @click="$emit('close')">完成</button>
-      </div>
+    </div>
+
+    <template v-if="!result" #footer>
+      <button type="button" class="btn btn--secondary" :disabled="applying" @click="requestClose">取消</button>
+      <button type="button" class="btn btn--secondary" :disabled="!requestReady || previewing || applying" data-test="batch-edit-preview-btn" @click="runPreview">{{ previewing ? '试运行中…' : '试运行' }}</button>
+      <button type="button" class="btn btn--primary" :disabled="!canApply" data-test="batch-edit-apply" @click="apply">
+        {{ applying ? '执行中…' : `执行（${preview ? preview.changed_count : 0} 项）` }}
+      </button>
     </template>
-  </BaseModal>
+    <template v-else #footer>
+      <button v-if="result.batch_id && !undone" type="button" class="btn btn--secondary" :disabled="undoing" data-test="batch-edit-undo" @click="undo">{{ undoing ? '撤销中…' : '撤销' }}</button>
+      <button type="button" class="btn btn--primary" :disabled="undoing" data-test="batch-edit-done" @click="$emit('close')">关闭</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
@@ -121,7 +121,9 @@ import {
   BATCH_EDIT_FIELDS, BATCH_RATING_OPTIONS, batchActionOptions, batchEditErrorMessage, batchFieldIsScalar, batchFieldLabel,
   describeBatchOp, undoResultText
 } from '../utils/metadataBatchEdit.js';
-import BaseModal from './ui/BaseModal.vue';
+import { notifySuccess, notifyUndoable } from '../utils/feedback.js';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
 
 // 关联字段候选一次给几个。
 const OPTION_LIMIT = 20;
@@ -134,7 +136,7 @@ function newRow(field) {
 
 export default {
   name: 'MetadataBatchEditDialog',
-  components: { BaseModal },
+  components: { AppIcon, DialogShell },
   props: {
     kind: { type: String, default: 'video' },
     selectedIds: { type: Array, default: () => [] },
@@ -165,6 +167,9 @@ export default {
     };
   },
   computed: {
+    kindLabel() {
+      return this.kind === 'image' ? '图片' : '视频';
+    },
     fieldOptions() {
       return BATCH_EDIT_FIELDS[this.kind] || BATCH_EDIT_FIELDS.video;
     },
@@ -262,6 +267,7 @@ export default {
       try {
         this.result = await ApplyMetadataBatchEdit(this.buildRequest());
         this.$emit('applied', this.result);
+        this.offerUndo(this.result);
       } catch (err) {
         const known = batchEditErrorMessage(err);
         logFrontend('metadataBatchEdit', 'ApplyMetadataBatchEdit failed', { err: String(err) }, true);
@@ -276,20 +282,50 @@ export default {
         this.applying = false;
       }
     },
-    async undo() {
-      if (!this.result?.batch_id || this.undoing) return;
+    // 有改动的批次（中途停止的也算）可撤销（D-UD-07、D-UD-09）：出带「撤销」的全局提示，并记进任务中心「最近操作」。
+    // 提示 / 最近操作里的撤销与对话框结果页的「撤销」是同一批、同一条路（performUndo），已撤销过的再点什么也不做。
+    offerUndo(result) {
+      const batchID = result?.batch_id;
+      if (!batchID) return;
+      const changed = Number(result.changed_count || 0);
+      const message = result.cancelled ? `批量编辑中途停止：${changed} 项已改动，可以撤销` : `已批量编辑 ${changed} 项${this.kindLabel}`;
+      notifyUndoable(message, () => this.undoFromToast(batchID), { label: `批量编辑${this.kindLabel}（${changed} 项）` });
+    },
+    async undoFromToast(batchID) {
+      if (this.undone) return;
+      if (this.undoing) throw new Error('这次批量编辑正在撤销，请稍后再试');
+      let undoResult;
+      try {
+        undoResult = await this.performUndo(batchID);
+      } catch (err) {
+        throw new Error(this.errorText(err, '请稍后重试'));
+      }
+      // 中途停止：抛出去让「最近操作」留着这一条，可以再点撤销继续。
+      if (undoResult?.cancelled) throw new Error(undoResultText(undoResult));
+      notifySuccess(undoResultText(undoResult));
+    },
+    async performUndo(batchID) {
       this.undoing = true;
       this.error = '';
       try {
-        const undoResult = await UndoMetadataBatchEdit(this.result.batch_id);
+        const undoResult = await UndoMetadataBatchEdit(batchID);
         this.undone = !undoResult?.cancelled;
         this.undoMessage = undoResultText(undoResult);
         this.$emit('undone', undoResult);
+        return undoResult;
       } catch (err) {
-        this.error = this.errorText(err, '撤销失败，请稍后重试。');
         logFrontend('metadataBatchEdit', 'UndoMetadataBatchEdit failed', { err: String(err) }, true);
+        throw err;
       } finally {
         this.undoing = false;
+      }
+    },
+    async undo() {
+      if (!this.result?.batch_id || this.undoing || this.undone) return;
+      try {
+        await this.performUndo(this.result.batch_id);
+      } catch (err) {
+        this.error = this.errorText(err, '撤销失败，请稍后重试。');
       }
     },
     requestClose() {
@@ -350,26 +386,26 @@ export default {
 </script>
 
 <style scoped>
-:deep(.batch-edit-modal) { width: min(640px, 92vw); display: grid; gap: 12px; }
-:deep(.batch-edit-modal) h3 { margin: 0; }
-.batch-edit-scope { display: flex; flex-wrap: wrap; gap: 8px 18px; }
-.batch-edit-scope__option { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.batch-edit-content { display: grid; gap: var(--space-3); align-content: start; }
+.batch-edit-scope { display: flex; flex-wrap: wrap; gap: var(--space-2) 18px; }
+.batch-edit-scope__option { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-secondary); }
 .batch-edit-ops { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.batch-edit-op { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; }
-.batch-edit-op__line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.batch-edit-op__count { font-size: 12px; color: var(--accent-text); }
+.batch-edit-op { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border-color); border-radius: var(--radius); }
+.batch-edit-op__line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.batch-edit-op__line .select-input { width: auto; min-width: 120px; }
+.batch-edit-op__count { font-size: var(--fs-caption); color: var(--accent-text); }
 .batch-edit-year { width: 110px; }
 .batch-edit-picker { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .batch-edit-picker__input { flex: 1; min-width: 160px; }
-.batch-edit-chip-remove { width: 20px; height: 20px; margin-left: 2px; }
+.batch-edit-chip-remove.btn-icon { width: 20px; height: 20px; margin-left: 2px; }
+.batch-edit-add { justify-self: start; }
 .batch-edit-options {
-  position: absolute; top: 100%; left: 0; z-index: 5; width: 100%; max-height: 220px; overflow-y: auto;
-  display: grid; padding: 4px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-elevated);
+  position: absolute; top: 100%; left: 0; z-index: var(--z-menu); width: 100%; max-height: 220px; overflow-y: auto;
+  display: grid; padding: var(--space-1); border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-popover);
 }
-.batch-edit-option { text-align: left; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); cursor: pointer; }
-.batch-edit-option:hover { background: var(--control-hover-bg); }
-.batch-edit-muted { margin: 0; font-size: 12px; color: var(--text-secondary); }
-.batch-edit-preview { margin: 0; font-size: 13px; }
-.batch-edit-error { margin: 0; font-size: 13px; color: var(--danger-color); }
-.batch-edit-result-ops { margin: 0; padding-left: 18px; font-size: 13px; }
+.batch-edit-option { justify-content: flex-start; color: var(--text-primary); font-weight: var(--fw-regular); text-align: left; }
+.batch-edit-muted { margin: 0; font-size: var(--fs-caption); color: var(--text-secondary); }
+.batch-edit-preview { margin: 0; font-size: var(--fs-secondary); }
+.batch-edit-error { margin: 0; font-size: var(--fs-secondary); color: var(--danger-text); }
+.batch-edit-result-ops { margin: 0; padding-left: 18px; font-size: var(--fs-secondary); }
 </style>

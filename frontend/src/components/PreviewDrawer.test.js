@@ -951,7 +951,7 @@ describe('P-037 抽屉代理排位、进度与自动切换（D-PC26）', () => {
     await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('排队中（第 2 个）');
-    expect(wrapper.get('[data-test="preview-proxy-create"]').text()).toBe('排队中...');
+    expect(wrapper.get('[data-test="preview-proxy-create"]').text()).toBe('排队中…');
     expect(wrapper.get('[data-test="preview-proxy-create"]').attributes('disabled')).toBeDefined();
     expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
     expect(wrapper.find('[data-test="preview-proxy-error"]').exists()).toBe(false);
@@ -1441,5 +1441,82 @@ describe('2026-10-13 直接播 + 自动代理（抽屉经共用播放器）', ()
     wrapper.unmount();
     await flushPromises();
     expect(api.CancelPreviewProxy).toHaveBeenCalledWith(1, expect.stringMatching(/^player-/));
+  });
+});
+
+// 统一设计 D-UD-13：管理侧抽屉里，人物 / 作品集的文字字段也按「保存」走，离开前有未保存的修改要提醒；
+// D-UD-07：作品集删除后无法恢复，走「不可逆」确认（输入按钮上的文字）。
+describe('PreviewDrawer 统一设计（D-UD-07 / D-UD-13）', () => {
+  const collectionDetail = () => ({
+    collection: { collection: { id: 3, name: 'Collection', description: '旧简介' }, cover_url: '', active_video_count: 0 },
+    videos: []
+  });
+  const personDetail = () => ({
+    person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 0, active_image_count: 0 },
+    videos: [], next_video_id: 0, images: [], next_image_id: 0
+  });
+
+  it('asks before closing a person entry with an unsaved name, and closes directly when clean', async () => {
+    api.GetPersonDetail.mockResolvedValue(personDetail());
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+    expect(wrapper.vm.hasUnsavedEntityDraft).toBe(false);
+
+    wrapper.vm.personEdit.displayName = 'Actor 7';
+    expect(wrapper.vm.hasUnsavedEntityDraft).toBe(true);
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="preview-drawer-close"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '放弃未保存的修改', message: expect.stringContaining('姓名') }));
+    expect(wrapper.emitted('close')).toBeUndefined();
+
+    wrapper.vm.personEdit.displayName = 'Actor Seven';
+    feedback.confirmAction.mockClear();
+    await wrapper.get('[data-test="preview-drawer-close"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('asks before leaving a collection entry with an unsaved description', async () => {
+    api.GetCollectionDetail.mockResolvedValue(collectionDetail());
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'collection', id: 3 } } });
+    await flushPromises();
+    wrapper.vm.collectionEdit.description = '新简介';
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.vm.openVideo(1);
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('名称或简介') }));
+    expect(wrapper.vm.currentEntry).toEqual({ type: 'collection', id: 3 });
+  });
+
+  it('deletes a collection only through the irreversible confirmation', async () => {
+    api.GetCollectionDetail.mockResolvedValue(collectionDetail());
+    api.DeleteCollection.mockResolvedValue(undefined);
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'collection', id: 3 } } });
+    await flushPromises();
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="drawer-collection-delete"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ level: 'irreversible', confirmText: '删除作品集', message: expect.stringContaining('「Collection」') }));
+    expect(api.DeleteCollection).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="drawer-collection-delete"]').trigger('click');
+    await flushPromises();
+    expect(api.DeleteCollection).toHaveBeenCalledWith(3);
+    expect(wrapper.emitted('collection-deleted')).toEqual([[3]]);
+  });
+
+  it('labels the candidate select-all with the unified wording and the count it selects', async () => {
+    api.GetCollectionDetail.mockResolvedValue(collectionDetail());
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'one.mp4' }, { id: 2, name: 'two.mp4' }] });
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'collection', id: 3 } } });
+    await flushPromises();
+    await wrapper.vm.searchRelatedVideos(true);
+    await flushPromises();
+    const selectAll = wrapper.get('[data-test="related-video-select-all"]');
+    expect(selectAll.text()).toBe('全选当前结果（2）');
+    await selectAll.trigger('click');
+    expect(wrapper.vm.relatedVideoSelection).toEqual([1, 2]);
   });
 });

@@ -77,7 +77,7 @@ afterEach(() => {
 describe('InlineVideoPlayer 会话（D-UI-11）', () => {
   it('受控：用宿主给的会话，不自己取；null 时显示准备中', async () => {
     const waiting = await mountPlayer({ session: null });
-    expect(waiting.text()).toContain('正在准备预览...');
+    expect(waiting.text()).toContain('正在准备预览…');
     const wrapper = await mountPlayer();
     expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/1');
     expect(api.GetPreviewSession).not.toHaveBeenCalled();

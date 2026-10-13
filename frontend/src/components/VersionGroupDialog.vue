@@ -1,11 +1,7 @@
 <template>
-  <BaseModal class="version-dialog" data-test="version-dialog" @close="$emit('close')">
-    <div class="version-dialog__header">
-      <h3>{{ group ? '管理版本组' : '加入版本组' }}</h3>
-      <button type="button" class="version-dialog__close" aria-label="关闭" @click="$emit('close')">✕</button>
-    </div>
+  <DialogShell :title="group ? '管理版本组' : '加入版本组'" size="md" class="version-dialog" data-test="version-dialog" @close="$emit('close')">
     <p v-if="error" class="version-dialog__error" role="alert" data-test="version-dialog-error">{{ error }}</p>
-    <div v-if="loading" class="version-dialog__placeholder">正在读取……</div>
+    <SkeletonBlock v-if="loading" class="version-dialog__placeholder" :lines="3" />
 
     <!-- 管理一个组：标题、标签、顺序（第 1 位是主版本）、移出与解散。 -->
     <template v-else-if="group">
@@ -20,50 +16,53 @@
         <li v-for="(member, index) in group.members" :key="member.video_id" class="version-dialog__member" :data-test="`version-dialog-member-${member.video_id}`">
           <div class="version-dialog__member-info">
             <div class="version-dialog__member-name">
-              <span v-if="index === 0" class="version-dialog__primary">主版本</span>
+              <AppBadge v-if="index === 0" tone="accent">主版本</AppBadge>
               <span :title="member.name">{{ memberTitle(member) }}</span>
             </div>
             <div class="help-text">{{ memberFacts(member) }}</div>
           </div>
           <input v-model="draftLabels[member.video_id]" type="text" maxlength="40" class="text-input version-dialog__label" placeholder="标签，如 原版 / 高清版" :data-test="`version-dialog-label-${member.video_id}`" />
           <div class="version-dialog__member-actions">
-            <button type="button" class="row-btn" :disabled="busy || index === 0" aria-label="上移" :data-test="`version-dialog-up-${member.video_id}`" @click="move(index, -1)">↑</button>
-            <button type="button" class="row-btn" :disabled="busy || index === group.members.length - 1" aria-label="下移" @click="move(index, 1)">↓</button>
-            <button type="button" class="row-btn" :disabled="busy" :data-test="`version-dialog-remove-${member.video_id}`" @click="remove(member)">移出</button>
+            <button type="button" class="btn-icon btn--sm" :disabled="busy || index === 0" aria-label="上移" :data-test="`version-dialog-up-${member.video_id}`" @click="move(index, -1)"><AppIcon name="chevron-up" :size="16" /></button>
+            <button type="button" class="btn-icon btn--sm" :disabled="busy || index === group.members.length - 1" aria-label="下移" @click="move(index, 1)"><AppIcon name="chevron-down" :size="16" /></button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" :data-test="`version-dialog-remove-${member.video_id}`" @click="remove(member)">移出</button>
           </div>
         </li>
       </ol>
-      <div class="modal-actions">
-        <button type="button" class="btn-danger" :disabled="busy" data-test="version-dialog-dissolve" @click="dissolve">解散版本组</button>
-        <div class="version-dialog__spacer"></div>
-        <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
-        <button type="button" class="btn-primary" :disabled="busy || !dirty" data-test="version-dialog-save" @click="save">保存标题与标签</button>
-      </div>
     </template>
 
     <!-- 视频还不在组里：可加入已有的组；新建要在片库多选后用批量栏「合并为版本组」。 -->
     <template v-else>
       <p class="help-text">「{{ videoTitle || `视频 #${videoId}` }}」还不在任何版本组里。可以把它加入下面已有的组；要新建，请在片库里多选 2 个以上视频后点「合并为版本组」。</p>
-      <div v-if="!candidates.length" class="version-dialog__placeholder" data-test="version-dialog-empty">还没有版本组。</div>
+      <EmptyState v-if="!candidates.length" title="还没有版本组" message="在片库里多选 2 个以上视频后点「合并为版本组」即可新建。" data-test="version-dialog-empty" />
       <ul v-else class="version-dialog__groups">
         <li v-for="candidate in candidates" :key="candidate.group_id" class="version-dialog__group">
           <span class="version-dialog__group-title">{{ groupTitle(candidate) }}</span>
           <span class="help-text">{{ candidate.member_count }} 个版本</span>
-          <button type="button" class="btn-secondary btn-compact" :disabled="busy" :data-test="`version-dialog-join-${candidate.group_id}`" @click="join(candidate)">加入</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" :data-test="`version-dialog-join-${candidate.group_id}`" @click="join(candidate)">加入</button>
         </li>
       </ul>
-      <div class="modal-actions">
-        <button v-if="nextCursorID" type="button" class="btn-secondary" :disabled="busy" @click="loadCandidates(true)">加载更多</button>
-        <div class="version-dialog__spacer"></div>
-        <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
-      </div>
+      <button v-if="nextCursorID" type="button" class="btn btn--secondary btn--sm version-dialog__more" :disabled="busy" @click="loadCandidates(true)">加载更多</button>
     </template>
-  </BaseModal>
+
+    <template v-if="!loading && group" #footer>
+      <button type="button" class="btn btn--danger" :disabled="busy" data-test="version-dialog-dissolve" @click="dissolve">解散版本组</button>
+      <button type="button" class="btn btn--secondary" @click="$emit('close')">关闭</button>
+      <button type="button" class="btn btn--primary" :disabled="busy || !dirty" data-test="version-dialog-save" @click="save">保存标题与标签</button>
+    </template>
+    <template v-else-if="!loading" #footer>
+      <button type="button" class="btn btn--secondary" @click="$emit('close')">关闭</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { AddVersionMembers, DissolveVersionGroup, GetVersionGroup, ListVersionGroups, RemoveVersionMember, ReorderVersionMembers, UpdateVersionGroup } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppBadge from './ui/AppBadge.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
+import EmptyState from './ui/EmptyState.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notify, notifySuccess } from '../utils/feedback.js';
 import { isVersionGroupConflict, isVersionGroupNotFound, moveVersionMember, parseVersionMemberConflict, versionGroupErrorText, versionGroupTitle, versionMemberFacts, versionMemberTitle } from '../utils/versionGroups.js';
 
@@ -72,7 +71,7 @@ import { isVersionGroupConflict, isVersionGroupNotFound, moveVersionMember, pars
 // 片库页据此原地刷新。
 export default {
   name: 'VersionGroupDialog',
-  components: { BaseModal },
+  components: { AppBadge, AppIcon, DialogShell, EmptyState, SkeletonBlock },
   props: {
     groupId: { type: Number, default: 0 },
     videoId: { type: Number, default: 0 },
@@ -247,19 +246,15 @@ export default {
 </script>
 
 <style scoped>
-.version-dialog__header { display: flex; align-items: center; gap: 8px; }
-.version-dialog__header h3 { margin: 0; flex: 1; }
-.version-dialog__close { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 14px; }
-.version-dialog__placeholder { padding: 16px 0; color: var(--text-muted); }
-.version-dialog__field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; font-size: 12px; }
-.version-dialog__members, .version-dialog__groups { list-style: none; margin: 8px 0; padding: 0; max-height: 50vh; overflow-y: auto; }
-.version-dialog__member, .version-dialog__group { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border-color); flex-wrap: wrap; }
+.version-dialog__placeholder { padding: var(--space-4) 0; }
+.version-dialog__field { display: flex; flex-direction: column; gap: var(--space-1); margin: 0 0 var(--space-3); color: var(--text-secondary); font-size: var(--fs-caption); }
+.version-dialog__members, .version-dialog__groups { list-style: none; margin: var(--space-2) 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.version-dialog__member, .version-dialog__group { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--hairline-soft); flex-wrap: wrap; }
 .version-dialog__member-info { flex: 1; min-width: 180px; }
-.version-dialog__member-name { display: flex; gap: 6px; align-items: center; font-weight: 600; overflow: hidden; }
-.version-dialog__primary { padding: 0 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; white-space: nowrap; }
+.version-dialog__member-name { display: flex; gap: 6px; align-items: center; font-weight: var(--fw-semibold); overflow: hidden; }
 .version-dialog__label { width: 160px; }
-.version-dialog__member-actions { display: flex; gap: 4px; }
+.version-dialog__member-actions { display: flex; align-items: center; gap: var(--space-1); }
 .version-dialog__group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.version-dialog__spacer { flex: 1; }
-.version-dialog__error { margin: 8px 0; color: var(--danger-text); font-size: 12px; }
+.version-dialog__more { margin-top: var(--space-2); }
+.version-dialog__error { margin: 0 0 var(--space-3); color: var(--danger-text); font-size: var(--fs-caption); }
 </style>

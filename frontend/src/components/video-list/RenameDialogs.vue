@@ -1,11 +1,10 @@
 <template>
   <!-- 重命名弹窗 -->
-  <BaseModal v-if="renameDialog.show" class="download-modal">
-      <h3>重命名视频</h3>
+  <DialogShell v-if="renameDialog.show" title="重命名视频" size="sm" class="rename-dialog" @close="renameDialog.show = false">
       <input
         v-model="renameDialog.newName"
         type="text"
-        class="search-input rename-input"
+        class="text-input rename-input"
         placeholder="输入新文件名"
         @keyup.enter="executeRename"
         ref="renameInput"
@@ -14,37 +13,36 @@
       <!-- 与后端 RenameVideo 同一规则（D-PC12、LIB-03）：只有「视频扩展名」里的后缀才算扩展名，
            其余一律补回原扩展名，所以 The.Matrix.1999.1080p 不会被当成「.1080p」文件。 -->
       <p class="rename-hint" data-test="rename-video-preview">{{ renamePreviewText }}</p>
-      <div class="modal-actions">
-        <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
-        <button @click="executeRename" class="btn-primary">确认</button>
-      </div>
-  </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" @click="renameDialog.show = false">取消</button>
+        <button type="button" class="btn btn--primary" @click="executeRename">重命名</button>
+      </template>
+  </DialogShell>
 
-  <BaseModal v-if="folderRenameDialog.show" class="download-modal">
-      <h3>重命名文件夹</h3>
+  <DialogShell v-if="folderRenameDialog.show" title="重命名文件夹" size="sm" :busy="migrationRunning" class="rename-dialog" @close="folderRenameDialog.show = false">
       <p class="folder-rename-source" :title="folderRenameDialog.source">{{ folderRenameDialog.source }}</p>
       <input
         ref="folderRenameInput"
         v-model="folderRenameDialog.newName"
         type="text"
         maxlength="255"
-        class="search-input rename-input"
+        class="text-input rename-input"
         placeholder="输入新的文件夹名称"
         :disabled="migrationRunning"
         @keyup.enter="executeFolderRename"
       />
       <p class="rename-hint">只修改当前文件夹名称，内部目录结构和视频关联保持不变。</p>
-      <p v-if="folderRenameDialog.error" class="cleanup-error">{{ folderRenameDialog.error }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="folderRenameDialog.show = false">取消</button>
-        <button type="button" class="btn-primary" :disabled="migrationRunning || !folderRenameDialog.newName.trim()" @click="executeFolderRename">{{ migrationRunning ? '重命名中...' : '确认重命名' }}</button>
-      </div>
-  </BaseModal>
+      <p v-if="folderRenameDialog.error" class="rename-error" role="alert">{{ folderRenameDialog.error }}</p>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" :disabled="migrationRunning" @click="folderRenameDialog.show = false">取消</button>
+        <button type="button" class="btn btn--primary" :disabled="migrationRunning || !folderRenameDialog.newName.trim()" @click="executeFolderRename">{{ migrationRunning ? '重命名中…' : '确认重命名' }}</button>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { RenameVideo, RenameDirectory, SelectFolderToRename, GetSettings } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import DialogShell from '../ui/DialogShell.vue';
 import { notify, notifyError } from '../../utils/feedback.js';
 
 // 「视频扩展名」设置为空时后端用的默认集合（services/video_scan.go 的 defaultVideoExtensions，
@@ -82,7 +80,7 @@ export function renamedVideoFileName(currentName, input, videoExtensions) {
 // 文件夹重命名会动扫描目录与设置，所以完成后把三件事交回片库页处理。
 export default {
   name: 'RenameDialogs',
-  components: { BaseModal },
+  components: { DialogShell },
   props: {
     migrationRunning: { type: Boolean, default: false },
     reloadView: { type: Function, required: true },
@@ -188,30 +186,24 @@ export default {
 </script>
 
 <style scoped>
-:deep(.download-modal) {
-  width: 400px;
-  text-align: center;
-  padding: 30px;
-}
 .rename-input {
-  margin: 15px 0;
+  margin: var(--space-2) 0;
 }
 .rename-hint {
+  margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 .folder-rename-source {
-  margin: 12px 0 4px;
+  margin: 0 0 var(--space-1);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.cleanup-error,
-.cleanup-intro,
-.cleanup-loading,
-.cleanup-empty {
-  color: var(--review-text-muted);
-  font-size: 13px;
+.rename-error {
+  margin: var(--space-2) 0 0;
+  color: var(--danger-text);
+  font-size: var(--fs-secondary);
 }
 </style>

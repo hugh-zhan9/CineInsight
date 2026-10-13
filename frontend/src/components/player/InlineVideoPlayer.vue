@@ -42,8 +42,9 @@
   其余成员是内部实现。类名沿用抽屉里的 preview-drawer__*：抽屉既有测试与样式守卫按这些名字找播放器。
 -->
 <template>
-  <div class="inline-player">
-    <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览...</div>
+  <!-- 播放器区域不论主题都是深色（--player-bg）：用影院表面让里面的提示文字与按钮按深色配色，浅色主题下也看得清。 -->
+  <div class="inline-player surface-cinema">
+    <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
     <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
       <div class="preview-drawer__player-shell">
         <video
@@ -95,7 +96,7 @@
     <div v-else-if="activeSession.mode === 'inline' && inlinePlaybackFailed" class="preview-drawer__placeholder" role="alert" data-test="preview-inline-error">
       <p>无法内嵌播放此文件</p>
       <div class="detail-action-row">
-        <button type="button" class="btn-primary" data-test="preview-inline-error-external" @click="$emit('preview-externally', Number(videoId))">用系统播放器预览</button>
+        <button type="button" class="btn btn--primary" data-test="preview-inline-error-external" @click="$emit('preview-externally', Number(videoId))">用系统播放器预览</button>
         <button v-if="!playingThroughProxy && proxyBlocked !== 'unavailable'" type="button" class="btn btn--secondary" data-test="preview-inline-error-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
       </div>
       <p v-if="proxyStatusLine" class="preview-drawer__proxy-progress" role="status" data-test="preview-inline-error-progress">{{ proxyStatusLine }}</p>
@@ -115,7 +116,7 @@
     <template v-else-if="activeSession.mode === 'external-preview' && activeSession.external_action">
       <div class="preview-drawer__placeholder">
         <p>{{ activeSession.reason_message }}</p>
-        <button type="button" class="btn-primary" @click="$emit('preview-externally', Number(videoId))">{{ activeSession.external_action.button_label }}</button>
+        <button type="button" class="btn btn--primary" @click="$emit('preview-externally', Number(videoId))">{{ activeSession.external_action.button_label }}</button>
         <p v-if="proxyProgressText" class="preview-drawer__proxy-progress" data-test="preview-player-proxy-progress">{{ proxyProgressText }}</p>
       </div>
     </template>
@@ -216,8 +217,8 @@ export default {
       return playbackProxyItemStateText(this.proxyTracking.state) || '正在加入队列';
     },
     proxyCreateLabel() {
-      if (this.proxyPending) return this.proxyTracking.state?.phase === 'queued' ? '排队中...' : '生成中...';
-      return this.proxyBusy ? '处理中...' : '生成播放代理';
+      if (this.proxyPending) return this.proxyTracking.state?.phase === 'queued' ? '排队中…' : '生成中…';
+      return this.proxyBusy ? '处理中…' : '生成播放代理';
     },
     // 播放器框里（等代理、内嵌报错）的两行：进度与提示放 role=status，失败放 role=alert，分成两个元素。
     proxyStatusLine() { return this.proxyPending ? this.proxyProgressText : this.proxyNotice; },
@@ -624,16 +625,17 @@ export default {
 
 <style scoped>
 /* 根是一层网格：放进固定最小高度的容器（抽屉的播放器区块）时，占位框与以前一样撑满整块。 */
-.inline-player { display: grid; }
+.inline-player { display: grid; background: var(--player-bg); }
 .preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
-.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: 999px; background: color-mix(in srgb, var(--text-primary) 28%, transparent); cursor: default; }
+.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text-primary) 28%, transparent); cursor: default; }
 .preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; background: color-mix(in srgb, var(--text-primary) 58%, transparent); content: ''; }
-.preview-drawer__seek-preview { position: absolute; bottom: 18px; width: 160px; transform: translateX(-50%); display: grid; gap: 4px; justify-items: center; pointer-events: none; }
-.preview-drawer__seek-image { position: relative; width: 160px; height: 90px; overflow: hidden; border: 2px solid rgba(255, 255, 255, .9); border-radius: 8px; background: var(--player-bg); box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+.preview-drawer__seek-preview { position: absolute; bottom: 18px; width: 160px; transform: translateX(-50%); display: grid; gap: var(--space-1); justify-items: center; pointer-events: none; }
+/* 悬停预览浮在画面上：描边与时间角标用画面角标的那一对颜色（两主题同值），投影取浮层投影。 */
+.preview-drawer__seek-image { position: relative; width: 160px; height: 90px; overflow: hidden; border: 2px solid var(--media-badge-fg); border-radius: var(--radius-sm); background: var(--player-bg); box-shadow: var(--shadow-popover); }
 .preview-drawer__seek-image img { position: absolute; max-width: none; object-fit: fill; }
-.preview-drawer__seek-preview time { padding: 2px 6px; border-radius: 5px; color: #fff; background: rgba(0, 0, 0, .78); font-size: 11px; font-variant-numeric: tabular-nums; }
+.preview-drawer__seek-preview time { padding: 2px 6px; border-radius: var(--radius-sm); color: var(--media-badge-fg); background: var(--media-badge-bg); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 /* 下面两条与抽屉里的同名规则一致：抽屉自己的「正在读取」占位和动作行仍用它们。 */
-.preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: 12px; color: var(--text-secondary); }
-.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.preview-drawer__proxy-progress { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: var(--radius-lg); padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: var(--space-3); color: var(--text-secondary); }
+.detail-action-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.preview-drawer__proxy-progress { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); }
 </style>

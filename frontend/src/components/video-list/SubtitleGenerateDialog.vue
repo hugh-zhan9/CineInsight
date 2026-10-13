@@ -1,34 +1,40 @@
 <template>
   <!-- 上次退出时没跑完的字幕任务（D-PC20、MEDIA-10）：启动时标成「已中断」，这里给出重新排队与忽略。 -->
-  <div v-if="interruptedJobs.count > 0" class="subtitle-interrupted-bar glass-surface" role="status" data-test="subtitle-interrupted-bar">
-    <span class="subtitle-interrupted-bar__text">上次退出应用时有 {{ interruptedJobs.count }} 个字幕任务没有完成。</span>
-    <button type="button" class="btn-primary btn-compact" :disabled="!!interruptedBusy" data-test="subtitle-interrupted-requeue" @click="requeueInterruptedJobs">
-      {{ interruptedBusy === 'requeue' ? '正在重新排队…' : '全部重新排队' }}
-    </button>
-    <button type="button" class="btn-secondary btn-compact" :disabled="!!interruptedBusy" data-test="subtitle-interrupted-dismiss" @click="dismissInterruptedJobs">忽略</button>
-    <button type="button" class="btn-secondary btn-compact" data-test="subtitle-interrupted-task-center" @click="openTaskCenter">在任务中心查看</button>
-  </div>
+  <AppBanner
+    v-if="interruptedJobs.count > 0"
+    tone="warning"
+    class="subtitle-interrupted-bar"
+    :title="`上次退出应用时有 ${interruptedJobs.count} 个字幕任务没有完成。`"
+    data-test="subtitle-interrupted-bar"
+  >
+    <template #actions>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="!!interruptedBusy" data-test="subtitle-interrupted-dismiss" @click="dismissInterruptedJobs">忽略</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="subtitle-interrupted-task-center" @click="openTaskCenter">在任务中心查看</button>
+      <button type="button" class="btn btn--primary btn--sm" :disabled="!!interruptedBusy" data-test="subtitle-interrupted-requeue" @click="requeueInterruptedJobs">
+        {{ interruptedBusy === 'requeue' ? '正在重新排队…' : '全部重新排队' }}
+      </button>
+    </template>
+  </AppBanner>
 
-  <div v-if="subtitleQueue.total > 0" class="subtitle-queue-panel glass-surface">
+  <div v-if="subtitleQueue.total > 0" class="subtitle-queue-panel">
     <div class="subtitle-queue-heading">
       <strong>字幕任务队列（{{ subtitleQueue.total }}）</strong>
-      <button type="button" class="btn-secondary" @click="refreshSubtitleQueue">刷新</button>
+      <button type="button" class="btn btn--secondary btn--sm" @click="refreshSubtitleQueue">刷新</button>
     </div>
     <div v-if="subtitleQueue.active_task" class="subtitle-queue-task subtitle-queue-task--active">
       <span class="subtitle-queue-status">处理中</span>
       <span class="subtitle-queue-name">{{ subtitleQueue.active_task.video_name || `视频 #${subtitleQueue.active_task.video_id}` }}</span>
-      <button v-if="subtitleQueue.active_task.can_cancel" type="button" class="btn-danger btn-compact" :disabled="cancellingSubtitleTaskIds.includes(subtitleQueue.active_task.task_id)" @click="cancelSubtitleTask(subtitleQueue.active_task.task_id)">取消</button>
+      <button v-if="subtitleQueue.active_task.can_cancel" type="button" class="btn btn--danger btn--sm" :disabled="cancellingSubtitleTaskIds.includes(subtitleQueue.active_task.task_id)" @click="cancelSubtitleTask(subtitleQueue.active_task.task_id)">取消</button>
     </div>
     <div v-for="task in subtitleQueue.queued_tasks" :key="task.task_id" class="subtitle-queue-task">
       <span class="subtitle-queue-status">排队中 #{{ task.position }}</span>
       <span class="subtitle-queue-name">{{ task.video_name || `视频 #${task.video_id}` }}</span>
-      <button v-if="task.can_cancel" type="button" class="btn-secondary btn-compact" :disabled="cancellingSubtitleTaskIds.includes(task.task_id)" @click="cancelSubtitleTask(task.task_id)">取消</button>
+      <button v-if="task.can_cancel" type="button" class="btn btn--secondary btn--sm" :disabled="cancellingSubtitleTaskIds.includes(task.task_id)" @click="cancelSubtitleTask(task.task_id)">取消</button>
     </div>
   </div>
 
   <!-- 字幕操作弹窗（确认/进度/结果） -->
-  <BaseModal v-if="subtitleDialog.show" class="download-modal" data-test="subtitle-generate-dialog" @close="handleDialogClose">
-      <h3>{{ subtitleDialog.title }}</h3>
+  <DialogShell v-if="subtitleDialog.show" :title="subtitleDialog.title" size="sm" class="subtitle-generate-modal" data-test="subtitle-generate-dialog" @close="handleDialogClose">
       <p class="subtitle-dialog-msg" data-test="subtitle-dialog-msg">{{ subtitleDialog.msg }}</p>
 
       <!-- 覆盖提示（D-PC13、MEDIA-01）：已有同名字幕时说清会先备份；同名共用字幕的其他视频一并列出。 -->
@@ -45,7 +51,7 @@
       <!-- 引擎与语言选择 (确认生成时显示) -->
       <div v-if="subtitleDialog.mode === 'confirm' && !pendingForceRequest" class="lang-select-box">
         <label class="dialog-field-label">字幕引擎</label>
-        <select v-model="selectedSubtitleEngine" @change="refreshSubtitleConfirmCopy" class="search-input dialog-select">
+        <select v-model="selectedSubtitleEngine" @change="refreshSubtitleConfirmCopy" class="select-input dialog-select">
           <option v-for="status in subtitleEngineStatuses" :key="status.engine" :value="status.engine" :disabled="!status.supported">
             {{ status.display_name }}{{ !status.supported ? '（当前平台不可用）' : '' }}
           </option>
@@ -54,23 +60,22 @@
 
         <template v-if="subtitleSourceLangVisible">
           <label class="dialog-field-label dialog-field-label--spaced">识别源语言</label>
-          <select v-model="sourceLang" class="search-input dialog-select" data-test="apple-source-language" :disabled="detectingLanguage || preparingLanguage" @change="rememberSourceLanguage">
+          <select v-model="sourceLang" class="select-input dialog-select" data-test="apple-source-language" :disabled="detectingLanguage || preparingLanguage" @change="rememberSourceLanguage">
             <option v-for="opt in languageOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
           <p class="dialog-field-hint">自动检测范围：{{ installedLanguageNames || '尚无已安装语种，请先准备语言资源' }}。结果可以手动修改。</p>
-          <button v-if="!batchConfirm" type="button" class="btn-secondary" data-test="apple-detect-language" :disabled="detectingLanguage || preparingLanguage || !selectedSubtitleEngineStatus?.available" @click="detectLanguage">{{ detectingLanguage ? '正在检测…' : '检测语言' }}</button>
-          <button v-if="sourceLang !== 'auto'" type="button" class="btn-secondary" data-test="apple-prepare-language" :disabled="detectingLanguage || preparingLanguage" @click="prepareSelectedLanguage">{{ preparingLanguage ? '正在准备…' : '准备所选语言' }}</button>
-          <button v-if="detectingLanguage || preparingLanguage" type="button" class="btn-secondary" data-test="apple-language-cancel" @click="cancelPrepare">取消</button>
+          <div class="language-actions">
+            <button v-if="!batchConfirm" type="button" class="btn btn--secondary btn--sm" data-test="apple-detect-language" :disabled="detectingLanguage || preparingLanguage || !selectedSubtitleEngineStatus?.available" @click="detectLanguage">{{ detectingLanguage ? '正在检测…' : '检测语言' }}</button>
+            <button v-if="sourceLang !== 'auto'" type="button" class="btn btn--secondary btn--sm" data-test="apple-prepare-language" :disabled="detectingLanguage || preparingLanguage" @click="prepareSelectedLanguage">{{ preparingLanguage ? '正在准备…' : '准备所选语言' }}</button>
+            <button v-if="detectingLanguage || preparingLanguage" type="button" class="btn btn--secondary btn--sm" data-test="apple-language-cancel" @click="cancelPrepare">取消</button>
+          </div>
           <p v-if="languageMessage" class="dialog-field-hint" role="status" data-test="apple-language-message">{{ languageMessage }}</p>
         </template>
       </div>
 
       <!-- 下载进度条 -->
       <template v-if="subtitleDialog.mode === 'progress'">
-        <div class="progress-bar-container">
-          <div class="progress-bar" :style="{ width: subtitleDialog.percent + '%' }"></div>
-        </div>
-        <p class="progress-text">{{ subtitleDialog.percent }}%</p>
+        <ProgressBar class="subtitle-progress" :value="subtitleDialog.percent / 100" :label="subtitleDialog.progressAction === 'generate' ? '生成进度' : '准备进度'" />
         <p v-if="subtitleDialog.progressAction === 'generate'" class="progress-meta">
           当前阶段：{{ subtitleProgressPhaseLabel }}
           <span v-if="subtitleElapsedText"> · 已运行 {{ subtitleElapsedText }}</span>
@@ -78,40 +83,38 @@
         <p v-if="subtitleDialog.progressAction === 'generate'" class="progress-hint">
           {{ subtitleProgressHint }}
         </p>
-        <div class="modal-actions">
-          <button v-if="subtitleDialog.progressAction === 'generate'" @click="minimizeSubtitleProgress" class="btn-secondary">后台继续</button>
-          <button v-if="subtitleDialog.progressAction === 'generate'" @click="cancelSubtitle" class="btn-danger">取消生成</button>
-          <template v-else>
-            <button type="button" class="btn-secondary" data-test="subtitle-prepare-minimize" @click="minimizePrepare">后台继续准备</button>
-            <!-- 引擎准备可取消（D-PC22、MEDIA-13）：与设置页「字幕」分区的「取消准备」是同一个入口。 -->
-            <button type="button" class="btn-danger" :disabled="prepareState.cancelling" data-test="subtitle-prepare-cancel" @click="cancelPrepare">
-              {{ prepareState.cancelling ? '正在取消…' : '取消准备' }}
-            </button>
-          </template>
-        </div>
       </template>
 
+      <template v-if="subtitleDialog.mode === 'progress' && subtitleDialog.progressAction === 'generate'" #footer>
+        <button type="button" class="btn btn--secondary" @click="minimizeSubtitleProgress">后台继续</button>
+        <button type="button" class="btn btn--danger" @click="cancelSubtitle">取消生成</button>
+      </template>
+      <template v-else-if="subtitleDialog.mode === 'progress'" #footer>
+        <button type="button" class="btn btn--secondary" data-test="subtitle-prepare-minimize" @click="minimizePrepare">后台继续准备</button>
+        <!-- 引擎准备可取消（D-PC22、MEDIA-13）：与设置页「字幕」分区的「取消准备」是同一个入口。 -->
+        <button type="button" class="btn btn--danger" :disabled="prepareState.cancelling" data-test="subtitle-prepare-cancel" @click="cancelPrepare">
+          {{ prepareState.cancelling ? '正在取消…' : '取消准备' }}
+        </button>
+      </template>
       <!-- 待确认的结果（D-PC13）：原字幕没动，强制生成才替换；放弃即删除临时结果。 -->
-      <div v-if="subtitleDialog.mode === 'confirm' && pendingForceRequest" class="modal-actions">
-        <button v-if="!pendingForceRequest.retained" type="button" class="btn-secondary" data-test="subtitle-confirm-cancel" @click="cancelConfirm">取消</button>
-        <button v-if="pendingForceRequest.retained" type="button" class="btn-secondary" data-test="subtitle-pending-later" @click="deferPendingDecision">稍后处理</button>
-        <button v-if="pendingForceRequest.retained" type="button" class="btn-secondary" :disabled="discardingPending" data-test="subtitle-pending-discard" @click="discardPendingResult">
+      <template v-else-if="subtitleDialog.mode === 'confirm' && pendingForceRequest" #footer>
+        <button v-if="!pendingForceRequest.retained" type="button" class="btn btn--secondary" data-test="subtitle-confirm-cancel" @click="cancelConfirm">取消</button>
+        <button v-if="pendingForceRequest.retained" type="button" class="btn btn--secondary" data-test="subtitle-pending-later" @click="deferPendingDecision">稍后处理</button>
+        <button v-if="pendingForceRequest.retained" type="button" class="btn btn--secondary" :disabled="discardingPending" data-test="subtitle-pending-discard" @click="discardPendingResult">
           {{ discardingPending ? '正在放弃…' : '放弃这次结果' }}
         </button>
-        <button type="button" class="btn-primary" data-test="subtitle-confirm" @click="onSubtitleConfirm">{{ subtitleConfirmActionLabel }}</button>
-      </div>
-
+        <button type="button" class="btn btn--primary" data-test="subtitle-confirm" @click="onSubtitleConfirm">{{ subtitleConfirmActionLabel }}</button>
+      </template>
       <!-- 确认按钮 -->
-      <div v-else-if="subtitleDialog.mode === 'confirm'" class="modal-actions">
-        <button type="button" class="btn-secondary" data-test="subtitle-confirm-cancel" @click="cancelConfirm">取消</button>
-        <button type="button" class="btn-primary" data-test="subtitle-confirm" :disabled="subtitleConfirmDisabled" @click="onSubtitleConfirm">{{ subtitleConfirmActionLabel }}</button>
-      </div>
-
+      <template v-else-if="subtitleDialog.mode === 'confirm'" #footer>
+        <button type="button" class="btn btn--secondary" data-test="subtitle-confirm-cancel" @click="cancelConfirm">取消</button>
+        <button type="button" class="btn btn--primary" data-test="subtitle-confirm" :disabled="subtitleConfirmDisabled" @click="onSubtitleConfirm">{{ subtitleConfirmActionLabel }}</button>
+      </template>
       <!-- 结果关闭按钮 -->
-      <div v-if="subtitleDialog.mode === 'result'" class="modal-actions">
-        <button @click="subtitleDialog.show = false" class="btn-primary" data-test="subtitle-result-close">确定</button>
-      </div>
-  </BaseModal>
+      <template v-else-if="subtitleDialog.mode === 'result'" #footer>
+        <button type="button" class="btn btn--primary" data-test="subtitle-result-close" @click="subtitleDialog.show = false">确定</button>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
@@ -120,7 +123,9 @@ import {
   ForceGenerateSubtitle, GenerateSubtitle, GetInterruptedSubtitleJobs, GetSubtitleEngineStatuses, GetSubtitleOverwriteInfo,
   GetSubtitleQueueState, PrepareSubtitleEngine, RequeueInterruptedSubtitleJobs, DetectSubtitleLanguage, PrepareAppleSubtitleLanguage
 } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import AppBanner from '../ui/AppBanner.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 import { notify, notifyError } from '../../utils/feedback.js';
 import { logFrontend } from '../../utils/frontendLog.js';
 import { findCommand } from '../../utils/commandRegistry.js';
@@ -144,7 +149,7 @@ function idleBatch() {
 // 所以把 generatingSubtitleIds 镜像回去。
 export default {
   name: 'SubtitleGenerateDialog',
-  components: { BaseModal },
+  components: { AppBanner, DialogShell, ProgressBar },
   mixins: [runtimeEventsMixin],
   emits: ['generating-change'],
   data() {
@@ -210,7 +215,7 @@ export default {
         await this.loadSubtitleEngineStatuses();
         if (this.prepareState.owned && !this.prepareState.minimized && this.subtitleDialog.show && this.subtitleDialog.progressAction === 'prepare') {
           this.subtitleDialog.mode = 'result';
-          this.subtitleDialog.title = '✅ 组件准备完成';
+          this.subtitleDialog.title = '组件准备完成';
           this.subtitleDialog.msg = '当前引擎已就绪，现在可以开始生成字幕。';
         }
       });
@@ -223,7 +228,7 @@ export default {
 		this.resetSubtitleProgressTracking();
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';
-        this.subtitleDialog.title = '✅ 字幕生成成功';
+        this.subtitleDialog.title = '字幕生成成功';
         this.subtitleDialog.msg = this.successMessage(data.path, data.warnings, data.backup_id);
       });
 
@@ -235,7 +240,7 @@ export default {
 		this.resetSubtitleProgressTracking();
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';
-        this.subtitleDialog.title = '⏹️ 已取消字幕生成';
+        this.subtitleDialog.title = '已取消字幕生成';
         this.subtitleDialog.msg = data.message || '当前字幕任务已取消。';
       });
 
@@ -597,11 +602,11 @@ export default {
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'confirm';
         if (replaceFailed) {
-          this.subtitleDialog.title = '⚠️ 字幕写回失败';
+          this.subtitleDialog.title = '字幕写回失败';
           this.subtitleDialog.msg = `字幕已生成并通过校验，但写回同名 .srt 时失败，原字幕没有改动。${result.message ? `\n${result.message}` : ''}\n\n`
             + (retained ? '临时结果已保留：「重试写回」不会重新识别；「放弃这次结果」会删除它。' : '临时结果没能保留，重试会重新识别。');
         } else {
-          this.subtitleDialog.title = '⚠️ 字幕质量警告';
+          this.subtitleDialog.title = '字幕质量警告';
           this.subtitleDialog.msg = `${result.message || '字幕没有通过质量校验。'}\n\n原字幕没有改动，`
             + (retained ? '这次的结果暂存为待确认。「强制生成」会用它替换现有字幕（会先备份）；「放弃这次结果」会删除它。' : '这次的结果没有保留，「强制生成」会重新识别并跳过质量检测。');
         }
@@ -622,11 +627,11 @@ export default {
       this.subtitleDialog.show = true;
       this.subtitleDialog.mode = 'result';
       if (result.status === 'cancelled') {
-        this.subtitleDialog.title = '⏹️ 已取消字幕生成';
+        this.subtitleDialog.title = '已取消字幕生成';
         this.subtitleDialog.msg = result.message || '当前字幕任务已取消。';
         return;
       }
-      this.subtitleDialog.title = '✅ 字幕生成完成';
+      this.subtitleDialog.title = '字幕生成完成';
       this.subtitleDialog.msg = forceMode
         ? `已用确认后的结果替换字幕。\n${this.successMessage(result.path, result.warnings, '')}`
         : this.successMessage(result.path, result.warnings, '');
@@ -758,7 +763,7 @@ export default {
         console.error('[Subtitle] Error:', err);
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';
-        this.subtitleDialog.title = '❌ 检查依赖失败';
+        this.subtitleDialog.title = '检查依赖失败';
         this.subtitleDialog.msg = subtitleExceptionText(err);
       }
     },
@@ -832,7 +837,7 @@ export default {
         this.subtitleDialog.phase = 'validating';
         this.subtitleDialog.title = '正在强制生成字幕';
         this.subtitleDialog.percent = 0;
-        this.subtitleDialog.msg = '跳过质量检测，重新生成...';
+        this.subtitleDialog.msg = '跳过质量检测，重新生成…';
         this.startSubtitleProgressTracking();
         this.generatingSubtitleIds.push(video.id);
         try {
@@ -847,7 +852,7 @@ export default {
           if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
 			if (!this.consumeMinimizedSubtitleTask() && (!this.subtitleProgressVideoID || this.subtitleProgressVideoID === video.id)) {
 				this.subtitleDialog.mode = 'result';
-				this.subtitleDialog.title = '❌ 强制生成失败';
+				this.subtitleDialog.title = '强制生成失败';
 				this.subtitleDialog.msg = subtitleExceptionText(err);
 			}
         }
@@ -863,7 +868,7 @@ export default {
         this.subtitleDialog.phase = 'preparing-runtime';
         this.subtitleDialog.title = '正在准备组件';
         this.subtitleDialog.percent = 0;
-        this.subtitleDialog.msg = '准备中... 可关闭此窗口，后台会继续。';
+        this.subtitleDialog.msg = '准备中… 可关闭此窗口，后台会继续。';
         this.pendingSubtitleVideo = null;
         this.batchConfirm = null;
         this.overwriteInfo = null;
@@ -872,7 +877,7 @@ export default {
           await this.loadSubtitleEngineStatuses();
           if (this.subtitleDialog.show && !this.prepareState.minimized) {
             this.subtitleDialog.mode = 'result';
-            this.subtitleDialog.title = '✅ 组件准备完成';
+            this.subtitleDialog.title = '组件准备完成';
             this.subtitleDialog.msg = '现在可以点击字幕按钮生成字幕了。';
           } else {
             notify('字幕组件已准备好，现在可以生成字幕了。');
@@ -881,7 +886,7 @@ export default {
           const cancelled = String(err?.message || err).includes(PREPARE_CANCELLED_TEXT);
           if (this.subtitleDialog.show && !this.prepareState.minimized) {
             this.subtitleDialog.mode = 'result';
-            this.subtitleDialog.title = cancelled ? '⏹️ 已取消准备组件' : '❌ 组件准备失败';
+            this.subtitleDialog.title = cancelled ? '已取消准备组件' : '组件准备失败';
             this.subtitleDialog.msg = cancelled ? '已取消准备，可以随时重新开始。' : subtitleExceptionText(err);
           } else if (!cancelled) {
             // 「后台继续准备」之后失败：弹窗已关，改用提示条告知（MEDIA-13）。
@@ -915,7 +920,7 @@ export default {
         this.subtitleDialog.phase = 'checking';
         this.subtitleDialog.title = '正在生成字幕';
         this.subtitleDialog.percent = 0;
-        this.subtitleDialog.msg = `任务已启动，正在准备 ${this.selectedSubtitleEngineStatus?.display_name || '当前引擎'}...`;
+        this.subtitleDialog.msg = `任务已启动，正在准备 ${this.selectedSubtitleEngineStatus?.display_name || '当前引擎'}…`;
         this.startSubtitleProgressTracking();
         await this.doGenerateSubtitle(video);
       }
@@ -938,7 +943,7 @@ export default {
 		if (!this.consumeMinimizedSubtitleTask() && (!this.subtitleProgressVideoID || this.subtitleProgressVideoID === video.id)) {
 			this.subtitleDialog.show = true;
 			this.subtitleDialog.mode = 'result';
-			this.subtitleDialog.title = '❌ 生成字幕失败';
+			this.subtitleDialog.title = '生成字幕失败';
 			this.subtitleDialog.msg = subtitleExceptionText(err);
 		}
       }
@@ -962,25 +967,20 @@ export default {
 </script>
 
 <style scoped>
-:deep(.download-modal) {
-  width: 400px;
-  text-align: center;
-  padding: 30px;
-}
 .subtitle-dialog-msg {
+  margin: 0;
   white-space: pre-line;
 }
 .subtitle-overwrite-notice {
-  margin-top: 12px;
-  padding: 8px 10px;
+  margin-top: var(--space-3);
+  padding: var(--space-2) 10px;
   border: 1px solid var(--warning-border);
   border-radius: var(--radius);
-  color: var(--warning-color);
-  font-size: 12px;
-  text-align: left;
+  color: var(--warning-text);
+  font-size: var(--fs-caption);
 }
 .subtitle-overwrite-notice p {
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 .subtitle-overwrite-notice ul {
   margin: 0;
@@ -989,73 +989,51 @@ export default {
   overflow-y: auto;
 }
 .subtitle-interrupted-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 12px 0;
-  padding: 10px 16px;
-  font-size: 13px;
-}
-.subtitle-interrupted-bar__text {
-  flex: 1 1 auto;
-  min-width: 0;
+  margin: var(--space-3) 0;
 }
 .lang-select-box {
-  margin-top: 15px;
+  margin-top: var(--space-4);
 }
 .dialog-field-label {
   display: block;
-  margin-bottom: 8px;
-  text-align: left;
+  margin-bottom: var(--space-2);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 .dialog-field-label--spaced {
-  margin-top: 12px;
-}
-.dialog-select {
-  height: var(--h-unit);
-  padding: 0 10px;
-  text-align: left;
+  margin-top: var(--space-3);
 }
 .dialog-field-hint {
   margin-top: 5px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
-.progress-bar-container {
-  width: 100%;
-  height: 10px;
-  background-color: var(--review-progress-track-bg);
-  border-radius: 5px;
-  margin: 20px 0;
-  overflow: hidden;
+.language-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
-.progress-bar {
-  height: 100%;
-  background-color: var(--success-bright);
-  transition: width 0.3s ease;
-}
-.progress-text {
-  font-size: 0.9em;
-  color: var(--review-text-muted);
-  margin: 0;
+.subtitle-progress {
+  margin: var(--space-4) 0 var(--space-2);
 }
 .progress-meta {
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   color: var(--review-text-meta);
   margin: 10px 0 0;
 }
 .progress-hint {
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.6;
   color: var(--review-text-muted);
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
 }
 .subtitle-queue-panel {
-  margin: 12px 0;
-  padding: 12px 16px;
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
 }
 .subtitle-queue-heading,
 .subtitle-queue-task {
@@ -1065,25 +1043,25 @@ export default {
 }
 .subtitle-queue-heading {
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 .subtitle-queue-task {
   min-height: 32px;
   border-top: 1px solid var(--neutral-soft);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 .subtitle-queue-task--active {
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius);
   background: var(--review-accent-soft);
 }
 .subtitle-queue-task--active .subtitle-queue-status {
-  font-weight: 700;
+  font-weight: var(--fw-bold);
 }
 .subtitle-queue-status {
   flex: 0 0 70px;
   color: var(--accent-deep);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 .subtitle-queue-name {
   flex: 1;
@@ -1091,10 +1069,5 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
 }
 </style>

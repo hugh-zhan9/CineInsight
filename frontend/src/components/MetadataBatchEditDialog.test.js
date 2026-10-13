@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import MetadataBatchEditDialog from './MetadataBatchEditDialog.vue';
+import { feedbackState, resetFeedback, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
 
 const tags = [
   { id: 1, name: '剧情', automatic_kind: '' },
@@ -36,6 +38,8 @@ async function setYear(wrapper, year, index = 0) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetFeedback();
+  recentOperations.clear();
   api.LogFrontend.mockResolvedValue(undefined);
   api.PreviewMetadataBatchEdit.mockResolvedValue({
     kind: 'video', target_count: 2, changed_count: 1,
@@ -180,5 +184,76 @@ describe('批量编辑对话框（D-MC-04 / D-MC-05）', () => {
     await wrapper.get('[data-test="batch-edit-preview-btn"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-test="batch-edit-error"]').text()).toContain('另一个批量编辑或撤销正在进行');
+  });
+});
+
+// 可撤销的标准出口（D-UD-07、D-UD-09）：执行成功后出带「撤销」的全局提示，同一条记进任务中心「最近操作」；
+// 提示、最近操作与结果页的「撤销」是同一批，哪边先撤都只调一次 UndoMetadataBatchEdit。
+describe('批量编辑的撤销入口（D-UD-09）', () => {
+  async function applyYear(wrapper) {
+    await setYear(wrapper, 2001);
+    await wrapper.get('[data-test="batch-edit-preview-btn"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="batch-edit-apply"]').trigger('click');
+    await flushPromises();
+  }
+  const undoToast = () => feedbackState.toasts.find(toast => toast.action?.label === '撤销');
+
+  it('执行成功后出带「撤销」的提示并记进最近操作；从提示撤销调用既有接口并更新结果页', async () => {
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    const toast = undoToast();
+    expect(toast.message).toBe('已批量编辑 1 项视频');
+    expect(recentOperations.list().map(item => item.label)).toEqual(['批量编辑视频（1 项）']);
+
+    expect(await runToastAction(toast.id)).toBe(true);
+    await flushPromises();
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledTimes(1);
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledWith(7);
+    expect(wrapper.emitted('undone')).toHaveLength(1);
+    expect(wrapper.get('[data-test="batch-edit-undo-result"]').text()).toBe('已撤销：恢复 1 处。');
+    expect(wrapper.find('[data-test="batch-edit-undo"]').exists()).toBe(false);
+    expect(recentOperations.list()).toEqual([]);
+    expect(feedbackState.toasts.map(item => item.message)).toContain('已撤销：恢复 1 处。');
+  });
+
+  it('结果页已经撤销过：最近操作里再撤销不再调接口，记录随之移除', async () => {
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    await wrapper.get('[data-test="batch-edit-undo"]').trigger('click');
+    await flushPromises();
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledTimes(1);
+
+    const [entry] = recentOperations.list();
+    expect(await recentOperations.undo(entry.id)).toBe(true);
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledTimes(1);
+    expect(recentOperations.list()).toEqual([]);
+  });
+
+  it('撤销中途停止时最近操作留着这一条，提示说明可以再撤销', async () => {
+    api.UndoMetadataBatchEdit.mockResolvedValueOnce({ batch_id: 7, restored: 1, changed_since: 0, cancelled: true });
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    expect(await runToastAction(undoToast().id)).toBe(false);
+    expect(recentOperations.list()).toHaveLength(1);
+    expect(feedbackState.toasts.at(-1)).toMatchObject({ level: 'error', message: '撤销失败：撤销中途停止：已恢复 1 处，可以再点撤销继续。' });
+    expect(wrapper.find('[data-test="batch-edit-undo"]').exists()).toBe(true);
+  });
+
+  it('撤销接口报错时给可读的原因，不露错误码，记录留着', async () => {
+    api.UndoMetadataBatchEdit.mockRejectedValueOnce(new Error('batch_edit_busy'));
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    expect(await runToastAction(undoToast().id)).toBe(false);
+    expect(feedbackState.toasts.at(-1).message).toBe('撤销失败：另一个批量编辑或撤销正在进行，请稍后再试。');
+    expect(recentOperations.list()).toHaveLength(1);
+  });
+
+  it('什么也没改（没有批次）时不出撤销提示，也不记最近操作', async () => {
+    api.ApplyMetadataBatchEdit.mockResolvedValueOnce({ batch_id: 0, kind: 'video', target_count: 2, processed: 2, changed_count: 0, cancelled: false, ops: [] });
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    expect(undoToast()).toBeUndefined();
+    expect(recentOperations.list()).toEqual([]);
   });
 });

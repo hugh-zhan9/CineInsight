@@ -1,89 +1,17 @@
 {
   "owner": "B1b 片库相关对话框、预览抽屉与播放器（PreviewDrawer、字幕/版本/元数据/扫描/标签等对话框、InlineVideoPlayer）",
   "pending": {
-    "colors": {
-      "components/SubtitleWorkbench.vue": 1,
-      "components/player/InlineVideoPlayer.vue": 4
-    },
-    "font-scale": {
-      "components/AddTagDialog.vue": 8,
-      "components/CollectionSuggestionPanel.vue": 13,
-      "components/LocalMetadataDialog.vue": 5,
-      "components/MetadataBatchEditDialog.vue": 6,
-      "components/PreviewDrawer.vue": 20,
-      "components/RelatedVideoItem.vue": 2,
-      "components/ScanDialog.vue": 3,
-      "components/SubtitleWorkbench.vue": 13,
-      "components/TonightPickerDialog.vue": 3,
-      "components/VersionCompareDialog.vue": 11,
-      "components/VersionGroupDialog.vue": 4,
-      "components/VersionGroupPanel.vue": 4,
-      "components/player/InlineVideoPlayer.vue": 2,
-      "components/video-list/EnhanceDialog.vue": 7,
-      "components/video-list/RenameDialogs.vue": 3,
-      "components/video-list/SaveViewDialog.vue": 2,
-      "components/video-list/SubtitleGenerateDialog.vue": 10,
-      "components/video-list/SubtitlePreviewModal.vue": 2,
-      "components/video-list/SubtitleTranslateDialog.vue": 11
-    },
-    "z-index": {
-      "components/LocalMetadataDialog.vue": 1,
-      "components/MetadataBatchEditDialog.vue": 1,
-      "components/PreviewDrawer.vue": 1,
-      "components/SubtitleWorkbench.vue": 1,
-      "components/VersionCompareDialog.vue": 2
-    },
+    "colors": {},
+    "font-scale": {},
+    "z-index": {},
     "vars": {},
-    "dialogs": {
-      "components/AddTagDialog.vue": 1,
-      "components/CollectionSuggestionPanel.vue": 1,
-      "components/MetadataBatchEditDialog.vue": 1,
-      "components/ScanDialog.vue": 1,
-      "components/TonightPickerDialog.vue": 1,
-      "components/VersionGroupDialog.vue": 1,
-      "components/VersionGroupPanel.vue": 1,
-      "components/video-list/EnhanceDialog.vue": 1,
-      "components/video-list/RenameDialogs.vue": 2,
-      "components/video-list/SaveViewDialog.vue": 1,
-      "components/video-list/SubtitleGenerateDialog.vue": 1,
-      "components/video-list/SubtitlePreviewModal.vue": 1,
-      "components/video-list/SubtitleTranslateDialog.vue": 1
-    },
+    "dialogs": {},
     "page-header": {},
-    "wording": {
-      "components/AddTagDialog.vue": 2,
-      "components/CollectionSuggestionPanel.vue": 1,
-      "components/LocalMetadataDialog.vue": 2,
-      "components/PreviewDrawer.vue": 15,
-      "components/SubtitleWorkbench.vue": 5,
-      "components/VersionGroupDialog.vue": 1,
-      "components/VersionGroupPanel.vue": 1,
-      "components/player/InlineVideoPlayer.vue": 1,
-      "components/video-list/EnhanceDialog.vue": 1,
-      "components/video-list/RenameDialogs.vue": 1,
-      "components/video-list/SaveViewDialog.vue": 1,
-      "components/video-list/SubtitlePreviewModal.vue": 1
-    },
+    "wording": {},
     "buttons": {
-      "components/AddTagDialog.vue": 6,
-      "components/CollectionSuggestionPanel.vue": 7,
-      "components/LocalMetadataDialog.vue": 2,
-      "components/MetadataBatchEditDialog.vue": 9,
-      "components/PreviewDrawer.vue": 53,
-      "components/RelatedVideoItem.vue": 2,
-      "components/ScanDialog.vue": 5,
-      "components/SubtitleWorkbench.vue": 22,
-      "components/TonightPickerDialog.vue": 3,
-      "components/VersionCompareDialog.vue": 11,
-      "components/VersionGroupDialog.vue": 10,
-      "components/VersionGroupPanel.vue": 7,
-      "components/player/InlineVideoPlayer.vue": 2,
-      "components/video-list/EnhanceDialog.vue": 9,
-      "components/video-list/RenameDialogs.vue": 4,
-      "components/video-list/SaveViewDialog.vue": 5,
-      "components/video-list/SubtitleGenerateDialog.vue": 20,
-      "components/video-list/SubtitlePreviewModal.vue": 1,
-      "components/video-list/SubtitleTranslateDialog.vue": 9
+      "components/VersionCompareDialog.vue": 4,
+      "components/VersionGroupPanel.vue": 2,
+      "components/video-list/SaveViewDialog.vue": 3
     }
   }
 }

@@ -76,7 +76,7 @@ describe('手动目录扫描实时进度', () => {
     expect(wrapper.vm.scanProgress.found).toBe(2);
     expect(wrapper.vm.scanDirectory).toBe('/share/videos');
     expect(wrapper.text()).toContain('后台继续');
-    expect(wrapper.findAll('button')[0].element.disabled).toBe(true);
+    expect(wrapper.get('[data-test="scan-select-dir"]').element.disabled).toBe(true);
     await wrapper.vm.startScan();
     expect(api.SyncDirectoryWithProgress).toHaveBeenCalledOnce();
     scan.resolve({ scanned: 0, errors: [] });
