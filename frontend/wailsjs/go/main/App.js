@@ -1014,10 +1014,6 @@ export function ListMovieChartYears() {
   return window['go']['main']['App']['ListMovieChartYears']();
 }
 
-export function ListMovieVideoLinks(arg1) {
-  return window['go']['main']['App']['ListMovieVideoLinks'](arg1);
-}
-
 export function ListPeople(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListPeople'](arg1, arg2, arg3, arg4);
 }

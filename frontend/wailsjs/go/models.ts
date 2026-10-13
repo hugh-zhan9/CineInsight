@@ -7924,24 +7924,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class LinkedVideoView {
-	    video_id: number;
-	    name: string;
-	    display_title: string;
-	    is_watched: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new LinkedVideoView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.video_id = source["video_id"];
-	        this.name = source["name"];
-	        this.display_title = source["display_title"];
-	        this.is_watched = source["is_watched"];
-	    }
-	}
 	export class LocalMetadataResolution {
 	    normalized_name: string;
 	    mode: string;

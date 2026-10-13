@@ -511,8 +511,6 @@ export function ListMovieChart(arg1:number,arg2:string,arg3:number,arg4:boolean)
 
 export function ListMovieChartYears():Promise<Array<number>>;
 
-export function ListMovieVideoLinks(arg1:string):Promise<Array<services.LinkedVideoView>>;
-
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
 
 export function ListPeopleByCount(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number):Promise<Array<services.PersonListItem>>;

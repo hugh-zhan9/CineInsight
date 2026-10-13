@@ -140,15 +140,6 @@ func (a *App) UnlinkMovieVideo(doubanID string, videoID uint) error {
 	return service.UnlinkMovieVideo(doubanID, videoID)
 }
 
-// ListMovieVideoLinks 返回某个豆瓣 ID 已关联的片库视频，「在片库打开」用。
-func (a *App) ListMovieVideoLinks(doubanID string) ([]services.LinkedVideoView, error) {
-	service := a.movieChartService()
-	if service == nil {
-		return nil, errors.New("年度榜单服务不可用")
-	}
-	return service.ListMovieVideoLinks(doubanID)
-}
-
 // SuggestLibraryMatchesBatch 一次扫描匹配多个查询，返回 "片名|年份" → 建议列表
 // （键与 services.LibraryMatchKey 一致，每个查询都有键）。榜单一页几十张卡片用它，
 // 不要逐条调单条接口。
