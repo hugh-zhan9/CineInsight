@@ -579,13 +579,8 @@ func (a *App) DeleteDirectory(id uint) error {
 		return fmt.Errorf("扫描目录不存在: %d", id)
 	}
 
-	marked, err := a.videoService.MarkVideosStaleUnderRemovedRoot(removedPath, remaining)
-	if err != nil {
-		log.Printf("API DeleteDirectory mark stale id=%d path=%s err=%v", id, removedPath, err)
-		return err
-	}
-
-	err = a.directoryService.DeleteDirectory(id)
+	// 标失效与删配置一起做，并与进行中的扫描对账串行（RemoveScanRoot）。
+	marked, err := a.videoService.RemoveScanRoot(removedPath, remaining, func() error { return a.directoryService.DeleteDirectoryLocked(id) })
 	if err == nil {
 		a.reconfigureLibraryWatcher()
 	}

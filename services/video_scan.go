@@ -352,6 +352,9 @@ func (s *VideoService) SyncDirectoryWithProgress(dir string, progress func(Direc
 	return s.syncScanDirectories([]models.ScanDirectory{{Path: dir}}, false, progress)
 }
 
+// videoSyncAfterLock 只给测试用：对账拿到 scanSyncMu 之后调用，用来卡住一轮进行中的对账。
+var videoSyncAfterLock func()
+
 func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcileOrphans bool, progress func(DirectoryScanProgress)) *ScanSyncResult {
 	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
 	// 维护围栏生效（恢复 / 切换，含「待重启」终态）时不等路径锁，直接如实报错（修复 I m1）。
@@ -363,6 +366,9 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 	defer unlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
+	if videoSyncAfterLock != nil {
+		videoSyncAfterLock()
+	}
 
 	scannedByPath := make(map[string]ScannedFile)
 	existingByPath := make(map[string]models.Video)
@@ -884,6 +890,25 @@ func (s *VideoService) MarkVideosStaleUnderRemovedRoot(removedRoot string, remai
 	}
 	defer unlock()
 	return markVideosStaleUnderRemovedRoot(removedRoot, remainingRoots)
+}
+
+// RemoveScanRoot 删除视频扫描目录：先把只属于它的视频标为失效，再调 deleteConfig 删配置行；标记失败就不删。
+// 两步与扫描对账用同一把 scanSyncMu 串行：进行中的对账（例如加目录后的后台恢复扫描）拿着删除前的目录配置，
+// 与删除交错时会把刚标失效的记录又恢复（2026-10-13 与图片侧同一根因）。deleteConfig 在持锁期间调用，
+// 不得再去拿路径锁（用 DirectoryService.DeleteDirectoryLocked）。
+func (s *VideoService) RemoveScanRoot(removedRoot string, remainingRoots []string, deleteConfig func() error) (int64, error) {
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	s.scanSyncMu.Lock()
+	defer s.scanSyncMu.Unlock()
+	marked, err := markVideosStaleUnderRemovedRoot(removedRoot, remainingRoots)
+	if err != nil {
+		return marked, err
+	}
+	return marked, deleteConfig()
 }
 
 // markVideosStaleUnderRemovedRoot 是不加锁的实现，调用方负责持有 libraryPathMutationMu。

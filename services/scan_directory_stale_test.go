@@ -420,3 +420,90 @@ func TestBrowserDownloadImportIgnoresUnrelatedScanErrors(t *testing.T) {
 		t.Fatal("产物没进库时应当报失败")
 	}
 }
+
+// 删目录与进行中的对账交错（加目录后的后台恢复扫描还没跑完就删了目录）：删除要等那一轮对账结束再标失效，
+// 否则对账拿着删除前的配置把刚标失效的图片又恢复成正常（2026-10-13 TestDeleteImageDirectoryHidesItsImages 偶发失败的根因）。
+func TestRemoveImageDirectoryWaitsForInFlightSync(t *testing.T) {
+	setupImageServiceTestDB(t)
+	root := t.TempDir()
+	imagePath := filepath.Join(root, "photo.jpg")
+	if err := os.WriteFile(imagePath, []byte("jpeg-bytes"), 0o644); err != nil {
+		t.Fatalf("造图片文件失败: %v", err)
+	}
+	svc := &ImageService{}
+	dir := imageTestMustAddDirectory(t, svc, root)
+	imageTestMustSync(t, svc)
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	imageSyncAfterConfigRead = func() { close(entered); <-release }
+	t.Cleanup(func() { imageSyncAfterConfigRead = nil })
+	syncDone := make(chan error, 1)
+	go func() { _, err := svc.SyncImageDirectories(); syncDone <- err }()
+	<-entered
+	imageSyncAfterConfigRead = nil
+
+	removeDone := make(chan error, 1)
+	go func() { _, err := svc.RemoveImageDirectory(dir.ID, root, nil); removeDone <- err }()
+	select {
+	case err := <-removeDone:
+		t.Fatalf("删除目录不该在对账进行中完成: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-syncDone; err != nil {
+		t.Fatalf("对账失败: %v", err)
+	}
+	if err := <-removeDone; err != nil {
+		t.Fatalf("删除图片目录失败: %v", err)
+	}
+	var image models.Image
+	if err := database.DB.Unscoped().Where("path = ?", imagePath).First(&image).Error; err != nil {
+		t.Fatalf("记录应当还在: %v", err)
+	}
+	if !image.IsStale {
+		t.Fatal("对账结束后再删目录，图片应当标为失效")
+	}
+}
+
+// 视频侧同一根因：删扫描目录要等进行中的对账结束，标失效与删配置在同一把 scanSyncMu 下完成。
+func TestRemoveScanRootWaitsForInFlightSync(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	// 文件真实存在：对账不会把它当失踪软删，只有删目录的标记能让它失效。
+	if err := os.WriteFile(filepath.Join(root, "a.mp4"), []byte("video-bytes"), 0o644); err != nil {
+		t.Fatalf("造视频文件失败: %v", err)
+	}
+	video := createStaleTestVideo(t, filepath.Join(root, "a.mp4"))
+	svc := &VideoService{}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	videoSyncAfterLock = func() { close(entered); <-release }
+	t.Cleanup(func() { videoSyncAfterLock = nil })
+	syncDone := make(chan struct{})
+	go func() { svc.SyncDirectoryWithProgress(root, nil); close(syncDone) }()
+	<-entered
+	videoSyncAfterLock = nil
+
+	deleted := false
+	removeDone := make(chan error, 1)
+	go func() {
+		_, err := svc.RemoveScanRoot(root, nil, func() error { deleted = true; return nil })
+		removeDone <- err
+	}()
+	select {
+	case err := <-removeDone:
+		t.Fatalf("删除扫描目录不该在对账进行中完成: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-syncDone
+	if err := <-removeDone; err != nil {
+		t.Fatalf("删除扫描目录失败: %v", err)
+	}
+	if !deleted {
+		t.Fatal("标记成功后应当删配置行")
+	}
+	if !reloadVideo(t, video.ID).IsStale {
+		t.Fatal("对账结束后再删目录，视频应当标为失效")
+	}
+}
