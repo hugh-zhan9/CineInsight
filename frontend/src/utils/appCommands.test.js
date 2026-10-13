@@ -427,7 +427,7 @@ describe('命令面板快捷键与其他对话框（D-UD-03）', () => {
     mixins: [appCommandsMixin],
     components: { CommandPalette, BaseModal },
     data() {
-      return { currentPage: 'videos', startupError: '', otherDialog: false };
+      return { currentPage: 'videos', startupError: '', otherDialog: false, drawerOpen: false };
     },
     methods: {
       debugLog: vi.fn(),
@@ -439,6 +439,7 @@ describe('命令面板快捷键与其他对话框（D-UD-03）', () => {
     template: `<div>
       <CommandPalette :open="commandPaletteOpen" :open-video="openVideo" @close="closeCommandPalette" />
       <BaseModal v-if="otherDialog" data-test="other-dialog" @close="otherDialog = false"><p>别的对话框</p></BaseModal>
+      <aside v-if="drawerOpen" role="dialog" aria-modal="false" data-test="non-modal-drawer">抽屉</aside>
     </div>`
   };
 
@@ -496,6 +497,21 @@ describe('命令面板快捷键与其他对话框（D-UD-03）', () => {
 
     await wrapper.setData({ otherDialog: false });
     press(cmdK);
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+  });
+
+  it('a non-modal panel open (aria-modal="false", e.g. the library drawer or a popover): ⌘K and ⌘⇧P still work', async () => {
+    const wrapper = mountPaletteHost();
+    await wrapper.setData({ drawerOpen: true });
+    const k = press(cmdK);
+    await flushPromises();
+    expect(k.defaultPrevented).toBe(true);
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+    press(cmdK);
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+    press(cmdShiftP);
     await flushPromises();
     expect(wrapper.vm.commandPaletteOpen).toBe(true);
   });

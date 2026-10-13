@@ -205,12 +205,13 @@ function isCleanupHotkey(event) {
   return isLetterKey(event, 'k');
 }
 
-// 面板以外有对话框或浮层开着：对话框（role="dialog"，含 BaseModal / DialogShell、抽屉、查看器、浮层）、
+// 面板以外有模态的东西开着：对话框（role="dialog"，含 BaseModal / DialogShell、查看器、自制遮罩）、
 // 任何 aria-modal="true" 的遮罩（如待重启遮罩），或应用内确认框还没答复（读 feedbackState，不依赖它渲染出 DOM）。
+// 明确标了 aria-modal="false" 的非模态面板（片库详情抽屉、浮层）不拦：原先 ⌘⇧P 在它们开着时也能用。
 // 调用方先排除「命令面板自己开着」的情况，面板的 BaseModal 同样带 role="dialog"。
 function otherDialogOpen() {
   if (feedbackState.confirm) return true;
-  return Boolean(document.querySelector('[role="dialog"], [aria-modal="true"]'));
+  return Boolean(document.querySelector('[role="dialog"]:not([aria-modal="false"]), [aria-modal="true"]'));
 }
 
 export const appCommandsMixin = {

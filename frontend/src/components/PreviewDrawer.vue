@@ -1,5 +1,5 @@
 <template>
-  <aside class="preview-drawer" role="dialog" aria-label="媒体详情抽屉">
+  <aside class="preview-drawer" role="dialog" aria-modal="false" aria-label="媒体详情抽屉">
     <div class="preview-drawer__header glass-drawer-header">
       <div class="preview-drawer__heading">
         <button v-if="canGoBack" type="button" class="btn-secondary btn-compact" @click="requestGoBack">返回</button>
