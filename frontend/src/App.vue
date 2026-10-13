@@ -5,7 +5,7 @@
         <h1>析微影策</h1>
       </div>
       <!-- 顶栏两套导航（D-UI-02、D-UI-09）：区域由当前页面推出，只显示这一侧的导航；组间分隔，
-           「片单」收成下拉；「下载」只在开启浏览器插件桥接时出现。页面清单与命令面板同一份
+           「片单」是一个页面（D-P2-04，不再是下拉）；「下载」只在开启浏览器插件桥接时出现。页面清单与命令面板同一份
            （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的三项是动作：
            执行命令面板里同 ID 的既有命令，打开待处理、清理中心与任务中心。
            导航项是 .btn .btn--ghost，尺寸与选中态由下面的 .header .nav-btn 收窄。 -->
@@ -18,46 +18,26 @@
           <span v-if="index > 0" class="header-nav__divider" aria-hidden="true"></span>
           <div class="header-nav__group" role="group" :aria-label="group.label" :data-test="`nav-group-${group.key}`">
             <button
-              v-if="group.menu"
+              v-for="page in group.pages"
+              :key="page.key"
               type="button"
-              :class="['btn', 'btn--ghost', 'nav-btn', { active: group.pages.some(page => page.key === currentPage) }]"
-              aria-haspopup="menu"
-              :aria-expanded="navMenu && navMenu.key === group.key ? 'true' : 'false'"
-              :data-test="`nav-menu-${group.key}`"
-              @click="toggleNavMenu(group, $event)"
-            >{{ group.label }}<span class="nav-btn__caret" aria-hidden="true">▾</span></button>
-            <template v-else>
-              <button
-                v-for="page in group.pages"
-                :key="page.key"
-                type="button"
-                :class="['btn', 'btn--ghost', 'nav-btn', { active: currentPage === page.key }]"
-                :data-test="page.command ? `open-${page.key}` : `nav-${page.key}`"
-                :aria-label="page.key === 'task-center' ? `${page.label}${taskIndicatorStatus}` : undefined"
-                @click="selectNavItem(page)"
-              >
-                {{ page.label }}
-                <span v-if="page.key === 'pending-work' && pendingWorkTotal > 0" class="header-badge" data-test="pending-work-badge">{{ badgeText(pendingWorkTotal) }}</span>
-                <!-- 任务指示（D-UD-11）：有任务在跑时转圈 + 数量，上一轮有失败时右上角红点；点开任务中心。 -->
-                <template v-if="page.key === 'task-center'">
-                  <AppSpinner v-if="taskCenterBadge.running > 0" class="header-task-spinner" :size="16" data-test="task-center-spinner" />
-                  <AppBadge v-if="taskCenterBadge.running > 0" tone="accent" :count="taskCenterBadge.running" data-test="task-center-badge" />
-                  <span v-if="taskCenterBadge.failed" class="header-dot" role="img" aria-label="有任务上一轮失败" data-test="task-center-failed-dot"></span>
-                </template>
-              </button>
-            </template>
+              :class="['btn', 'btn--ghost', 'nav-btn', { active: currentPage === page.key }]"
+              :data-test="page.command ? `open-${page.key}` : `nav-${page.key}`"
+              :aria-label="page.key === 'task-center' ? `${page.label}${taskIndicatorStatus}` : undefined"
+              @click="selectNavItem(page)"
+            >
+              {{ page.label }}
+              <span v-if="page.key === 'pending-work' && pendingWorkTotal > 0" class="header-badge" data-test="pending-work-badge">{{ badgeText(pendingWorkTotal) }}</span>
+              <!-- 任务指示（D-UD-11）：有任务在跑时转圈 + 数量，上一轮有失败时右上角红点；点开任务中心。 -->
+              <template v-if="page.key === 'task-center'">
+                <AppSpinner v-if="taskCenterBadge.running > 0" class="header-task-spinner" :size="16" data-test="task-center-spinner" />
+                <AppBadge v-if="taskCenterBadge.running > 0" tone="accent" :count="taskCenterBadge.running" data-test="task-center-badge" />
+                <span v-if="taskCenterBadge.failed" class="header-dot" role="img" aria-label="有任务上一轮失败" data-test="task-center-failed-dot"></span>
+              </template>
+            </button>
           </div>
         </template>
       </nav>
-      <BaseMenu
-        v-if="navMenu"
-        :anchor="navMenu.anchor"
-        :items="navMenuItems"
-        :min-width="160"
-        :label="navMenu.label"
-        @select="navigateTo($event.id)"
-        @close="navMenu = null"
-      />
       <!-- 观看区右侧：待播队列与「管理」入口，待处理数量作为角标挂在「管理」上（D-UI-02）。 -->
       <div v-if="!startupError && area === 'viewer'" class="header-tools">
         <button type="button" class="btn btn--secondary btn--sm header-tool-btn" data-test="open-playback-queue" @click="playbackQueueOpen = true">待播队列</button>
@@ -144,7 +124,6 @@
         @open-video-edit="openVideoEditProject"
       />
 
-      <ViewingNotesPage v-if="notesMounted" v-show="currentPage === 'viewing-notes'" :page-active="currentPage === 'viewing-notes'" @open-bookmark="openBookmark($event, { from: 'viewing-notes' })" @open-video="openVideo($event, { from: 'viewing-notes' })" @open-video-id="openVideoByID($event, { from: 'viewing-notes' })" />
       <!-- 观看回顾：首次进入才挂载，之后只隐藏；不可见时停掉实时刷新。 -->
       <RecapPage
         v-if="recapMounted"
@@ -157,12 +136,20 @@
         @navigate="navigateTo"
       />
       <DownloadsPage v-if="currentPage === 'downloads'" />
-      <WatchlistPage v-if="currentPage === 'watchlist'" />
-      <!-- 按需挂载：榜单页一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），
-           不在这个页面时不该有那个副作用，所以用 v-if 而不是 v-show。 -->
-      <MovieChartPage v-if="currentPage === 'movie-chart'" />
-      <!-- 已看页只读一次本地标记表，进页面才挂载就够了；切回来重新读，不用自己做失效。 -->
-      <WatchedMoviesPage v-if="currentPage === 'watched-movies'" @navigate="navigateTo" @open-video="openVideo($event, { from: 'watched-movies' })" />
+      <!-- 片单（D-P2-04）：想看 · 榜单 · 观影记录 · 观看笔记四个标签。首次进入才挂载，之后只隐藏（观看笔记的
+           编辑与翻页状态要留着）；各标签何时挂载、何时卸载由 ListsPage 按原来四页的做法管。当前标签是页面参数
+           listsTab，别名 key（watchlist 等）由 navigateTo 换成它。 -->
+      <ListsPage
+        v-if="listsMounted"
+        v-show="currentPage === 'lists'"
+        :page-active="currentPage === 'lists'"
+        :tab="listsTab"
+        @update:tab="navigateTo('lists', { tab: $event })"
+        @navigate="navigateTo"
+        @open-video="openVideo($event, { from: 'lists' })"
+        @open-video-id="openVideoByID($event, { from: 'lists' })"
+        @open-bookmark="openBookmark($event, { from: 'lists' })"
+      />
 
       <SettingsPage
         ref="settingsPage"
@@ -299,15 +286,12 @@ import InsightsPage from './components/InsightsPage.vue';
 import DataCarePage from './components/DataCarePage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
 import DownloadsPage from './components/DownloadsPage.vue';
-import WatchlistPage from './components/WatchlistPage.vue';
-import MovieChartPage from './components/MovieChartPage.vue';
-import WatchedMoviesPage from './components/WatchedMoviesPage.vue';
-import ViewingNotesPage from './components/ViewingNotesPage.vue';
 import RecapPage from './components/RecapPage.vue';
 import ScenesPage from './components/ScenesPage.vue';
 import VideoWorkbenchPage from './components/VideoWorkbenchPage.vue';
 import HomePage from './components/viewer/HomePage.vue';
 import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
+import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
@@ -317,7 +301,6 @@ import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
 import VersionCompareDialog from './components/VersionCompareDialog.vue';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
-import BaseMenu from './components/ui/BaseMenu.vue';
 import DialogShell from './components/ui/DialogShell.vue';
 import AppBadge from './components/ui/AppBadge.vue';
 import AppSpinner from './components/ui/AppSpinner.vue';
@@ -326,7 +309,8 @@ import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import {
-  appCommandsMixin, isNavPageVisible, MANAGE_NAV_GROUPS, pageArea, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
+  appCommandsMixin, DEFAULT_LIST_TAB, isListTab, isNavPageVisible, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea, resolvePageRoute,
+  VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
 } from './utils/appCommands.js';
 import { findCommand } from './utils/commandRegistry.js';
 import { opensVideoDetail, popDetailReturn, pushDetailReturn, restoreScrollWhenReachable } from './utils/viewerNavigation.js';
@@ -348,9 +332,9 @@ export default {
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
-    VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
-    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
-    BaseMenu, DialogShell, AppBadge, AppSpinner, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
+    VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
+    AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
+    DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoDetailPage, ManageHomePage
   },
   data() {
@@ -358,9 +342,10 @@ export default {
       // 默认落在观看首页（D-UI-01、D-UI-09）；片库页仍常挂载，只是不再是默认可见页。
       currentPage: 'home',
       playbackQueueOpen: false,
-      // 顶栏「片单」下拉：{ key, label, anchor }，关着为 null。
-      navMenu: null,
       homeMounted: false,
+      // 片单（D-P2-04）：首次进入才挂载；当前标签是这一页的参数（navigateTo('lists', { tab })），默认「想看」。
+      listsMounted: false,
+      listsTab: DEFAULT_LIST_TAB,
       // 整页详情的参数（D-UI-05）：token 每次打开或返回都换，让详情页重新挂载。
       detailRoute: { videoId: 0, startAtMs: null, bookmark: null, token: 0 },
       // 整页详情的返回栈（D-UI-10）：[{ page, params, scrollTop }]，规则见 utils/viewerNavigation.js。
@@ -369,7 +354,6 @@ export default {
       versionCompare: versionCompareState,
       // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
       photosMounted: false,
-      notesMounted: false,
       recapMounted: false,
       scenesMounted: false,
       // 片库带过来的场景检索范围：{ filter, token }；为空表示全部视频。
@@ -505,11 +489,10 @@ export default {
       handler(page) {
         if (page === 'home') this.homeMounted = true;
         if (page === 'photos' || page === 'photos-manage') this.photosMounted = true;
-        if (page === 'viewing-notes') this.notesMounted = true;
+        if (page === LISTS_PAGE) this.listsMounted = true;
         if (page === 'recap') this.recapMounted = true;
         if (page === 'scenes') this.scenesMounted = true;
         if (page === 'video-workbench') this.workbenchMounted = true;
-        this.navMenu = null;
         // 返回栈只在整页详情上用得到：落到任何别的页面（包括进管理区）就清空（D-UI-10）。
         // 留着的层再也回不去——别的页面没有「返回」，从那里再开一部片会重新压栈。
         if (page !== VIDEO_DETAIL_PAGE) this.detailReturnStack = [];
@@ -538,10 +521,6 @@ export default {
       return (this.area === 'manage' ? MANAGE_NAV_GROUPS : VIEWER_NAV_GROUPS)
         .map(group => ({ ...group, pages: group.pages.filter(page => isNavPageVisible(page, this.settings)) }))
         .filter(group => group.pages.length > 0);
-    },
-    navMenuItems() {
-      const group = this.visibleNavGroups.find(item => item.key === this.navMenu?.key);
-      return (group?.pages || []).map(page => ({ id: page.key, label: page.label, checked: page.key === this.currentPage }));
     },
     // 「视频」与「片库管理」、「图片」与「图片管理」各是同一个常挂载实例的两个入口。
     libraryPageVisible() {
@@ -606,8 +585,15 @@ export default {
     // 所有切页都走这里（顶栏、命令面板、待处理工作台、图片页的「去设置」）。设置页有未保存修改时
     // 先确认「放弃未保存的设置修改？」（D-PC57、APP-08）：SettingsPage 是 v-if，切走即销毁表单。
     // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
-    navigateTo(page) {
-      if (!page || page === this.currentPage) return true;
+    // params 是页面参数（目前只有片单的 { tab }）；片单的四个别名 key 先换成 `lists` + 标签（D-P2-04），
+    // 已在片单上时只换标签。
+    navigateTo(target, targetParams = null) {
+      const { page, params } = resolvePageRoute(target, targetParams);
+      if (!page) return true;
+      if (page === this.currentPage) {
+        this.applyPageParams(page, params);
+        return true;
+      }
       // 存储体检正在移到废纸篓：撤销条与「不支持废纸篓」二选一都挂在洞察页上，切走会丢掉它们，
       // 删除结果也就传不回片库（与图片清理页删除进行中不能离开同一做法）。
       if (this.currentPage === 'insights' && this.insightsBusy) {
@@ -624,21 +610,32 @@ export default {
         }).then(ok => {
           if (!ok) return false;
           this.settingsDirty = false;
-          this.commitPage(page);
+          this.commitPage(page, params);
           return true;
         });
       }
-      this.commitPage(page);
+      this.commitPage(page, params);
       return true;
     },
     // 真正切页的唯一出口：顺带作废还在取视频的「打开一部片」（M-1），用户已经去了别处，取回来也不再把人拽回去。
-    commitPage(page) {
+    commitPage(page, params = null) {
       this.supersedeVideoOpen();
       // 上一页还没放回去的滚动位置不能落到新页面上。
       this._cancelScrollRestore?.();
       this._cancelScrollRestore = null;
       this._pendingDetailScrollTop = null;
+      this.applyPageParams(page, params);
       this.currentPage = page;
+    },
+    // 页面参数落到页面状态上：片单的标签（认不出的标签忽略，留在原来的标签上）。
+    applyPageParams(page, params) {
+      if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
+    },
+    // 当前页面的参数（整页详情返回栈记下来源时用）。
+    currentPageParams() {
+      if (this.currentPage === VIDEO_DETAIL_PAGE) return { videoId: this.detailRoute.videoId };
+      if (this.currentPage === LISTS_PAGE) return { tab: this.listsTab };
+      return null;
     },
     // 「打开一部片」的代次：每次新的打开、每次切页都换代，取完视频还是这一代才继续。
     supersedeVideoOpen() {
@@ -818,7 +815,7 @@ export default {
       const start = Number(startAtMs);
       const source = {
         page: this.currentPage,
-        params: this.currentPage === VIDEO_DETAIL_PAGE ? { videoId: this.detailRoute.videoId } : null,
+        params: this.currentPageParams(),
         scrollTop: this.$refs.mainView?.scrollTop || 0
       };
       return whenNavigated(this.navigateTo(VIDEO_DETAIL_PAGE), () => {
@@ -854,7 +851,7 @@ export default {
       this.detailReturnStack = stack;
       if (!entry) return this.navigateTo('home');
       if (entry.page === VIDEO_DETAIL_PAGE) return this.showVideoDetail(entry.params.videoId, { scrollTop: entry.scrollTop });
-      if (this.navigateTo(entry.page) === false) return false;
+      if (this.navigateTo(entry.page, entry.params) === false) return false;
       await this.$nextTick();
       if (this.$refs.mainView) this._cancelScrollRestore = restoreScrollWhenReachable(this.$refs.mainView, entry.scrollTop);
       return true;
@@ -871,13 +868,6 @@ export default {
     // 首页「本月常看的人物」：沿用命令面板打开实体的入口。payload 为 { id, name }。
     openPerson(person) {
       return this.openRecapEntity({ type: 'person', id: person?.id, name: person?.name });
-    },
-    toggleNavMenu(group, event) {
-      if (this.navMenu?.key === group.key) {
-        this.navMenu = null;
-        return;
-      }
-      this.navMenu = { key: group.key, label: group.label, anchor: event?.currentTarget || null };
     },
     // 顶栏一项：页面就切页；动作（待处理、清理中心、任务中心）执行命令面板里同 ID 的既有命令。
     selectNavItem(item) {
@@ -1064,9 +1054,6 @@ export default {
 .header .nav-btn:hover:not(:disabled) { color: var(--text-primary); background: var(--panel-muted-bg); }
 .header .nav-btn.active,
 .header .nav-btn.active:hover:not(:disabled) { color: var(--accent-on); background: var(--accent-color); font-weight: var(--fw-semibold); }
-
-/* 「片单」下拉按钮的箭头；管理侧动作项（待处理、任务中心）沿用右侧入口的角标与红点。 */
-.nav-btn__caret { margin-left: -2px; font-size: var(--fs-caption); opacity: 0.7; }
 
 /* 顶栏分组（D-PC59、D-UI-02）：组内按钮紧挨，组间一条竖向发丝线。 */
 .header-nav__group { display: flex; gap: 2px; align-items: center; }

@@ -54,3 +54,18 @@ it('reactivation during pending pagination reads only its last committed cursor'
   await wrapper.setProps({ pageActive: false }); await wrapper.setProps({ pageActive: true }); await flushPromises(); finish({ items: [item(25, '2024-01-01')], has_more: true }); await pending;
   expect(wrapper.vm.items[0].id).toBe(51); expect(wrapper.vm.cursor).toBeNull(); expect(wrapper.vm.cursors).toEqual([]);
 });
+
+it('embedded（嵌在片单页里）不显示自己的页头，分区页签与「手动补记」留在本页一行里', async () => {
+  const wrapper = shallowMount(ViewingNotesPage, { props: { embedded: true }, global: { stubs: { AppTabs: false } } });
+  await flushPromises();
+  expect(wrapper.findComponent({ name: 'PageHeader' }).exists()).toBe(false);
+  expect(wrapper.classes()).not.toContain('page-content');
+  await wrapper.get('[data-test="notes-tab-bookmarks"]').trigger('click');
+  expect(wrapper.vm.tab).toBe('bookmarks');
+  await wrapper.get('[data-test="diary-add"]').trigger('click');
+  expect(wrapper.getComponent(DiaryEditor).props('entry')).toEqual({});
+  const standalone = shallowMount(ViewingNotesPage);
+  await flushPromises();
+  expect(standalone.findComponent({ name: 'PageHeader' }).exists()).toBe(true);
+  expect(standalone.find('.notes-embedded-bar').exists()).toBe(false);
+});
