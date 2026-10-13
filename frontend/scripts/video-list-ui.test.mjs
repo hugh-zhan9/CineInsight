@@ -79,7 +79,9 @@ assert.match(toolbarSource, /activeConditionLabels/, 'the result bar should spel
 assert.match(videoListSource, /CountLibraryVideos/, 'the result bar count should come from the backend filter count');
 // 选择操作条（D-UD-10）：批量动作只在有选中时出现，用全站同一个 SelectionBar，由片库页放在内容区底部。
 assert.match(batchBarSource, /<SelectionBar\s+class="selection-toolbar"/, 'batch actions should live in the shared selection bar');
-assert.match(videoListSource, /<BatchActionBar\b[\s\S]*?:total-matching="matchingTotal"[\s\S]*?@select-all-matching="selectAllMatching"/, 'the library page hosts the selection bar with the real result count');
+assert.match(videoListSource, /<BatchActionBar\b[\s\S]*?:total-matching="selectAllScope\.total"[\s\S]*?@select-all-matching="selectAllMatching"/, 'the library page hosts the selection bar with the real result count');
+// I-1：工具栏的「全选当前结果（N）」与选择操作条用同一个范围（selectAllScope）。
+assert.match(videoListSource, /<LibraryToolbar\b[\s\S]*?:select-all-total="selectAllScope\.total"[\s\S]*?@toggle-select-all="toggleSelectAllMatching"/, 'the toolbar select-all shares the selection bar scope');
 assert.doesNotMatch(toolbarSource, /<BatchActionBar\b/, 'the sticky toolbar no longer carries batch actions');
 assert.match(videoListSource, /@click="runIncrementalScan"|case 'scan-incremental': this\.runIncrementalScan\(\)/, 'video list should expose a manual incremental scan action');
 assert.match(incrementalScanSource, /SyncScanDirectories/, 'manual incremental scan should reuse the backend sync API');

@@ -10,7 +10,7 @@ vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), notify: vi.fn(), notifyError: vi.fn() }));
 vi.mock('./TrashCenterDialog.vue', async (importOriginal) => ({ ...(await importOriginal()), default: { name: 'TrashCenterDialog', template: '<div />' } }));
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
-import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
+import { clearToasts, feedbackState, notify, runToastAction } from '../utils/feedback.js';
 import * as recentOperations from '../utils/recentOperations.js';
 const target = { kind: 'image', personID: 7, media: { id: 11, name: 'photo.jpg', path: '/photos/photo.jpg', size: 1024 } };
 const okResult = (ids, batchID = 'b1') => ({ batch_id: batchID, items: ids.map(id => ({ id, code: 'ok' })) });
@@ -107,6 +107,24 @@ describe('PersonMediaDeleteDialog', () => {
     expect(recentOperations.list().map(item => item.id)).toEqual([entry.id]);
   });
 
+  // M-4：这批已经在回收站里恢复过了（恢复 0 项、也没有失败）：记录移除并说一声，宿主以回收站为准重读。
+  it('这批已经从回收站恢复过：撤销时提示「这批已经恢复过了」，「最近操作」移除这一条', async () => {
+    api.DeleteImagesWithResult.mockResolvedValueOnce(okResult([11], 'batch-done'));
+    api.RestoreTrashBatch.mockResolvedValueOnce({ items: [] });
+    const onRestored = vi.fn();
+    const w = await mountLive({ onRestored });
+    await body().get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    clearToasts(); await flushPromises();
+    w.unmount();
+
+    const [entry] = recentOperations.list();
+    expect(await recentOperations.undo(entry.id)).toBe(true);
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-done');
+    expect(notify).toHaveBeenCalledWith('这批已经恢复过了');
+    expect(onRestored.mock.calls).toEqual([[{ kind: 'image', ids: [] }]]);
+    expect(recentOperations.list()).toEqual([]);
+  });
+
   it('撤销有项没恢复时报「撤销失败」，宿主以回收站为准重读，「最近操作」留着可再试', async () => {
     api.DeleteImagesWithResult.mockResolvedValueOnce(okResult([11], 'batch-1'));
     api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 11, code: 'restore_conflict', message: '原位置已有同名文件' }] });
@@ -121,25 +139,34 @@ describe('PersonMediaDeleteDialog', () => {
     w.unmount();
   });
 
-  it('「删除前确认」关掉时不弹确认框，按「删除原文件」的设置直接移到废纸篓并给撤销提示', async () => {
+  // I-2：人物页 / 抽屉里删媒体一律先确认，不看「删除前确认」开关（按钮容易被当成「从人物名下拿掉」）；
+  // 框里「同时把原文件移到废纸篓」默认取「删除原文件」的设置。
+  it('「删除前确认」关掉时仍弹确认框；用户确认之前不调删除，勾选默认取「删除原文件」', async () => {
     api.GetSettings.mockResolvedValue({ confirm_before_delete: false, delete_original_file: true });
     api.DeleteImagesWithResult.mockResolvedValueOnce({ batch_id: 'b9', items: [{ id: 11, code: 'ok' }] });
     const w = await mountLive();
+    expect(body().get('[data-test="person-media-delete-dialog"]').text()).toContain('photo.jpg');
+    expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(true);
+    expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('移到废纸篓');
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
+    await body().get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], true, expect.any(String));
-    expect(body().find('[data-test="person-media-delete-dialog"]').exists()).toBe(false);
     expect(w.emitted('deleted')).toEqual([[target]]);
     expect(undoToast().message).toContain('已移到废纸篓 1 张图片');
     w.unmount();
   });
 
-  it('「删除前确认」关掉但没删掉时亮出确认框与原因，可以重试', async () => {
+  it('「删除前确认」关掉、取消确认框时什么都不删', async () => {
     api.GetSettings.mockResolvedValue({ confirm_before_delete: false, delete_original_file: false });
-    api.DeleteImagesWithResult.mockRejectedValueOnce('磁盘不可用').mockResolvedValueOnce(okResult([11]));
-    const w = await mountLive();
-    expect(body().get('[data-test="person-media-delete-dialog"] [role="alert"]').text()).toContain('磁盘不可用');
-    expect(w.emitted('deleted')).toBeUndefined();
-    await body().get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
-    expect(w.emitted('deleted')).toEqual([[target]]);
+    const video = { kind: 'video', personID: 7, media: { id: 21, name: 'clip.mp4', path: '/v/clip.mp4', size: 10 } };
+    const w = await mountLive({ target: video });
+    expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(false);
+    expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('从片库移除');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await flushPromises();
+    expect(w.emitted('close')).toHaveLength(1);
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
     w.unmount();
   });
 

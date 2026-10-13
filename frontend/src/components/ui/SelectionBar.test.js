@@ -1,7 +1,8 @@
 import { mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
+import { h } from 'vue';
 
-import SelectionBar from './SelectionBar.vue';
+import SelectionBar, { selectAllMatchingLabel } from './SelectionBar.vue';
 
 const mounted = [];
 function mountBar(props) {
@@ -86,5 +87,51 @@ describe('SelectionBar', () => {
     const wrapper = mountBar({ count: 0 });
     pressEscape();
     expect(wrapper.emitted('clear')).toBeUndefined();
+  });
+
+  // M-6：宿主页面被 v-show 藏起来（切到别的页面）时，那页的勾选还在，但 Esc 不能替看不见的页面清空。
+  it('Esc does nothing while the host page is hidden with v-show, and works again once it is shown', async () => {
+    const onClear = [];
+    const Host = {
+      props: { shown: Boolean },
+      render() {
+        return h('div', { style: this.shown ? {} : { display: 'none' } }, [
+          h('section', [h(SelectionBar, { count: 2, onClear: () => onClear.push(1) })])
+        ]);
+      }
+    };
+    const wrapper = mount(Host, { props: { shown: false }, attachTo: document.body });
+    mounted.push(wrapper);
+    expect(pressEscape().defaultPrevented).toBe(false);
+    expect(onClear).toHaveLength(0);
+
+    await wrapper.setProps({ shown: true });
+    expect(pressEscape().defaultPrevented).toBe(true);
+    expect(onClear).toHaveLength(1);
+  });
+
+  // M-6：清理审阅的勾选是审阅结果——宿主关掉 Esc 清空，「取消选择」照旧，也不再提示 Esc。
+  it('clear-on-escape=false ignores Esc and drops the Esc hint; 取消选择 still clears', async () => {
+    const wrapper = mountBar({ count: 2, clearOnEscape: false });
+    expect(pressEscape().defaultPrevented).toBe(false);
+    expect(wrapper.emitted('clear')).toBeUndefined();
+    expect(wrapper.get('[data-test="selection-bar-clear"]').text()).toBe('取消选择');
+    expect(wrapper.find('.ui-selection-bar__kbd').exists()).toBe(false);
+    await wrapper.get('[data-test="selection-bar-clear"]').trigger('click');
+    expect(wrapper.emitted('clear')).toHaveLength(1);
+  });
+
+  // M-2：宿主补取剩余的页时按钮禁用、写「正在选择…」。
+  it('while the host is selecting all, the link is disabled and says 正在选择…', () => {
+    const wrapper = mountBar({ count: 3, totalMatching: 120, selectingAll: true });
+    const link = wrapper.get('[data-test="selection-bar-select-all-matching"]');
+    expect(link.text()).toBe('正在选择…');
+    expect(link.attributes('disabled')).toBeDefined();
+  });
+
+  it('selectAllMatchingLabel is the one wording for the bar and the library toolbar', () => {
+    expect(selectAllMatchingLabel(20)).toBe('全选当前结果（20）');
+    expect(selectAllMatchingLabel(null)).toBe('全选当前结果');
+    expect(selectAllMatchingLabel(20, true)).toBe('正在选择…');
   });
 });

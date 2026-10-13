@@ -98,7 +98,8 @@ describe('失联数据面板（D-LD-*）', () => {
     await wrapper.get('[data-test="lost-selection-search"]').trigger('click');
     await flushPromises();
     expect(api.PreviewLostRelinkSearch).toHaveBeenCalledWith({ kind: 'video', directory: '/new', item_ids: [2] });
-    // 有勾选时，目录行上的按钮仍然只按整个目录处理，不跟着勾选变。
+    // 取消勾选后，目录行上的按钮按整个目录处理，不跟着勾选变。
+    await wrapper.get('[data-test="selection-bar-clear"]').trigger('click');
     await wrapper.get('[data-test="lost-dir-search"]').trigger('click');
     await flushPromises();
     expect(api.PreviewLostRelinkSearch).toHaveBeenLastCalledWith({ kind: 'video', directory: '/new', item_ids: [1, 2] });
@@ -106,6 +107,39 @@ describe('失联数据面板（D-LD-*）', () => {
     await wrapper.get('[data-test="lost-search-all"]').trigger('click');
     await flushPromises();
     expect(api.PreviewLostRelinkSearch).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  // I-3：勾了几条再点目录行上的「清除…」很容易以为只处理勾选的——有勾选时行上处理整个目录的按钮都禁用并说明，
+  // 别的目录不受影响；勾选清掉后照旧处理整个目录。
+  it('目录里有勾选时，这一行的「目录搬家」「从文件夹找回…」「清除…」禁用并提示用底部操作条；没勾选时照旧', async () => {
+    const twoDirs = report();
+    twoDirs.roots[0].directories.push({ directory: '/old/b', count: 1, size: 10, purgeable: 1, reasons: { missing: 1 }, samples: [] });
+    api.GetLostMediaReport.mockResolvedValueOnce(twoDirs);
+    api.PreviewLostPurge.mockResolvedValue({ kind: 'video', ids: [1, 2], count: 2, size: 20, not_purgeable: 0, skipped: {} });
+    const wrapper = await mountPanel();
+    const row = index => wrapper.findAll('[data-test="lost-directory"]')[index];
+    const rowButtons = index => ['lost-dir-move', 'lost-dir-search', 'lost-dir-purge'].map(name => row(index).get(`[data-test="${name}"]`));
+    await row(0).get('[data-test="lost-dir-expand"]').trigger('click');
+    await flushPromises();
+    expect(rowButtons(0).map(button => button.element.disabled)).toEqual([false, false, false]);
+    expect(row(0).get('[data-test="lost-dir-purge"]').attributes('title')).toContain('清除这个目录里全部 2 条');
+
+    await wrapper.findAll('[data-test="lost-item-toggle"]')[0].setValue(true);
+    expect(rowButtons(0).map(button => button.element.disabled)).toEqual([true, true, true]);
+    expect(rowButtons(0).map(button => button.attributes('title'))).toEqual(Array(3).fill('已勾选条目，请用底部操作条'));
+    // 别的目录没有勾选，不受影响。
+    expect(rowButtons(1).map(button => button.element.disabled)).toEqual([false, false, false]);
+    await row(0).get('[data-test="lost-dir-purge"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewLostPurge).not.toHaveBeenCalled();
+
+    // 取消勾选后，行上的「清除…」照旧处理整个目录。
+    await wrapper.get('[data-test="selection-bar-clear"]').trigger('click');
+    expect(rowButtons(0).map(button => button.element.disabled)).toEqual([false, false, false]);
+    await row(0).get('[data-test="lost-dir-purge"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2], confirm: '' });
     wrapper.unmount();
   });
 

@@ -460,8 +460,9 @@
     </EmptyState>
 
     <!-- 有勾选时才在底部浮出（D-UD-10）：「移到废纸篓」只作用于勾选的图片；不勾就没有删除。
-         这里不给「全选当前结果」：疑似重复要逐组看过才能勾（D-PC49），没有「整批全勾」这回事。 -->
-    <SelectionBar :count="selection.length" data-test="cleanup-selection-bar" @clear="clearSelection">
+         这里不给「全选当前结果」：疑似重复要逐组看过才能勾（D-PC49），没有「整批全勾」这回事。
+         勾选是审阅结果、不是临时选择：Esc 不清空（clear-on-escape=false），只有「取消选择」清。 -->
+    <SelectionBar :count="selection.length" :clear-on-escape="false" data-test="cleanup-selection-bar" @clear="clearSelection">
       <template #actions>
         <span class="cleanup-page__summary" data-test="cleanup-summary">移到废纸篓后，在访达清空废纸篓即可释放 {{ formatBytes(reclaimableBytes) }}</span>
         <!-- 「移出本组」「不是重复」的请求还没返回时不能删除（P-032 复审 I-1）：它们落地时会改组和勾选。 -->
@@ -1241,7 +1242,8 @@ export default {
         this.localError = `取消分析失败：${err}`;
       }
     },
-    // 选择操作条的「取消选择」与 Esc（D-UD-10）：清空两个区域的全部勾选。确认框打开着或删除进行中不动勾选。
+    // 选择操作条的「取消选择」（D-UD-10）：清空两个区域的全部勾选。确认框打开着或删除进行中不动勾选。
+    // Esc 不走这里：审阅勾选按一下 Esc 就没了代价太大（操作条传了 clear-on-escape=false）。
     clearSelection() {
       if (this.editLocked) return;
       this.review.selection = [];

@@ -110,6 +110,30 @@ describe('D-UD-07/09 撤销改为全局提示（undo-toast）', () => {
     wrapper.unmount();
   });
 
+  // 破坏性流程复审的探针（undo-older-batch）：先后删了两批，宿主卸下之后从「最近操作」撤销较早的那批——
+  // 只按那一批恢复、只执行一次（提示里再点也不重复），宿主照样收到 afterRestore；较晚那批的「撤销」原样留着。
+  it('撤销较早的一批：只恢复那一批、只执行一次，宿主卸下后照样回调；较晚那批的撤销不受影响', async () => {
+    const afterRestore = vi.fn().mockResolvedValue();
+    const wrapper = mountBanner({ afterRestore });
+    api.DeleteVideosWithResult
+      .mockResolvedValueOnce(result([{ id: 1, code: 'ok' }, { id: 2, code: 'ok' }], 'A'))
+      .mockResolvedValueOnce(result([{ id: 3, code: 'ok' }], 'B'));
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [1, 2], deleteFile: true }));
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [3], deleteFile: true }));
+    const [toastA, toastB] = feedbackState.toasts.filter(toast => toast.action?.label === '撤销');
+    const [opB, opA] = recentOperations.list();
+    wrapper.unmount();
+
+    api.RestoreTrashBatch.mockResolvedValue(result([{ id: 11, code: 'ok' }, { id: 12, code: 'ok' }], 'A'));
+    expect(await recentOperations.undo(opA.id)).toBe(true);
+    expect(await runToastAction(toastA.id)).toBe(true);
+    await flushPromises();
+    expect(api.RestoreTrashBatch.mock.calls).toEqual([['video', 'A']]);
+    expect(afterRestore).toHaveBeenCalledWith([1, 2], false);
+    expect(recentOperations.list().map(op => op.id)).toEqual([opB.id]);
+    expect(toastB.action.label).toBe('撤销');
+  });
+
   it('恢复调用失败时提示「撤销失败」，记录留在「最近操作」里可再试', async () => {
     api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 4, code: 'ok' }], 'b-t3'));
     const afterRestore = vi.fn().mockResolvedValue();
@@ -156,17 +180,46 @@ describe('LIB-12 删除与撤销', () => {
     wrapper.unmount();
   });
 
-  it('LIB-12 撤销只回来一部分时报告原因，交给宿主重新读取状态', async () => {
+  // M-3：撤销只回来一部分时整体算失败——提示「撤销失败：」带恢复与未恢复的条数和原因，「最近操作」留着可再试
+  // （RestoreTrashBatch 只恢复仍是已删除的条目，再试是安全的），并交给宿主以回收站为准重读。
+  it('LIB-12 撤销只回来一部分时报「撤销失败」与条数原因，「最近操作」留着可再试，交给宿主重新读取状态', async () => {
     api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 1, code: 'ok' }, { id: 2, code: 'ok' }], 'b-2'));
     const afterRestore = vi.fn().mockResolvedValue();
     const wrapper = mountBanner({ afterRestore });
     wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [1, 2], deleteFile: true }));
     await flushPromises();
+    const [operation] = recentOperations.list();
 
     api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 11, code: 'ok' }, { id: 12, code: 'path_occupied', message: '原位置已收录了新文件' }], 'b-2'));
-    await undoNow();
+    expect(await undoNow()).toBe(false);
 
-    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('原位置已收录了新文件'));
+    const errors = feedbackState.toasts.filter(item => item.level === 'error').map(item => item.message);
+    expect(errors).toEqual([expect.stringMatching(/^撤销失败：恢复 1 项，1 项未恢复：.*原位置已收录了新文件/)]);
+    expect(afterRestore).toHaveBeenCalledWith([], true);
+    expect(recentOperations.list().map(item => item.id)).toEqual([operation.id]);
+
+    // 再试：剩下那项这回恢复了，记录移除。
+    api.RestoreTrashBatch.mockResolvedValueOnce(result([{ id: 12, code: 'ok' }], 'b-2'));
+    expect(await recentOperations.undo(operation.id)).toBe(true);
+    expect(api.RestoreTrashBatch.mock.calls).toEqual([['video', 'b-2'], ['video', 'b-2']]);
+    expect(recentOperations.list()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  // M-4：这批已经在回收站里恢复过了（恢复 0 项、也没有失败）：不再一直报错，记录移除并说一声。
+  it('这批已经从回收站恢复过：撤销时提示「这批已经恢复过了」，「最近操作」移除这一条', async () => {
+    api.DeleteVideosWithResult.mockResolvedValueOnce(result([{ id: 1, code: 'ok' }], 'b-done'));
+    const afterRestore = vi.fn().mockResolvedValue();
+    const wrapper = mountBanner({ afterRestore });
+    wrapper.vm.showDeleteNotice(await wrapper.vm.runDelete({ ids: [1], deleteFile: true }));
+    await flushPromises();
+    const [operation] = recentOperations.list();
+
+    api.RestoreTrashBatch.mockResolvedValueOnce(result([], 'b-done'));
+    expect(await recentOperations.undo(operation.id)).toBe(true);
+    expect(feedback.notify).toHaveBeenCalledWith('这批已经恢复过了');
+    expect(feedbackState.toasts.filter(item => item.level === 'error')).toEqual([]);
+    expect(recentOperations.list()).toEqual([]);
     expect(afterRestore).toHaveBeenCalledWith([], true);
     wrapper.unmount();
   });

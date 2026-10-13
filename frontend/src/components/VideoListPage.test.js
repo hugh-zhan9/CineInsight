@@ -807,8 +807,115 @@ describe('VideoListPage 工具栏接线', () => {
     expect(wrapper.vm.selectedVideoIds).toEqual([1, 2, 3, 4, 5]);
     expect(bar().props('allMatchingSelected')).toBe(true);
     expect(bar().props('totalMatching')).toBe(5);
+    // 工具栏按钮与操作条同一个范围：写同一个 N，全选之后换成「取消选择」。
+    expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('selectAllTotal')).toBe(5);
+    expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('allMatchingSelected')).toBe(true);
 
     bar().vm.$emit('clear-selection');
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  // I-1：语义检索没有距离阈值，「全部」就是整个已索引的片库。「全选当前结果（N）」只选已经加载、列出来的行，
+  // 不往后取；工具栏按钮与底部选择操作条写同一个 N（已加载条数），点哪个都是同一条路。
+  it('I-1 语义检索：已加载 20 条（共 250）时全选只选这 20 条、不补取，两处都写（20）', async () => {
+    const hits = (from, n) => Array.from({ length: n }, (_, i) => ({ video: { id: from + i, name: `v${from + i}.mp4`, tags: [] }, score: 0.5 }));
+    // 第二页只在有人往后取时才会被取到（取到了就会多选 20 条）；之后的调用是 beforeEach 给的空结果。
+    api.SearchSemanticVideos
+      .mockResolvedValueOnce({ hits: hits(1, 20), coverage: { indexed: 250, total: 250 }, has_more: true })
+      .mockResolvedValueOnce({ hits: hits(21, 20), coverage: { indexed: 250, total: 250 }, has_more: false });
+    const wrapper = await mountPage({}, { global: { stubs: { BatchActionBar: false, SelectionBar: false } } });
+    const toolbar = () => wrapper.findComponent({ name: 'LibraryToolbar' });
+    wrapper.vm.searchMode = 'semantic';
+    wrapper.vm.searchKeyword = '海边日落';
+    await wrapper.vm.resetAndLoadVideos();
+    await flushPromises();
+    expect(wrapper.vm.videos).toHaveLength(20);
+    expect(wrapper.vm.hasMore).toBe(true);
+    expect(toolbar().props('selectAllTotal')).toBe(20);
+    expect(toolbar().props('allMatchingSelected')).toBe(false);
+
+    wrapper.vm.toggleVideoSelection({ id: 1 }, true);
+    await flushPromises();
+    expect(wrapper.get('[data-test="selection-bar-select-all-matching"]').text()).toBe('全选当前结果（20）');
+
+    api.SearchSemanticVideos.mockClear();
+    toolbar().vm.$emit('toggle-select-all');
+    await flushPromises();
+    expect(api.SearchSemanticVideos).not.toHaveBeenCalled();
+    expect(wrapper.vm.selectedVideoIds).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+    // 选中的就是已加载的这些：工具栏换成「取消选择」，操作条写「已选 20 项」而不是「当前结果全部」。
+    expect(toolbar().props('allMatchingSelected')).toBe(true);
+    expect(wrapper.get('[data-test="selection-bar-count"]').text()).toBe('已选 20 项');
+    expect(wrapper.find('[data-test="selection-bar-select-all-matching"]').exists()).toBe(false);
+
+    // 操作条上的「全选当前结果」走同一条路：先取消，再从操作条点，同样只选已加载的。
+    toolbar().vm.$emit('toggle-select-all');
+    wrapper.vm.toggleVideoSelection({ id: 3 }, true);
+    await flushPromises();
+    await wrapper.get('[data-test="selection-bar-select-all-matching"]').trigger('click');
+    await flushPromises();
+    expect(api.SearchSemanticVideos).not.toHaveBeenCalled();
+    expect(wrapper.vm.selectedVideoIds).toHaveLength(20);
+    wrapper.unmount();
+  });
+
+  it('I-1 相似视频也只选已加载的行；筛选结果仍按命中数', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
+    wrapper.vm.hasMore = true;
+    wrapper.vm.filteredCount = 40;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.selectAllScope).toEqual({ loadedOnly: false, total: 40 });
+    wrapper.vm.semanticSimilarVideoID = 9;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.selectAllScope).toEqual({ loadedOnly: true, total: 2 });
+    wrapper.unmount();
+  });
+
+  // M-2：补取剩余的页时两处都写「正在选择…」；途中用户自己改了勾选（或清空），全选作废，用户的改动留着。
+  it('M-2 补取途中显示「正在选择…」，用户改了勾选就不再全选、保留用户的改动', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }], next_cursor: { id: 2 } });
+    api.CountLibraryVideos.mockResolvedValue(4);
+    const wrapper = await mountPage({ directories: [{ path: '/v' }] });
+    const toolbar = () => wrapper.findComponent({ name: 'LibraryToolbar' });
+    const bar = () => wrapper.findComponent({ name: 'BatchActionBar' });
+    const pendingPage = () => {
+      let release;
+      api.SearchLibraryVideoPage.mockImplementationOnce(() => new Promise(resolve => {
+        release = () => resolve({ videos: [{ id: 3, name: 'c.mp4' }, { id: 4, name: 'd.mp4' }], next_cursor: null });
+      }));
+      return () => release();
+    };
+
+    const release = pendingPage();
+    const selecting = wrapper.vm.selectAllMatching();
+    await flushPromises();
+    expect(toolbar().props('selectingAll')).toBe(true);
+    expect(bar().props('selectingAll')).toBe(true);
+    wrapper.vm.toggleVideoSelection({ id: 2 }, true);
+    release();
+    await selecting;
+    await flushPromises();
+    expect(wrapper.vm.selectedVideoIds).toEqual([2]);
+    expect(toolbar().props('selectingAll')).toBe(false);
+    expect(bar().props('selectingAll')).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('M-2 补取途中按「取消选择」（或 Esc）也让全选作废', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 1, name: 'a.mp4' }], next_cursor: { id: 1 } });
+    api.CountLibraryVideos.mockResolvedValue(2);
+    const wrapper = await mountPage({ directories: [{ path: '/v' }] });
+    let release;
+    api.SearchLibraryVideoPage.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ videos: [{ id: 2, name: 'b.mp4' }], next_cursor: null }); }));
+    wrapper.vm.toggleVideoSelection({ id: 1 }, true);
+    const selecting = wrapper.vm.selectAllMatching();
+    await flushPromises();
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('clear-selection');
+    release();
+    await selecting;
+    await flushPromises();
     expect(wrapper.vm.selectedVideoIds).toEqual([]);
     wrapper.unmount();
   });

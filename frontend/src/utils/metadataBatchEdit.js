@@ -54,11 +54,16 @@ export function describeBatchOp(op) {
   return names.length ? `${field}${action} ${names.join('、')}` : `${field}${action}`;
 }
 
+// 撤销时后端回「这批已经撤销过了」（services.ErrBatchAlreadyUndone，错误文本 batch_already_undone）。
+export function isBatchAlreadyUndone(err) {
+  return String(err?.message || err || '').includes('batch_already_undone');
+}
+
 // 批量编辑接口的错误码 → 中文。invalid_batch_edit 后面带的是后端给的中文原因。
 export function batchEditErrorMessage(err) {
   const text = String(err?.message || err || '');
   if (text.includes('batch_edit_busy')) return '另一个批量编辑或撤销正在进行，请稍后再试。';
-  if (text.includes('batch_already_undone')) return '这次批量编辑已经撤销过了。';
+  if (isBatchAlreadyUndone(err)) return '这次批量编辑已经撤销过了。';
   if (text.includes('batch_edit_not_found')) return '这次批量编辑的记录已不在（只保留最近 20 次）。';
   const invalid = text.match(/invalid_batch_edit:\s*(.+)$/);
   if (invalid) return `操作无法执行：${invalid[1]}`;

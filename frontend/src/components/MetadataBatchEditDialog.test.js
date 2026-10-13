@@ -246,6 +246,34 @@ describe('批量编辑的撤销入口（D-UD-09）', () => {
     expect(recentOperations.list()).toEqual([]);
   });
 
+  // M-4：这批已经在别处（完整度页的最近批量编辑）撤销过了：后端回 batch_already_undone。当作撤销完成——
+  // 「最近操作」移除这一条并说一声，不再每次点都报错；结果页也不再给「撤销」。
+  it('这批在别处已经撤销过：从「最近操作」撤销时提示「这次批量编辑已经撤销过了」，记录移除', async () => {
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    api.UndoMetadataBatchEdit.mockRejectedValueOnce('batch_already_undone');
+    const [entry] = recentOperations.list();
+    expect(await recentOperations.undo(entry.id)).toBe(true);
+    await flushPromises();
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledWith(7);
+    expect(recentOperations.list()).toEqual([]);
+    expect(feedbackState.toasts.map(item => item.message)).toContain('这次批量编辑已经撤销过了。');
+    expect(feedbackState.toasts.filter(item => item.level === 'error')).toEqual([]);
+    expect(wrapper.find('[data-test="batch-edit-undo"]').exists()).toBe(false);
+  });
+
+  it('撤销时别的错误照旧报「撤销失败」，记录留着', async () => {
+    const wrapper = mountDialog();
+    await applyYear(wrapper);
+    api.UndoMetadataBatchEdit.mockRejectedValueOnce('batch_edit_busy');
+    expect(await runToastAction(undoToast().id)).toBe(false);
+    expect(feedbackState.toasts.filter(item => item.level === 'error').map(item => item.message))
+      .toEqual(['撤销失败：另一个批量编辑或撤销正在进行，请稍后再试。']);
+    expect(recentOperations.list()).toHaveLength(1);
+    wrapper.unmount();
+    wrappers.splice(wrappers.indexOf(wrapper), 1);
+  });
+
   it('撤销中途停止时最近操作留着这一条，提示说明可以再撤销', async () => {
     api.UndoMetadataBatchEdit.mockResolvedValueOnce({ batch_id: 7, restored: 1, changed_since: 0, cancelled: true });
     const wrapper = mountDialog();

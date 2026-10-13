@@ -68,20 +68,29 @@
                 </span>
               </div>
               <button type="button" class="btn btn--secondary btn--sm" data-test="lost-dir-expand" @click="toggleDirectory(dir)">{{ expanded === dir.directory ? '收起' : '明细' }}</button>
-              <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || !dir.purgeable" data-test="lost-dir-move" @click="startMove(dir.directory)">目录搬家</button>
+              <!-- 目录行上的三个按钮处理整个目录。这个目录里有勾选时禁用（破坏性流程复审 I-3）：
+                   勾了几条再点行上的「清除…」，很容易以为只处理勾选的；那时请用底部的操作条。 -->
               <button
                 type="button"
                 class="btn btn--secondary btn--sm"
-                :disabled="busy || !dir.purgeable"
-                :title="`选一个文件夹，为这个目录里全部 ${dir.purgeable} 条可处理的条目找对应的文件`"
+                :disabled="busy || !dir.purgeable || dirHasSelection(dir)"
+                :title="dirHasSelection(dir) ? SELECTION_PENDING_TITLE : null"
+                data-test="lost-dir-move"
+                @click="startMove(dir.directory)"
+              >目录搬家</button>
+              <button
+                type="button"
+                class="btn btn--secondary btn--sm"
+                :disabled="busy || !dir.purgeable || dirHasSelection(dir)"
+                :title="dirHasSelection(dir) ? SELECTION_PENDING_TITLE : `选一个文件夹，为这个目录里全部 ${dir.purgeable} 条可处理的条目找对应的文件`"
                 data-test="lost-dir-search"
                 @click="startSearch(dir)"
               >从文件夹找回…</button>
               <button
                 type="button"
                 class="btn btn--danger btn--sm"
-                :disabled="busy || !dir.purgeable"
-                :title="`清除这个目录里全部 ${dir.purgeable} 条可处理的记录，先列出连带影响再确认`"
+                :disabled="busy || !dir.purgeable || dirHasSelection(dir)"
+                :title="dirHasSelection(dir) ? SELECTION_PENDING_TITLE : `清除这个目录里全部 ${dir.purgeable} 条可处理的记录，先列出连带影响再确认`"
                 data-test="lost-dir-purge"
                 @click="startPurge(dir)"
               >清除…</button>
@@ -160,6 +169,8 @@ import OrphanFilesSection from './OrphanFilesSection.vue';
 
 const KINDS = [{ key: 'video', label: '视频' }, { key: 'image', label: '图片' }];
 const PAGE_SIZE = 100;
+// 目录里有勾选时，行上处理整个目录的按钮禁用，并这样说明。
+const SELECTION_PENDING_TITLE = '已勾选条目，请用底部操作条';
 
 export default {
   name: 'LostMediaPanel',
@@ -169,6 +180,7 @@ export default {
   data() {
     return {
       KINDS,
+      SELECTION_PENDING_TITLE,
       kind: 'video',
       report: null,
       loading: false,
@@ -198,6 +210,10 @@ export default {
     reasonChips,
     reasonLabel(reason) {
       return LOST_REASON_LABELS[reason] || reason;
+    },
+    // 勾选只存在于展开着的那个目录（换目录时清空）。
+    dirHasSelection(dir) {
+      return this.expanded === dir.directory && this.selected.size > 0;
     },
     async loadReport() {
       this.loading = true;

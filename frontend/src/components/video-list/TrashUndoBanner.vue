@@ -35,7 +35,7 @@ import {
 import TrashCenterDialog, { isTrashItemSuccess, summarizeTrashFailures, trashErrorText, trashResultText } from '../TrashCenterDialog.vue';
 import TrashUnsupportedDialog from '../TrashUnsupportedDialog.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
-import { notifyError, notifySuccess, notifyUndoable } from '../../utils/feedback.js';
+import { notify, notifyError, notifySuccess, notifyUndoable } from '../../utils/feedback.js';
 
 // 批量删除的请求标识：32 位十六进制（与后端随机标识同一格式）。
 function newRequestID() {
@@ -66,7 +66,16 @@ function emptyOutcome(kind, deleteFile) {
 }
 
 // 按批次恢复一次删除留下的全部条目（RestoreTrashBatch），返回恢复数与没恢复的项；调用本身失败时抛出。
+// RestoreTrashBatch 只恢复仍是已删除的条目：有项没回来时再试是安全的；一项都没恢复、也没有失败，
+// 说明这批已经在回收站里恢复过了（见 ALREADY_RESTORED_MESSAGE）。
 // 不依赖组件实例：人物页的删除对话框（PersonMediaDeleteDialog）关掉以后从「最近操作」撤销也走这一段。
+export const ALREADY_RESTORED_MESSAGE = '这批已经恢复过了';
+
+// 撤销有项没回来时抛出的原因（提示里是「撤销失败：恢复 N 项，M 项未恢复：…」）。
+export function partialRestoreError(restored, failures) {
+  return new Error(`恢复 ${restored} 项，${failures.length} 项未恢复：${summarizeTrashFailures(failures)}`);
+}
+
 export async function restoreTrashBatches(kind, batchIDs) {
   let restored = 0;
   const failures = [];
@@ -290,14 +299,20 @@ export default {
     restoreNoticeBatches(notice) {
       return restoreTrashBatches(notice.kind, notice.batchIDs);
     },
+    // 有项没回来：让宿主以回收站为准重读（哪几项没回来只有回收站知道，不逐个放掉清理面板的标记），
+    // 再整体算失败抛出——提示「撤销失败：恢复 N 项，M 项未恢复：原因」，「最近操作」里留着可以再试。
+    // 一项都没恢复、也没有失败：这批已经从回收站恢复过了，按撤销完成处理（记录移除），告诉用户一声。
     async finishRestore(notice, { restored, failures }) {
       if (failures.length) {
-        notifyError(`撤销完成：恢复 ${restored} 项，${failures.length} 项未恢复：${summarizeTrashFailures(failures)}`);
-        // 哪几项没回来只有回收站知道：不逐个放掉清理面板的标记，交给宿主重新读取状态。
         await this.afterRestore([], true);
-      } else {
-        await this.afterRestore(notice.restorableIDs, false);
+        throw partialRestoreError(restored, failures);
       }
+      if (restored === 0) {
+        notify(ALREADY_RESTORED_MESSAGE);
+        await this.afterRestore([], true);
+        return;
+      }
+      await this.afterRestore(notice.restorableIDs, false);
     },
     // 全局提示或任务中心「最近操作」里的「撤销」：失败时抛出（提示「撤销失败：原因」，记录留着可再试）。
     async undoFromToast(notice) {

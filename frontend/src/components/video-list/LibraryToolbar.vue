@@ -118,14 +118,15 @@
             <span v-if="tagGroups.length === 0" class="tag-browser__empty">暂无可选标签</span>
             <div class="tag-browser__actions">
               <button type="button" class="btn btn--secondary btn--sm" @click="$emit('open-tag-manager')">标签管理</button>
-              <!-- 选择（D-UD-10）：「全选当前结果」选中整个筛选结果（未加载的也先取回来），全选之后同一个位置是「取消选择」。 -->
+              <!-- 选择（D-UD-10）：「全选当前结果（N）」与底部选择操作条是同一个范围、同一句文案（N = 点了会选中的条数，
+                   片库页的 selectAllScope）；筛选结果会先把没加载的页取回来，期间写「正在选择…」。全选之后同一个位置是「取消选择」。 -->
               <button
                 type="button"
                 class="btn btn--secondary btn--sm"
                 data-test="toolbar-select-all-matching"
-                :disabled="videos.length === 0"
+                :disabled="videos.length === 0 || selectingAll"
                 @click="$emit('toggle-select-all')"
-              >{{ allMatchingSelected ? '取消选择' : '全选当前结果' }}</button>
+              >{{ selectAllButtonLabel }}</button>
             </div>
           </div>
           <!-- 人物筛选（D-PC33、META-02）：多选取交集，选中项与标签一样点一下取消；筛选条件归片库页持有，
@@ -324,6 +325,7 @@ import BaseMenu from '../ui/BaseMenu.vue';
 import BasePopover from '../ui/BasePopover.vue';
 import FilterChip from '../ui/FilterChip.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
+import { selectAllMatchingLabel } from '../ui/SelectionBar.vue';
 import CollectionSuggestionPanel from '../CollectionSuggestionPanel.vue';
 import { GetCollectionSuggestionStatus } from '../../../wailsjs/go/main/App';
 import { runtimeEventsMixin } from './runtimeEvents.js';
@@ -349,6 +351,10 @@ export default {
     videos: { type: Array, default: () => [] },
     // 当前结果是否已全选（D-UD-10）：决定标签行那个选择按钮写「全选当前结果」还是「取消选择」。
     allMatchingSelected: { type: Boolean, default: false },
+    // 「全选当前结果（N）」的 N（片库页 selectAllScope.total，与选择操作条同一个数）；不知道时为 null，不带括号。
+    selectAllTotal: { type: Number, default: null },
+    // 片库页正在为「全选当前结果」补取剩余的页。
+    selectingAll: { type: Boolean, default: false },
     searchKeyword: { type: String, default: '' },
     searchMode: { type: String, default: 'file' },
     smartView: { type: String, default: '' },
@@ -490,6 +496,10 @@ export default {
     clearTimeout(this._personSearchTimer);
   },
   computed: {
+    selectAllButtonLabel() {
+      if (this.allMatchingSelected && !this.selectingAll) return '取消选择';
+      return selectAllMatchingLabel(this.selectAllTotal, this.selectingAll);
+    },
 	tagGroups() {
 	  const groups = new Map();
 	  for (const tag of this.tags) {

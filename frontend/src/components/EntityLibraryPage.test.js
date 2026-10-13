@@ -94,6 +94,9 @@ describe('EntityLibraryPage', () => {
     const w = mount(EntityLibraryPage, { props: { entityType: 'person' }, global: { stubs: { teleport: true } } }); await flushPromises();
     await w.get('.entity-card').trigger('click'); await flushPromises();
     expect(w.get('.entity-library__toolbar').text()).toContain('视频 1 / 1 部 · 图片 1 / 1 张');
+    // 按钮写明后果（I-2）：从片库 / 图片库移除，不是从人物名下解绑。
+    expect(w.get('[data-test="person-video-delete-21"]').text()).toBe('从片库移除…');
+    expect(w.get('[data-test="person-image-delete-11"]').text()).toBe('从图片库移除…');
     await w.get('[data-test="person-image-delete-11"]').trigger('click');
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
@@ -543,12 +546,16 @@ describe('EntityLibraryPage 撤销删除后的刷新', () => {
   it('LIB-12 删除对话框关掉以后再从「最近操作」撤销：照样恢复，本页重读当前人物', async () => {
     clearToasts();
     recentOperations.clear();
-    // 「删除前确认」关着：不弹框，直接只删记录。
+    // 「删除前确认」关着也先弹确认框（破坏性流程复审 I-2）：用户确认之前不调删除；确认后只删记录。
     api.GetSettings.mockResolvedValueOnce({ confirm_before_delete: false, delete_original_file: false });
     api.DeleteImagesWithResult.mockResolvedValueOnce({ batch_id: 'b-person', items: [{ id: 11, code: 'ok' }] });
     api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 11, code: 'ok' }] });
     const { w } = await openPerson();
     w.vm.personMediaDeleteTarget = { kind: 'image', media: { id: 11, name: 'a.jpg', size: 200 }, personID: 7 };
+    await flushPromises();
+    expect(w.find('[data-test="person-media-delete-dialog"]').exists()).toBe(true);
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    await w.get('[data-test="person-media-delete-confirm"]').trigger('click');
     await flushPromises();
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));
     expect(w.vm.entityImages).toEqual([]);

@@ -113,6 +113,15 @@ describe('批量操作条（SelectionBar）', () => {
     wrapper.unmount();
   });
 
+  // M-2：片库页补取剩余的页时，条上的「全选当前结果」禁用并写「正在选择…」。
+  it('片库页正在全选时「全选当前结果」禁用并写「正在选择…」', () => {
+    const wrapper = mount(BatchActionBar, { props: { selectedCount: 3, totalMatching: 128, selectingAll: true } });
+    const link = wrapper.get('[data-test="selection-bar-select-all-matching"]');
+    expect(link.text()).toBe('正在选择…');
+    expect(link.element.disabled).toBe(true);
+    wrapper.unmount();
+  });
+
   it('Esc 发 clear-selection', async () => {
     const wrapper = mount(BatchActionBar, { props: { selectedCount: 2 }, attachTo: document.body });
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

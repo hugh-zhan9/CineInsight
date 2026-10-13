@@ -1247,7 +1247,8 @@ describe('统一设计：选择操作条与用词（D-UD-10 / D-UD-14）', () =>
     wrapper.unmount();
   });
 
-  it('Esc 取消选择；确认框开着时 Esc 只关确认框，勾选不动', async () => {
+  // M-6：审阅勾选是审阅结果、不是临时选择——Esc 不清空（确认框开着时只关确认框），只有「取消选择」清。
+  it('Esc 不清空审阅勾选；确认框开着时 Esc 只关确认框；「取消选择」照旧清空', async () => {
     const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
     await clickDelete(wrapper);
     expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(true);
@@ -1257,7 +1258,15 @@ describe('统一设计：选择操作条与用词（D-UD-10 / D-UD-14）', () =>
     expect(wrapper.vm.review.selection).toEqual([12]);
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
 
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.vm.review.selection).toEqual([12]);
+    const bar = wrapper.get('[data-test="cleanup-selection-bar"]');
+    expect(bar.get('[data-test="selection-bar-clear"]').text()).toBe('取消选择');
+
+    await bar.get('[data-test="selection-bar-clear"]').trigger('click');
     await flushPromises();
     expect(wrapper.vm.review.selection).toEqual([]);
     wrapper.unmount();

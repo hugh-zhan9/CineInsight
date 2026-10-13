@@ -100,7 +100,8 @@
             <button type="button" class="btn btn--secondary btn--sm" :data-test="`entity-video-detail-${video.id}`" @click="openVideoDetails(video)">详情</button>
             <button type="button" class="btn btn--primary btn--sm" :disabled="playingVideoIDs.includes(Number(video.id))" @click="playEntityVideo(video)">{{ playingVideoIDs.includes(Number(video.id)) ? '启动中…' : '播放' }}</button>
             <button type="button" class="btn-icon btn--secondary btn--sm" aria-label="在访达中显示" title="在访达中显示" @click="openVideoDirectory(video)"><AppIcon name="folder" /></button>
-            <button v-if="isPeople" type="button" class="btn btn--danger btn--sm" :data-test="`person-video-delete-${video.id}`" @click="requestPersonMediaDelete('video', video)">移除…</button>
+            <!-- 人物页上「移除」容易被当成从这个人物名下拿掉：写明是从片库移除，点了一律先确认（PersonMediaDeleteDialog）。 -->
+            <button v-if="isPeople" type="button" class="btn btn--danger btn--sm" :data-test="`person-video-delete-${video.id}`" @click="requestPersonMediaDelete('video', video)">从片库移除…</button>
           </div>
         </article>
       </section>
@@ -118,7 +119,7 @@
             <div class="entity-image-card__actions">
               <button type="button" class="btn-icon btn--secondary btn--sm" aria-label="在访达中显示" title="在访达中显示" @click="revealPersonImage(image)"><AppIcon name="folder" /></button>
               <button type="button" class="btn btn--secondary btn--sm" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`entity-image-unlink-${image.id}`" @click="unlinkPersonImage(image)">解绑</button>
-              <button type="button" class="btn btn--danger btn--sm" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">移除…</button>
+              <button type="button" class="btn btn--danger btn--sm" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">从图片库移除…</button>
             </div>
           </figure>
         </div>

@@ -4,6 +4,7 @@
     :count="selectedCount"
     :total-matching="totalMatching"
     :all-matching-selected="allMatchingSelected"
+    :selecting-all="selectingAll"
     @select-all-matching="$emit('select-all-matching')"
     @clear="$emit('clear-selection')"
   >
@@ -55,9 +56,12 @@ export default {
   components: { SelectionBar },
   props: {
     selectedCount: { type: Number, default: 0 },
-    // 当前结果的真实总数（筛选命中数，结果全部加载完时就是已加载条数）；不知道时为 null，不出「全选当前结果」。
+    // 「全选当前结果（N）」的 N：点了会选中的条数（片库页 selectAllScope.total，工具栏按钮用同一个数）——
+    // 筛选结果是命中数，语义检索、相似视频与随机批次是已加载的条数；不知道时为 null，不出「全选当前结果」。
     totalMatching: { type: Number, default: null },
     allMatchingSelected: { type: Boolean, default: false },
+    // 片库页正在为「全选当前结果」补取剩余的页（「正在选择…」）。
+    selectingAll: { type: Boolean, default: false },
     selectedTotalSizeText: { type: String, default: '' },
     migrationRunning: { type: Boolean, default: false },
     deleteLabel: { type: String, default: '移到废纸篓' }

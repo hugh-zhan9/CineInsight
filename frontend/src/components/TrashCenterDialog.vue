@@ -523,7 +523,8 @@ export default {
         : [...state.selected, id];
     },
     // 「全选当前结果」作用于整个筛选结果：还有没加载的页时先按当前筛选取完，再全部选中；
-    // 取的途中失败、换了页签或筛选（请求令牌变了）就不选，免得只选中一部分却显示成全选。
+    // 取的途中失败、换了页签或筛选（请求令牌不是这次补取自己发的那个，或筛选与点的时候不同）就不选，
+    // 免得只选中一部分却显示成全选，或把换了筛选之后的另一批结果当成用户点的那一批选上。
     async toggleSelectAll() {
       const kind = this.activeTab;
       const state = this.lists[kind];
@@ -531,13 +532,16 @@ export default {
         state.selected = [];
         return;
       }
-      while (state.hasMore && !state.error && this.visible && this.activeTab === kind) {
+      const filter = JSON.stringify(this.filters[kind]);
+      let token = state.token;
+      const unchanged = () => state.token === token && this.visible && this.activeTab === kind && JSON.stringify(this.filters[kind]) === filter;
+      while (state.hasMore && !state.error && unchanged()) {
         const before = state.items.length;
-        const token = state.token;
         await this.loadEntries(kind, { append: true });
-        if (state.token !== token + 1 || state.items.length === before) break;
+        token += 1;
+        if (state.items.length === before) break;
       }
-      if (state.hasMore || state.error || !this.visible) return;
+      if (state.hasMore || state.error || !unchanged()) return;
       state.selected = state.items.map(entry => entry.id);
     },
     selectedWith(action) {
@@ -755,19 +759,22 @@ export default {
       const state = this.hidden;
       state.selected = state.selected.includes(id) ? state.selected.filter(item => item !== id) : [...state.selected, id];
     },
+    // 与 toggleSelectAll 同一做法：途中重读了列表（令牌不是自己发的那个）或换了页签就不选。
     async toggleHiddenSelectAll() {
       const state = this.hidden;
       if (this.hiddenAllSelected) {
         state.selected = [];
         return;
       }
-      while (state.hasMore && !state.error && this.visible) {
+      let token = state.token;
+      const unchanged = () => state.token === token && this.visible && this.activeTab === 'hidden';
+      while (state.hasMore && !state.error && unchanged()) {
         const before = state.items.length;
-        const token = state.token;
         await this.loadHidden({ append: true });
-        if (state.token !== token + 1 || state.items.length === before) break;
+        token += 1;
+        if (state.items.length === before) break;
       }
-      if (state.hasMore || state.error || !this.visible) return;
+      if (state.hasMore || state.error || !unchanged()) return;
       state.selected = state.items.map(item => item.id);
     },
     async recheckHidden() {

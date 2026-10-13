@@ -1744,16 +1744,20 @@ describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', 
     wrapper.unmount();
   });
 
-  it('D-PC49 没有删除流程时 Esc 关闭面板；应用确认框开着时 Esc 只关确认框', async () => {
+  // M-6：审阅勾选是审阅结果、不是临时选择——Esc 只关面板，勾选原样留着（再打开同一批结果还在）。
+  it('D-PC49 没有删除流程时 Esc 关闭面板；应用确认框开着时 Esc 只关确认框；Esc 不清空审阅勾选', async () => {
     const { wrapper } = await openWith(baseAnalysis({
       duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
     }));
+    const picks = [...wrapper.vm.cleanupSelection];
+    expect(picks).toEqual([2]);
     feedbackState.confirm = { title: '移出本组' };
     await pressEscape();
     expect(wrapper.vm.cleanupDialog.show).toBe(true);
     feedbackState.confirm = null;
     await pressEscape();
     expect(wrapper.vm.cleanupDialog.show).toBe(false);
+    expect(wrapper.vm.cleanupSelection).toEqual(picks);
     expect(lockNotices()).toHaveLength(0);
     wrapper.unmount();
   });

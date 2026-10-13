@@ -118,6 +118,67 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     wrapper.unmount();
   });
 
+  // M-1：点了「全选当前结果」、剩余的页还在路上时换了筛选——新筛选的结果先回来，旧的补取页后回来。
+  // 选中的必须是用户点的那一批；那一批已经不在了，就什么都不选（不能把新筛选的结果当成全选）。
+  it('M-1 补取途中换了筛选：新筛选先回来、旧的补取页后回来，不选新筛选的任何条目', async () => {
+    let releaseAppend;
+    api.ListTrashEntries
+      .mockResolvedValueOnce(page([entry(1), entry(2)], { hasMore: true, nextCursor: 2 }))
+      .mockImplementationOnce(() => new Promise(resolve => { releaseAppend = () => resolve(page([entry(3), entry(4)])); }))
+      .mockResolvedValueOnce(page([entry(10, { mode: 'record_only' }), entry(11, { mode: 'record_only' }), entry(12, { mode: 'record_only' })]));
+    const wrapper = await mountDialog();
+    expect(wrapper.vm.lists.video.items.map(item => item.id)).toEqual([1, 2]);
+
+    const selecting = wrapper.vm.toggleSelectAll();
+    await flushPromises();
+    await wrapper.get('[data-test="trash-filter-mode"]').setValue('record_only');
+    await flushPromises();
+    expect(wrapper.vm.lists.video.items.map(item => item.id)).toEqual([10, 11, 12]);
+    releaseAppend();
+    await selecting;
+    await flushPromises();
+    expect(wrapper.vm.lists.video.selected).toEqual([]);
+    expect(wrapper.get('[data-test="trash-select-all"]').element.checked).toBe(false);
+    expect(wrapper.get('[data-test="trash-bulk-restore"]').text()).toBe('恢复所选（0）');
+    wrapper.unmount();
+  });
+
+  it('M-1 补取途中改了筛选（还没应用）或换了页签也不选', async () => {
+    let releaseAppend;
+    api.ListTrashEntries
+      .mockResolvedValueOnce(page([entry(1)], { hasMore: true, nextCursor: 1 }))
+      .mockImplementationOnce(() => new Promise(resolve => { releaseAppend = () => resolve(page([entry(2)])); }));
+    const wrapper = await mountDialog();
+    const selecting = wrapper.vm.toggleSelectAll();
+    await flushPromises();
+    wrapper.vm.filters.video.query = '新的关键词';
+    releaseAppend();
+    await selecting;
+    await flushPromises();
+    expect(wrapper.vm.lists.video.selected).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('M-1 扫描隐藏页签：补取途中列表被重读，不选重读后的条目', async () => {
+    let releaseAppend;
+    const hiddenItem = id => ({ id, name: `${id}.jpg`, path: `/p/${id}.jpg`, directory: '/p', reason: 'missing_file' });
+    api.ListHiddenImages
+      .mockResolvedValueOnce({ items: [hiddenItem(1)], next_cursor: 1, has_more: true })
+      .mockImplementationOnce(() => new Promise(resolve => { releaseAppend = () => resolve({ items: [hiddenItem(2)], next_cursor: 0, has_more: false }); }))
+      .mockResolvedValueOnce({ items: [hiddenItem(7), hiddenItem(8)], next_cursor: 0, has_more: false });
+    const wrapper = await mountDialog({ initialTab: 'hidden' });
+    const selecting = wrapper.vm.toggleHiddenSelectAll();
+    await flushPromises();
+    await wrapper.vm.loadHidden();
+    await flushPromises();
+    releaseAppend();
+    await selecting;
+    await flushPromises();
+    expect(wrapper.vm.hidden.items.map(item => item.id)).toEqual([7, 8]);
+    expect(wrapper.vm.hidden.selected).toEqual([]);
+    wrapper.unmount();
+  });
+
   it('补取剩余的页失败时不全选（不把一部分说成全部）', async () => {
     api.ListTrashEntries
       .mockResolvedValueOnce(page([entry(9)], { hasMore: true, nextCursor: 9 }))

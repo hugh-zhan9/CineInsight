@@ -83,6 +83,19 @@ describe('工具栏的选择入口', () => {
     expect(button().element.disabled).toBe(true);
     wrapper.unmount();
   });
+
+  // I-1 / M-2：按钮写出点了会选中的条数（与底部选择操作条同一个数、同一句文案）；补取剩余的页时禁用并写「正在选择…」。
+  it('「全选当前结果（N）」写出片库页给的 N；正在补取时禁用并写「正在选择…」', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ videos: [...rows], selectAllTotal: 20 }) });
+    const button = () => wrapper.get('[data-test="toolbar-select-all-matching"]');
+    expect(button().text()).toBe('全选当前结果（20）');
+    expect(button().element.disabled).toBe(false);
+
+    await wrapper.setProps({ selectingAll: true });
+    expect(button().text()).toBe('正在选择…');
+    expect(button().element.disabled).toBe(true);
+    wrapper.unmount();
+  });
 });
 
 describe('工具栏三层重排', () => {

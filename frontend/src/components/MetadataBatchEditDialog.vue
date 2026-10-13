@@ -119,9 +119,9 @@ import { ApplyMetadataBatchEdit, ListCollections, ListPeople, PreviewMetadataBat
 import { logFrontend } from '../utils/frontendLog.js';
 import {
   BATCH_EDIT_FIELDS, BATCH_RATING_OPTIONS, batchActionOptions, batchEditErrorMessage, batchFieldIsScalar, batchFieldLabel,
-  describeBatchOp, undoResultText
+  describeBatchOp, isBatchAlreadyUndone, undoResultText
 } from '../utils/metadataBatchEdit.js';
-import { notifySuccess, notifyUndoable } from '../utils/feedback.js';
+import { notify, notifySuccess, notifyUndoable } from '../utils/feedback.js';
 import AppIcon from './ui/AppIcon.vue';
 import DialogShell from './ui/DialogShell.vue';
 
@@ -304,6 +304,13 @@ export default {
       try {
         undoResult = await this.performUndo(batchID);
       } catch (err) {
+        // 这批已经在别处（「数据维护 · 完整度」的最近批量编辑）撤销过了：当作撤销完成——「最近操作」移除这一条、
+        // 结果页不再给「撤销」，说一声，而不是每次点都报错。
+        if (isBatchAlreadyUndone(err)) {
+          this.undone = true;
+          notify(batchEditErrorMessage(err));
+          return;
+        }
         throw new Error(this.errorText(err, '请稍后重试'));
       }
       // 中途停止：抛出去让「最近操作」留着这一条，可以再点撤销继续。

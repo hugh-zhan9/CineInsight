@@ -9,7 +9,9 @@
       ref="libraryToolbar"
       :tags="tags"
       :videos="videos"
-      :all-matching-selected="allMatchingSelected"
+      :all-matching-selected="selectAllScopeSelected"
+      :select-all-total="selectAllScope.total"
+      :selecting-all="selectingAllMatching"
       :search-keyword="searchKeyword"
       :search-mode="searchMode"
       :smart-view="smartView"
@@ -297,8 +299,9 @@
     <!-- 选择操作条（D-UD-10）：有选中时才浮在内容区底部；放在列表之后，吸底靠 position: sticky。 -->
     <BatchActionBar
       :selected-count="selectedVideoIds.length"
-      :total-matching="matchingTotal"
+      :total-matching="selectAllScope.total"
       :all-matching-selected="allMatchingSelected"
+      :selecting-all="selectingAllMatching"
       :selected-total-size-text="selectedTotalSizeText"
       :migration-running="migrationRunning"
       :delete-label="deleteActionLabel"
@@ -753,6 +756,8 @@ export default {
       selectedVideoIds: [],
       // 「全选当前结果」正在补取剩余的页（D-UD-10）。
       selectingAllMatching: false,
+      // 用户自己改选择（勾选/取消、清空、键盘移动）时加一：补取途中改过，「全选当前结果」作废，不覆盖用户的改动。
+      selectionEditSeq: 0,
 	  keyboardFocusVideoID: 0,
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
@@ -952,9 +957,14 @@ export default {
     this.teardownRuntimeEvents();
   },
   computed: {
-    // 列表是不是「当前筛选」的结果：语义检索、随机批次与相似视频不是，这时批量编辑不提供筛选范围。
-    metadataBatchFilterUsable() {
+    // 列表是不是「当前筛选」的结果：语义检索、随机批次与相似视频列出的是排序结果（语义检索没有距离阈值，
+    // 「全部」就是整个已索引的片库），没有命中数，也不能当筛选范围用。
+    listIsFilterResult() {
       return this.searchMode !== 'semantic' && !this.randomPick.active && !this.semanticSimilarVideoID;
+    },
+    // 不是筛选结果时批量编辑不提供筛选范围。
+    metadataBatchFilterUsable() {
+      return this.listIsFilterResult;
     },
     randomPickSize() {
       return RANDOM_PICK_SIZE;
@@ -1088,12 +1098,27 @@ export default {
           return { icon: 'videos', title: '扫描目录里还没有找到视频', message: '把视频放进扫描目录后重新扫描。' };
       }
     },
-    // 选择（D-UD-10）：「全选当前结果（N）」的 N 是当前结果的真实总数。结果已全部加载时就是已加载的条数；
-    // 还没加载完时用筛选命中数（语义检索、随机批次等没有命中数时不提供「全选当前结果」）。
+    // 当前结果的真实总数：结果已全部加载时就是已加载的条数；还没加载完时用筛选命中数
+    // （语义检索、随机批次与相似视频没有命中数，为 null）。
     matchingTotal() {
       if (!this.hasMore) return this.videos.length;
-      if (this.searchMode === 'semantic' || this.randomPick.active || this.semanticSimilarVideoID) return null;
+      if (!this.listIsFilterResult) return null;
       return Number.isFinite(this.filteredCount) ? this.filteredCount : null;
+    },
+    // 「全选当前结果（N）」的范围（D-UD-10）：工具栏按钮与底部选择操作条共用这一份，N 与点了之后选中的条数一致。
+    //   筛选结果：整个筛选（N 是命中数，没加载的页先取回来，见 selectAllMatching）；
+    //   语义检索、相似视频与随机批次：只选已经加载、列出来的行（N 是已加载条数），不往后取——
+    //   后端没有距离阈值，往后取就是把整个已索引的片库都选上。
+    selectAllScope() {
+      const loadedOnly = !this.listIsFilterResult;
+      return { loadedOnly, total: loadedOnly ? this.videos.length : this.matchingTotal };
+    },
+    // 「全选当前结果」要选的每一条都已选中：工具栏的按钮据此换成「取消选择」。
+    selectAllScopeSelected() {
+      if (!this.selectAllScope.loadedOnly) return this.allMatchingSelected;
+      if (this.videos.length === 0) return false;
+      const selected = new Set(this.selectedVideoIds);
+      return this.videos.every(video => selected.has(video.id));
     },
     // 当前结果已全部选中：结果加载完了，且每一条都在选中里。
     allMatchingSelected() {
@@ -1189,7 +1214,10 @@ export default {
 	  const next = this.videos[nextIndex];
 	  this.keyboardFocusVideoID = next.id;
 	  // 保留用户已建立的多选（批量操作目标）；单选/无选时选中跟随焦点。
-	  if (this.selectedVideoIds.length <= 1) this.selectedVideoIds = [next.id];
+	  if (this.selectedVideoIds.length <= 1) {
+		this.selectedVideoIds = [next.id];
+		this.selectionEditSeq += 1;
+	  }
 	  this.scrollKeyboardFocusIntoView(next.id);
 	  if (openPreview) this.openPreview(next);
 	},
@@ -1862,6 +1890,7 @@ export default {
     },
     clearSelection() {
       this.selectedVideoIds = [];
+      this.selectionEditSeq += 1;
     },
     openRowMenu(video, anchor) {
       this.rowMenu = { video, anchor, position: null };
@@ -3005,6 +3034,7 @@ export default {
     },
     toggleVideoSelection(video, selected) {
       if (!video) return;
+      this.selectionEditSeq += 1;
       if (selected) {
         if (!this.selectedVideoIds.includes(video.id)) {
           this.selectedVideoIds = [...this.selectedVideoIds, video.id];
@@ -3013,29 +3043,38 @@ export default {
         this.selectedVideoIds = this.selectedVideoIds.filter(id => id !== video.id);
       }
     },
-    // 工具栏的「全选当前结果 / 取消选择」：已全选时清空，否则选中整个当前结果。
+    // 工具栏的「全选当前结果 / 取消选择」：已全选时清空，否则选中整个当前结果（与选择操作条同一个范围）。
     toggleSelectAllMatching() {
-      if (this.allMatchingSelected) {
+      if (this.selectAllScopeSelected) {
         this.clearSelection();
         return undefined;
       }
       return this.selectAllMatching();
     },
-    // 「全选当前结果（N）」（D-UD-10）：作用于整个筛选结果，所以先把还没加载的页按当前条件取回来，再全部选中。
-    // 取的途中条件变了、或某一页取失败（已提示），就不选，免得只选中一部分却显示成「全部」。
+    // 「全选当前结果（N）」（D-UD-10），范围见 selectAllScope：
+    //   语义检索、相似视频与随机批次只选已加载的行，不往后取；
+    //   筛选结果作用于整个筛选，先把还没加载的页按当前条件取回来再全部选中（期间按钮写「正在选择…」）。
+    //   取的途中条件变了、某一页取失败（已提示）、或用户自己改了选择，就不选——不把一部分说成「全部」，
+    //   也不覆盖用户刚做的勾选。
     async selectAllMatching() {
       if (this.selectingAllMatching) return;
+      if (this.selectAllScope.loadedOnly) {
+        this.selectedVideoIds = this.videos.map(video => video.id);
+        return;
+      }
       this.selectingAllMatching = true;
       const queryKey = this.virtualListQueryKey;
+      const editSeq = this.selectionEditSeq;
+      const unchanged = () => this.virtualListQueryKey === queryKey && this.selectionEditSeq === editSeq;
       try {
         if (this.reloadPromise) await this.reloadPromise;
         await this.waitForLoadIdle();
-        while (this.hasMore && this.virtualListQueryKey === queryKey) {
+        while (this.hasMore && unchanged()) {
           const before = this.videos.length;
           await this.loadVideos(IN_PLACE_REFRESH_PAGE_LIMIT);
           if (this.videos.length === before) break;
         }
-        if (this.hasMore || this.virtualListQueryKey !== queryKey) return;
+        if (this.hasMore || !unchanged()) return;
         this.selectedVideoIds = this.videos.map(video => video.id);
       } finally {
         this.selectingAllMatching = false;
