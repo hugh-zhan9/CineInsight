@@ -278,3 +278,49 @@ func TestCollectionProgressByIDsSkipsUnknownAndKeepsOrder(t *testing.T) {
 		t.Fatalf("空请求返回空数组: %v %v", none, err)
 	}
 }
+
+// include_works：作品集页一次拿到逐部明细（成员、代表、状态、续播成员）与失效成员，不必再逐个成员查版本组。
+func TestCollectionProgressIncludeWorks(t *testing.T) {
+	f := newProgressFixture(t)
+	first := f.video("第一部", f.watched(10))
+	secondMain := f.video("第二部", nil)
+	secondAlt := f.video("第二部 加长版", f.inProgress(20, 900))
+	third := f.video("第三部", nil)
+	offline := f.video("第四部（离线）", func(v *models.Video) { v.IsStale = true; f.watched(30)(v) })
+	f.group(secondMain, secondAlt)
+	id := f.collection("系列", first, secondAlt, offline, secondMain, third)
+
+	plain := f.progress(id)
+	if plain.Works != nil || plain.OfflineVideoIDs != nil {
+		t.Fatalf("不带 include_works 时不给明细: %+v", plain)
+	}
+	result, err := f.service.ListCollectionProgress(CollectionProgressRequest{CollectionIDs: []uint{id}, IncludeWorks: true})
+	if err != nil || len(result) != 1 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	progress := result[0]
+	if len(progress.Works) != 3 || progress.TotalWorks != 3 {
+		t.Fatalf("应有 3 部（离线成员不算）: %+v", progress.Works)
+	}
+	want := []CollectionProgressWork{
+		{WorkIndex: 1, VideoIDs: []uint{first.ID}, RepresentativeVideoID: first.ID, State: CollectionWorkWatched},
+		{WorkIndex: 2, VideoIDs: []uint{secondMain.ID, secondAlt.ID}, RepresentativeVideoID: secondMain.ID, State: CollectionWorkInProgress, ResumeVideoID: secondAlt.ID},
+		{WorkIndex: 3, VideoIDs: []uint{third.ID}, RepresentativeVideoID: third.ID, State: CollectionWorkUnwatched},
+	}
+	if fmt.Sprintf("%+v", progress.Works) != fmt.Sprintf("%+v", want) {
+		t.Fatalf("逐部明细不对:\n got %+v\nwant %+v", progress.Works, want)
+	}
+	requireUintSlice(t, "离线成员", progress.OfflineVideoIDs, []uint{offline.ID})
+	requireNext(t, "明细与下一部一致", progress, secondAlt.ID, 2, true)
+
+	if _, err := f.service.ListCollectionProgress(CollectionProgressRequest{ContinueOnly: true, IncludeWorks: true}); err == nil {
+		t.Fatal("include_works 不能与 continue_only 一起用")
+	}
+	tooMany := make([]uint, collectionProgressMaxIDsWithWorks+1)
+	for i := range tooMany {
+		tooMany[i] = uint(i + 1)
+	}
+	if _, err := f.service.ListCollectionProgress(CollectionProgressRequest{CollectionIDs: tooMany, IncludeWorks: true}); err == nil {
+		t.Fatal("带明细时超过上限应报错")
+	}
+}

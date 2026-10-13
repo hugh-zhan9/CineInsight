@@ -145,6 +145,55 @@ func (s *PersonService) ListPeople(keyword, cursorName string, cursorID uint, li
 	return items, nil
 }
 
+// ListPeopleByCount 是观看侧头像墙「按出现次数」的排序（UI 二期 D-P2-06）：按 active_video_count（可见视频数，
+// 与 PersonListItem.ActiveVideoCount、人物卡片上的「N 部作品」同一口径，版本不合并、不含图片）倒序，同数按
+// LOWER(display_name) 升序、再按 id 升序。键集分页：下一页传上一页最后一项的 active_video_count、cursor_name
+// 与 person.id；cursorID 为 0 取首页。ListPeople（按名称）不变。
+func (s *PersonService) ListPeopleByCount(keyword string, cursorCount int, cursorName string, cursorID uint, limit int) ([]PersonListItem, error) {
+	limit = normalizeEntityPageLimit(limit)
+	videos, err := visiblePersonVideos()
+	if err != nil {
+		return nil, fmt.Errorf("list people by count: %w", err)
+	}
+	counts := videos.Select("video_people.person_id AS person_id, COUNT(*) AS appearance_count").Group("video_people.person_id")
+	const countExpr = "COALESCE(pc.appearance_count, 0)"
+	const nameExpr = "LOWER(people.display_name)"
+	query := database.DB.Model(&models.Person{}).Joins("LEFT JOIN (?) AS pc ON pc.person_id = people.id", counts)
+	if keyword = strings.TrimSpace(keyword); keyword != "" {
+		pattern := "%" + strings.ToLower(escapeSQLLike(keyword)) + "%"
+		query = query.Where("(LOWER(people.display_name) LIKE ? ESCAPE '\\' OR LOWER(people.original_name) LIKE ? ESCAPE '\\')", pattern, pattern)
+	}
+	if cursorID != 0 {
+		cursorName = strings.ToLower(strings.TrimSpace(cursorName))
+		query = query.Where("("+countExpr+" < ? OR ("+countExpr+" = ? AND ("+nameExpr+" > ? OR ("+nameExpr+" = ? AND people.id > ?))))",
+			cursorCount, cursorCount, cursorName, cursorName, cursorID)
+	}
+	var rows []struct {
+		models.Person
+		CursorName      string `gorm:"column:cursor_name"`
+		AppearanceCount int64  `gorm:"column:appearance_count"`
+	}
+	if err := query.Select("people.*, " + nameExpr + " AS cursor_name, " + countExpr + " AS appearance_count").
+		Order(countExpr + " DESC").Order(nameExpr + " ASC").Order("people.id ASC").Limit(limit).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list people by count: %w", err)
+	}
+	personIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		personIDs = append(personIDs, row.ID)
+	}
+	imageCounts, err := activeImageCountsByPerson(personIDs)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]PersonListItem, 0, len(rows))
+	for _, row := range rows {
+		item := personListItemWithCount(row.Person, row.AppearanceCount, imageCounts[row.ID])
+		item.CursorName = row.CursorName
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 // 人物名下的视频与图片（计数和列表）与片库、图片库默认视图同一口径：扫描根与黑名单之内、
 // 非失效。移动硬盘拔掉后这些项不再计入也不再列出，盘插回来扫描清掉失效标记后自动回来。
 func visiblePersonVideos() (*gorm.DB, error) {

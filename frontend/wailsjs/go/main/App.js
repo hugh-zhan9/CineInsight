@@ -1022,6 +1022,10 @@ export function ListPeople(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListPeople'](arg1, arg2, arg3, arg4);
 }
 
+export function ListPeopleByCount(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ListPeopleByCount'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function ListRecentlyPlayedWithFilter(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListRecentlyPlayedWithFilter'](arg1, arg2, arg3, arg4);
 }

@@ -3330,6 +3330,26 @@ export namespace services {
 		}
 	}
 	
+	export class CollectionProgressWork {
+	    work_index: number;
+	    video_ids: number[];
+	    representative_video_id: number;
+	    state: string;
+	    resume_video_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionProgressWork(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.work_index = source["work_index"];
+	        this.video_ids = source["video_ids"];
+	        this.representative_video_id = source["representative_video_id"];
+	        this.state = source["state"];
+	        this.resume_video_id = source["resume_video_id"];
+	    }
+	}
 	export class CollectionProgressNext {
 	    video_id: number;
 	    title: string;
@@ -3362,6 +3382,8 @@ export namespace services {
 	    complete: boolean;
 	    next?: CollectionProgressNext;
 	    last_activity_at?: string;
+	    works?: CollectionProgressWork[];
+	    offline_video_ids?: number[];
 	
 	    static createFrom(source: any = {}) {
 	        return new CollectionProgress(source);
@@ -3378,6 +3400,8 @@ export namespace services {
 	        this.complete = source["complete"];
 	        this.next = this.convertValues(source["next"], CollectionProgressNext);
 	        this.last_activity_at = source["last_activity_at"];
+	        this.works = this.convertValues(source["works"], CollectionProgressWork);
+	        this.offline_video_ids = source["offline_video_ids"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3403,6 +3427,7 @@ export namespace services {
 	    collection_ids: number[];
 	    continue_only: boolean;
 	    limit: number;
+	    include_works: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CollectionProgressRequest(source);
@@ -3413,8 +3438,10 @@ export namespace services {
 	        this.collection_ids = source["collection_ids"];
 	        this.continue_only = source["continue_only"];
 	        this.limit = source["limit"];
+	        this.include_works = source["include_works"];
 	    }
 	}
+	
 	export class CollectionSuggestionMemberView {
 	    video_id: number;
 	    name: string;

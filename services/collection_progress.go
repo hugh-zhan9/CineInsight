@@ -23,6 +23,16 @@ const (
 	collectionProgressMaxIDs       = 200
 	collectionProgressDefaultLimit = 12
 	collectionProgressMaxLimit     = 50
+	// collectionProgressMaxIDsWithWorks 是带逐部明细（include_works）时一次最多的作品集数：作品集页一次只要一个，
+	// 明细按成员数增长，不给封面墙整页用。
+	collectionProgressMaxIDsWithWorks = 20
+)
+
+// 逐部状态（CollectionProgressWork.State）。
+const (
+	CollectionWorkWatched    = "watched"
+	CollectionWorkInProgress = "in_progress"
+	CollectionWorkUnwatched  = "unwatched"
 )
 
 // CollectionProgressRequest 是 ListCollectionProgress 的参数。
@@ -33,6 +43,8 @@ type CollectionProgressRequest struct {
 	ContinueOnly bool `json:"continue_only"`
 	// Limit 只在 ContinueOnly 时生效：默认 12，最大 50。
 	Limit int `json:"limit"`
+	// IncludeWorks 为 true 时每个作品集带上逐部明细与失效成员（作品集页用）；只能与 CollectionIDs 一起用，最多 20 个。
+	IncludeWorks bool `json:"include_works"`
 }
 
 // CollectionProgress 是一个作品集的进度汇总。
@@ -46,6 +58,21 @@ type CollectionProgress struct {
 	Complete        bool                    `json:"complete"`
 	Next            *CollectionProgressNext `json:"next,omitempty"`
 	LastActivityAt  *time.Time              `json:"last_activity_at" ts_type:"string"`
+	// Works 是逐部明细（只在 include_works 时给），按「第几部」排。
+	Works []CollectionProgressWork `json:"works,omitempty"`
+	// OfflineVideoIDs 是作品集里失效（离线）的成员，按作品集顺序；它们不计入任何一部（只在 include_works 时给）。
+	OfflineVideoIDs []uint `json:"offline_video_ids,omitempty"`
+}
+
+// CollectionProgressWork 是作品集里的一部。
+type CollectionProgressWork struct {
+	WorkIndex int `json:"work_index"` // 第几部，从 1 起
+	// VideoIDs 是这一部在作品集里的全部活跃、未失效成员，代表在最前，其余按版本顺序、视频 ID。
+	VideoIDs              []uint `json:"video_ids"`
+	RepresentativeVideoID uint   `json:"representative_video_id"`
+	State                 string `json:"state"` // watched | in_progress | unwatched（与进度汇总同一口径）
+	// ResumeVideoID 是在看那一部里有续播位置的成员（进度最近更新的那个）；不是在看时为 0。
+	ResumeVideoID uint `json:"resume_video_id"`
 }
 
 // CollectionProgressNext 是该作品集的下一部。
@@ -86,6 +113,14 @@ type collectionProgressWork struct {
 // ListCollectionProgress 返回作品集进度（D-P2-02）。数据库不可用时返回错误。
 func (s *CollectionService) ListCollectionProgress(request CollectionProgressRequest) ([]CollectionProgress, error) {
 	var ids []uint
+	if request.IncludeWorks {
+		if request.ContinueOnly {
+			return nil, fmt.Errorf("逐部明细只能按作品集 ID 查询")
+		}
+		if len(uniqueUintIDs(request.CollectionIDs)) > collectionProgressMaxIDsWithWorks {
+			return nil, fmt.Errorf("带逐部明细时一次最多查询 %d 个作品集", collectionProgressMaxIDsWithWorks)
+		}
+	}
 	if request.ContinueOnly {
 		candidates, err := continueCollectionCandidates()
 		if err != nil {
@@ -116,9 +151,19 @@ func (s *CollectionService) ListCollectionProgress(request CollectionProgressReq
 	if err != nil {
 		return nil, err
 	}
+	var offline map[uint][]uint
+	if request.IncludeWorks {
+		if offline, err = loadCollectionOfflineMembers(ids); err != nil {
+			return nil, err
+		}
+	}
 	byID := make(map[uint]CollectionProgress, len(collections))
 	for _, collection := range collections {
-		progress := summarizeCollectionProgress(rowsByCollection[collection.ID])
+		progress, works := summarizeCollectionProgress(rowsByCollection[collection.ID])
+		if request.IncludeWorks {
+			progress.Works = collectionProgressWorkViews(works)
+			progress.OfflineVideoIDs = offline[collection.ID]
+		}
 		progress.CollectionID = collection.ID
 		progress.Name = collection.Name
 		progress.HasCover = collection.CoverPath != ""
@@ -255,7 +300,49 @@ func groupPositionOf(row collectionProgressRow) int {
 	return *row.GroupPosition
 }
 
-func summarizeCollectionProgress(rows []collectionProgressRow) CollectionProgress {
+// loadCollectionOfflineMembers 读这些作品集里活跃但失效（离线）的成员，按 (作品集, position, 视频 ID)。
+func loadCollectionOfflineMembers(collectionIDs []uint) (map[uint][]uint, error) {
+	var rows []struct {
+		CollectionID uint
+		VideoID      uint
+	}
+	err := database.DB.Table("collection_videos AS cv").
+		Select("cv.collection_id AS collection_id, cv.video_id AS video_id").
+		Joins("JOIN videos v ON v.id = cv.video_id AND v.deleted_at IS NULL AND v.is_stale = ?", true).
+		Where("cv.collection_id IN ?", collectionIDs).
+		Order("cv.collection_id ASC").Order("cv.position ASC").Order("cv.video_id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("读取作品集失效成员失败: %w", err)
+	}
+	grouped := map[uint][]uint{}
+	for _, row := range rows {
+		grouped[row.CollectionID] = append(grouped[row.CollectionID], row.VideoID)
+	}
+	return grouped, nil
+}
+
+// collectionProgressWorkViews 把汇总用的「部」转成逐部明细。
+func collectionProgressWorkViews(works []*collectionProgressWork) []CollectionProgressWork {
+	views := make([]CollectionProgressWork, 0, len(works))
+	for _, work := range works {
+		view := CollectionProgressWork{WorkIndex: work.index, RepresentativeVideoID: work.members[0].VideoID, State: CollectionWorkUnwatched}
+		for _, member := range work.members {
+			view.VideoIDs = append(view.VideoIDs, member.VideoID)
+		}
+		switch {
+		case work.watched:
+			view.State = CollectionWorkWatched
+		case work.inProgress:
+			view.State = CollectionWorkInProgress
+			view.ResumeVideoID = resumeMemberOf(work).VideoID
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func summarizeCollectionProgress(rows []collectionProgressRow) (CollectionProgress, []*collectionProgressWork) {
 	works := collectionProgressWorks(rows)
 	progress := CollectionProgress{TotalWorks: len(works)}
 	var anchor *collectionProgressWork
@@ -279,13 +366,13 @@ func summarizeCollectionProgress(rows []collectionProgressRow) CollectionProgres
 	}
 	progress.Complete = len(works) > 0 && progress.WatchedWorks == len(works)
 	if progress.Complete || len(works) == 0 {
-		return progress
+		return progress, works
 	}
 	next := nextCollectionWork(works, anchor)
 	if next != nil {
 		progress.Next = collectionProgressNextOf(next)
 	}
-	return progress
+	return progress, works
 }
 
 func laterActivity(a, b *time.Time) bool {
@@ -324,20 +411,26 @@ func nextCollectionWork(works []*collectionProgressWork, anchor *collectionProgr
 	return nil
 }
 
+// resumeMemberOf 是在看那一部里要续播的成员：续播位置按文件各自保存，取有位置、进度最近更新的一个。
+func resumeMemberOf(work *collectionProgressWork) collectionProgressRow {
+	chosen := work.members[0]
+	found := false
+	for _, member := range work.members {
+		if member.WatchPositionSeconds <= 0 {
+			continue
+		}
+		if !found || laterActivity(member.WatchProgressUpdatedAt, chosen.WatchProgressUpdatedAt) {
+			chosen = member
+			found = true
+		}
+	}
+	return chosen
+}
+
 func collectionProgressNextOf(work *collectionProgressWork) *CollectionProgressNext {
 	chosen := work.members[0]
 	if work.inProgress {
-		// 续播位置按文件各自保存：播的必须是有进度的那个成员，取进度最近更新的一个。
-		found := false
-		for _, member := range work.members {
-			if member.WatchPositionSeconds <= 0 {
-				continue
-			}
-			if !found || laterActivity(member.WatchProgressUpdatedAt, chosen.WatchProgressUpdatedAt) {
-				chosen = member
-				found = true
-			}
-		}
+		chosen = resumeMemberOf(work)
 	}
 	return &CollectionProgressNext{
 		VideoID:              chosen.VideoID,

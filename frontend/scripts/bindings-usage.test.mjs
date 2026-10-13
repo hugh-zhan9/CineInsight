@@ -20,6 +20,7 @@ const allowedUnused = new Map([
   ['LinkWatchlistEntryVideo', 'UI 二期 D-P2-03「确认」关联：P2-C 片单「想看」标签接入'],
   ['UnlinkWatchlistEntryVideo', 'UI 二期 D-P2-03「解除」关联：P2-C 片单「想看」标签接入'],
   ['ListWatchlistInLibrary', 'UI 二期 D-P2-07 首页「想看的片片库里已有」：P2-B 首页接入'],
+  ['ListPeopleByCount', 'UI 二期 D-P2-06 人物头像墙「按出现次数」：P2-D 集成时接入'],
 ]);
 // 待裁决：前端已不用、去留还没定的绑定；目前为空（SearchSubtitleMatchesWithFilters 已由主代理裁决删除）。
 const pendingRuling = new Map([]);

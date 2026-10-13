@@ -49,6 +49,12 @@ func (a *App) ListPeople(keyword, cursorName string, cursorID uint, limit int) (
 	return a.personService.ListPeople(keyword, cursorName, cursorID, limit)
 }
 
+// ListPeopleByCount 按出现次数（可见视频数，即 active_video_count）倒序、同数按名称列人物（UI 二期 D-P2-06 头像墙），
+// 键集分页：下一页传上一页最后一项的 active_video_count、cursor_name 与 person.id。
+func (a *App) ListPeopleByCount(keyword string, cursorCount int, cursorName string, cursorID uint, limit int) ([]services.PersonListItem, error) {
+	return a.personService.ListPeopleByCount(keyword, cursorCount, cursorName, cursorID, limit)
+}
+
 func (a *App) GetPersonDetail(personID, cursorVideoID uint, limit int) (*services.PersonDetail, error) {
 	return a.personService.GetPersonDetail(personID, cursorVideoID, limit)
 }
