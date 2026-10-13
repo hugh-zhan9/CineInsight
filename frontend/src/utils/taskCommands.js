@@ -7,7 +7,7 @@
 import {
   CancelAIReviewApproval, CancelAutomationRuleRun, CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelDataHealthCheck, CancelFaceAnalysis, CancelImageAITagging,
   CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
-  CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelLostMediaTask, CancelMovieChartRefresh,
+  CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelLocalMetadataExport, CancelLostMediaTask, CancelMovieChartRefresh,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSceneIndex, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
   CreateDatabaseBackup, RunGatedTaskNow, StartCleanupAnalysisFromSettings, StartCollectionSuggestionAnalysis,
   StartImageAITagging, StartImageCleanupAnalysis, StartImageEXIFBackfill,
@@ -25,8 +25,8 @@ import { backgroundTaskLabel, BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdl
 // 清理分析的零参启动用「按设置里的阈值」那个绑定（StartCleanupAnalysisFromSettings），
 // 与扫描后自动分析同一口径（D-PC36）。
 //
-// local_metadata 一个 key 对应补全与写出两条 worker（后端按计数登记）。这里的
-// 启动与取消都只作用于「补全」，写出仍只从片库页的管理菜单发起。
+// local_metadata 是本地资料补全；NFO 写出 D-P3-05 起单独登记为 local_metadata_export：
+// 写出要选筛选范围，仍只从片库页的管理菜单发起，这里只给它「取消」。
 //
 // 每个绑定都包一层箭头函数：模块初始化时不去读绑定本身，测试里只需要模拟真正
 // 被调用到的那几个方法。
@@ -36,6 +36,7 @@ const TASK_BINDINGS = {
   frame_hash: { start: () => StartFrameHashBackfill(), cancel: () => CancelFrameHashBackfill() },
   technical: { start: () => StartTechnicalBackfill(), cancel: () => CancelTechnicalBackfill() },
   local_metadata: { start: () => StartLocalMetadataBackfill(), cancel: () => CancelLocalMetadataBackfill() },
+  local_metadata_export: { cancel: () => CancelLocalMetadataExport() },
   semantic: { cancel: () => CancelSemanticIndex() },
   // 人脸分析的启动要选范围（视频/图片/全部），按 D-029 的口径不进面板；
   // 但它在跑的时候得能取消，与字幕、语义索引同处理。

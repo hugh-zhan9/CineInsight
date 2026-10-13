@@ -83,8 +83,8 @@ type localMetadataBackfill struct {
 }
 
 // SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
-// 补全与写出共用 local_metadata 这一个 key：任一在跑就算这项在跑，
-// 登记表用计数配对，两条 worker 各自 Begin/End 不会互相抵消。
+// 补全登记为 local_metadata，NFO 写出登记为 local_metadata_export（D-P3-05 起分开），
+// 任务中心与命令面板据此分别显示与取消。
 func (s *LocalMetadataService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
 	backfill := s.backfillState()
 	backfill.mu.Lock()

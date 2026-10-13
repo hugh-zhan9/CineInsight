@@ -54,9 +54,9 @@ describe('任务中心动作与绑定对齐（APP-03）', () => {
     expect(api.CancelAIReviewApproval).toHaveBeenLastCalledWith('image', '');
   });
 
-  it('APP-03 后端适配表覆盖 30 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
+  it('APP-03 后端适配表覆盖 31 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
     const capabilities = backendAdapterCapabilities();
-    expect(capabilities).toHaveLength(30);
+    expect(capabilities).toHaveLength(31);
     const missing = [];
     for (const { key, canStart, canCancel } of capabilities) {
       expect(key, '适配表里的常量应当能在登记表里找到取值').toBeTruthy();
@@ -85,6 +85,28 @@ describe('任务中心动作与绑定对齐（APP-03）', () => {
     expect(api.CancelCollectionSuggestionAnalysis).toHaveBeenCalledTimes(1);
     await taskActionRunner('movie_chart', 'cancel')();
     expect(api.CancelMovieChartRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('D-P3-05 NFO 写出与本地资料补全各取消各的；写出没有零参启动', async () => {
+    await taskActionRunner('local_metadata_export', 'cancel')();
+    expect(api.CancelLocalMetadataExport).toHaveBeenCalledTimes(1);
+    expect(api.CancelLocalMetadataBackfill).not.toHaveBeenCalled();
+    await taskActionRunner('local_metadata', 'cancel')();
+    expect(api.CancelLocalMetadataBackfill).toHaveBeenCalledTimes(1);
+    expect(api.CancelLocalMetadataExport).toHaveBeenCalledTimes(1);
+    expect(taskActionRunner('local_metadata_export', 'start')).toBeNull();
+    const capabilities = Object.fromEntries(backendAdapterCapabilities().map(item => [item.key, item]));
+    expect(capabilities.local_metadata_export).toEqual({ key: 'local_metadata_export', canStart: false, canCancel: true });
+  });
+
+  it('D-P3-05 写出在跑时命令面板任务组给「NFO 写出 · 运行中 · 取消」，不给启动', async () => {
+    const running = buildTaskCommands({ running: ['local_metadata_export'], waiting: [] }).find(item => item.id === 'task:local_metadata_export');
+    expect(running.label).toBe('NFO 写出 · 运行中 · 取消');
+    await running.run();
+    expect(api.CancelLocalMetadataExport).toHaveBeenCalledTimes(1);
+    const idle = buildTaskCommands({ running: [], waiting: [] }).map(item => item.id);
+    expect(idle).not.toContain('task:local_metadata_export');
+    expect(idle).toContain('task:local_metadata');
   });
 
   it('没有绑定的动作返回 null，调用方据此不渲染按钮', () => {

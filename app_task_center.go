@@ -67,20 +67,31 @@ type TaskProgress struct {
 // TaskLastRun 是最近一轮的结果。批量任务是上一轮的成功 / 失败计数与失败明细；以单个任务为
 // 单位的 key（字幕、超分、下载）是最近结束的那一个任务；视频 AI 打标没有「轮」的概念，
 // 给的是按状态累计的完成数与失败数（FinishedAt 为空）。
+//
+// D-P3-05 补的几项都从各服务现有状态原样取（不改服务的统计口径），让片库页的后台任务状态条
+// 能收进任务中心：Cancelled 是这一轮被取消（此前与完成混为一谈）；Skipped 是有「跳过」口径的
+// 批量任务都填；Reused / OutOfScope 只有近重复指纹有；NothingToDo 是这一轮总数为 0、没被取消
+// 也没有失败（「已是最新」）。
 type TaskLastRun struct {
-	FinishedAt *time.Time `json:"finished_at" ts_type:"string"`
-	Succeeded  int        `json:"succeeded"`
-	Skipped    int        `json:"skipped,omitempty"`
-	Remaining  int        `json:"remaining,omitempty"`
-	Failed     int        `json:"failed"`
-	Failures   []string   `json:"failures"`
+	FinishedAt  *time.Time `json:"finished_at" ts_type:"string"`
+	Succeeded   int        `json:"succeeded"`
+	Skipped     int        `json:"skipped"`
+	Remaining   int        `json:"remaining,omitempty"`
+	Failed      int        `json:"failed"`
+	Failures    []string   `json:"failures"`
+	Cancelled   bool       `json:"cancelled"`
+	Reused      int        `json:"reused"`
+	OutOfScope  int        `json:"out_of_scope"`
+	NothingToDo bool       `json:"nothing_to_do"`
 }
 
-// TaskCenterItem 是任务中心里一个后台任务 key 的状态。
+// TaskCenterItem 是任务中心里一个后台任务 key 的状态。Preparing 是运行中、还在统计待处理项
+// （总数还不知道，Progress 为 nil）；只有服务状态里本来就有「准备中」的任务会给（D-P3-05）。
 type TaskCenterItem struct {
 	Key        string        `json:"key"`
 	State      string        `json:"state"`
 	GateReason string        `json:"gate_reason"`
+	Preparing  bool          `json:"preparing"`
 	Progress   *TaskProgress `json:"progress"`
 	LastRun    *TaskLastRun  `json:"last_run"`
 	Actions    []string      `json:"actions"`
@@ -264,6 +275,7 @@ func buildTaskCenterItem(key string, state taskCenterKeyState, src *taskCenterSo
 	switch {
 	case running:
 		item.State = TaskCenterStateRunning
+		item.Preparing = state.preparing
 		item.Progress = state.progress
 	case waiting:
 		item.State = TaskCenterStateWaitingIdle

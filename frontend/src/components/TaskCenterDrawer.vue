@@ -78,6 +78,7 @@
                 <span class="task-item__progress-text">{{ item.progress.done }}/{{ item.progress.total }}</span>
               </div>
               <p v-if="lastRunText(item)" class="task-item__last" :data-test="`task-item-last-${item.key}`">{{ lastRunText(item) }}</p>
+              <p v-for="(note, index) in itemNotes(item)" :key="`${item.key}-note-${index}`" class="task-item__note" :data-test="`task-item-note-${item.key}`">{{ note }}</p>
               <details v-if="failures(item).length" class="task-item__failures" :data-test="`task-item-failures-${item.key}`">
                 <summary>失败明细 {{ failures(item).length }} 条</summary>
                 <ul>
@@ -162,6 +163,19 @@ const ITEM_SECTIONS = [
 
 const ITEM_ACTION_LABELS = { start: '启动', cancel: '取消', run_now: '立即运行' };
 
+// 片库页后台任务状态条原有的几种说法（D-P3-05 收进任务中心，文案照搬）。
+const PREPARING_TEXT = '正在统计待处理项…';
+// 「总数为 0」的一轮：补全类沿用状态条的「无需补全」，其余任务（索引、打标、代理、写出）说「无需处理」。
+const BACKFILL_TASK_KEYS = new Set(['technical', 'frame_hash', 'phash', 'local_metadata', 'exif', 'image_phash']);
+const NOTHING_TO_DO_TEXT = { backfill: '无需补全（已是最新状态）', other: '无需处理（已是最新状态）' };
+// 近重复指纹条上的两句说明：指纹的用途（在跑、在等空闲或有过一轮时说），以及「失败」是什么意思（上一轮有失败时说）。
+const TASK_NOTES = {
+  phash: {
+    about: '指纹用于后续查找近重复视频，候选结果请在清理中心查看。',
+    failed: '处理失败表示未能生成指纹，部分视频仍可播放；具体原因见下方。'
+  }
+};
+
 // 最近任务：字幕、超分、下载、播放代理与集中整理，顺序固定。
 const RECENT_KINDS = [
   { kind: 'subtitle', label: '字幕' },
@@ -225,8 +239,10 @@ export function relativeTimeText(at, now = Date.now()) {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-// 任务中心抽屉（D-PC18、APP-03）。只读聚合 GetTaskCenterSnapshot：22 个后台任务 key 的状态、
+// 任务中心抽屉（D-PC18、APP-03）。只读聚合 GetTaskCenterSnapshot：全部后台任务 key 的状态、
 // 进度、上一轮结果与可用动作，外加字幕 / 超分 / 下载 / 播放代理 / 集中整理的最近任务。
+// D-P3-05 起片库页的后台任务状态条收进这里：准备中、跳过数、已完成 / 已取消、近重复指纹的复用与
+// 移出范围、「无需补全（已是最新状态）」，以及 NFO 写出（local_metadata_export）的取消。
 // 常挂载（关着也在），这样顶栏角标能跟着 task-center-changed 走；打开时再主动拉一次。
 // 「最近操作」页签（统一设计 D-UD-09）读 utils/recentOperations.js：生产方用 notifyUndoable 记下的可撤销操作，
 // 撤销走同一条记录（recentOperations.undo），失败时记录留着并提示原因。
@@ -404,7 +420,7 @@ export default {
     },
     stateText(item) {
       const reason = item.gate_reason ? `等待空闲（${idleWaitReasonLabel(item.gate_reason)}）` : '';
-      if (item.state === 'running') return reason ? `运行中 · ${reason}` : '运行中';
+      if (item.state === 'running') return ['运行中', item.preparing ? PREPARING_TEXT : '', reason].filter(Boolean).join(' · ');
       if (item.state === 'waiting_idle') return reason || '等待空闲';
       return '空闲';
     },
@@ -416,14 +432,32 @@ export default {
     lastRunFailed(item) {
       return Number(item?.last_run?.failed || 0) > 0 || asArray(item?.last_run?.failures).length > 0;
     },
+    // 上一轮：总数为 0 的一轮只说「无需补全 / 无需处理（已是最新状态）」；其余列计数（跳过、未处理、
+    // 复用、移出范围只在不为 0 时列），再按状态条的说法收尾：取消的写「已取消」，有结束时间的写
+    // 「已完成」或「本轮结束，有失败项」（视频 AI 打标给的是累计数、没有结束时间，不收尾）。
     lastRunText(item) {
       const run = item.last_run;
       if (!run) return '';
       const time = this.formatTime(run.finished_at);
+      const head = time ? `上一轮（${time}）` : '上一轮';
+      if (run.nothing_to_do) return `${head}：${NOTHING_TO_DO_TEXT[BACKFILL_TASK_KEYS.has(item.key) ? 'backfill' : 'other']}`;
       const counts = [`成功 ${Number(run.succeeded || 0)}`, `失败 ${Number(run.failed || 0)}`];
       if (Number(run.skipped) > 0) counts.push(`跳过 ${Number(run.skipped)}`);
       if (Number(run.remaining) > 0) counts.push(`未处理 ${Number(run.remaining)}`);
-      return time ? `上一轮（${time}）：${counts.join(' · ')}` : `上一轮：${counts.join(' · ')}`;
+      if (Number(run.reused) > 0) counts.push(`已有指纹复用 ${Number(run.reused)}`);
+      if (Number(run.out_of_scope) > 0) counts.push(`已移出处理范围 ${Number(run.out_of_scope)}`);
+      return `${head}：${counts.join(' · ')}${this.lastRunOutcome(item)}`;
+    },
+    lastRunOutcome(item) {
+      const run = item.last_run;
+      if (run.cancelled) return '（已取消）';
+      if (!run.finished_at) return '';
+      return this.lastRunFailed(item) ? '（本轮结束，有失败项）' : '（已完成）';
+    },
+    itemNotes(item) {
+      const notes = TASK_NOTES[item.key];
+      if (!notes || (item.state === 'idle' && !item.last_run)) return [];
+      return this.lastRunFailed(item) ? [notes.about, notes.failed] : [notes.about];
     },
     failures(item) {
       return asArray(item.last_run?.failures);
@@ -614,6 +648,7 @@ export default {
 .task-item__bar { flex: 1; }
 .task-item__progress-text { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-caption); }
 .task-item__last { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.task-item__note { margin-top: var(--space-1); color: var(--text-secondary); font-size: var(--fs-caption); line-height: 1.6; }
 .task-item__failures { margin-top: var(--space-1); color: var(--text-secondary); font-size: var(--fs-caption); }
 .task-item__failures summary { cursor: pointer; color: var(--warning-text); }
 .task-item__failures ul { margin: var(--space-1) 0 0; padding-left: 18px; max-height: 160px; overflow-y: auto; }

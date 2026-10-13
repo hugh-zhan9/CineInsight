@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -55,12 +56,13 @@ func taskCenterItemByKey(t *testing.T, snapshot TaskCenterSnapshot, key string) 
 	return TaskCenterItem{}
 }
 
-// APP-03：适配表必须恰好覆盖登记表的 30 个 key（P-007 加入 scene_index，P-008 加入 video_edit，数据维护加入四项）。登记表新增一个 key 而适配表没跟上、
+// APP-03：适配表必须恰好覆盖登记表的 31 个 key（P-007 加入 scene_index，P-008 加入 video_edit，数据维护加入四项，
+// D-P3-05 加入 local_metadata_export）。登记表新增一个 key 而适配表没跟上、
 // 或适配表里留着登记表已删掉的 key，这个用例都会失败；快照的 Items 也按登记表顺序全部列出。
 func TestAPP03TaskCenterAdaptersCoverEveryRegistryKey(t *testing.T) {
 	keys := services.BackgroundTaskKeys()
-	if len(keys) != 30 {
-		t.Fatalf("登记表应有 30 个 key（详细设计 §1.2a + scene_index + video_edit + 数据维护四项），实际 %d: %v", len(keys), keys)
+	if len(keys) != 31 {
+		t.Fatalf("登记表应有 31 个 key（详细设计 §1.2a + scene_index + video_edit + 数据维护四项 + local_metadata_export），实际 %d: %v", len(keys), keys)
 	}
 	registered := map[string]bool{}
 	for _, key := range keys {
@@ -448,4 +450,267 @@ func setTaskCenterChangeDelayForTest(t *testing.T, delay time.Duration) {
 		taskCenterChangeDelay = previous
 		taskCenterChanges.mu.Unlock()
 	})
+}
+
+// ===== D-P3-05：任务中心补齐片库页后台任务状态条上的几项 =====
+
+// 各批量任务的服务状态原样搬进上一轮：跳过数（有跳过口径的都填）、取消与完成分开、近重复指纹的
+// 复用 / 移出范围、总数为 0 的「已是最新」。期望里没写的字段都应为零值。
+func TestP3ABatchRunsMapServiceCountsIntoLastRun(t *testing.T) {
+	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		run  batchRun
+		want TaskLastRun
+	}{
+		{"技术信息：跳过数照搬，完成不算取消", technicalBackfillRun(services.TechnicalBackfillStatus{Completed: true, Total: 6, Processed: 6, Succeeded: 3, Skipped: 2, Failed: 1, UpdatedAt: &at,
+			Failures: []services.TechnicalBackfillFailure{{Name: "a.mp4", Error: "坏文件"}}}),
+			TaskLastRun{Succeeded: 3, Skipped: 2, Failed: 1, Failures: []string{"a.mp4：坏文件"}}},
+		{"技术信息：取消", technicalBackfillRun(services.TechnicalBackfillStatus{Cancelled: true, Total: 6, Processed: 2, Succeeded: 1, Skipped: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Skipped: 1, Cancelled: true}},
+		{"技术信息：总数为 0 是已是最新", technicalBackfillRun(services.TechnicalBackfillStatus{Completed: true, UpdatedAt: &at}),
+			TaskLastRun{NothingToDo: true}},
+		{"技术信息：准备失败（总数 0、失败 1）不是已是最新", technicalBackfillRun(services.TechnicalBackfillStatus{Completed: true, Failed: 1, UpdatedAt: &at,
+			Failures: []services.TechnicalBackfillFailure{{Name: "准备补全任务", Error: "库不可读"}}}),
+			TaskLastRun{Failed: 1, Failures: []string{"准备补全任务：库不可读"}}},
+		{"近重复指纹：复用与移出范围", perceptualHashRun(services.PerceptualHashStatus{Completed: true, Total: 10, Processed: 10, Succeeded: 4, Skipped: 1, Reused: 3, OutOfScope: 2, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 4, Skipped: 1, Reused: 3, OutOfScope: 2}},
+		{"近重复指纹：取消时服务同时置 Completed，总数为 0 也不算已是最新", perceptualHashRun(services.PerceptualHashStatus{Completed: true, Cancelled: true, UpdatedAt: &at}),
+			TaskLastRun{Cancelled: true}},
+		{"帧哈希：跳过", frameHashRun(services.FrameHashStatus{Completed: true, Total: 3, Processed: 3, Succeeded: 1, Skipped: 2, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Skipped: 2}},
+		{"帧哈希：总数为 0", frameHashRun(services.FrameHashStatus{Completed: true, UpdatedAt: &at}),
+			TaskLastRun{NothingToDo: true}},
+		{"本地资料补全：跳过与取消", localMetadataBackfillRun(services.LocalMetadataBackfillStatus{Completed: true, Cancelled: true, Total: 5, Processed: 3, Succeeded: 2, Skipped: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 2, Skipped: 1, Cancelled: true}},
+		{"NFO 写出：完成，失败明细取原因", localMetadataExportRun(services.LocalMetadataExportStatus{Completed: true, Total: 2, Processed: 2, Succeeded: 1, Failed: 1, UpdatedAt: &at,
+			Failures: []services.LocalMetadataFailure{{VideoID: 9, Message: "NFO 被占用"}}}),
+			TaskLastRun{Succeeded: 1, Failed: 1, Failures: []string{"NFO 被占用"}}},
+		{"NFO 写出：取消", localMetadataExportRun(services.LocalMetadataExportStatus{Completed: true, Cancelled: true, Total: 4, Processed: 1, Succeeded: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Cancelled: true}},
+		{"NFO 写出：筛选结果为空", localMetadataExportRun(services.LocalMetadataExportStatus{Completed: true, UpdatedAt: &at}),
+			TaskLastRun{NothingToDo: true}},
+		{"场景画面索引：跳过", sceneIndexRun(services.SceneIndexStatus{Completed: true, Total: 4, Processed: 4, Succeeded: 3, Skipped: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 3, Skipped: 1}},
+		{"人脸分析：中断也算这一轮结束，整轮错误进失败明细", faceAnalysisRun(services.FaceAnalysisStatus{Interrupted: true, Total: 5, Processed: 2, Succeeded: 2, LastError: "sidecar 退出", UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 2, Failures: []string{"sidecar 退出"}}},
+		{"人脸分析：取消", faceAnalysisRun(services.FaceAnalysisStatus{Cancelled: true, Total: 5, Processed: 1, Succeeded: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Cancelled: true}},
+		{"语义索引：跳过", semanticIndexRun(services.SemanticIndexStatus{Completed: true, Total: 3, Processed: 3, Succeeded: 2, Skipped: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 2, Skipped: 1}},
+		{"图片语义索引：跳过与取消", imageSemanticIndexRun(services.ImageSemanticIndexStatus{Cancelled: true, Total: 3, Processed: 2, Succeeded: 1, Skipped: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Skipped: 1, Cancelled: true}},
+		{"图片 AI 打标：跳过", imageAITaggingRun(services.ImageAITaggingStatus{Completed: true, Total: 3, Processed: 3, Succeeded: 1, Skipped: 2, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Skipped: 2}},
+		{"图片 EXIF：跳过", imageEXIFRun(services.ImageEXIFBackfillStatus{Completed: true, Total: 3, Processed: 3, Succeeded: 1, Skipped: 2, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Skipped: 2}},
+		{"图片指纹：跳过", imagePerceptualHashRun(services.ImagePerceptualHashBackfillStatus{Completed: true, Total: 2, Processed: 2, Succeeded: 1, Skipped: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Skipped: 1}},
+		{"图片指纹：总数为 0", imagePerceptualHashRun(services.ImagePerceptualHashBackfillStatus{Completed: true, UpdatedAt: &at}),
+			TaskLastRun{NothingToDo: true}},
+		{"播放代理：跳过数与失败项", playbackProxyRun(services.PlaybackProxyStatus{Completed: true, Total: 3, Processed: 3, Succeeded: 1, Skipped: 1, Failed: 1, UpdatedAt: &at,
+			Results: []services.PlaybackProxyItemResult{{VideoID: 1, Name: "a.avi", Code: services.PlaybackProxyCodeAlreadyExists}, {VideoID: 2, Name: "b.avi", Code: "encode_failed", Message: "ffmpeg 退出"}}}),
+			TaskLastRun{Succeeded: 1, Skipped: 1, Failed: 1, Failures: []string{"b.avi：ffmpeg 退出"}}},
+		{"播放代理：取消", playbackProxyRun(services.PlaybackProxyStatus{Cancelled: true, Total: 3, Processed: 1, Succeeded: 1, UpdatedAt: &at}),
+			TaskLastRun{Succeeded: 1, Cancelled: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.run.lastRun()
+			if got == nil {
+				t.Fatalf("结束了的一轮应有上一轮结果: %+v", tc.run)
+			}
+			want := tc.want
+			want.FinishedAt = &at
+			if want.Failures == nil {
+				want.Failures = []string{}
+			}
+			if !reflect.DeepEqual(*got, want) {
+				t.Fatalf("上一轮映射不对:\n got %+v\nwant %+v", *got, want)
+			}
+		})
+	}
+}
+
+// 跑着的批量任务只报进度（准备阶段连进度也没有、只报准备中），不报上一轮。
+func TestP3ARunningBatchReportsPreparingOrProgressButNoLastRun(t *testing.T) {
+	// 准备阶段服务只置 Preparing（Running 可能还没翻）：这四项都按 running || preparing 算在跑。
+	for name, run := range map[string]batchRun{
+		"技术信息":   technicalBackfillRun(services.TechnicalBackfillStatus{Preparing: true}),
+		"帧哈希":    frameHashRun(services.FrameHashStatus{Preparing: true}),
+		"人脸分析":   faceAnalysisRun(services.FaceAnalysisStatus{Running: true, Preparing: true}),
+		"场景画面索引": sceneIndexRun(services.SceneIndexStatus{Preparing: true}),
+	} {
+		if !run.running || !run.preparing || run.progress() != nil || run.lastRun() != nil {
+			t.Fatalf("%s 准备阶段应为运行中 + 准备中、没有进度与上一轮: %+v", name, run)
+		}
+	}
+	running := frameHashRun(services.FrameHashStatus{Running: true, Total: 10, Processed: 4, Succeeded: 3, Skipped: 1})
+	if running.preparing || running.lastRun() != nil || !reflect.DeepEqual(running.progress(), &TaskProgress{Done: 4, Total: 10}) {
+		t.Fatalf("运行中应只有进度: %+v", running)
+	}
+	if run := localMetadataExportRun(services.LocalMetadataExportStatus{Running: true, Total: 5, Processed: 2}); !run.running || run.preparing ||
+		!reflect.DeepEqual(run.progress(), &TaskProgress{Done: 2, Total: 5}) || run.lastRun() != nil {
+		t.Fatalf("NFO 写出运行中应只有进度: %+v", run)
+	}
+	if run := technicalBackfillRun(services.TechnicalBackfillStatus{}); run.running || run.lastRun() != nil {
+		t.Fatalf("从没跑过时既不在跑也没有上一轮: %+v", run)
+	}
+}
+
+// Preparing 只在运行中给出（等待空闲或空闲的项不报准备中），此时没有进度。
+func TestP3ATaskCenterItemReportsPreparingOnlyWhileRunning(t *testing.T) {
+	src := &taskCenterSources{running: map[string]bool{}, waiting: map[string]string{}}
+	item := buildTaskCenterItem("technical", taskCenterKeyState{running: true, preparing: true, canStart: true, canCancel: true}, src)
+	if item.State != TaskCenterStateRunning || !item.Preparing || item.Progress != nil || !reflect.DeepEqual(item.Actions, []string{TaskCenterActionCancel}) {
+		t.Fatalf("准备阶段应为 running + preparing + 可取消: %+v", item)
+	}
+	item = buildTaskCenterItem("technical", taskCenterKeyState{running: true, canCancel: true, progress: &TaskProgress{Done: 1, Total: 3}}, src)
+	if item.Preparing || item.Progress == nil {
+		t.Fatalf("统计完之后不再报准备中: %+v", item)
+	}
+	src.waiting["technical"] = services.IdleWaitReasonUserActive
+	item = buildTaskCenterItem("technical", taskCenterKeyState{preparing: true, canStart: true}, src)
+	if item.State != TaskCenterStateWaitingIdle || item.Preparing {
+		t.Fatalf("没在跑的项不报准备中: %+v", item)
+	}
+}
+
+// 「一次分析」类与批量批准、自动规则：取消的那一轮单独标出，不再与完成混为一谈。
+func TestP3ASingleOutcomeTasksSeparateCancelledFromCompleted(t *testing.T) {
+	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	if run := cleanupLastRun(true, false, "", &at); run == nil || run.Cancelled || run.Succeeded != 1 || run.Failed != 0 {
+		t.Fatalf("清理分析完成: %+v", run)
+	}
+	if run := cleanupLastRun(false, true, "", &at); run == nil || !run.Cancelled || run.Succeeded != 0 || run.Failed != 0 || run.NothingToDo {
+		t.Fatalf("清理分析取消: %+v", run)
+	}
+	if run := cleanupLastRun(false, false, "磁盘已满", &at); run == nil || run.Cancelled || run.Failed != 1 || !reflect.DeepEqual(run.Failures, []string{"磁盘已满"}) {
+		t.Fatalf("清理分析出错: %+v", run)
+	}
+	if run := cleanupLastRun(false, false, "", &at); run != nil {
+		t.Fatalf("没跑过不该有上一轮: %+v", run)
+	}
+
+	if run := collectionSuggestLastRun(services.CollectionSuggestionStatus{Cancelled: true, UpdatedAt: &at}); run == nil || !run.Cancelled || run.Succeeded != 0 {
+		t.Fatalf("建议作品集取消: %+v", run)
+	}
+	if run := collectionSuggestLastRun(services.CollectionSuggestionStatus{Completed: true, UpdatedAt: &at}); run == nil || run.Cancelled || run.Succeeded != 1 {
+		t.Fatalf("建议作品集完成: %+v", run)
+	}
+	if run := collectionSuggestLastRun(services.CollectionSuggestionStatus{Completed: true, LastError: "读库失败", UpdatedAt: &at}); run == nil || run.Cancelled || run.Failed != 1 {
+		t.Fatalf("建议作品集出错优先: %+v", run)
+	}
+
+	review := services.ReviewApprovalState{State: "cancelled", FinishedAt: &at, Succeeded: 2, Skipped: 1, Remaining: 3}
+	if run := reviewApprovalLastRun(review); run == nil || !run.Cancelled || run.Succeeded != 2 || run.Skipped != 1 || run.Remaining != 3 || len(run.Failures) != 0 {
+		t.Fatalf("批量批准取消: %+v", run)
+	}
+	review.State = "completed"
+	if run := reviewApprovalLastRun(review); run == nil || run.Cancelled {
+		t.Fatalf("批量批准完成: %+v", run)
+	}
+	review.State = "failed"
+	if run := reviewApprovalLastRun(review); run == nil || run.Cancelled || len(run.Failures) != 1 {
+		t.Fatalf("批量批准中止: %+v", run)
+	}
+	if run := reviewApprovalLastRun(services.ReviewApprovalState{State: "idle"}); run != nil {
+		t.Fatalf("没有批次时不该有上一轮: %+v", run)
+	}
+
+	if run := automationRuleLastRun(services.AutomationRuleRunStatus{Completed: true, Cancelled: true, Matched: 4, FinishedAt: &at}); !run.Cancelled || run.Succeeded != 4 {
+		t.Fatalf("自动规则取消: %+v", run)
+	}
+	if run := automationRuleLastRun(services.AutomationRuleRunStatus{Completed: true, Matched: 4, FinishedAt: &at}); run.Cancelled {
+		t.Fatalf("自动规则完成: %+v", run)
+	}
+}
+
+// 以单个任务为单位的几类：最近结束的那一个是被取消的，上一轮就标已取消（不算成功也不算失败）。
+func TestP3AJobTasksMarkCancelledLastRun(t *testing.T) {
+	app := &App{}
+	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	cancelledSubtitle := app.taskCenterSubtitle(&taskCenterSources{subtitleJobs: []services.SubtitleJobItem{{Status: services.SubtitleQueueTaskStatusCancelled, FinishedAt: &at}}})
+	if run := cancelledSubtitle.lastRun; run == nil || !run.Cancelled || run.Succeeded != 0 || run.Failed != 0 {
+		t.Fatalf("字幕取消: %+v", run)
+	}
+	doneSubtitle := app.taskCenterSubtitle(&taskCenterSources{subtitleJobs: []services.SubtitleJobItem{{Status: services.SubtitleQueueTaskStatusSucceeded, FinishedAt: &at}}})
+	if run := doneSubtitle.lastRun; run == nil || run.Cancelled || run.Succeeded != 1 {
+		t.Fatalf("字幕完成: %+v", run)
+	}
+
+	var cancelledTask, completedTask services.EnhancementTaskView
+	cancelledTask.Status, cancelledTask.FinishedAt = models.EnhancementStatusCancelled, &at
+	completedTask.Status, completedTask.FinishedAt = models.EnhancementStatusCompleted, &at
+	if run := app.taskCenterEnhancement(&taskCenterSources{enhancement: []services.EnhancementTaskView{cancelledTask}}).lastRun; run == nil || !run.Cancelled || run.Succeeded != 0 {
+		t.Fatalf("超分取消: %+v", run)
+	}
+	if run := app.taskCenterEnhancement(&taskCenterSources{enhancement: []services.EnhancementTaskView{completedTask}}).lastRun; run == nil || run.Cancelled || run.Succeeded != 1 {
+		t.Fatalf("超分完成: %+v", run)
+	}
+
+	edit := app.taskCenterVideoEdit(&taskCenterSources{videoEdits: []services.EditProjectSummary{{Status: "cancelled", ItemCount: 3, CompletedCount: 1, FinishedAt: &at}}})
+	if run := edit.lastRun; run == nil || !run.Cancelled || run.Succeeded != 1 || run.Failed != 0 {
+		t.Fatalf("视频工作台取消: %+v", run)
+	}
+	edit = app.taskCenterVideoEdit(&taskCenterSources{videoEdits: []services.EditProjectSummary{{Status: "partial", ItemCount: 3, CompletedCount: 2, FinishedAt: &at}}})
+	if run := edit.lastRun; run == nil || run.Cancelled || run.Failed != 1 {
+		t.Fatalf("视频工作台部分完成: %+v", run)
+	}
+
+	var consolidation services.CleanupConsolidationSummary
+	consolidation.Status, consolidation.Total, consolidation.Completed, consolidation.FinishedAt = "cancelled", 3, 1, &at
+	if run := app.taskCenterCleanupConsolidation(&taskCenterSources{consolidations: []services.CleanupConsolidationSummary{consolidation}}).lastRun; run == nil || !run.Cancelled || run.Succeeded != 1 {
+		t.Fatalf("集中整理取消: %+v", run)
+	}
+	consolidation.Status = "completed"
+	if run := app.taskCenterCleanupConsolidation(&taskCenterSources{consolidations: []services.CleanupConsolidationSummary{consolidation}}).lastRun; run == nil || run.Cancelled {
+		t.Fatalf("集中整理完成: %+v", run)
+	}
+}
+
+// NFO 写出与本地资料补全分成两个 key：写出的运行与上一轮只出现在 local_metadata_export 上，
+// 它没有零参启动（要选筛选范围）；补全那一项不受牵连，照旧可启动。
+func TestP3ATaskCenterSplitsNFOExportFromLocalMetadataBackfill(t *testing.T) {
+	setupAppTestDB(t)
+	app := NewApp()
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "片B.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake-video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.Video{Name: "片B.mp4", Path: videoPath, Directory: root}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.StartLocalMetadataExport(services.LocalMetadataExportRequest{}); err != nil {
+		t.Fatalf("启动 NFO 写出失败: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for app.GetLocalMetadataExportStatus().Running || len(app.GetBackgroundTasks()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("NFO 写出应很快结束: %+v %v", app.GetLocalMetadataExportStatus(), app.GetBackgroundTasks())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	snapshot := app.GetTaskCenterSnapshot()
+	export := taskCenterItemByKey(t, snapshot, string(services.BackgroundTaskLocalMetadataExport))
+	if export.State != TaskCenterStateIdle || export.LastRun == nil || export.LastRun.Succeeded != 1 || export.LastRun.Cancelled ||
+		export.LastRun.NothingToDo || len(export.Actions) != 0 {
+		t.Fatalf("NFO 写出的上一轮应在自己的 key 上、且没有零参启动: %+v last=%+v", export, export.LastRun)
+	}
+	backfill := taskCenterItemByKey(t, snapshot, string(services.BackgroundTaskLocalMetadata))
+	if backfill.State != TaskCenterStateIdle || backfill.LastRun != nil || !reflect.DeepEqual(backfill.Actions, []string{TaskCenterActionStart}) {
+		t.Fatalf("补全那一项不该带上写出的结果: %+v last=%+v", backfill, backfill.LastRun)
+	}
+
+	app.backgroundTasks.Begin(services.BackgroundTaskLocalMetadataExport)
+	defer app.backgroundTasks.End(services.BackgroundTaskLocalMetadataExport)
+	snapshot = app.GetTaskCenterSnapshot()
+	if item := taskCenterItemByKey(t, snapshot, string(services.BackgroundTaskLocalMetadataExport)); item.State != TaskCenterStateRunning {
+		t.Fatalf("登记表里的写出应显示运行中: %+v", item)
+	}
+	if item := taskCenterItemByKey(t, snapshot, string(services.BackgroundTaskLocalMetadata)); item.State != TaskCenterStateIdle {
+		t.Fatalf("写出在跑时补全那一项仍是空闲: %+v", item)
+	}
 }

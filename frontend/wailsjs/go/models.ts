@@ -146,10 +146,14 @@ export namespace main {
 	export class TaskLastRun {
 	    finished_at?: string;
 	    succeeded: number;
-	    skipped?: number;
+	    skipped: number;
 	    remaining?: number;
 	    failed: number;
 	    failures: string[];
+	    cancelled: boolean;
+	    reused: number;
+	    out_of_scope: number;
+	    nothing_to_do: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new TaskLastRun(source);
@@ -163,6 +167,10 @@ export namespace main {
 	        this.remaining = source["remaining"];
 	        this.failed = source["failed"];
 	        this.failures = source["failures"];
+	        this.cancelled = source["cancelled"];
+	        this.reused = source["reused"];
+	        this.out_of_scope = source["out_of_scope"];
+	        this.nothing_to_do = source["nothing_to_do"];
 	    }
 	}
 	export class TaskProgress {
@@ -183,6 +191,7 @@ export namespace main {
 	    key: string;
 	    state: string;
 	    gate_reason: string;
+	    preparing: boolean;
 	    progress?: TaskProgress;
 	    last_run?: TaskLastRun;
 	    actions: string[];
@@ -196,6 +205,7 @@ export namespace main {
 	        this.key = source["key"];
 	        this.state = source["state"];
 	        this.gate_reason = source["gate_reason"];
+	        this.preparing = source["preparing"];
 	        this.progress = this.convertValues(source["progress"], TaskProgress);
 	        this.last_run = this.convertValues(source["last_run"], TaskLastRun);
 	        this.actions = source["actions"];

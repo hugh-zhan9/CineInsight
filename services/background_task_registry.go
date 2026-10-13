@@ -17,6 +17,7 @@ const (
 	BackgroundTaskPerceptualHash       BackgroundTaskKey = "phash"
 	BackgroundTaskTechnical            BackgroundTaskKey = "technical"
 	BackgroundTaskLocalMetadata        BackgroundTaskKey = "local_metadata"
+	BackgroundTaskLocalMetadataExport  BackgroundTaskKey = "local_metadata_export" // NFO 写出，D-P3-05 起与补全分开登记
 	BackgroundTaskSemantic             BackgroundTaskKey = "semantic"
 	BackgroundTaskImageSemantic        BackgroundTaskKey = "image_semantic"
 	BackgroundTaskAITagging            BackgroundTaskKey = "ai_tagging"
@@ -68,6 +69,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskPerceptualHash,
 	BackgroundTaskTechnical,
 	BackgroundTaskLocalMetadata,
+	BackgroundTaskLocalMetadataExport,
 	BackgroundTaskSemantic,
 	BackgroundTaskImageSemantic,
 	BackgroundTaskAITagging,
@@ -113,8 +115,9 @@ func BackgroundTaskKeys() []string {
 
 // BackgroundTaskRegistry 记录当前正在跑的长任务（D-014）。
 //
-// 用计数而不是集合：本地元数据的补全与写出共用一个 key，任一在跑就算这项在跑，
-// 两条 worker 各自 Begin/End 时只有计数能配得上。
+// 用计数而不是集合：同一个 key 可能有几条 worker 同时在跑（例如插件下载每个任务各登记一次），
+// 任一在跑就算这项在跑，各自 Begin/End 时只有计数能配得上。本地资料的补全与 NFO 写出此前共用
+// local_metadata，D-P3-05 起写出单独登记为 local_metadata_export，任务中心才分得清、取消得准。
 //
 // 不持久化：进程重启即清零。
 type BackgroundTaskRegistry struct {
