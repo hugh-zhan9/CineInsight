@@ -116,6 +116,7 @@ func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video
 		return nil, err
 	}
 	log.Printf("扫描器软删的视频文件已回到原处，恢复原记录（无 missing 条目） video_id=%d", restored.ID)
+	notifyLibraryMatchInputsChanged("scanner-restore")
 	return &restored, nil
 }
 

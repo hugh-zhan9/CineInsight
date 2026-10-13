@@ -452,8 +452,10 @@ func (a *App) startup(ctx context.Context) {
 	a.aiTaggingService.Start(ctx)
 	// 想看片单的在线补全：先把进程重启后残留的 running 刷回 pending，再起 worker。
 	a.watchlistService.StartEnrichment(ctx)
-	// UI 二期：后台补齐片名排序键（§2.3），再给全部未关联的想看条目跑一轮片库自动关联（D-P2-03）。
-	services.StartVideoTitleSortKeyBackfill(ctx)
+	// UI 二期：后台对账片名排序键（§2.3），再给全部未关联的想看条目跑一轮片库自动关联（D-P2-03）；
+	// 之后视频片名 / 年份变化、回收站恢复都经防抖再跑一轮。
+	services.StartVideoTitleSortKeyReconcile(ctx)
+	services.SetLibraryMatchInputListener(a.watchlistService.TriggerLibraryMatchSoon)
 	a.watchlistService.TriggerLibraryMatch("startup")
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
 	go a.triggerImageAITaggingAuto("startup")
@@ -731,7 +733,7 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.watchlistService != nil {
 		a.watchlistService.StopEnrichmentAndWait()
-		a.watchlistService.WaitLibraryMatch()
+		a.watchlistService.StopLibraryMatch()
 	}
 	if svc := a.movieChartService(); svc != nil {
 		// 必须等它真的收摊：详情阶段是 1 次/秒的限速循环，不取消就会在退出途中

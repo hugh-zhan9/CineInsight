@@ -20,24 +20,30 @@ import (
 
 // 想看条目与片库视频的关联（UI 二期 D-P2-03，详细设计 §2.2）。
 //
-// 一处一份：豆瓣来源（source_name = douban 且 source_item_id 非空）的已关联存在 movie_video_links
-// （榜单的已看同步依赖它，origin 空串 = 手动、auto = 自动匹配）；其他来源存在 watchlist_video_links
-// （auto / manual）；所有来源的「解除过」都存在 watchlist_video_links（dismissed）。读一个条目的关联
-// = 对应那张表的已关联行（只算活跃视频）减去它的 dismissed 行。两张表不互相同步。
+// 唯一归处是 watchlist_video_links：按条目记、与条目来源无关，origin = auto / manual / dismissed。
+// 读一个条目的关联 = 它的 auto / manual 行 ∪（条目此刻是豆瓣来源时）movie_video_links 里它那个豆瓣 ID 的行
+// （榜单页建的，读作 manual），再按「作品」减去 dismissed：同一版本组任一成员解除过，整部作品都不算。
 //
-// 自动匹配：条目片名规范化（normalizeLibraryTitle）后与视频 display_title / original_title / 去扩展名
-// name 的规范化结果**完全相等**、视频 year 等于条目年份（两边都有）、命中的视频按版本组合并后**恰好一部**，
-// 才关联到那一部的代表视频；解除过的那一对跳过。触发：条目新增、改名、在线补全成功（只算这一条，同步）；
-// 扫描入库新视频后与应用启动后（全部未关联条目，后台）。同一时刻只跑一轮，后台轮进行中再触发记一次「再跑」；
-// 写入用唯一索引兜底，冲突即已关联。
+//   - 自动匹配只写 watchlist_video_links(origin=auto)，从不写 movie_video_links，所以不牵动榜单的已看双向同步；
+//     插入用 (条目, 视频) 唯一键 ON CONFLICT DO NOTHING，已有的 dismissed / manual 行总是赢。
+//   - 片单页手动关联写 manual（关联时间刷新为此刻），并清掉这部作品的 dismissed；豆瓣条目另外调榜单的
+//     LinkMovieToVideo，保持「片单确认的关联榜单也看得到」的既有行为。
+//   - 片单页解除把这一对写成 dismissed；豆瓣条目另外调榜单的 UnlinkMovieVideo。
+//   - 榜单页解除（UnlinkMovieVideo）给此刻以这个豆瓣 ID 为来源的每个条目记 dismissed，自动匹配不会再连回来。
 //
-// 原有 LinkMovieToVideo / UnlinkMovieVideo（榜单页）不变，后者不写 dismissed。
+// 自动匹配：条目片名规范化（normalizeLibraryTitle）后与视频 display_title / original_title / 去扩展名 name 的
+// 规范化结果**完全相等**、视频 year 等于条目年份（两边都有）、命中的视频按版本组合并后**恰好一部**，且这部作品
+// 没有被这个条目解除过，才关联到那一部的代表视频。触发：条目新增、改名、在线补全成功（只算这一条，同步，不等
+// 后台轮）；扫描入库新视频后、应用启动后（全部未关联条目，后台）；视频片名 / 原始片名 / 文件名 / 年份变了、
+// 回收站恢复后（防抖约 5 秒的后台轮）。后台轮同一时刻只有一个，进行中再触发记一次「再跑」。
 
 const watchlistLibraryStateMaxEntries = 200
 
 const (
 	watchlistInLibraryDefaultLimit = 12
 	watchlistInLibraryMaxLimit     = 50
+	// watchlistMatchDebounce 是视频元数据变化后到后台匹配轮开跑的防抖时间。
+	watchlistMatchDebounce = 5 * time.Second
 )
 
 // WatchlistLinkedVideo 是条目已关联的一个视频。
@@ -51,6 +57,8 @@ type WatchlistLinkedVideo struct {
 // WatchlistLibraryState 是一个想看条目的片库关联状态。
 type WatchlistLibraryState struct {
 	Linked []WatchlistLinkedVideo `json:"linked"`
+	// Dismissed 是这个条目解除过的视频 ID（含解除过的作品的全部版本），升序；「片库中可能已有」的建议据此滤掉。
+	Dismissed []uint `json:"dismissed"`
 }
 
 // WatchlistInLibraryItem 是首页「想看的片片库里已有」的一项。
@@ -69,13 +77,72 @@ type WatchlistInLibraryItem struct {
 
 // watchlistLibraryMatch 是自动匹配的并发状态，零值可用。
 type watchlistLibraryMatch struct {
-	runMu   sync.Mutex // 一轮匹配（单条或全量）同一时刻只有一个
-	mu      sync.Mutex
-	running bool // 后台全量轮的 goroutine 在跑
-	rerun   bool // 后台轮进行中又被触发：跑完再来一轮
-	wg      sync.WaitGroup
-	rounds  atomic.Int64 // 跑过的轮数（测试观察单飞用）
+	runMu    sync.Mutex // 全量轮同一时刻只有一个；单条匹配不拿它（DO NOTHING 兜底）
+	mu       sync.Mutex
+	running  bool // 后台全量轮的 goroutine 在跑
+	rerun    bool // 后台轮进行中又被触发：跑完再来一轮
+	stopped  bool // 应用退出：不再起新的后台轮
+	debounce *time.Timer
+	delay    time.Duration // 防抖时间，0 = watchlistMatchDebounce（测试改短）
+	wg       sync.WaitGroup
+	rounds   atomic.Int64 // 跑过的全量轮数（测试观察单飞用）
+	// beforeAutoWrite 只给测试用：写一条自动关联之前调用，用来把解除插进一轮的中间。
+	beforeAutoWrite func(entryID, videoID uint)
 }
+
+// watchlistChartLinker 是榜单一侧的关联读写口（MovieChartService 实现）。依赖方向仍是榜单 → 片单：
+// 榜单服务构造时把自己挂到片单服务上，片单一侧只认接口。
+type watchlistChartLinker interface {
+	LinkMovieToVideo(doubanID string, videoID uint) error
+	UnlinkMovieVideo(doubanID string, videoID uint) error
+}
+
+type watchlistChartLinks struct {
+	mu     sync.RWMutex
+	linker watchlistChartLinker
+}
+
+// SetChartLinker 挂上（或用 nil 摘掉）榜单关联读写口。
+func (s *WatchlistService) SetChartLinker(linker watchlistChartLinker) {
+	if s == nil {
+		return
+	}
+	s.chartLinks.mu.Lock()
+	defer s.chartLinks.mu.Unlock()
+	s.chartLinks.linker = linker
+}
+
+func (s *WatchlistService) chartLinker() watchlistChartLinker {
+	s.chartLinks.mu.RLock()
+	defer s.chartLinks.mu.RUnlock()
+	return s.chartLinks.linker
+}
+
+// --- 视频元数据变化 → 防抖后台匹配 ---
+
+var libraryMatchInputs struct {
+	mu       sync.RWMutex
+	listener func(reason string)
+}
+
+// SetLibraryMatchInputListener 挂上「想看自动匹配的输入变了」的监听（App 接到 TriggerLibraryMatchSoon）；nil 摘掉。
+func SetLibraryMatchInputListener(listener func(reason string)) {
+	libraryMatchInputs.mu.Lock()
+	defer libraryMatchInputs.mu.Unlock()
+	libraryMatchInputs.listener = listener
+}
+
+// notifyLibraryMatchInputsChanged 在视频片名、原始片名、文件名、年份变化或视频恢复之后调用。
+func notifyLibraryMatchInputsChanged(reason string) {
+	libraryMatchInputs.mu.RLock()
+	listener := libraryMatchInputs.listener
+	libraryMatchInputs.mu.RUnlock()
+	if listener != nil {
+		listener(reason)
+	}
+}
+
+// --- 读 ---
 
 type watchlistLinkRow struct {
 	EntryID  uint
@@ -92,125 +159,181 @@ type watchlistLinkVideo struct {
 	IsStale      bool
 }
 
+// watchlistLinkSet 是一批条目的关联读取结果。
+type watchlistLinkSet struct {
+	links           map[uint][]watchlistLinkRow // 条目 → 可见关联（活跃视频、作品没被解除），按关联时间升序
+	videos          map[uint]watchlistLinkVideo // 可见关联涉及的活跃视频
+	dismissedVideos map[uint][]uint             // 条目 → dismissed 行的视频 ID
+	dismissedWorks  map[uint]map[int64]struct{} // 条目 → 解除过的作品
+	groups          map[uint]uint               // 视频 → 版本组（涉及到的视频）
+}
+
 func watchlistEntryIsDouban(entry models.WatchlistEntry) bool {
 	return entry.SourceName == WatchlistMetadataSourceDouban && entry.SourceItemID != ""
 }
 
-func watchlistPairKey(entryID, videoID uint) string {
-	return strconv.FormatUint(uint64(entryID), 10) + ":" + strconv.FormatUint(uint64(videoID), 10)
+// workKeyOf 是视频所属「作品」的键：在版本组里就是组 ID，否则是负的视频 ID。
+func workKeyOf(videoID uint, groups map[uint]uint) int64 {
+	if group, ok := groups[videoID]; ok {
+		return int64(group)
+	}
+	return -int64(videoID)
 }
 
-// loadWatchlistLinks 读出这些条目的已关联行（各走自己那张表，减去 dismissed，只留活跃视频），以及
-// 这些条目的全部 dismissed 对。videos 是涉及到的活跃视频。
-func loadWatchlistLinks(db *gorm.DB, entries []models.WatchlistEntry) (map[uint][]watchlistLinkRow, map[string]bool, map[uint]watchlistLinkVideo, error) {
-	links := map[uint][]watchlistLinkRow{}
-	dismissed := map[string]bool{}
-	videos := map[uint]watchlistLinkVideo{}
+// videoGroupsOf 读这些视频所在的版本组（视频 → 组），不看视频状态。
+func videoGroupsOf(db *gorm.DB, videoIDs []uint) (map[uint]uint, error) {
+	groups := map[uint]uint{}
+	ids := uniqueUintIDs(videoIDs)
+	if len(ids) == 0 {
+		return groups, nil
+	}
+	for _, chunk := range chunkUintIDs(ids, 500) {
+		var rows []struct {
+			VideoID uint
+			GroupID uint
+		}
+		if err := db.Table("video_version_members").Select("video_id", "group_id").
+			Where("video_id IN ?", chunk).Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("读取版本组成员失败: %w", err)
+		}
+		for _, row := range rows {
+			groups[row.VideoID] = row.GroupID
+		}
+	}
+	return groups, nil
+}
+
+// workMembersOf 返回视频所在作品的全部成员 ID（版本组的所有成员，不看状态；不在组里就是它自己）。
+func workMembersOf(db *gorm.DB, videoID uint) ([]uint, error) {
+	groups, err := videoGroupsOf(db, []uint{videoID})
+	if err != nil {
+		return nil, err
+	}
+	group, ok := groups[videoID]
+	if !ok {
+		return []uint{videoID}, nil
+	}
+	var members []uint
+	if err := db.Table("video_version_members").Where("group_id = ?", group).
+		Order("video_id ASC").Pluck("video_id", &members).Error; err != nil {
+		return nil, fmt.Errorf("读取版本组成员失败: %w", err)
+	}
+	return members, nil
+}
+
+// loadWatchlistLinks 读出这些条目的关联（规则见文件头）。
+func loadWatchlistLinks(db *gorm.DB, entries []models.WatchlistEntry) (*watchlistLinkSet, error) {
+	set := &watchlistLinkSet{
+		links: map[uint][]watchlistLinkRow{}, videos: map[uint]watchlistLinkVideo{},
+		dismissedVideos: map[uint][]uint{}, dismissedWorks: map[uint]map[int64]struct{}{}, groups: map[uint]uint{},
+	}
 	if len(entries) == 0 {
-		return links, dismissed, videos, nil
+		return set, nil
+	}
+	type pair struct{ entry, video uint }
+	merged := map[pair]watchlistLinkRow{}
+	add := func(row watchlistLinkRow) {
+		key := pair{row.EntryID, row.VideoID}
+		current, ok := merged[key]
+		if !ok {
+			merged[key] = row
+			return
+		}
+		if row.Origin == models.WatchlistLinkOriginManual {
+			current.Origin = models.WatchlistLinkOriginManual
+		}
+		if row.LinkedAt.After(current.LinkedAt) {
+			current.LinkedAt = row.LinkedAt
+		}
+		merged[key] = current
 	}
 	entryIDs := make([]uint, 0, len(entries))
 	byDouban := map[string][]uint{}
-	plainIDs := make([]uint, 0, len(entries))
 	for _, entry := range entries {
 		entryIDs = append(entryIDs, entry.ID)
 		if watchlistEntryIsDouban(entry) {
 			byDouban[entry.SourceItemID] = append(byDouban[entry.SourceItemID], entry.ID)
-		} else {
-			plainIDs = append(plainIDs, entry.ID)
 		}
 	}
-	var raw []watchlistLinkRow
+	dismissedIDs := []uint{}
 	for _, chunk := range chunkUintIDs(entryIDs, 500) {
-		var rows []struct {
-			WatchlistEntryID uint
-			VideoID          uint
-			Origin           string
-			CreatedAt        time.Time
-		}
-		if err := db.Model(&models.WatchlistVideoLink{}).
-			Select("watchlist_entry_id", "video_id", "origin", "created_at").
-			Where("watchlist_entry_id IN ?", chunk).Order("id ASC").Scan(&rows).Error; err != nil {
-			return nil, nil, nil, fmt.Errorf("读取想看关联失败: %w", err)
+		var rows []models.WatchlistVideoLink
+		if err := db.Select("watchlist_entry_id", "video_id", "origin", "updated_at").
+			Where("watchlist_entry_id IN ?", chunk).Order("id ASC").Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("读取想看关联失败: %w", err)
 		}
 		for _, row := range rows {
 			if row.Origin == models.WatchlistLinkOriginDismissed {
-				dismissed[watchlistPairKey(row.WatchlistEntryID, row.VideoID)] = true
+				set.dismissedVideos[row.WatchlistEntryID] = append(set.dismissedVideos[row.WatchlistEntryID], row.VideoID)
+				dismissedIDs = append(dismissedIDs, row.VideoID)
 				continue
 			}
-			raw = append(raw, watchlistLinkRow{EntryID: row.WatchlistEntryID, VideoID: row.VideoID, Origin: row.Origin, LinkedAt: row.CreatedAt})
+			add(watchlistLinkRow{EntryID: row.WatchlistEntryID, VideoID: row.VideoID, Origin: row.Origin, LinkedAt: row.UpdatedAt})
 		}
 	}
-	// 非豆瓣条目只认 watchlist_video_links；豆瓣条目只认 movie_video_links。
-	plain := idSet(plainIDs)
-	filtered := raw[:0]
-	for _, row := range raw {
-		if _, ok := plain[row.EntryID]; ok {
-			filtered = append(filtered, row)
-		}
-	}
-	raw = filtered
 	if len(byDouban) > 0 {
 		doubanIDs := make([]string, 0, len(byDouban))
 		for id := range byDouban {
 			doubanIDs = append(doubanIDs, id)
 		}
 		sort.Strings(doubanIDs)
-		var rows []struct {
-			DoubanID  string
-			VideoID   uint
-			Origin    string
-			CreatedAt time.Time
-		}
-		if err := db.Model(&models.MovieVideoLink{}).
-			Select("douban_id", "video_id", "origin", "created_at").
-			Where("douban_id IN ?", doubanIDs).Order("id ASC").Scan(&rows).Error; err != nil {
-			return nil, nil, nil, fmt.Errorf("读取榜单关联失败: %w", err)
+		var rows []models.MovieVideoLink
+		if err := db.Select("douban_id", "video_id", "created_at").
+			Where("douban_id IN ?", doubanIDs).Order("id ASC").Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("读取榜单关联失败: %w", err)
 		}
 		for _, row := range rows {
-			origin := models.WatchlistLinkOriginManual
-			if row.Origin == models.WatchlistLinkOriginAuto {
-				origin = models.WatchlistLinkOriginAuto
-			}
 			for _, entryID := range byDouban[row.DoubanID] {
-				if dismissed[watchlistPairKey(entryID, row.VideoID)] {
-					continue
-				}
-				raw = append(raw, watchlistLinkRow{EntryID: entryID, VideoID: row.VideoID, Origin: origin, LinkedAt: row.CreatedAt})
+				add(watchlistLinkRow{EntryID: entryID, VideoID: row.VideoID, Origin: models.WatchlistLinkOriginManual, LinkedAt: row.CreatedAt})
 			}
 		}
 	}
-	videoIDs := make([]uint, 0, len(raw))
-	for _, row := range raw {
-		videoIDs = append(videoIDs, row.VideoID)
+	linkIDs := make([]uint, 0, len(merged))
+	for key := range merged {
+		linkIDs = append(linkIDs, key.video)
 	}
-	for _, chunk := range chunkUintIDs(uniqueUintIDs(videoIDs), 500) {
+	groups, err := videoGroupsOf(db, append(append([]uint{}, linkIDs...), dismissedIDs...))
+	if err != nil {
+		return nil, err
+	}
+	set.groups = groups
+	for entryID, videoIDs := range set.dismissedVideos {
+		works := map[int64]struct{}{}
+		for _, videoID := range videoIDs {
+			works[workKeyOf(videoID, groups)] = struct{}{}
+		}
+		set.dismissedWorks[entryID] = works
+	}
+	for _, chunk := range chunkUintIDs(uniqueUintIDs(linkIDs), 500) {
 		var rows []watchlistLinkVideo
 		if err := db.Model(&models.Video{}).
 			Select("id", "display_title", "name", "is_watched", "is_stale").
 			Where("id IN ?", chunk).Scan(&rows).Error; err != nil {
-			return nil, nil, nil, fmt.Errorf("读取关联视频失败: %w", err)
+			return nil, fmt.Errorf("读取关联视频失败: %w", err)
 		}
 		for _, row := range rows {
-			videos[row.ID] = row
+			set.videos[row.ID] = row
 		}
 	}
-	for _, row := range raw {
-		if _, active := videos[row.VideoID]; !active {
+	for key, row := range merged {
+		if _, active := set.videos[key.video]; !active {
 			continue
 		}
-		links[row.EntryID] = append(links[row.EntryID], row)
+		if _, dismissed := set.dismissedWorks[key.entry][workKeyOf(key.video, groups)]; dismissed {
+			continue
+		}
+		set.links[key.entry] = append(set.links[key.entry], row)
 	}
-	for entryID := range links {
-		rows := links[entryID]
-		sort.SliceStable(rows, func(i, j int) bool {
+	for entryID := range set.links {
+		rows := set.links[entryID]
+		sort.Slice(rows, func(i, j int) bool {
 			if !rows[i].LinkedAt.Equal(rows[j].LinkedAt) {
 				return rows[i].LinkedAt.Before(rows[j].LinkedAt)
 			}
 			return rows[i].VideoID < rows[j].VideoID
 		})
 	}
-	return links, dismissed, videos, nil
+	return set, nil
 }
 
 // ListLibraryState 返回这些条目的片库关联状态（最多 200 个）；不存在的条目不出现在结果里。
@@ -227,23 +350,56 @@ func (s *WatchlistService) ListLibraryState(entryIDs []uint) (map[uint]Watchlist
 	if err := database.DB.Select("id", "source_name", "source_item_id").Where("id IN ?", ids).Find(&entries).Error; err != nil {
 		return nil, fmt.Errorf("读取想看片单失败: %w", err)
 	}
-	links, _, videos, err := loadWatchlistLinks(database.DB, entries)
+	set, err := loadWatchlistLinks(database.DB, entries)
 	if err != nil {
 		return nil, err
 	}
+	dismissedGroups := []uint{}
+	for _, videoIDs := range set.dismissedVideos {
+		for _, videoID := range videoIDs {
+			if group, ok := set.groups[videoID]; ok {
+				dismissedGroups = append(dismissedGroups, group)
+			}
+		}
+	}
+	groupMembers := map[uint][]uint{}
+	if len(dismissedGroups) > 0 {
+		var rows []struct {
+			GroupID uint
+			VideoID uint
+		}
+		if err := database.DB.Table("video_version_members").Select("group_id", "video_id").
+			Where("group_id IN ?", uniqueUintIDs(dismissedGroups)).Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("读取版本组成员失败: %w", err)
+		}
+		for _, row := range rows {
+			groupMembers[row.GroupID] = append(groupMembers[row.GroupID], row.VideoID)
+		}
+	}
 	for _, entry := range entries {
-		state := WatchlistLibraryState{Linked: make([]WatchlistLinkedVideo, 0, len(links[entry.ID]))}
-		for _, link := range links[entry.ID] {
-			video := videos[link.VideoID]
+		state := WatchlistLibraryState{Linked: make([]WatchlistLinkedVideo, 0, len(set.links[entry.ID])), Dismissed: []uint{}}
+		for _, link := range set.links[entry.ID] {
+			video := set.videos[link.VideoID]
 			state.Linked = append(state.Linked, WatchlistLinkedVideo{
 				VideoID: link.VideoID, Title: recapVideoTitle(video.DisplayTitle, video.Name),
 				Origin: link.Origin, IsWatched: video.IsWatched,
 			})
 		}
+		dismissed := []uint{}
+		for _, videoID := range set.dismissedVideos[entry.ID] {
+			dismissed = append(dismissed, videoID)
+			if group, ok := set.groups[videoID]; ok {
+				dismissed = append(dismissed, groupMembers[group]...)
+			}
+		}
+		state.Dismissed = uniqueUintIDs(dismissed)
+		sort.Slice(state.Dismissed, func(i, j int) bool { return state.Dismissed[i] < state.Dismissed[j] })
 		result[entry.ID] = state
 	}
 	return result, nil
 }
+
+// --- 手动关联 / 解除 ---
 
 // loadLinkTarget 读条目与视频，供手动关联 / 解除使用。activeOnly 时视频必须是活跃的。
 func loadLinkTarget(tx *gorm.DB, entryID, videoID uint, activeOnly bool) (models.WatchlistEntry, error) {
@@ -268,66 +424,108 @@ func loadLinkTarget(tx *gorm.DB, entryID, videoID uint, activeOnly bool) (models
 	return entry, nil
 }
 
+// upsertWatchlistVideoLink 把这一对写成 origin；已有行时改 origin 并把关联时间（updated_at）刷新为此刻。
 func upsertWatchlistVideoLink(tx *gorm.DB, entryID, videoID uint, origin string) error {
-	link := models.WatchlistVideoLink{WatchlistEntryID: entryID, VideoID: videoID, Origin: origin}
+	now := time.Now()
+	link := models.WatchlistVideoLink{WatchlistEntryID: entryID, VideoID: videoID, Origin: origin, CreatedAt: now, UpdatedAt: now}
 	return tx.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "watchlist_entry_id"}, {Name: "video_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"origin", "updated_at"}),
 	}).Create(&link).Error
 }
 
-// LinkVideo 手动确认关联：豆瓣条目写 movie_video_links（origin 空串 = 手动，已有自动行改成手动），其余写
-// watchlist_video_links（manual）；同时清掉这一对的 dismissed。视频必须是活跃的。
+// LinkVideo 手动确认关联：写 manual（关联时间为此刻），清掉这部作品对这个条目的 dismissed；豆瓣条目另外经
+// 榜单的 LinkMovieToVideo 写 movie_video_links。视频必须是活跃的。
 func (s *WatchlistService) LinkVideo(entryID, videoID uint) error {
-	return database.Transaction(func(tx *gorm.DB) error {
+	var doubanID string
+	err := database.Transaction(func(tx *gorm.DB) error {
 		entry, err := loadLinkTarget(tx, entryID, videoID, true)
 		if err != nil {
 			return err
 		}
-		if !watchlistEntryIsDouban(entry) {
-			if err := upsertWatchlistVideoLink(tx, entryID, videoID, models.WatchlistLinkOriginManual); err != nil {
-				return fmt.Errorf("关联视频失败: %w", err)
-			}
-			return nil
+		if err := upsertWatchlistVideoLink(tx, entryID, videoID, models.WatchlistLinkOriginManual); err != nil {
+			return fmt.Errorf("关联视频失败: %w", err)
 		}
-		if err := tx.Where("watchlist_entry_id = ? AND video_id = ?", entryID, videoID).
+		members, err := workMembersOf(tx, videoID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Where("watchlist_entry_id = ? AND video_id IN ? AND origin = ?", entryID, members, models.WatchlistLinkOriginDismissed).
 			Delete(&models.WatchlistVideoLink{}).Error; err != nil {
 			return fmt.Errorf("清除解除记录失败: %w", err)
 		}
-		link := models.MovieVideoLink{DoubanID: entry.SourceItemID, VideoID: videoID, Origin: ""}
-		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "douban_id"}, {Name: "video_id"}},
-			DoUpdates: clause.Assignments(map[string]any{"origin": "", "updated_at": time.Now()}),
-		}).Create(&link).Error; err != nil {
-			return fmt.Errorf("关联视频失败: %w", err)
+		if watchlistEntryIsDouban(entry) {
+			doubanID = entry.SourceItemID
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if linker := s.chartLinker(); doubanID != "" && linker != nil {
+		if err := linker.LinkMovieToVideo(doubanID, videoID); err != nil {
+			return fmt.Errorf("已在想看中关联，但同步到榜单失败: %w", err)
+		}
+	}
+	return nil
 }
 
-// UnlinkVideo 解除关联并记下 dismissed（之后不再自动关联这一对）；豆瓣条目同时删掉 movie_video_links 那一行。
-// 没有关联时同样记 dismissed。
+// UnlinkVideo 解除关联：把这一对写成 dismissed（没有关联时同样记下），这部作品之后不再自动关联；豆瓣条目另外经
+// 榜单的 UnlinkMovieVideo 删掉 movie_video_links 那一行。
 func (s *WatchlistService) UnlinkVideo(entryID, videoID uint) error {
-	return database.Transaction(func(tx *gorm.DB) error {
+	var doubanID string
+	err := database.Transaction(func(tx *gorm.DB) error {
 		entry, err := loadLinkTarget(tx, entryID, videoID, false)
 		if err != nil {
 			return err
 		}
-		if watchlistEntryIsDouban(entry) {
-			if err := tx.Where("douban_id = ? AND video_id = ?", entry.SourceItemID, videoID).
-				Delete(&models.MovieVideoLink{}).Error; err != nil {
-				return fmt.Errorf("解除关联失败: %w", err)
-			}
-		}
 		if err := upsertWatchlistVideoLink(tx, entryID, videoID, models.WatchlistLinkOriginDismissed); err != nil {
 			return fmt.Errorf("记录解除失败: %w", err)
 		}
+		if watchlistEntryIsDouban(entry) {
+			doubanID = entry.SourceItemID
+		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if linker := s.chartLinker(); doubanID != "" && linker != nil {
+		if err := linker.UnlinkMovieVideo(doubanID, videoID); err != nil {
+			return fmt.Errorf("已在想看中解除，但同步到榜单失败: %w", err)
+		}
+	}
+	return nil
 }
 
-// ListInLibrary 返回首页「想看的片片库里已有」：已关联、要播的视频（代表视频）没看过且未失效，按关联时间
-// 倒序；limit 默认 12、最大 50。
+// recordChartUnlinkDismissals 是榜单页解除（UnlinkMovieVideo）的另一半：给此刻以这个豆瓣 ID 为来源的每个想看
+// 条目记下这一对 dismissed（作品级生效），自动匹配不会再把它连回来。视频已经不在时没什么可记。
+func recordChartUnlinkDismissals(tx *gorm.DB, doubanID string, videoID uint) error {
+	var videos int64
+	if err := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videoID).Count(&videos).Error; err != nil {
+		return fmt.Errorf("读取视频失败: %w", err)
+	}
+	if videos == 0 {
+		return nil
+	}
+	var entryIDs []uint
+	if err := tx.Model(&models.WatchlistEntry{}).
+		Where("source_name = ? AND source_item_id = ?", WatchlistMetadataSourceDouban, doubanID).
+		Order("id ASC").Pluck("id", &entryIDs).Error; err != nil {
+		return fmt.Errorf("读取想看片单失败: %w", err)
+	}
+	for _, entryID := range entryIDs {
+		if err := upsertWatchlistVideoLink(tx, entryID, videoID, models.WatchlistLinkOriginDismissed); err != nil {
+			return fmt.Errorf("记录解除失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// --- 首页「想看的片片库里已有」 ---
+
+// ListInLibrary 返回首页「想看的片片库里已有」：每个条目取最近一次关联的未失效视频，映射到它所在版本组的代表；
+// 这部作品任一（活跃、未失效）版本看过就不列。按关联时间倒序，limit 默认 12、最大 50。
 func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, error) {
 	if limit <= 0 {
 		limit = watchlistInLibraryDefaultLimit
@@ -340,16 +538,16 @@ func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, e
 		Order("id ASC").Find(&entries).Error; err != nil {
 		return nil, fmt.Errorf("读取想看片单失败: %w", err)
 	}
-	links, _, videos, err := loadWatchlistLinks(database.DB, entries)
+	set, err := loadWatchlistLinks(database.DB, entries)
 	if err != nil {
 		return nil, err
 	}
 	latest := map[uint]watchlistLinkRow{}
-	targetIDs := make([]uint, 0, len(links))
-	for entryID, rows := range links {
+	targetIDs := make([]uint, 0, len(set.links))
+	for entryID, rows := range set.links {
 		var chosen *watchlistLinkRow
 		for i := range rows {
-			if videos[rows[i].VideoID].IsStale {
+			if set.videos[rows[i].VideoID].IsStale {
 				continue
 			}
 			if chosen == nil || !rows[i].LinkedAt.Before(chosen.LinkedAt) {
@@ -361,25 +559,9 @@ func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, e
 			targetIDs = append(targetIDs, chosen.VideoID)
 		}
 	}
-	representatives, err := versionRepresentatives(database.DB, targetIDs)
+	works, err := loadPlayableWorks(database.DB, targetIDs)
 	if err != nil {
 		return nil, err
-	}
-	needed := make([]uint, 0, len(representatives))
-	for _, id := range representatives {
-		if _, ok := videos[id]; !ok {
-			needed = append(needed, id)
-		}
-	}
-	if len(needed) > 0 {
-		var rows []watchlistLinkVideo
-		if err := database.DB.Model(&models.Video{}).Select("id", "display_title", "name", "is_watched", "is_stale").
-			Where("id IN ?", uniqueUintIDs(needed)).Scan(&rows).Error; err != nil {
-			return nil, fmt.Errorf("读取代表视频失败: %w", err)
-		}
-		for _, row := range rows {
-			videos[row.ID] = row
-		}
 	}
 	items := make([]WatchlistInLibraryItem, 0, len(latest))
 	for _, entry := range entries {
@@ -387,18 +569,14 @@ func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, e
 		if !ok {
 			continue
 		}
-		videoID := link.VideoID
-		if representative, ok := representatives[videoID]; ok {
-			videoID = representative
-		}
-		video, ok := videos[videoID]
-		if !ok || video.IsWatched || video.IsStale {
+		work, ok := works[link.VideoID]
+		if !ok || work.watched {
 			continue
 		}
 		items = append(items, WatchlistInLibraryItem{
 			EntryID: entry.ID, EntryTitle: entry.Title, Kind: entry.Kind, Year: entry.Year,
-			HasPoster: entry.PosterPath != "", VideoID: videoID,
-			VideoTitle: recapVideoTitle(video.DisplayTitle, video.Name),
+			HasPoster: entry.PosterPath != "", VideoID: work.representative.ID,
+			VideoTitle: recapVideoTitle(work.representative.DisplayTitle, work.representative.Name),
 			Origin:     link.Origin, LinkedAt: link.LinkedAt,
 		})
 	}
@@ -414,56 +592,74 @@ func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, e
 	return items, nil
 }
 
-// versionRepresentatives 把视频映射到所在版本组的代表：组内活跃、未失效的成员按 (版本顺序, 视频 ID) 取第一个
-// （与 CollapseVersions 同一规则）。不在组里的视频不出现在结果里。
-func versionRepresentatives(db *gorm.DB, videoIDs []uint) (map[uint]uint, error) {
-	result := map[uint]uint{}
+type playableWork struct {
+	representative watchlistLinkVideo
+	watched        bool
+}
+
+// loadPlayableWorks 把视频映射到它所在作品：代表 = 版本组里活跃、未失效的成员按 (版本顺序, 视频 ID) 第一个
+// （与 CollapseVersions 同一规则），不在组里就是它自己；watched = 这些成员里任一看过。没有可播成员的视频不在结果里。
+func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, error) {
+	result := map[uint]playableWork{}
 	ids := uniqueUintIDs(videoIDs)
 	if len(ids) == 0 {
 		return result, nil
 	}
-	var memberships []struct {
-		VideoID uint
-		GroupID uint
+	groups, err := videoGroupsOf(db, ids)
+	if err != nil {
+		return nil, err
 	}
-	for _, chunk := range chunkUintIDs(ids, 500) {
-		var rows []struct {
-			VideoID uint
-			GroupID uint
+	groupIDs := make([]uint, 0, len(groups))
+	for _, group := range groups {
+		groupIDs = append(groupIDs, group)
+	}
+	byGroup := map[uint]playableWork{}
+	if len(groupIDs) > 0 {
+		var members []struct {
+			GroupID      uint
+			ID           uint
+			DisplayTitle string
+			Name         string
+			IsWatched    bool
 		}
-		if err := db.Table("video_version_members").Select("video_id", "group_id").
-			Where("video_id IN ?", chunk).Scan(&rows).Error; err != nil {
+		if err := db.Table("video_version_members AS vm").
+			Select("vm.group_id AS group_id, v.id AS id, v.display_title AS display_title, v.name AS name, v.is_watched AS is_watched").
+			Joins("JOIN videos v ON v.id = vm.video_id AND v.deleted_at IS NULL AND v.is_stale = ?", false).
+			Where("vm.group_id IN ?", uniqueUintIDs(groupIDs)).
+			Order("vm.group_id ASC").Order("vm.position ASC").Order("vm.video_id ASC").
+			Scan(&members).Error; err != nil {
 			return nil, fmt.Errorf("读取版本组成员失败: %w", err)
 		}
-		memberships = append(memberships, rows...)
-	}
-	if len(memberships) == 0 {
-		return result, nil
-	}
-	groupIDs := make([]uint, 0, len(memberships))
-	for _, membership := range memberships {
-		groupIDs = append(groupIDs, membership.GroupID)
-	}
-	var members []struct {
-		GroupID uint
-		VideoID uint
-	}
-	if err := db.Table("video_version_members AS vm").Select("vm.group_id AS group_id, vm.video_id AS video_id").
-		Joins("JOIN videos v ON v.id = vm.video_id AND v.deleted_at IS NULL AND v.is_stale = ?", false).
-		Where("vm.group_id IN ?", uniqueUintIDs(groupIDs)).
-		Order("vm.group_id ASC").Order("vm.position ASC").Order("vm.video_id ASC").
-		Scan(&members).Error; err != nil {
-		return nil, fmt.Errorf("读取版本组代表失败: %w", err)
-	}
-	first := map[uint]uint{}
-	for _, member := range members {
-		if _, ok := first[member.GroupID]; !ok {
-			first[member.GroupID] = member.VideoID
+		for _, member := range members {
+			work, seen := byGroup[member.GroupID]
+			if !seen {
+				work.representative = watchlistLinkVideo{ID: member.ID, DisplayTitle: member.DisplayTitle, Name: member.Name, IsWatched: member.IsWatched}
+			}
+			work.watched = work.watched || member.IsWatched
+			byGroup[member.GroupID] = work
 		}
 	}
-	for _, membership := range memberships {
-		if representative, ok := first[membership.GroupID]; ok {
-			result[membership.VideoID] = representative
+	var singles []watchlistLinkVideo
+	ungrouped := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := groups[id]; !ok {
+			ungrouped = append(ungrouped, id)
+		}
+	}
+	if len(ungrouped) > 0 {
+		if err := db.Model(&models.Video{}).Select("id", "display_title", "name", "is_watched", "is_stale").
+			Where("id IN ? AND is_stale = ?", ungrouped, false).Scan(&singles).Error; err != nil {
+			return nil, fmt.Errorf("读取关联视频失败: %w", err)
+		}
+	}
+	for _, single := range singles {
+		result[single.ID] = playableWork{representative: single, watched: single.IsWatched}
+	}
+	for _, id := range ids {
+		if group, ok := groups[id]; ok {
+			if work, ok := byGroup[group]; ok {
+				result[id] = work
+			}
 		}
 	}
 	return result, nil
@@ -471,7 +667,8 @@ func versionRepresentatives(db *gorm.DB, videoIDs []uint) (map[uint]uint, error)
 
 // --- 自动匹配 ---
 
-// matchEntryToLibrary 是条目新增、改名、在线补全成功后的同步单条匹配；失败只记日志（条目本身已经写好）。
+// matchEntryToLibrary 是条目新增、改名、在线补全成功后的同步单条匹配；不等后台全量轮（插入 DO NOTHING 兜底），
+// 失败只记日志（条目本身已经写好）。
 func (s *WatchlistService) matchEntryToLibrary(entryID uint, reason string) {
 	if s == nil || entryID == 0 {
 		return
@@ -486,13 +683,17 @@ func (s *WatchlistService) matchEntryToLibrary(entryID uint, reason string) {
 	}
 }
 
-// TriggerLibraryMatch 在后台跑一轮全量自动匹配（扫描入库新视频后、应用启动后）。同一时刻只有一个后台轮，
-// 进行中再触发只记一次「再跑」，跑完再来一轮。
+// TriggerLibraryMatch 在后台跑一轮全量自动匹配（扫描入库新视频后、应用启动后、防抖到点）。同一时刻只有一个
+// 后台轮，进行中再触发只记一次「再跑」，跑完再来一轮。
 func (s *WatchlistService) TriggerLibraryMatch(reason string) {
 	if s == nil {
 		return
 	}
 	s.match.mu.Lock()
+	if s.match.stopped {
+		s.match.mu.Unlock()
+		return
+	}
 	if s.match.running {
 		s.match.rerun = true
 		s.match.mu.Unlock()
@@ -511,8 +712,9 @@ func (s *WatchlistService) TriggerLibraryMatch(reason string) {
 				log.Printf("[WatchlistLibrary] auto linked entries=%d reason=%s", linked, reason)
 			}
 			s.match.mu.Lock()
-			if !s.match.rerun {
+			if !s.match.rerun || s.match.stopped {
 				s.match.running = false
+				s.match.rerun = false
 				s.match.mu.Unlock()
 				return
 			}
@@ -522,11 +724,46 @@ func (s *WatchlistService) TriggerLibraryMatch(reason string) {
 	}()
 }
 
-// WaitLibraryMatch 等后台匹配轮结束（应用退出与测试用）。
+// TriggerLibraryMatchSoon 在视频元数据变化（片名、原始片名、文件名、年份）或视频恢复之后，防抖约 5 秒再起一个
+// 后台全量轮：批量编辑之类的一连串变化只跑一轮。
+func (s *WatchlistService) TriggerLibraryMatchSoon(reason string) {
+	if s == nil {
+		return
+	}
+	s.match.mu.Lock()
+	defer s.match.mu.Unlock()
+	if s.match.stopped {
+		return
+	}
+	delay := s.match.delay
+	if delay <= 0 {
+		delay = watchlistMatchDebounce
+	}
+	if s.match.debounce != nil {
+		s.match.debounce.Stop()
+	}
+	s.match.debounce = time.AfterFunc(delay, func() { s.TriggerLibraryMatch(reason) })
+}
+
+// WaitLibraryMatch 等当前的后台匹配轮结束（测试用；不取消防抖中的触发）。
 func (s *WatchlistService) WaitLibraryMatch() {
 	if s == nil {
 		return
 	}
+	s.match.wg.Wait()
+}
+
+// StopLibraryMatch 在应用退出时调用：取消防抖中的触发，不再起新的后台轮，等进行中的那一轮结束。
+func (s *WatchlistService) StopLibraryMatch() {
+	if s == nil {
+		return
+	}
+	s.match.mu.Lock()
+	s.match.stopped = true
+	if s.match.debounce != nil {
+		s.match.debounce.Stop()
+	}
+	s.match.mu.Unlock()
 	s.match.wg.Wait()
 }
 
@@ -535,18 +772,19 @@ type watchlistMatchCandidate struct {
 	hits  map[uint]struct{}
 }
 
-// runLibraryMatchRound 跑一轮自动匹配，entryIDs 为 nil 表示全部条目。返回本轮新建的关联数。
+// runLibraryMatchRound 跑一轮自动匹配，entryIDs 为 nil 表示全部条目（全量轮，持轮次锁）。返回本轮新建的关联数。
 func (s *WatchlistService) runLibraryMatchRound(ctx context.Context, entryIDs []uint) (int, error) {
-	s.match.runMu.Lock()
-	defer s.match.runMu.Unlock()
-	s.match.rounds.Add(1)
+	if entryIDs == nil {
+		s.match.runMu.Lock()
+		defer s.match.runMu.Unlock()
+		s.match.rounds.Add(1)
+	} else if len(entryIDs) == 0 {
+		return 0, nil
+	}
 	db := database.DB.WithContext(ctx)
 	query := db.Select("id", "title", "year", "source_name", "source_item_id").
 		Where("year > 0 AND title <> ''")
 	if entryIDs != nil {
-		if len(entryIDs) == 0 {
-			return 0, nil
-		}
 		query = query.Where("id IN ?", entryIDs)
 	}
 	var entries []models.WatchlistEntry
@@ -556,7 +794,7 @@ func (s *WatchlistService) runLibraryMatchRound(ctx context.Context, entryIDs []
 	if len(entries) == 0 {
 		return 0, nil
 	}
-	links, dismissed, _, err := loadWatchlistLinks(db, entries)
+	set, err := loadWatchlistLinks(db, entries)
 	if err != nil {
 		return 0, err
 	}
@@ -564,7 +802,7 @@ func (s *WatchlistService) runLibraryMatchRound(ctx context.Context, entryIDs []
 	candidates := make([]*watchlistMatchCandidate, 0, len(entries))
 	years := map[int]struct{}{}
 	for _, entry := range entries {
-		if len(links[entry.ID]) > 0 {
+		if len(set.links[entry.ID]) > 0 {
 			continue
 		}
 		normalized := normalizeLibraryTitle(entry.Title)
@@ -616,51 +854,50 @@ func (s *WatchlistService) runLibraryMatchRound(ctx context.Context, entryIDs []
 			hitIDs = append(hitIDs, id)
 		}
 	}
-	representatives, err := versionRepresentatives(db, hitIDs)
+	works, err := loadPlayableWorks(db, hitIDs)
+	if err != nil {
+		return 0, err
+	}
+	hitGroups, err := videoGroupsOf(db, hitIDs)
 	if err != nil {
 		return 0, err
 	}
 	linked := 0
 	for _, candidate := range candidates {
-		works := map[uint]struct{}{}
+		targets := map[int64]uint{}
 		for id := range candidate.hits {
-			target := id
-			if representative, ok := representatives[id]; ok {
-				target = representative
+			if work, ok := works[id]; ok {
+				targets[workKeyOf(id, hitGroups)] = work.representative.ID
 			}
-			works[target] = struct{}{}
 		}
-		if len(works) != 1 {
+		if len(targets) != 1 {
 			continue // 没命中，或命中不止一部作品：留给「片库中可能已有」由用户确认
 		}
-		var target uint
-		for id := range works {
-			target = id
-		}
-		if dismissed[watchlistPairKey(candidate.entry.ID, target)] {
-			continue
-		}
-		created, err := writeAutoWatchlistLink(db, candidate.entry, target)
-		if err != nil {
-			return linked, err
-		}
-		if created {
-			linked++
+		for workKey, target := range targets {
+			if _, dismissed := set.dismissedWorks[candidate.entry.ID][workKey]; dismissed {
+				continue // 这部作品（任一版本）被这个条目解除过
+			}
+			if hook := s.match.beforeAutoWrite; hook != nil {
+				hook(candidate.entry.ID, target)
+			}
+			created, err := writeAutoWatchlistLink(db, candidate.entry.ID, target)
+			if err != nil {
+				return linked, err
+			}
+			if created {
+				linked++
+			}
 		}
 	}
 	return linked, nil
 }
 
-// writeAutoWatchlistLink 写一条自动关联；唯一索引冲突（并发的另一轮或用户刚手动关联 / 解除）视为已处理。
-func writeAutoWatchlistLink(db *gorm.DB, entry models.WatchlistEntry, videoID uint) (bool, error) {
-	var result *gorm.DB
-	if watchlistEntryIsDouban(entry) {
-		link := models.MovieVideoLink{DoubanID: entry.SourceItemID, VideoID: videoID, Origin: models.WatchlistLinkOriginAuto}
-		result = db.Clauses(clause.OnConflict{DoNothing: true}).Create(&link)
-	} else {
-		link := models.WatchlistVideoLink{WatchlistEntryID: entry.ID, VideoID: videoID, Origin: models.WatchlistLinkOriginAuto}
-		result = db.Clauses(clause.OnConflict{DoNothing: true}).Create(&link)
-	}
+// writeAutoWatchlistLink 写一条自动关联，只写 watchlist_video_links。(条目, 视频) 唯一键冲突时什么都不做：
+// 已有的 dismissed / manual 行（并发的解除、手动关联，或另一轮）总是赢。
+func writeAutoWatchlistLink(db *gorm.DB, entryID, videoID uint) (bool, error) {
+	now := time.Now()
+	link := models.WatchlistVideoLink{WatchlistEntryID: entryID, VideoID: videoID, Origin: models.WatchlistLinkOriginAuto, CreatedAt: now, UpdatedAt: now}
+	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&link)
 	if result.Error != nil {
 		return false, fmt.Errorf("写入自动关联失败: %w", result.Error)
 	}

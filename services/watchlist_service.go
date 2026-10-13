@@ -32,6 +32,9 @@ type WatchlistService struct {
 	bind watchlistDoubanBind
 	// match 是片库自动关联的单飞状态（UI 二期 D-P2-03），实现在 watchlist_library_match.go。零值可用。
 	match watchlistLibraryMatch
+	// chartLinks 是榜单关联读写口的槽位：豆瓣条目在片单页手动关联 / 解除时同步到 movie_video_links。
+	// 由榜单服务在构造时挂上；零值可用（没挂时只写片单一侧）。
+	chartLinks watchlistChartLinks
 }
 
 // NewWatchlistService 照 NewPersonService / NewCollectionService 的形态构造：

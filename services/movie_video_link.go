@@ -62,6 +62,7 @@ const (
 var (
 	_ WatchStateObserver          = (*MovieChartService)(nil)
 	_ watchlistDoubanBindObserver = (*MovieChartService)(nil)
+	_ watchlistChartLinker        = (*MovieChartService)(nil)
 )
 
 // SetLinkedVideoWatchSetter 注入「榜单侧改已看之后回写关联视频」的实现（接线项）。
@@ -108,17 +109,20 @@ func (s *MovieChartService) LinkMovieToVideo(doubanID string, videoID uint) erro
 	return nil
 }
 
-// UnlinkMovieVideo 解除关联，没有这条关联时是幂等的空操作。
+// UnlinkMovieVideo 解除关联，没有这条关联时是幂等的空操作。同一事务里给此刻以这个豆瓣 ID 为来源的想看条目
+// 记下这一对「解除过」（UI 二期 D-P2-03）：想看的自动匹配不会再把它连回来。
 func (s *MovieChartService) UnlinkMovieVideo(doubanID string, videoID uint) error {
 	if s == nil {
 		return errors.New("年度榜单服务不可用")
 	}
-	err := s.db.Where("douban_id = ? AND video_id = ?", doubanID, videoID).
-		Delete(&models.MovieVideoLink{}).Error
-	if err != nil {
-		return fmt.Errorf("解除关联失败: %w", err)
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		err := tx.Where("douban_id = ? AND video_id = ?", doubanID, videoID).
+			Delete(&models.MovieVideoLink{}).Error
+		if err != nil {
+			return fmt.Errorf("解除关联失败: %w", err)
+		}
+		return recordChartUnlinkDismissals(tx, doubanID, videoID)
+	})
 }
 
 // ListMovieVideoLinks 返回某个豆瓣 ID 已关联的活跃视频，按视频 ID 升序。

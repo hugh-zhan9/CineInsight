@@ -90,20 +90,21 @@ type WatchlistEntry struct {
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }
 
-// 想看条目与片库视频关联的来源（watchlist_video_links.origin，movie_video_links.origin，UI 二期 D-P2-03）。
+// 想看条目与片库视频关联的来源（watchlist_video_links.origin，UI 二期 D-P2-03）。
 const (
 	// WatchlistLinkOriginAuto：片名与年份完全一致、只对上一部作品时自动建立。
 	WatchlistLinkOriginAuto = "auto"
-	// WatchlistLinkOriginManual：用户点「确认」建立。movie_video_links 上手动关联存空串（存量行同义）。
+	// WatchlistLinkOriginManual：用户在片单页点「确认」建立；豆瓣条目在榜单页建的关联（movie_video_links）读出来也是 manual。
 	WatchlistLinkOriginManual = "manual"
-	// WatchlistLinkOriginDismissed：用户解除过这一对，之后不再自动关联（所有来源都记在 watchlist_video_links）。
+	// WatchlistLinkOriginDismissed：用户解除过这一对（片单页或榜单页），这一部作品之后不再自动关联。
 	WatchlistLinkOriginDismissed = "dismissed"
 )
 
-// WatchlistVideoLink 是非豆瓣来源想看条目与片库视频的关联（origin = auto / manual），以及所有来源的
-// 「解除过」记录（origin = dismissed）。豆瓣来源（source_name = douban 且 source_item_id 非空）的已关联
-// 仍存在 movie_video_links——榜单的已看同步依赖它；读一个条目的关联 = 对应那张表的已关联行减去这里的
-// dismissed 行（UI 二期详细设计 §2.2）。一对 (条目, 视频) 只有一行：解除就是把这一行改成 dismissed。
+// WatchlistVideoLink 是想看条目与片库视频关联的唯一归处（UI 二期详细设计 §2.2）：按条目记，与条目来源无关，
+// origin = auto / manual / dismissed，一对 (条目, 视频) 只有一行。自动匹配只写这张表，从不写 movie_video_links，
+// 所以不会牵动榜单的已看同步。读一个条目的关联 = 这里的 auto / manual 行 ∪（条目此刻是豆瓣来源时）
+// movie_video_links 里它那个豆瓣 ID 的行，再按「作品」减去 dismissed：同一版本组任一成员解除过，整部作品都不算。
+// 关联时间取 UpdatedAt（变成 manual 时刷新）。
 //
 // Origin 不设 gorm default，创建时显式赋值（GORM 会把零值当未设置换成默认值，见 2026-09-02 那条禁令）。
 type WatchlistVideoLink struct {

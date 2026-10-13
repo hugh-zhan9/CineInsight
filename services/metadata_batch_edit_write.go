@@ -66,12 +66,23 @@ func writeBatchChanges(tx *gorm.DB, plan *batchPlan, state *batchMediaState, cha
 func writeBatchScalar(tx *gorm.DB, kind, field string, value *float64, ids []uint) error {
 	column := batchScalarColumn(field)
 	query := tx.Model(batchMediaModel(kind)).Where("id IN ?", ids)
+	var result *gorm.DB
 	if value == nil {
-		return query.Where(column+" IS NOT NULL").Update(column, nil).Error
+		result = query.Where(column+" IS NOT NULL").Update(column, nil)
+	} else {
+		// 年份按整数传参：Postgres 按列类型推断参数类型，浮点数给整数列会编码失败。
+		arg := batchScalarArg(field, *value)
+		result = query.Where("("+column+" IS NULL OR "+column+" <> ?)", arg).Update(column, arg)
 	}
-	// 年份按整数传参：Postgres 按列类型推断参数类型，浮点数给整数列会编码失败。
-	arg := batchScalarArg(field, *value)
-	return query.Where("("+column+" IS NULL OR "+column+" <> ?)", arg).Update(column, arg).Error
+	notifyBatchYearChanged(result, kind, field)
+	return result.Error
+}
+
+// notifyBatchYearChanged：批量改了视频年份，想看自动匹配的输入变了（D-P2-03），防抖后重跑一轮。
+func notifyBatchYearChanged(result *gorm.DB, kind, field string) {
+	if result.Error == nil && result.RowsAffected > 0 && kind == BatchEditKindVideo && field == BatchEditFieldYear {
+		notifyLibraryMatchInputsChanged("batch-edit-year")
+	}
 }
 
 // addBatchRelation 加上一个对象。保持各自入口的既有语义：

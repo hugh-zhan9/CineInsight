@@ -43,7 +43,7 @@
   "movie_chart_entries": ["card_subtitle","cast","countries","created_at","detail_claim","detail_error","detail_fetched_at","detail_status","directors","douban_id","genres","id","is_released","list_fetched_at","original_title","overview","poster_path","poster_url","rating","rating_count","release_date","release_pubdate","release_scope","title","updated_at","year"],
   "movie_chart_marks": ["created_at","douban_id","id","mark","marked_at","poster_url","release_year","title","updated_at","watchlist_entry_id","watchlist_entry_origin"],
   "movie_chart_year_states": ["created_at","id","last_attempt_at","last_failure","last_refreshed_at","updated_at","year"],
-  "movie_video_links": ["created_at","douban_id","id","origin","updated_at","video_id"],
+  "movie_video_links": ["created_at","douban_id","id","updated_at","video_id"],
   "near_duplicate_dismissals": ["created_at","fingerprint_a","fingerprint_b","id","video_high_id","video_low_id"],
   "people": ["avatar_path","created_at","display_name","id","original_name","updated_at"],
   "play_events": ["created_at","id","played_at","source","video_id"],

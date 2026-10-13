@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"testing"
@@ -206,11 +207,13 @@ func TestLibraryCursorValidationPerSortMode(t *testing.T) {
 		{"空年份带年份值", LibrarySortYearDesc, LibraryVideoCursor{SortMode: LibrarySortYearDesc, YearIsNull: true, Year: &year, ID: 1}, false},
 		{"年份缺值", LibrarySortYearDesc, LibraryVideoCursor{SortMode: LibrarySortYearDesc, ID: 1}, false},
 		{"年份带片名键", LibrarySortYearDesc, LibraryVideoCursor{SortMode: LibrarySortYearDesc, Year: &year, TitleKey: "ab", ID: 1}, false},
-		{"片名", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "9600ab", ID: 1}, true},
+		{"片名", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "1:9600ab", ID: 1}, true},
+		{"片名缺版本号", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "9600ab", ID: 1}, false},
+		{"片名奇数长度", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "1:9600a", ID: 1}, false},
 		{"片名空键", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, ID: 1}, true},
-		{"片名非十六进制", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "zz", ID: 1}, false},
-		{"片名大写", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "AB", ID: 1}, false},
-		{"片名过长", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: strings.Repeat("a", 514), ID: 1}, false},
+		{"片名非十六进制", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "1:zz", ID: 1}, false},
+		{"片名大写", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "1:AB", ID: 1}, false},
+		{"片名过长", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "1:" + strings.Repeat("a", 512), ID: 1}, false},
 		{"片名带评分", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "ab", Rating: &rating, ID: 1}, false},
 		{"片名缺 ID", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortTitleAsc, TitleKey: "ab"}, false},
 		{"模式不匹配", LibrarySortTitleAsc, LibraryVideoCursor{SortMode: LibrarySortYearDesc, Year: &year, ID: 1}, false},
@@ -233,5 +236,87 @@ func TestLibraryCursorValidationPerSortMode(t *testing.T) {
 		if _, err := normalizeLibraryFilter(LibraryFilter{SortMode: mode}); err != nil {
 			t.Fatalf("%s 应是合法排序: %v", mode, err)
 		}
+	}
+}
+
+// 随机夹具：大量同值、空年份、未对账的空键、版本组聚合开关，三种排序各个页大小翻完都与一次取完的顺序一致。
+func TestLibraryBrowseKeysetRandomized(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	rng := rand.New(rand.NewSource(7))
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.Local)
+	var all []models.Video
+	titles := []string{"长安", "重庆森林", "阿凡达", "Avatar", "avatar", "ＡＶＡＴＡＲ", "", "沙丘", "沙丘", "Zoo"}
+	for i := 0; i < 120; i++ {
+		var year *int
+		if rng.Intn(4) != 0 {
+			y := 2000 + rng.Intn(3)
+			year = &y
+		}
+		created := base.Add(time.Duration(rng.Intn(5)) * time.Second)
+		if rng.Intn(3) == 0 {
+			created = created.Add(time.Duration(rng.Intn(999)) * time.Microsecond)
+		}
+		video := models.Video{Name: fmt.Sprintf("f%03d.mp4", i), DisplayTitle: titles[rng.Intn(len(titles))], Year: year,
+			Path: fmt.Sprintf("/lib/p/%03d.mp4", i), Directory: "/lib/p", Size: 10, CreatedAt: created}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, video)
+	}
+	for i := 0; i < 10; i++ { // 还没对账的行：空键排在最前
+		if err := database.DB.Model(&models.Video{}).Where("id = ?", all[rng.Intn(len(all))].ID).UpdateColumn("title_sort_key", "").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	groups := NewVersionGroupService()
+	for g := 0; g < 8; g++ {
+		if _, err := groups.Create(context.Background(), []uint{all[g*2].ID, all[g*2+1].ID}, fmt.Sprintf("g%d", g)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, collapse := range []bool{false, true} {
+		for _, mode := range []string{LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc} {
+			filter := LibraryFilter{SortMode: mode, CollapseVersions: collapse}
+			full := collectBrowsePages(t, filter, 200, nil)
+			if want := len(all); collapse {
+				want -= 8
+				if len(full) != want {
+					t.Fatalf("%s 聚合后应有 %d 张卡: %d", mode, want, len(full))
+				}
+			} else if len(full) != want {
+				t.Fatalf("%s 应有 %d 条: %d", mode, want, len(full))
+			}
+			for _, limit := range []int{2, 3, 7} {
+				requireUintSlice(t, fmt.Sprintf("%s collapse=%v limit=%d", mode, collapse, limit), collectBrowsePages(t, filter, limit, nil), full)
+			}
+		}
+	}
+}
+
+// 游标行在两页之间被永久删除：最近添加的游标退回用回传的时间，同一时刻的其余行一条不漏。
+func TestLibraryAddedCursorSurvivesHardDeletedCursorRow(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	base := time.Date(2026, 10, 1, 12, 0, 0, 123456789, time.Local)
+	for i := 0; i < 6; i++ {
+		video := models.Video{Name: fmt.Sprintf("h%d.mp4", i), Path: fmt.Sprintf("/lib/h/%d.mp4", i), Directory: "/lib/h", CreatedAt: base}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := &VideoService{}
+	filter := LibraryFilter{SortMode: LibrarySortAddedDesc}
+	page, err := service.SearchLibraryVideoPage(filter, nil, 3)
+	if err != nil || page.NextCursor == nil {
+		t.Fatalf("第一页: %v", err)
+	}
+	if err := database.DB.Unscoped().Delete(&models.Video{}, page.NextCursor.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.SearchLibraryVideoPage(filter, page.NextCursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pageVideoIDs(second); len(got) != 3 {
+		t.Fatalf("游标行删掉后应还剩 3 条: %v", got)
 	}
 }

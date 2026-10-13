@@ -481,7 +481,12 @@ func (s *VideoService) RestoreTrashEntry(entryID uint) (*models.Video, error) {
 	if entry.State == trashStatePendingMove || entry.State == trashStateRollback {
 		return s.cancelInterruptedDeletion(&entry)
 	}
-	return s.restoreTrashEntry(&entry)
+	restored, err := s.restoreTrashEntry(&entry)
+	if err == nil {
+		// 视频回到片库：想看自动匹配可能多了一个命中（D-P2-03），防抖后重跑一轮。
+		notifyLibraryMatchInputsChanged("trash-restore")
+	}
+	return restored, err
 }
 
 func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models.Video, error) {

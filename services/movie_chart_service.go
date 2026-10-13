@@ -172,6 +172,8 @@ func NewMovieChartService(db *gorm.DB, watchlist *WatchlistService) *MovieChartS
 		// 依赖方向仍是榜单 → 片单；同一个片单服务被再次构造的榜单服务接管时，
 		// 观察者随之换成最新的那个。
 		watchlist.SetDoubanBindObserver(service)
+		// 片单页对豆瓣条目手动关联 / 解除时同步到 movie_video_links（UI 二期 D-P2-03）。
+		watchlist.SetChartLinker(service)
 	}
 	return service
 }

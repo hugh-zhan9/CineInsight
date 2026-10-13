@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"video-master/database"
@@ -53,12 +54,32 @@ func validateBrowseCursor(sortMode string, cursor *LibraryVideoCursor) error {
 		if cursor.CreatedAt != nil || cursor.Year != nil || cursor.YearIsNull {
 			return other
 		}
-		// 空串是合法键（还没补齐的行排在最前）；非空时必须是列宽以内的小写十六进制。
-		if len(cursor.TitleKey) > titleSortKeyCursorMax || len(cursor.TitleKey)%2 != 0 || !isLowerHex(cursor.TitleKey) {
+		// 空串是合法键（还没对账的行排在最前）；非空时必须是列宽以内的「版本号:小写十六进制」。
+		if !validTitleSortKey(cursor.TitleKey) {
 			return errors.New("片名游标无效")
 		}
 	}
 	return nil
+}
+
+// validTitleSortKey 认 models.VideoTitleSortKey 的形状：空串，或「数字版本号:偶数长度小写十六进制」，不超过列宽。
+func validTitleSortKey(key string) bool {
+	if key == "" {
+		return true
+	}
+	if len(key) > titleSortKeyCursorMax {
+		return false
+	}
+	version, hexPart, found := strings.Cut(key, ":")
+	if !found || version == "" || len(hexPart)%2 != 0 {
+		return false
+	}
+	for _, r := range version {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return isLowerHex(hexPart)
 }
 
 func isLowerHex(text string) bool {

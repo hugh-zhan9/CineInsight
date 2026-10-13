@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"video-master/database"
+	"video-master/internal/dbtest"
 	"video-master/models"
 
 	"gorm.io/gorm"
@@ -74,8 +75,8 @@ func TestVideoTitleSortKeyPinyinCaseWidthAndSource(t *testing.T) {
 	if len(key) != 512 {
 		t.Fatalf("长片名的键应截在列宽 512: %d", len(key))
 	}
-	if !isLowerHex(key) {
-		t.Fatal("排序键应是小写十六进制")
+	if !strings.HasPrefix(key, models.TitleSortKeyVersion) || !validTitleSortKey(key) {
+		t.Fatalf("排序键应是「版本号:小写十六进制」: %.12s…", key)
 	}
 }
 
@@ -157,11 +158,56 @@ func TestVideoTitleSortKeyConditionalBypassIsCaught(t *testing.T) {
 	if got, key := readTitleSortKey(t, video.ID); key != "" || got.DisplayTitle != "阿凡达" {
 		t.Fatalf("生产上应照常写入并把键清空待补齐: %+v key=%q", got, key)
 	}
-	filled, err := BackfillVideoTitleSortKeys(context.Background())
-	if err != nil || filled != 1 {
-		t.Fatalf("补齐应补上这一行: filled=%d err=%v", filled, err)
+	fixed, err := ReconcileVideoTitleSortKeys(context.Background())
+	if err != nil || fixed != 1 {
+		t.Fatalf("对账应改正这一行: fixed=%d err=%v", fixed, err)
 	}
-	requireTitleSortKeyCurrent(t, "补齐", video.ID)
+	requireTitleSortKeyCurrent(t, "对账", video.ID)
+}
+
+// 钩子与统一写法都不改调用方的更新内容（同一个 map 拿去更新下一行时不带上一行的键）；多行模型的标题更新被拒绝。
+func TestVideoTitleSortKeyWritesDoNotMutateCallerUpdates(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	a := models.Video{Name: "a.mp4", Path: "/x/a.mp4", Directory: "/x"}
+	b := models.Video{Name: "b.mp4", DisplayTitle: "乙", Path: "/x/b.mp4", Directory: "/x"}
+	for _, video := range []*models.Video{&a, &b} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	updates := map[string]any{"name": "茶馆.mp4"}
+	if err := database.DB.Model(&a).Updates(updates).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("钩子不应改调用方的 map: %v", updates)
+	}
+	if err := database.DB.Model(&b).Updates(updates).Error; err != nil {
+		t.Fatal(err)
+	}
+	requireTitleSortKeyCurrent(t, "第一行", a.ID)
+	if got := requireTitleSortKeyCurrent(t, "复用 map 的第二行", b.ID); got.TitleSortKey != models.VideoTitleSortKey("乙", "") {
+		t.Fatalf("第二行的键应按它自己的显示标题算: %q", got.TitleSortKey)
+	}
+	helperUpdates := map[string]any{"display_title": "阿凡达"}
+	if err := UpdateVideoTitleFields(database.DB.Model(&models.Video{}).Where("id = ?", a.ID), a.ID, helperUpdates).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(helperUpdates) != 1 {
+		t.Fatalf("统一写法不应改调用方的 map: %v", helperUpdates)
+	}
+	structUpdates := models.Video{DisplayTitle: "大话西游"}
+	if err := database.DB.Model(&a).Updates(&structUpdates).Error; err != nil {
+		t.Fatal(err)
+	}
+	if structUpdates.TitleSortKey != "" {
+		t.Fatal("钩子不应改调用方的结构体")
+	}
+	requireTitleSortKeyCurrent(t, "Updates(struct)", a.ID)
+	rows := []models.Video{a, b}
+	if err := database.DB.Model(&rows).Updates(map[string]any{"display_title": "同名"}).Error; !errors.Is(err, models.ErrVideoTitleSortKeyMultiRow) {
+		t.Fatalf("多行模型的标题更新应被拒绝: %v", err)
+	}
 }
 
 func TestUpdateVideoTitleFieldsComputesFromMergedValues(t *testing.T) {
@@ -199,9 +245,9 @@ func TestUpdateVideoTitleFieldsComputesFromMergedValues(t *testing.T) {
 	}
 }
 
-func TestBackfillVideoTitleSortKeysFillsEmptyRowsInBatches(t *testing.T) {
+func TestReconcileVideoTitleSortKeysFixesStaleKeysInBatches(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	total := videoTitleSortBackfillBatch + 3
+	total := videoTitleSortReconcileBatch + 3
 	videos := make([]models.Video, 0, total)
 	for i := 0; i < total; i++ {
 		videos = append(videos, models.Video{Name: "片" + strconv.Itoa(i) + ".mp4", Path: "/library/v/" + strconv.Itoa(i) + ".mp4", Directory: "/library/v"})
@@ -209,7 +255,7 @@ func TestBackfillVideoTitleSortKeysFillsEmptyRowsInBatches(t *testing.T) {
 	if err := database.DB.CreateInBatches(&videos, 200).Error; err != nil {
 		t.Fatal(err)
 	}
-	// 模拟升级前的存量行：键为空。软删行也要补；两列都空的行补不出来，原样跳过。
+	// 模拟升级前的存量行：键为空；再造几种不一致：错键（并发写入错过）、旧版本前缀（排序规则换过）。
 	if err := database.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Model(&models.Video{}).UpdateColumn("title_sort_key", "").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -217,21 +263,73 @@ func TestBackfillVideoTitleSortKeysFillsEmptyRowsInBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	blank := models.Video{Name: "", Path: "/library/blank", Directory: "/library"}
-	if err := database.DB.Create(&blank).Error; err != nil {
-		t.Fatal(err)
+	wrong := models.Video{Name: "茶馆.mp4", Path: "/library/wrong", Directory: "/library"}
+	oldVersion := models.Video{Name: "阿凡达.mp4", Path: "/library/old", Directory: "/library"}
+	current := models.Video{Name: "霸王别姬.mp4", Path: "/library/current", Directory: "/library"}
+	for _, video := range []*models.Video{&blank, &wrong, &oldVersion, &current} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
-	filled, err := BackfillVideoTitleSortKeys(context.Background())
-	if err != nil || filled != total {
-		t.Fatalf("应补齐 %d 行: filled=%d err=%v", total, filled, err)
+	for id, key := range map[uint]string{wrong.ID: models.VideoTitleSortKey("阿凡达", ""), oldVersion.ID: "0:" + strings.TrimPrefix(models.VideoTitleSortKey("阿凡达", ""), models.TitleSortKeyVersion)} {
+		if err := database.DB.Model(&models.Video{}).Where("id = ?", id).UpdateColumn("title_sort_key", key).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
-	requireTitleSortKeyCurrent(t, "软删行补齐", videos[0].ID)
-	requireTitleSortKeyCurrent(t, "最后一批", videos[total-1].ID)
+	fixed, err := ReconcileVideoTitleSortKeys(context.Background())
+	if err != nil || fixed != total+2 {
+		t.Fatalf("应改正 %d 行: fixed=%d err=%v", total+2, fixed, err)
+	}
+	for label, id := range map[string]uint{"软删行": videos[0].ID, "最后一批": videos[total-1].ID, "错键": wrong.ID, "旧版本": oldVersion.ID, "本来就对": current.ID} {
+		requireTitleSortKeyCurrent(t, label, id)
+	}
 	if _, key := readTitleSortKey(t, blank.ID); key != "" {
 		t.Fatalf("两列都空的行应保持空串: %q", key)
 	}
-	again, err := BackfillVideoTitleSortKeys(context.Background())
+	again, err := ReconcileVideoTitleSortKeys(context.Background())
 	if err != nil || again != 0 {
-		t.Fatalf("再跑一次应没有可补的: %d %v", again, err)
+		t.Fatalf("再跑一次应没有可改的: %d %v", again, err)
+	}
+}
+
+// 老库升级：没有 title_sort_key 列、没有想看关联表与索引的库跑完 ApplySchema 后，对账把键全部补上。
+func TestTitleSortKeyUpgradeExistingDatabase(t *testing.T) {
+	db := dbtest.OpenRaw(t)
+	if err := database.ApplySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		"DROP INDEX IF EXISTS idx_videos_title_sort_active",
+		"DROP TABLE IF EXISTS watchlist_video_links",
+		"ALTER TABLE videos DROP COLUMN title_sort_key",
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	for _, name := range []string{"甲.mp4", "乙.mp4", "丙.mp4"} {
+		if err := db.Exec("INSERT INTO videos (name, path, directory, display_title, original_title, description, poster_path, fanart_path, created_at, updated_at) VALUES (?, ?, '/d', '', '', '', '', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", name, "/d/"+name).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.ApplySchema(db); err != nil {
+		t.Fatalf("升级失败: %v", err)
+	}
+	if !db.Migrator().HasTable(&models.WatchlistVideoLink{}) || !db.Migrator().HasIndex(&models.Video{}, "idx_videos_title_sort_active") {
+		t.Fatal("升级应建出想看关联表与排序索引")
+	}
+	fixed, err := reconcileVideoTitleSortKeysFrom(context.Background(), db)
+	if err != nil || fixed != 3 {
+		t.Fatalf("对账应补上 3 行: %d %v", fixed, err)
+	}
+	var rows []models.Video
+	if err := db.Order("id ASC").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.TitleSortKey != models.VideoTitleSortKey(row.DisplayTitle, row.Name) || row.TitleSortKey == "" {
+			t.Fatalf("对账后键不对: %+v", row)
+		}
 	}
 }
 

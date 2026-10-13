@@ -163,6 +163,7 @@ func undoBatchScalar(tx *gorm.DB, kind string, item models.MetadataBatchEditItem
 		value = batchScalarArg(item.Field, *before)
 	}
 	result := query.Update(column, value)
+	notifyBatchYearChanged(result, kind, item.Field)
 	return result.RowsAffected == 1, result.Error
 }
 
