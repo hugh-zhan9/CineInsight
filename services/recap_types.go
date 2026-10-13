@@ -177,13 +177,39 @@ type RecapHabits struct {
 // legacy 事件计入总数但不让一部片成为新发现（它可以作为「以前看过」的证据）。
 // 新收藏按 favorited_at 落在本期且至今仍收藏；DiaryRated 是本期观影日记里带评分的条目数
 // （片库评分本身没有时间戳，无法归期）。
+// 四类各带最多 6 个样本（与计数同口径）：视频与图片样本只取仍可展示的（未删除、未失效），所以样本可能比计数少；
+// 新发现样本按排行顺序，其余三类按本期内最近一次在前（重温看期内最后一次播放，新收藏看 favorited_at，
+// 日记看观看日期）。
 type RecapFreshness struct {
-	NewVideos         int64        `json:"new_videos"`
-	RewatchedVideos   int64        `json:"rewatched_videos"`
-	NewSamples        []RecapVideo `json:"new_samples"`
-	NewFavoriteVideos int64        `json:"new_favorite_videos"`
-	NewFavoriteImages int64        `json:"new_favorite_images"`
-	DiaryRated        int64        `json:"diary_rated"`
+	NewVideos          int64              `json:"new_videos"`
+	RewatchedVideos    int64              `json:"rewatched_videos"`
+	NewSamples         []RecapVideo       `json:"new_samples"`
+	RewatchedSamples   []RecapVideo       `json:"rewatched_samples"`
+	NewFavoriteVideos  int64              `json:"new_favorite_videos"`
+	NewFavoriteImages  int64              `json:"new_favorite_images"`
+	NewFavoriteSamples []RecapNewFavorite `json:"new_favorite_samples"`
+	DiaryRated         int64              `json:"diary_rated"`
+	DiaryRatedSamples  []RecapDiaryRated  `json:"diary_rated_samples"`
+}
+
+// RecapNewFavorite 是本期新收藏的一项：Kind 为 video / image（图片要靠 ID 打开查看器）。
+type RecapNewFavorite struct {
+	Kind        string    `json:"kind"`
+	ID          uint      `json:"id"`
+	Title       string    `json:"title"`
+	FavoritedAt time.Time `json:"favorited_at" ts_type:"string"`
+	Available   bool      `json:"available"`
+}
+
+// RecapDiaryRated 是本期一条带评分的观影日记。VideoID 是关联的片库视频（没有关联时为 nil），
+// VideoAvailable 表示那部视频仍可打开（未删除、未失效）；日记本身不随视频删除。
+type RecapDiaryRated struct {
+	ID             uint    `json:"id"`
+	Title          string  `json:"title"`
+	Rating         float64 `json:"rating"`
+	WatchedOn      string  `json:"watched_on"`
+	VideoID        *uint   `json:"video_id"`
+	VideoAvailable bool    `json:"video_available"`
 }
 
 // RecapTitle 是按固定规则给出的称号，Detail 写明依据的数字。

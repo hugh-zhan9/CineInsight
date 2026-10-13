@@ -10474,6 +10474,28 @@ export namespace services {
 	        this.views = source["views"];
 	    }
 	}
+	export class RecapDiaryRated {
+	    id: number;
+	    title: string;
+	    rating: number;
+	    watched_on: string;
+	    video_id?: number;
+	    video_available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapDiaryRated(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.rating = source["rating"];
+	        this.watched_on = source["watched_on"];
+	        this.video_id = source["video_id"];
+	        this.video_available = source["video_available"];
+	    }
+	}
 	export class RecapEntity {
 	    id: number;
 	    name: string;
@@ -10752,13 +10774,36 @@ export namespace services {
 	        this.available = source["available"];
 	    }
 	}
+	export class RecapNewFavorite {
+	    kind: string;
+	    id: number;
+	    title: string;
+	    favorited_at: string;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapNewFavorite(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.favorited_at = source["favorited_at"];
+	        this.available = source["available"];
+	    }
+	}
 	export class RecapFreshness {
 	    new_videos: number;
 	    rewatched_videos: number;
 	    new_samples: RecapVideo[];
+	    rewatched_samples: RecapVideo[];
 	    new_favorite_videos: number;
 	    new_favorite_images: number;
+	    new_favorite_samples: RecapNewFavorite[];
 	    diary_rated: number;
+	    diary_rated_samples: RecapDiaryRated[];
 	
 	    static createFrom(source: any = {}) {
 	        return new RecapFreshness(source);
@@ -10769,9 +10814,12 @@ export namespace services {
 	        this.new_videos = source["new_videos"];
 	        this.rewatched_videos = source["rewatched_videos"];
 	        this.new_samples = this.convertValues(source["new_samples"], RecapVideo);
+	        this.rewatched_samples = this.convertValues(source["rewatched_samples"], RecapVideo);
 	        this.new_favorite_videos = source["new_favorite_videos"];
 	        this.new_favorite_images = source["new_favorite_images"];
+	        this.new_favorite_samples = this.convertValues(source["new_favorite_samples"], RecapNewFavorite);
 	        this.diary_rated = source["diary_rated"];
+	        this.diary_rated_samples = this.convertValues(source["diary_rated_samples"], RecapDiaryRated);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -10992,6 +11040,7 @@ export namespace services {
 	        this.views = source["views"];
 	    }
 	}
+	
 	export class RecapNowPlaying {
 	    video: RecapVideo;
 	    basis: string;

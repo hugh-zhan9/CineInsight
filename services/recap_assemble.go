@@ -1,6 +1,6 @@
 package services
 
-// hydrate 一次读回本期要显示的视频与图片（Top、新发现样本、每月之最、今日流水、正在播放）。
+// hydrate 一次读回本期要显示的视频与图片（Top、新发现与重温样本、每月之最、今日流水、正在播放）。
 func (b *recapBuilder) hydrate() (map[uint]RecapVideo, map[uint]RecapImage, error) {
 	videos, err := hydrateRecapVideos(b.db, recapIDList(b.videoIDs))
 	if err != nil {
@@ -52,6 +52,9 @@ func (b *recapBuilder) assemble(videos map[uint]RecapVideo, images map[uint]Reca
 	}
 	for _, item := range b.newSamples {
 		r.Freshness.NewSamples = append(r.Freshness.NewSamples, recapVideoOf(videos, item.id))
+	}
+	for _, item := range b.rewatchSamples {
+		r.Freshness.RewatchedSamples = append(r.Freshness.RewatchedSamples, recapVideoOf(videos, item.id))
 	}
 	if r.Period == RecapPeriodYear && !r.Empty {
 		for month, item := range b.monthBest {

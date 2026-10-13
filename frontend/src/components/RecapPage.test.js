@@ -139,6 +139,135 @@ describe('RecapPage', () => {
   });
 });
 
+describe('RecapPage freshness switch', () => {
+  const freshness = (overrides = {}) => ({
+    new_videos: 2, new_samples: [video(21), video(22)],
+    rewatched_videos: 3, rewatched_samples: [video(31), video(32, { title: '' })],
+    new_favorite_videos: 1, new_favorite_images: 1,
+    new_favorite_samples: [
+      { kind: 'image', id: 41, title: 'p41.jpg', favorited_at: '2026-10-09T10:00:00+08:00', available: true },
+      { kind: 'video', id: 42, title: '收藏片', favorited_at: '2026-10-08T10:00:00+08:00', available: true }
+    ],
+    diary_rated: 3,
+    diary_rated_samples: [
+      { id: 51, title: '有关联', rating: 9.5, watched_on: '2026-10-20', video_id: 61, video_available: true },
+      { id: 52, title: '无关联', rating: 7, watched_on: '2026-10-05', video_id: null, video_available: false },
+      { id: 53, title: '视频已删', rating: 8, watched_on: '2026-10-03', video_id: 62, video_available: false }
+    ],
+    ...overrides
+  });
+  const options = ['new', 'rewatched', 'favorites', 'diary'];
+  const option = (wrapper, key) => wrapper.get(`[data-test="recap-fresh-${key}"]`);
+  const checked = wrapper => options.filter(key => option(wrapper, key).attributes('aria-checked') === 'true');
+  const accented = wrapper => options.filter(key => option(wrapper, key).classes().includes('recap-fact--accent'));
+  const cards = wrapper => wrapper.findAll('[data-test="recap-fresh-samples"] .recap-card');
+
+  async function mountFresh(overrides = {}, mountOptions = {}) {
+    api.GetRecap.mockImplementation(() => Promise.resolve(recap({ freshness: freshness(overrides) })));
+    const wrapper = mount(RecapPage, mountOptions);
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('is a radio group that starts on 新发现, with only the selected card accented', async () => {
+    const wrapper = await mountFresh();
+    const group = wrapper.get('[data-test="recap-freshness"]');
+    expect(group.attributes('role')).toBe('radiogroup');
+    for (const key of options) {
+      const element = option(wrapper, key);
+      expect(element.element.tagName).toBe('BUTTON');
+      expect(element.attributes('role')).toBe('radio');
+      expect(element.classes()).toContain('btn-plain');
+    }
+    expect(checked(wrapper)).toEqual(['new']);
+    expect(accented(wrapper)).toEqual(['new']);
+    expect(option(wrapper, 'new').attributes('tabindex')).toBe('0');
+    expect(option(wrapper, 'diary').attributes('tabindex')).toBe('-1');
+    expect(option(wrapper, 'favorites').text()).toContain('视频 1 · 图片 1');
+    expect(cards(wrapper).map(card => card.text())).toEqual(['影片21本期新发现', '影片22本期新发现']);
+    await cards(wrapper)[1].trigger('click');
+    expect(wrapper.emitted('open-video-id')).toEqual([[22]]);
+  });
+
+  it('switches the strip and its subtitle with the selected category', async () => {
+    const wrapper = await mountFresh();
+    await option(wrapper, 'rewatched').trigger('click');
+    expect(checked(wrapper)).toEqual(['rewatched']);
+    expect(accented(wrapper)).toEqual(['rewatched']);
+    expect(cards(wrapper).map(card => card.text())).toEqual(['影片31本期重温', '已删除的视频本期重温']);
+    await cards(wrapper)[0].trigger('click');
+    expect(wrapper.emitted('open-video-id')).toEqual([[31]]);
+
+    await option(wrapper, 'favorites').trigger('click');
+    expect(accented(wrapper)).toEqual(['favorites']);
+    const favorites = cards(wrapper);
+    expect(favorites.map(card => card.attributes('data-test'))).toEqual(['recap-card-image', 'recap-card-video']);
+    expect(favorites.map(card => card.text())).toEqual(['p41.jpg本期新收藏', '收藏片本期新收藏']);
+    expect(favorites[0].get('img').attributes('src')).toBe('/preview/image-thumbnail/41');
+    await favorites[0].trigger('click');
+    expect(wrapper.emitted('open-image')).toEqual([[{ id: 41, name: 'p41.jpg' }]]);
+    await favorites[1].trigger('click');
+    expect(wrapper.emitted('open-video-id')).toEqual([[31], [42]]);
+
+    await option(wrapper, 'diary').trigger('click');
+    expect(accented(wrapper)).toEqual(['diary']);
+    const diary = cards(wrapper);
+    expect(diary.map(card => card.text())).toEqual(['9.5 分有关联本期日记评分', '7.0 分无关联本期日记评分', '8.0 分视频已删本期日记评分']);
+    // 只有还在库的关联视频才拿它的缩略图；没有关联、视频已删的用占位图标，但都能点。
+    expect(diary[0].get('img').attributes('src')).toBe('/preview/thumbnail/61');
+    expect(diary[1].find('img').exists()).toBe(false);
+    expect(diary[2].find('img').exists()).toBe(false);
+    expect(diary.map(card => card.attributes('disabled'))).toEqual([undefined, undefined, undefined]);
+    await diary[0].trigger('click');
+    expect(wrapper.emitted('open-video-id')).toEqual([[31], [42], [61]]);
+    await diary[1].trigger('click');
+    await diary[2].trigger('click');
+    expect(wrapper.emitted('navigate')).toEqual([['viewing-notes'], ['viewing-notes']]);
+  });
+
+  it('moves the selection and focus with the arrow keys, wrapping at both ends', async () => {
+    const wrapper = await mountFresh({}, { attachTo: document.body });
+    const group = wrapper.get('[data-test="recap-freshness"]');
+    option(wrapper, 'new').element.focus();
+    await group.trigger('keydown', { key: 'ArrowRight' });
+    expect(checked(wrapper)).toEqual(['rewatched']);
+    expect(document.activeElement).toBe(option(wrapper, 'rewatched').element);
+    expect(cards(wrapper)[0].text()).toContain('本期重温');
+    await group.trigger('keydown', { key: 'ArrowRight' });
+    await group.trigger('keydown', { key: 'ArrowRight' });
+    expect(checked(wrapper)).toEqual(['diary']);
+    await group.trigger('keydown', { key: 'ArrowRight' });
+    expect(checked(wrapper)).toEqual(['new']);
+    await group.trigger('keydown', { key: 'ArrowLeft' });
+    expect(checked(wrapper)).toEqual(['diary']);
+    expect(document.activeElement).toBe(option(wrapper, 'diary').element);
+    expect(option(wrapper, 'diary').attributes('tabindex')).toBe('0');
+    expect(option(wrapper, 'new').attributes('tabindex')).toBe('-1');
+    await group.trigger('keydown', { key: 'Home' });
+    expect(checked(wrapper)).toEqual(['new']);
+    await group.trigger('keydown', { key: 'End' });
+    expect(checked(wrapper)).toEqual(['diary']);
+    await group.trigger('keydown', { key: 'Enter' });
+    expect(checked(wrapper)).toEqual(['diary']);
+  });
+
+  it('shows one muted line when a category is zero or all of its media are gone', async () => {
+    const wrapper = await mountFresh({ rewatched_videos: 0, rewatched_samples: [], new_videos: 3, new_samples: [], diary_rated: 0, diary_rated_samples: [] });
+    expect(wrapper.find('[data-test="recap-fresh-samples"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="recap-fresh-empty"]').text()).toBe('这 3 部都已不在库中，记录仍然保留。');
+    await option(wrapper, 'rewatched').trigger('click');
+    expect(checked(wrapper)).toEqual(['rewatched']);
+    expect(accented(wrapper)).toEqual(['rewatched']);
+    expect(wrapper.find('[data-test="recap-fresh-samples"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="recap-fresh-empty"]').text()).toBe('这一期没有重温。');
+    await option(wrapper, 'diary').trigger('click');
+    expect(wrapper.get('[data-test="recap-fresh-empty"]').text()).toBe('这一期没有观影日记评分。');
+    await option(wrapper, 'favorites').trigger('click');
+    expect(wrapper.find('[data-test="recap-fresh-empty"]').exists()).toBe(false);
+    expect(cards(wrapper)).toHaveLength(2);
+  });
+});
+
 describe('RecapPage live refresh', () => {
   const liveResult = () => recap({
     period: 'live', label: '今天', favorite: null, favorite_image: null, titles: [],

@@ -250,15 +250,39 @@
 
         <section v-reveal class="recap-section">
           <header class="recap-section__head"><h3><RecapIcon name="explorer" /> 新鲜度</h3><small>新发现 = 第一次出现播放记录；历史补记不会让一部片成为新发现</small></header>
-          <div class="recap-fresh" data-test="recap-freshness">
-            <article class="recap-fact recap-fact--accent"><small>新发现</small><strong><RecapCountUp :value="result.freshness.new_videos" /> 部</strong></article>
-            <article class="recap-fact"><small>重温</small><strong><RecapCountUp :value="result.freshness.rewatched_videos" /> 部</strong></article>
-            <article class="recap-fact"><small>新收藏</small><strong>{{ result.freshness.new_favorite_videos + result.freshness.new_favorite_images }}</strong><span>视频 {{ result.freshness.new_favorite_videos }} · 图片 {{ result.freshness.new_favorite_images }}</span></article>
-            <article class="recap-fact"><small>观影日记评分</small><strong>{{ result.freshness.diary_rated }} 条</strong><span>片库评分没有时间，不归入某一期</span></article>
+          <!-- 四张卡是单选（radiogroup，←/→ 切换、焦点跟着走），选中的那张用强调色；下面的横排换成这一类的样本。 -->
+          <div class="recap-fresh" role="radiogroup" aria-label="新鲜度" data-test="recap-freshness" @keydown="freshKeydown">
+            <button
+              v-for="option in freshOptions"
+              :key="option.key"
+              type="button"
+              role="radio"
+              :class="['btn-plain', 'recap-fact', 'recap-fresh__option', { 'recap-fact--accent': option.key === freshKey }]"
+              :aria-checked="option.key === freshKey ? 'true' : 'false'"
+              :tabindex="option.key === freshKey ? 0 : -1"
+              :data-test="option.dataTest"
+              @click="freshKey = option.key"
+            >
+              <small>{{ option.label }}</small>
+              <strong><RecapCountUp :value="option.count" /> {{ option.unit }}</strong>
+              <span v-if="option.note">{{ option.note }}</span>
+            </button>
           </div>
-          <div v-if="result.freshness.new_samples.length" class="recap-strip recap-strip--compact">
-            <RecapMediaCard v-for="video in result.freshness.new_samples" :key="video.id" class="recap-strip__item" :id="video.id" :title="video.title || '已删除的视频'" subtitle="本期新发现" :available="video.available" @open="openVideo(video)" />
+          <div v-if="freshSamples.length" class="recap-strip recap-strip--compact recap-fresh__strip" data-test="recap-fresh-samples">
+            <RecapMediaCard
+              v-for="item in freshSamples"
+              :key="item.key"
+              class="recap-strip__item"
+              :kind="item.kind"
+              :id="item.id"
+              :title="item.title"
+              :subtitle="freshSelected.subtitle"
+              :badge="item.badge"
+              :available="item.available"
+              @open="item.open()"
+            />
           </div>
+          <p v-else class="recap-muted" data-test="recap-fresh-empty">{{ freshEmptyText }}</p>
         </section>
 
         <template v-if="result.period === 'year'">
@@ -340,7 +364,11 @@ export default {
   props: { pageActive: { type: Boolean, default: true } },
   emits: ['open-video-id', 'open-tag', 'open-image', 'open-entity', 'navigate'],
   data() {
-    return { tabs: RECAP_TABS, tab: 'month', cursor: currentCursor(), result: null, resultKey: '', loading: false, error: '', generation: 0, nowTick: Date.now() };
+    return {
+      tabs: RECAP_TABS, tab: 'month', cursor: currentCursor(), result: null, resultKey: '', loading: false, error: '', generation: 0, nowTick: Date.now(),
+      // 新鲜度当前选中的一类（new / rewatched / favorites / diary），换期次时保留。
+      freshKey: 'new'
+    };
   },
   computed: {
     tabOptions() { return this.tabs.map(item => ({ value: item.key, label: item.label, dataTest: `recap-tab-${item.key}` })); },
@@ -428,6 +456,46 @@ export default {
       }));
     },
     sourcesTitle() { return this.sourceBars.map(item => `${item.label} ${item.count}`).join(' · '); },
+    // 新鲜度的四类：计数与样本都来自 GetRecap（样本最多 6 个，只含还能打开的媒体，所以可能比计数少）。
+    freshOptions() {
+      const fresh = this.result?.freshness || {};
+      const videos = Number(fresh.new_favorite_videos || 0);
+      const images = Number(fresh.new_favorite_images || 0);
+      return [
+        { key: 'new', dataTest: 'recap-fresh-new', label: '新发现', subtitle: '本期新发现', unit: '部', count: Number(fresh.new_videos || 0), note: '' },
+        { key: 'rewatched', dataTest: 'recap-fresh-rewatched', label: '重温', subtitle: '本期重温', unit: '部', count: Number(fresh.rewatched_videos || 0), note: '' },
+        { key: 'favorites', dataTest: 'recap-fresh-favorites', label: '新收藏', subtitle: '本期新收藏', unit: '', count: videos + images, note: `视频 ${videos} · 图片 ${images}` },
+        { key: 'diary', dataTest: 'recap-fresh-diary', label: '观影日记评分', subtitle: '本期日记评分', unit: '条', count: Number(fresh.diary_rated || 0), note: '片库评分没有时间，不归入某一期' }
+      ];
+    },
+    freshSelected() { return this.freshOptions.find(option => option.key === this.freshKey) || this.freshOptions[0]; },
+    // 选中一类的样本，统一成卡片要的样子：视频进详情；收藏里的图片开查看器；日记有还在库的关联视频就进详情，否则去观看笔记。
+    freshSamples() {
+      const fresh = this.result?.freshness || {};
+      const video = item => ({ key: `v${item.id}`, kind: 'video', id: Number(item.id), title: item.title || '已删除的视频', badge: '', available: Boolean(item.available), open: () => this.openVideo(item) });
+      switch (this.freshSelected.key) {
+        case 'rewatched':
+          return (fresh.rewatched_samples || []).map(video);
+        case 'favorites':
+          return (fresh.new_favorite_samples || []).map(item => ({
+            key: `${item.kind}${item.id}`, kind: item.kind === 'image' ? 'image' : 'video', id: Number(item.id), title: item.title, badge: '',
+            available: Boolean(item.available), open: () => this.openFeedItem(item)
+          }));
+        case 'diary':
+          return (fresh.diary_rated_samples || []).map(entry => ({
+            key: `d${entry.id}`, kind: 'video', id: entry.video_available ? Number(entry.video_id || 0) : 0, title: entry.title,
+            badge: `${Number(entry.rating).toFixed(1)} 分`, available: true, open: () => this.openDiaryEntry(entry)
+          }));
+        default:
+          return (fresh.new_samples || []).map(video);
+      }
+    },
+    // 没有样本时的一句：这一类本期为 0，或者有计数但对应的媒体都已不在库中。
+    freshEmptyText() {
+      const option = this.freshSelected;
+      if (!option.count) return `这一期没有${option.label}。`;
+      return `这 ${option.count} ${option.unit || '项'}都已不在库中，记录仍然保留。`;
+    },
     // 空期（EmptyState）：说明回顾统计什么，再按情况给一句下一步——还没结束就等等，上一期有记录就翻过去。
     emptyHasPrevious() {
       const previous = this.result?.overview?.previous;
@@ -540,6 +608,25 @@ export default {
     openFeedItem(item) {
       if (item.kind === 'image') this.openImage({ id: item.id, name: item.title, available: item.available });
       else this.openVideo({ id: item.id, available: item.available });
+    },
+    // 日记条目：关联的视频还在库就进详情，否则去片单「观看笔记」（默认就是观影日记）。
+    openDiaryEntry(entry) {
+      if (entry?.video_id && entry.video_available) this.openVideo({ id: entry.video_id });
+      else this.$emit('navigate', 'viewing-notes');
+    },
+    // 新鲜度四张卡的方向键：← ↑ / → ↓ 选上一类 / 下一类（首尾循环），Home / End 到两端，焦点跟着选中项走。
+    freshKeydown(event) {
+      const keys = this.freshOptions.map(option => option.key);
+      const current = Math.max(0, keys.indexOf(this.freshSelected.key));
+      let next;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % keys.length;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + keys.length) % keys.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = keys.length - 1;
+      else return;
+      event.preventDefault();
+      this.freshKey = keys[next];
+      event.currentTarget.querySelectorAll('[role="radio"]')[next]?.focus();
     },
     framesFor(video) {
       return video?.available ? heroFrameURLs(video) : [];
@@ -746,6 +833,10 @@ export default {
 
 .recap-fresh { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .recap-fresh .recap-fact strong { font-size: var(--fs-display); }
+.recap-fresh__option { width: 100%; cursor: pointer; transition: border-color var(--transition), background var(--transition); }
+.recap-fresh__option:hover:not(.recap-fact--accent) { border-color: var(--border-strong); }
+/* 新收藏里视频与图片混排：统一按 16:9 裁切，横排才整齐。 */
+.recap-fresh__strip :deep(.recap-card__media) { aspect-ratio: 16 / 9; }
 
 .recap-bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; align-items: end; height: 170px; }
 .recap-bars__col { display: grid; grid-template-rows: 1fr auto; gap: 6px; height: 100%; min-width: 0; text-align: center; }
@@ -781,6 +872,6 @@ export default {
   .recap-reveal, .recap-bars__plays, .recap-bars__views { transition: none; }
   .recap-reveal { opacity: 1; transform: none; }
   .recap-live-dot { animation: none; }
-  .recap-hero__chips .recap-chip, .recap-cloud__tag { transition: none; }
+  .recap-hero__chips .recap-chip, .recap-cloud__tag, .recap-fresh__option { transition: none; }
 }
 </style>

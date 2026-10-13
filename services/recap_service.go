@@ -58,7 +58,8 @@ func (s *RecapService) GetRecap(ctx context.Context, req RecapRequest) (*RecapRe
 		InProgress: w.inProgress, GeneratedAt: now, TopVideos: []RecapVideoRank{}, TopTags: []RecapTagRank{},
 		TopPeople: []RecapEntityRank{}, TopCollections: []RecapEntityRank{}, TopImages: []RecapImageRank{},
 		Titles: []RecapTitle{}, Months: []RecapMonthBucket{}, MonthBest: []RecapMonthBest{}, QuarterTags: []RecapQuarterTags{},
-		Feed: []RecapFeedItem{}, Week: []RecapDayBucket{}, Freshness: RecapFreshness{NewSamples: []RecapVideo{}}}
+		Feed: []RecapFeedItem{}, Week: []RecapDayBucket{}, Freshness: RecapFreshness{NewSamples: []RecapVideo{},
+			RewatchedSamples: []RecapVideo{}, NewFavoriteSamples: []RecapNewFavorite{}, DiaryRatedSamples: []RecapDiaryRated{}}}
 	err = database.WithOperationContext(ctx, func(db *gorm.DB) error {
 		return (&recapBuilder{db: db, w: w, now: now, loc: loc, result: result}).build()
 	})
@@ -89,6 +90,7 @@ type recapBuilder struct {
 	availableVideos map[uint]bool
 	availableImages map[uint]bool
 	newSamples      []*recapMediaTally
+	rewatchSamples  []*recapMediaTally
 	monthBest       [12]*recapMediaTally
 	feed            []RecapFeedItem
 	nowPlaying      *RecapNowPlaying

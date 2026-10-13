@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sort"
 	"time"
 	"video-master/models"
 
@@ -50,22 +51,109 @@ func recapPriorVideoIDs(db *gorm.DB, start, end time.Time) (map[uint]bool, error
 	return prior, nil
 }
 
-// recapFavoriteCounts 数 favorited_at 落在期内、至今仍在收藏的视频与图片（取消收藏会清空该列）。
+// recapNewFavorites 是 favorited_at 落在期内、至今仍在收藏的视频或图片（取消收藏会清空该列；Model 自带软删过滤）。
+func recapNewFavorites(db *gorm.DB, model any, start, end time.Time) *gorm.DB {
+	return db.Model(model).Where("is_favorite = ? AND favorited_at >= ? AND favorited_at < ?", true, start, end)
+}
+
+// recapFavoriteCounts 数本期新收藏的视频与图片。
 func recapFavoriteCounts(db *gorm.DB, start, end time.Time) (videos, images int64, err error) {
-	if err = db.Model(&models.Video{}).Where("is_favorite = ? AND favorited_at >= ? AND favorited_at < ?", true, start, end).
-		Count(&videos).Error; err != nil {
+	if err = recapNewFavorites(db, &models.Video{}, start, end).Count(&videos).Error; err != nil {
 		return
 	}
-	err = db.Model(&models.Image{}).Where("is_favorite = ? AND favorited_at >= ? AND favorited_at < ?", true, start, end).
-		Count(&images).Error
+	err = recapNewFavorites(db, &models.Image{}, start, end).Count(&images).Error
 	return
 }
 
-// recapDiaryRated 数观看日期落在期内且带评分的观影日记条目（watched_on 是本地日期串，按字符串区间比较）。
+type recapNewFavoriteRow struct {
+	ID           uint
+	Name         string
+	DisplayTitle string
+	FavoritedAt  time.Time
+}
+
+// recapNewFavoriteSamples 取本期新收藏里仍可展示（未失效）的视频与图片，按收藏时间从近到远合并后取前 limit 个；
+// 同一时刻视频在前、再按 ID 大的在前。两边各取前 limit 个再合并，结果与整体排序取前 limit 个相同。
+func recapNewFavoriteSamples(db *gorm.DB, start, end time.Time, limit int, loc *time.Location) ([]RecapNewFavorite, error) {
+	var videos, images []recapNewFavoriteRow
+	recent := func(model any, columns string, rows *[]recapNewFavoriteRow) error {
+		return recapNewFavorites(db, model, start, end).Where("is_stale = ?", false).Select(columns).
+			Order("favorited_at DESC").Order("id DESC").Limit(limit).Scan(rows).Error
+	}
+	if err := recent(&models.Video{}, "id, name, display_title, favorited_at", &videos); err != nil {
+		return nil, err
+	}
+	if err := recent(&models.Image{}, "id, name, favorited_at", &images); err != nil {
+		return nil, err
+	}
+	samples := make([]RecapNewFavorite, 0, len(videos)+len(images))
+	for _, row := range videos {
+		samples = append(samples, RecapNewFavorite{Kind: RecapActivityVideo, ID: row.ID, Title: recapVideoTitle(row.DisplayTitle, row.Name),
+			FavoritedAt: row.FavoritedAt.In(loc), Available: true})
+	}
+	for _, row := range images {
+		samples = append(samples, RecapNewFavorite{Kind: RecapActivityImage, ID: row.ID, Title: row.Name, FavoritedAt: row.FavoritedAt.In(loc), Available: true})
+	}
+	sort.SliceStable(samples, func(i, j int) bool {
+		a, b := samples[i], samples[j]
+		if !a.FavoritedAt.Equal(b.FavoritedAt) {
+			return a.FavoritedAt.After(b.FavoritedAt)
+		}
+		if a.Kind != b.Kind {
+			return a.Kind == RecapActivityVideo
+		}
+		return a.ID > b.ID
+	})
+	return samples[:min(limit, len(samples))], nil
+}
+
+// recapDiaryRatedEntries 是观看日期落在期内且带评分的观影日记条目（watched_on 是本地日期串，按字符串区间比较）。
+func recapDiaryRatedEntries(db *gorm.DB, start, end time.Time) *gorm.DB {
+	return db.Model(&models.ViewingDiaryEntry{}).
+		Where("rating IS NOT NULL AND watched_on >= ? AND watched_on < ?", start.Format("2006-01-02"), end.Format("2006-01-02"))
+}
+
+// recapDiaryRated 数本期带评分的观影日记条目。
 func recapDiaryRated(db *gorm.DB, start, end time.Time) (int64, error) {
 	var count int64
-	err := db.Model(&models.ViewingDiaryEntry{}).
-		Where("rating IS NOT NULL AND watched_on >= ? AND watched_on < ?", start.Format("2006-01-02"), end.Format("2006-01-02")).
-		Count(&count).Error
+	err := recapDiaryRatedEntries(db, start, end).Count(&count).Error
 	return count, err
+}
+
+// recapDiaryRatedSamples 取本期带评分的观影日记，按观看日期从近到远、同一天 ID 大的在前（走 idx_diary_day），
+// 并标出关联的视频还能不能打开。
+func recapDiaryRatedSamples(db *gorm.DB, start, end time.Time, limit int) ([]RecapDiaryRated, error) {
+	var rows []struct {
+		ID        uint
+		Title     string
+		Rating    *float64
+		WatchedOn string
+		VideoID   *uint
+	}
+	if err := recapDiaryRatedEntries(db, start, end).Select("id, title, rating, watched_on, video_id").
+		Order("watched_on DESC").Order("id DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	videoIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		if row.VideoID != nil {
+			videoIDs = append(videoIDs, *row.VideoID)
+		}
+	}
+	available, err := recapAvailableIDs(db, &models.Video{}, videoIDs)
+	if err != nil {
+		return nil, err
+	}
+	samples := make([]RecapDiaryRated, 0, len(rows))
+	for _, row := range rows {
+		sample := RecapDiaryRated{ID: row.ID, Title: row.Title, WatchedOn: row.WatchedOn, VideoID: row.VideoID}
+		if row.Rating != nil {
+			sample.Rating = *row.Rating
+		}
+		if row.VideoID != nil {
+			sample.VideoAvailable = available[*row.VideoID]
+		}
+		samples = append(samples, sample)
+	}
+	return samples, nil
 }
