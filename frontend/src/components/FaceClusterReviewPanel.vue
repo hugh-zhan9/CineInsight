@@ -6,7 +6,7 @@
       </p>
       <button
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         data-test="face-cluster-refresh"
         :disabled="!!busy"
         @click="refresh()"
@@ -54,7 +54,7 @@
               loading="lazy"
               @error="markCropFailed(card.id)"
             />
-            <span v-else aria-hidden="true">?</span>
+            <AppIcon v-else name="person" :size="24" />
           </div>
           <div class="face-review__summary">
             <strong>{{ cardTitle(card) }}</strong>
@@ -77,25 +77,25 @@
           </div>
         </div>
 
-        <button type="button" class="btn-secondary btn-compact" :data-test="`face-cluster-detail-${card.id}`" @click="detailCluster = card">查看来源详情</button>
+        <button type="button" class="btn btn--secondary btn--sm" :data-test="`face-cluster-detail-${card.id}`" @click="detailCluster = card">查看来源详情</button>
         <div v-if="card.status === 'unnamed'" class="face-review__actions">
           <button
             type="button"
-            class="btn-primary btn-compact"
+            class="btn btn--primary btn--sm"
             :disabled="!!busy"
             :data-test="`face-cluster-name-open-${card.id}`"
             @click="openNameForm(card)"
           >命名为新人物</button>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="!!busy"
             :data-test="`face-cluster-link-open-${card.id}`"
             @click="openLinkForm(card)"
           >关联到现有人物</button>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="!!busy"
             :data-test="`face-cluster-ignore-${card.id}`"
             @click="ignore(card)"
@@ -122,14 +122,14 @@
             <template v-if="card.append_pending_count">
               <button
                 type="button"
-                class="btn-primary btn-compact"
+                class="btn btn--primary btn--sm"
                 :disabled="!!busy || !selectedAppendMedia(card).length"
                 :data-test="`face-cluster-append-confirm-${card.id}`"
                 @click="confirmAppend(card)"
               >{{ selectedAppendMedia(card).length === card.append_pending_media.length ? '确认追加' : `确认所选（${selectedAppendMedia(card).length}）` }}</button>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :disabled="!!busy"
                 :data-test="`face-cluster-append-dismiss-${card.id}`"
                 @click="dismissAppend(card)"
@@ -137,14 +137,14 @@
             </template>
             <button
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :disabled="!!busy"
               :data-test="`face-cluster-unlink-open-${card.id}`"
               @click="openRelink(card, 'unlink')"
             >解除关联</button>
             <button
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :disabled="!!busy"
               :data-test="`face-cluster-reassign-open-${card.id}`"
               @click="openRelink(card, 'reassign')"
@@ -171,14 +171,14 @@
           />
           <button
             type="button"
-            class="btn-primary btn-compact"
+            class="btn btn--primary btn--sm"
             :disabled="!!busy"
             data-test="face-cluster-name-submit"
             @click="submitName(card)"
           >确认命名</button>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="face-cluster-name-cancel"
             @click="closeForms"
           >取消</button>
@@ -213,7 +213,7 @@
                 type="button"
                 role="option"
                 :aria-selected="index === linkForm.activeIndex"
-                :class="['face-review__option', { active: index === linkForm.activeIndex }]"
+                :class="['btn', 'btn--ghost', 'btn--sm', 'face-review__option', { active: index === linkForm.activeIndex }]"
                 :data-test="`face-cluster-link-option-${option.personID}`"
                 @mouseenter="linkForm.activeIndex = index"
                 @mousedown.prevent="submitLink(card, option)"
@@ -226,7 +226,7 @@
           </div>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="face-cluster-link-cancel"
             @click="closeForms"
           >取消</button>
@@ -256,7 +256,7 @@
                 type="button"
                 role="option"
                 :aria-selected="relinkForm.target?.personID === option.personID"
-                :class="['face-review__option', { active: relinkForm.target?.personID === option.personID }]"
+                :class="['btn', 'btn--ghost', 'btn--sm', 'face-review__option', { active: relinkForm.target?.personID === option.personID }]"
                 :data-test="`face-cluster-reassign-option-${option.personID}`"
                 @click="relinkForm.target = option"
               >{{ option.name }}</button>
@@ -290,12 +290,12 @@
           <div class="face-review__actions">
             <button
               type="button"
-              class="btn-danger btn-compact"
+              class="btn btn--danger btn--sm"
               :disabled="!!busy || relinkForm.loading || !!relinkForm.error || (relinkForm.mode === 'reassign' && !relinkForm.target)"
               data-test="face-cluster-relink-submit"
               @click="submitRelink(card)"
             >{{ relinkForm.mode === 'unlink' ? '确认解除关联' : (relinkForm.target ? `确认改派给「${relinkForm.target.name}」` : '先选择人物') }}</button>
-            <button type="button" class="btn-secondary btn-compact" data-test="face-cluster-relink-cancel" @click="closeForms">取消</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="face-cluster-relink-cancel" @click="closeForms">取消</button>
           </div>
         </div>
       </article>
@@ -303,7 +303,7 @@
       <button
         v-if="view === 'pending' && unnamed.hasMore"
         type="button"
-        class="btn-secondary face-review__more"
+        class="btn btn--secondary face-review__more"
         data-test="face-cluster-load-more"
         :disabled="unnamed.loadingMore || !!busy"
         @click="loadMoreUnnamed"
@@ -312,7 +312,7 @@
       <button
         v-if="view === 'named' && hiddenNamedCount > 0"
         type="button"
-        class="btn-secondary face-review__more"
+        class="btn btn--secondary face-review__more"
         data-test="face-cluster-show-more"
         @click="namedLimit += cardPageSize"
       >显示更多（还有 {{ hiddenNamedCount }} 组）</button>
@@ -337,7 +337,7 @@
               loading="lazy"
               @error="markCropFailed(row.cluster.id)"
             />
-            <span v-else aria-hidden="true">?</span>
+            <AppIcon v-else name="person" :size="24" />
           </div>
           <div class="face-review__summary">
             <strong>已忽略的面孔</strong>
@@ -348,7 +348,7 @@
         <div class="face-review__actions">
           <button
             type="button"
-            class="btn-primary btn-compact"
+            class="btn btn--primary btn--sm"
             :disabled="!!busy"
             :data-test="`face-cluster-restore-${row.cluster.id}`"
             @click="restore(row)"
@@ -358,7 +358,7 @@
       <button
         v-if="ignored.cursor"
         type="button"
-        class="btn-secondary face-review__more"
+        class="btn btn--secondary face-review__more"
         data-test="face-cluster-ignored-more"
         :disabled="ignored.loading"
         @click="loadIgnored({ reset: false })"
@@ -371,6 +371,7 @@
 
 <script>
 import FaceClusterDetailDialog from './FaceClusterDetailDialog.vue';
+import AppIcon from './ui/AppIcon.vue';
 import {
   ConfirmFaceClusterAppend, ConfirmFaceClusterAppendObservations, DismissFaceClusterAppend, GetFaceClusterObservations,
   IgnoreFaceCluster, LinkFaceCluster, ListFaceClusterPage, ListIgnoredFaceClusters, ListPeople, NameFaceCluster,
@@ -407,7 +408,7 @@ const EMPTY_RELINK_FORM = () => ({ clusterID: 0, mode: 'unlink', loading: false,
 // 三处看到的是同一批簇，一个簇可能同时含视频与图片观测，因此这里不按媒体类型筛。
 export default {
   name: 'FaceClusterReviewPanel',
-  components: { FaceClusterDetailDialog },
+  components: { AppIcon, FaceClusterDetailDialog },
   // loaded 载荷 { unnamed, appendPending, unnamedHasMore }：unnamed 是已加载的未命名组数，
   // 还有下一页时 unnamedHasMore 为真（宿主据此写「N+ 组」）。
   emits: ['changed', 'loaded'],
@@ -930,20 +931,20 @@ export default {
 .face-review__error {
   margin: 0;
   color: var(--danger-text);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .face-review__notice {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .face-review__status {
   margin: 24px 0;
   text-align: center;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .face-review__more {
@@ -994,7 +995,7 @@ export default {
 .face-review__meta {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .face-review__candidates {
@@ -1010,7 +1011,7 @@ export default {
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-text);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .face-review__actions {
@@ -1046,7 +1047,7 @@ export default {
   top: calc(100% + 4px);
   right: 0;
   left: 0;
-  z-index: 20;
+  z-index: var(--z-menu);
   max-height: 220px;
   overflow-y: auto;
   padding: 4px;
@@ -1062,7 +1063,9 @@ export default {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  height: auto;
   padding: 7px 8px;
+  font-weight: var(--fw-regular);
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -1074,19 +1077,19 @@ export default {
 .face-review__option:hover,
 .face-review__option.active {
   background: var(--control-hover-bg);
-  color: var(--accent-color);
+  color: var(--accent-text);
 }
 
 .face-review__option-hint {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .face-review__options-empty {
   display: block;
   padding: 8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 .face-review__views {
   display: flex;
@@ -1105,7 +1108,7 @@ export default {
   background: var(--control-bg);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .face-review__views button.active {
@@ -1120,7 +1123,7 @@ export default {
   padding: 0 5px;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 12%, transparent);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   text-align: center;
 }
 
@@ -1132,7 +1135,7 @@ export default {
 
 .face-review__append-item {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   overflow-wrap: anywhere;
 }
 
@@ -1146,7 +1149,7 @@ export default {
   flex-wrap: wrap;
   gap: 6px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .face-review__relink-title span {
@@ -1171,7 +1174,7 @@ export default {
   padding: 4px 6px;
   border-radius: 6px;
   background: var(--panel-muted-bg);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .face-review__relink-name {
@@ -1197,7 +1200,7 @@ export default {
 
 .face-review__relink-apply {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .face-review__reassign-options {

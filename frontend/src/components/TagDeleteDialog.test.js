@@ -19,7 +19,7 @@ describe('TagDeleteDialog META-14 影响范围', () => {
     expect(impact).toContain('将从 12 部视频、4 张图片上移除这个标签');
     expect(impact).toContain('回收站中另有 2 部视频、1 张图片');
 
-    await wrapper.findAll('.modal-actions button').find(button => button.text() === '确认删除').trigger('click');
+    await wrapper.get('[data-test="tag-delete-confirm"]').trigger('click');
     expect(wrapper.emitted('confirm-delete')[0][0]).toEqual({ id: 7, name: '旅行' });
   });
 
@@ -41,7 +41,7 @@ describe('TagDeleteDialog META-14 影响范围', () => {
     const wrapper = mount(TagDeleteDialog, { props: { visible: true, tag: { id: 7, name: '旅行' } } });
     await flushPromises();
     expect(wrapper.get('[data-test="tag-delete-impact"]').text()).toContain('统计受影响的媒体失败');
-    await wrapper.findAll('.modal-actions button').find(button => button.text() === '确认删除').trigger('click');
+    await wrapper.get('[data-test="tag-delete-confirm"]').trigger('click');
     expect(wrapper.emitted('confirm-delete')).toHaveLength(1);
   });
 });

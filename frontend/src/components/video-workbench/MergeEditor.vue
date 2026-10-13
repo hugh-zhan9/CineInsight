@@ -8,9 +8,9 @@
           <span class="edit-list__name" :title="videoName(source.video_id)">{{ videoName(source.video_id) }}</span>
           <span class="help-text">{{ sourceFacts(source.video_id) }}</span>
           <span class="edit-list__spacer"></span>
-          <button type="button" class="row-btn" aria-label="上移" :disabled="!editable || index === 0" :data-test="`merge-up-${source.video_id}`" @click="move(index, -1)">↑</button>
-          <button type="button" class="row-btn" aria-label="下移" :disabled="!editable || index === sources.length - 1" @click="move(index, 1)">↓</button>
-          <button type="button" class="row-btn" :disabled="!editable || sources.length <= 2" :data-test="`merge-remove-${source.video_id}`" @click="remove(index)">移出</button>
+          <button type="button" class="btn-icon btn--sm" aria-label="上移" title="上移" :disabled="!editable || index === 0" :data-test="`merge-up-${source.video_id}`" @click="move(index, -1)"><AppIcon name="chevron-up" :size="16" /></button>
+          <button type="button" class="btn-icon btn--sm" aria-label="下移" title="下移" :disabled="!editable || index === sources.length - 1" @click="move(index, 1)"><AppIcon name="chevron-down" :size="16" /></button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || sources.length <= 2" :data-test="`merge-remove-${source.video_id}`" @click="remove(index)">移出</button>
         </div>
         <EditFrameStrip
           v-if="index < sources.length - 1"
@@ -32,6 +32,7 @@
 </template>
 
 <script>
+import AppIcon from '../ui/AppIcon.vue';
 import EditFrameStrip from './EditFrameStrip.vue';
 import { frameBefore, moveMergeSource, parseFrameRate, preflightSource, removeMergeSource, setMergeSpec, sourceFrameRate } from '../../utils/videoEdit.js';
 import { workbenchVideoMixin } from './workbenchVideo.js';
@@ -39,7 +40,7 @@ import { workbenchVideoMixin } from './workbenchVideo.js';
 // 顺序合并编辑器：来源排序/移出、接缝帧、规格选择（只在预检报规格不同时出现）。改动以 change 交给页面保存。
 export default {
   name: 'MergeEditor',
-  components: { EditFrameStrip },
+  components: { AppIcon, EditFrameStrip },
   mixins: [workbenchVideoMixin],
   // 页面用同一组属性挂三种编辑器；合并不需要分析相关的那几个，不让它们落到根元素上。
   inheritAttrs: false,

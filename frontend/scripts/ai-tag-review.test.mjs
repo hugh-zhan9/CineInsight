@@ -127,7 +127,7 @@ const componentSource = readFileSync(new URL('../src/components/AITagReviewDialo
 assert.match(componentSource, /data-confidence/);
 assert.match(componentSource, /ai-confidence--high/);
 assert.match(componentSource, /ai-confidence--medium/);
-assert.match(componentSource, /ai-confirm-overlay/);
+assert.match(componentSource, /<DialogShell v-if="renameConfirm\.show"/, 'the rename form stacks as a DialogShell so Esc closes only that layer');
 assert.match(componentSource, /RejectAITagCandidatesByVideo/);
 assert.match(componentSource, /reviewSearch/);
 assert.match(componentSource, /RenameVideo/);
@@ -147,8 +147,9 @@ assert.match(componentSource, /same-source-thumbnail--failed/, 'same-source thum
 // P-034：同源删除改走带结果码的删除与整批撤销条（D-PC04），仍只删记录、保留原文件。
 assert.match(componentSource, /runDelete\(\{ ids: \[videoId\], deleteFile: false/, 'same-source deletion should preserve the original file');
 assert.doesNotMatch(componentSource, /\bDeleteVideo\(/, 'same-source deletion must not call the legacy single delete binding');
-assert.match(componentSource, /删除 A/);
-assert.match(componentSource, /删除 B/);
+assert.match(componentSource, /从片库移除 A/);
+assert.match(componentSource, /从片库移除 B/);
+assert.match(componentSource, /confirmText: '从片库移除'/, 'same-source record removal confirms through the unified confirm box');
 assert.match(componentSource, /不是同源/);
 assert.match(componentSource, /relation\.video_a_deleted/);
 assert.match(componentSource, /relation\.video_b_deleted/);
@@ -158,10 +159,11 @@ assert.match(componentSource, /<AddTagDialog/);
 assert.match(componentSource, /handleManualTagAdded/);
 assert.match(componentSource, /class="search-input ai-tag-review-search"/, 'AI review search should reuse shared search input styling');
 assert.match(componentSource, /class="text-input ai-tag-rename-input"/, 'AI review rename dialog should reuse shared text input styling');
-assert.match(componentSource, /class="ai-confirm-dialog glass-surface"/, 'AI review nested confirmations should use shared glass surfaces');
-assert.match(componentSource, /class="btn-secondary btn-compact" @click="previewVideo/, 'AI review preview action should use the shared compact button size');
-assert.match(componentSource, /class="btn-secondary btn-compact" @click="openRenameDialog/, 'AI review rename action should use the shared compact button size');
-assert.match(componentSource, /class="btn-secondary btn-compact" @click="retryVideo/, 'AI review retry action should use the shared compact button size');
+assert.match(componentSource, /title: '确认全部拒绝'/, 'AI review reject-all confirms through the unified confirm box');
+assert.doesNotMatch(componentSource, /ai-confirm-overlay|<BaseModal/, 'AI review nested confirmations must not hand-roll overlays or use BaseModal directly');
+assert.match(componentSource, /class="btn btn--secondary btn--sm" @click="previewVideo/, 'AI review preview action should use the shared compact button size');
+assert.match(componentSource, /class="btn btn--secondary btn--sm" @click="openRenameDialog/, 'AI review rename action should use the shared compact button size');
+assert.match(componentSource, /class="btn btn--secondary btn--sm" @click="retryVideo/, 'AI review retry action should use the shared compact button size');
 // 候选没有上限：审阅工作台必须走分页接口，并把"还有下一页"做成显式入口。
 assert.match(componentSource, /this\.candidatePageRequest\(query\)/, 'the workbench should load the first page through its filtered request helper');
 assert.match(componentSource, /ListAITagCandidatePage\(0, '', 'pending', cursor, limit\)/, 'load-more should continue from the page cursor');

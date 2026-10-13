@@ -1,14 +1,8 @@
 <template>
-  <BaseModal v-if="visible" class="image-ai-tag-review" data-test="image-ai-tag-review" @close="$emit('close')">
-    <header class="image-ai-tag-review__header">
-      <div>
-        <h3>AI 标签审阅</h3>
-        <p class="image-ai-tag-review__subtitle">
-          AI 只会从标签库里选标签，接受后才会真正挂到图片上。
-        </p>
-      </div>
-      <button type="button" class="btn-secondary btn-compact" data-test="image-ai-tag-review-close" @click="$emit('close')">关闭</button>
-    </header>
+  <DialogShell v-if="visible" title="AI 标签审阅" size="xl" class="image-ai-tag-review" data-test="image-ai-tag-review" @close="$emit('close')">
+    <p class="image-ai-tag-review__subtitle">
+      AI 只会从标签库里选标签，接受后才会真正挂到图片上。
+    </p>
 
     <!-- 人物候选与 AI 标签是两批不同的候选，但都是"确认后才写库"的审阅动作，
          放在同一个面板的两个页签下，和视频侧待审工作台同一套形状。 -->
@@ -28,20 +22,21 @@
     </nav>
 
     <div v-if="section === 'tags'" class="image-ai-tag-review__toolbar">
-      <input v-model="keyword" class="image-ai-tag-review__search" data-test="image-ai-tag-search" aria-label="搜索全部图片待审候选" placeholder="搜索文件名、路径、标签或理由" />
+      <input v-model="keyword" type="search" class="search-input image-ai-tag-review__search" data-test="image-ai-tag-search" aria-label="搜索全部图片待审候选" placeholder="搜索文件名、路径、标签或理由" />
       <div class="image-ai-tag-review__filters" role="group" aria-label="置信度筛选">
         <button
           v-for="option in confidenceOptions"
           :key="option.value"
           type="button"
-          :class="['btn-secondary', 'btn-compact', { active: confidence === option.value }]"
+          :class="['btn', 'btn--secondary', 'btn--sm', { active: confidence === option.value }]"
+          :aria-pressed="confidence === option.value ? 'true' : 'false'"
           :data-test="`image-ai-tag-confidence-${option.value || 'all'}`"
           @click="setConfidence(option.value)"
         >{{ option.label }}</button>
       </div>
       <button
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         data-test="image-ai-tag-review-refresh"
         :disabled="loading || busy"
         @click="load"
@@ -52,8 +47,8 @@
     </div>
 
     <div v-if="section === 'tags'" class="image-ai-tag-review__filters">
-      <button type="button" class="btn-primary btn-compact" data-test="image-review-approve-loaded" :disabled="reviewBatchBusy || reviewRefreshCount > 0 || loadedQueryKey !== queryKey || !filteredCandidates.length" @click="$refs.reviewBatch.previewLoaded(filteredCandidates.map(item => item.id))">批准已加载结果…</button>
-      <button type="button" class="btn-secondary btn-compact" data-test="image-review-approve-filtered" :disabled="reviewBatchBusy || reviewRefreshCount > 0" @click="$refs.reviewBatch.previewFiltered()">批准全部筛选结果…</button>
+      <button type="button" class="btn btn--primary btn--sm" data-test="image-review-approve-loaded" :disabled="reviewBatchBusy || reviewRefreshCount > 0 || loadedQueryKey !== queryKey || !filteredCandidates.length" @click="$refs.reviewBatch.previewLoaded(filteredCandidates.map(item => item.id))">批准已加载结果…</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="image-review-approve-filtered" :disabled="reviewBatchBusy || reviewRefreshCount > 0" @click="$refs.reviewBatch.previewFiltered()">批准全部筛选结果…</button>
     </div>
     <AIReviewBatchControls ref="reviewBatch" kind="image" :visible="visible && section === 'tags'" :query="query" @busy="reviewBatchBusy = $event" @outcomes="applyBatchOutcomes" @settled="batchSettled" />
 
@@ -63,7 +58,7 @@
     <p v-if="notice" class="image-ai-tag-review__notice" role="status" data-test="image-ai-tag-review-notice">{{ notice }}</p>
 
     <!-- 一页候选也可能几十条，加上翻页会越滚越长。滚动条必须在这一层、弹窗自身封高，
-         否则内容会把 BaseModal 的面板撑出应用窗口，底部的候选点都点不到。 -->
+         否则内容会把对话框面板撑出应用窗口，底部的候选点都点不到。 -->
     <div class="image-ai-tag-review__content" data-test="image-ai-tag-review-scroll-area">
       <FaceClusterReviewPanel v-if="section === 'face'" />
 
@@ -93,13 +88,13 @@
                 :data-test="`image-ai-tag-thumb-${group.imageID}`"
                 @error="markThumbFailed(group.imageID)"
               />
-              <span v-else aria-hidden="true" :data-test="`image-ai-tag-thumb-fallback-${group.imageID}`">🖼</span>
+              <AppIcon v-else name="image" :size="24" :data-test="`image-ai-tag-thumb-fallback-${group.imageID}`" />
             </div>
             <strong :title="group.name">{{ group.name }}</strong>
             <span v-if="group.deleted" class="image-ai-tag-review__deleted" data-test="image-ai-tag-deleted">图片已删除</span>
             <button
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :disabled="busy"
               title="拒绝这张图片的全部待审候选，包括当前置信度筛选之外的"
               :data-test="`image-ai-tag-reject-all-${group.imageID}`"
@@ -116,14 +111,14 @@
               <span class="image-ai-tag-review__actions">
                 <button
                   type="button"
-                  class="btn-primary btn-compact"
+                  class="btn btn--primary btn--sm"
                   :disabled="busy || group.deleted"
                   :data-test="`image-ai-tag-approve-${candidate.id}`"
                   @click="approve(candidate)"
                 >接受</button>
                 <button
                   type="button"
-                  class="btn-secondary btn-compact"
+                  class="btn btn--secondary btn--sm"
                   :disabled="busy"
                   :data-test="`image-ai-tag-reject-${candidate.id}`"
                   @click="reject(candidate)"
@@ -136,7 +131,7 @@
         <div v-if="cursor" class="image-ai-tag-review__more">
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="image-ai-tag-load-more"
             :disabled="loadingMore || loading"
             @click="loadMore"
@@ -145,7 +140,10 @@
         </div>
       </template>
     </div>
-  </BaseModal>
+    <template #footer>
+      <button type="button" class="btn btn--secondary" data-test="image-ai-tag-review-close" @click="$emit('close')">关闭</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
@@ -153,7 +151,8 @@ import {
   GetAIReviewCandidates, ApproveImageAITagCandidate, ListImageAITagCandidatePage, SearchImageAITagCandidatePage,
   RejectImageAITagCandidate, RejectImageAITagCandidatesByImage
 } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
 import AIReviewBatchControls from './AIReviewBatchControls.vue';
 import ReviewCandidateWindow from './ReviewCandidateWindow.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
@@ -161,7 +160,7 @@ import { applyReviewCandidateRefresh, reviewOutcomeCandidateIDs, filterCandidate
 
 export default {
   name: 'ImageAITagReviewPanel',
-  components: { ReviewCandidateWindow, AIReviewBatchControls, BaseModal, FaceClusterReviewPanel },
+  components: { ReviewCandidateWindow, AIReviewBatchControls, AppIcon, DialogShell, FaceClusterReviewPanel },
   props: {
     visible: { type: Boolean, default: false }
   },
@@ -415,7 +414,7 @@ export default {
 </script>
 
 <style scoped>
-/* 这条规则必须走 :deep：scoped 的 data-v 只挂在 BaseModal 的根节点（遮罩层），
+/* 这条规则必须走 :deep：scoped 的 data-v 只挂在对话框的根节点（遮罩层），
    class 却落在内层 .modal 面板上。之前写成普通 scoped 选择器等于整条没生效——
    宽度停在全局 .modal 的 500px，而且完全不封高，候选一多就把弹窗撑出应用窗口。 */
 :deep(.image-ai-tag-review) {
@@ -427,38 +426,33 @@ export default {
   overflow: hidden;
 }
 
-.image-ai-tag-review__header {
+/* 对话框正文不自己滚：滚动交给下面的候选区（虚拟列表以它为滚动容器）。 */
+:deep(.image-ai-tag-review .ui-dialog__body) {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.image-ai-tag-review__header h3 {
-  margin: 0 0 4px;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .image-ai-tag-review__subtitle {
-  margin: 0;
-  font-size: 12px;
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
 }
 
 .image-ai-tag-review__tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   border-bottom: 1px solid var(--hairline-faint);
 }
 
 .image-ai-tag-review__tabs button {
-  padding: 6px 10px;
+  padding: 6px var(--space-3);
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   cursor: pointer;
 }
 
@@ -472,19 +466,29 @@ export default {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
-.image-ai-tag-review__search { flex: 1 1 240px; min-width: 160px; }
+.image-ai-tag-review__search { flex: 1 1 240px; min-width: 160px; width: auto; }
 
 .image-ai-tag-review__filters {
   display: flex;
   gap: 6px;
 }
 
+.image-ai-tag-review__toolbar + .image-ai-tag-review__filters {
+  margin-bottom: var(--space-3);
+}
+
+.image-ai-tag-review__filters .btn.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
 .image-ai-tag-review__count {
-  font-size: 12px;
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
 }
 
@@ -494,49 +498,49 @@ export default {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-right: 4px;
+  padding-right: var(--space-1);
 }
 
 .image-ai-tag-review__error {
-  margin: 0 0 12px;
-  color: var(--danger-color);
-  font-size: 13px;
+  margin: 0 0 var(--space-3);
+  color: var(--danger-text);
+  font-size: var(--fs-secondary);
 }
 
 .image-ai-tag-review__notice {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .image-ai-tag-review__status {
-  margin: 24px 0;
+  margin: var(--space-5) 0;
   text-align: center;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .image-ai-tag-review__more {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 4px 0 8px;
+  gap: var(--space-3);
+  padding: var(--space-1) 0 var(--space-2);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .image-ai-tag-review__group {
-  padding: 12px;
-  border-radius: 10px;
+  padding: var(--space-3);
+  border-radius: var(--radius);
   display: flow-root;
 }
 
 .image-ai-tag-review__group-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .image-ai-tag-review__group-head strong {
@@ -553,10 +557,9 @@ export default {
   aspect-ratio: 1;
   place-items: center;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--thumb-bg);
   color: var(--thumb-fg);
-  font-size: 20px;
 }
 
 .image-ai-tag-review__thumb img {
@@ -571,18 +574,18 @@ export default {
 }
 
 .image-ai-tag-review__deleted {
-  font-size: 12px;
-  color: var(--danger-color);
+  font-size: var(--fs-caption);
+  color: var(--danger-text);
 }
 
 .image-ai-tag-review__item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .image-ai-tag-review__confidence {
-  font-size: 12px;
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
 }
 
@@ -593,7 +596,7 @@ export default {
 .image-ai-tag-review__reason {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
   white-space: pre-wrap;

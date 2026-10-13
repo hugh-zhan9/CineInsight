@@ -5,9 +5,9 @@
       <h3>孤儿文件</h3>
       <small>所属记录已经彻底不存在的缩略图、海报副本、字幕备份等；回收站里的记录不算。媒体目录里的字幕文件不在范围内</small>
       <span class="lost-spacer"></span>
-      <button type="button" class="btn-secondary btn-compact" :disabled="loading || reclaiming" data-test="lost-orphans-refresh" @click="reload">重新统计</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="loading || reclaiming" data-test="lost-orphans-refresh" @click="reload">刷新</button>
     </header>
-    <p v-if="error" class="lost-alert" role="alert" data-test="lost-orphans-error">{{ error }}</p>
+    <AppBanner v-if="error" tone="danger" :title="error" data-test="lost-orphans-error" />
     <div class="lost-panel">
       <p v-if="loading && !report" class="lost-muted">正在统计…</p>
       <template v-else-if="report">
@@ -31,8 +31,8 @@
         <div v-if="report.total_files" class="lost-orphans__bar">
           <span class="lost-muted">共 {{ report.total_files }} 个 · {{ formatBytes(report.total_bytes) }}</span>
           <span class="lost-spacer"></span>
-          <button type="button" class="btn-danger btn-compact" :disabled="picked.size === 0 || reclaiming" data-test="lost-orphans-reclaim" @click="reclaim">
-            {{ reclaiming ? '回收中…' : `回收所选 (${picked.size})` }}
+          <button type="button" class="btn btn--danger btn--sm" :disabled="picked.size === 0 || reclaiming" data-test="lost-orphans-reclaim" @click="reclaim">
+            {{ reclaiming ? '回收中…' : `回收所选（${picked.size}）` }}
           </button>
         </div>
         <p v-if="result" class="lost-muted" data-test="lost-orphans-result">
@@ -47,9 +47,11 @@
 import { GetOrphanFileReport, ReclaimOrphanFiles } from '../../../wailsjs/go/main/App';
 import { formatBytes } from '../../utils/mediaDetails.js';
 import { lostMediaErrorText } from '../../utils/lostMedia.js';
+import AppBanner from '../ui/AppBanner.vue';
 
 export default {
   name: 'OrphanFilesSection',
+  components: { AppBanner },
   data() {
     return { report: null, loading: false, reclaiming: false, picked: new Set(), result: null, error: '' };
   },
@@ -95,18 +97,17 @@ export default {
 </script>
 
 <style scoped>
-.lost-section { display: grid; gap: 12px; }
-.lost-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.lost-section__head h3 { margin: 0; font-size: 17px; font-weight: 750; }
-.lost-section__head small { color: var(--text-muted); font-size: 12px; }
+.lost-section { display: grid; gap: var(--space-3); }
+.lost-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.lost-section__head h3 { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.lost-section__head small { color: var(--text-muted); font-size: var(--fs-caption); }
 .lost-spacer { flex: 1; }
-.lost-alert { margin: 0; padding: 9px 14px; border: 1px solid var(--danger-color); border-radius: 10px; color: var(--danger-color); font-size: 12px; }
-.lost-panel { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
-.lost-muted { margin: 0; color: var(--text-muted); font-size: 12.5px; }
-.lost-orphans { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.lost-orphans li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 90px; align-items: center; gap: 10px; font-size: 13px; }
+.lost-panel { display: grid; gap: var(--space-3); padding: 14px var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.lost-muted { margin: 0; color: var(--text-muted); font-size: var(--fs-secondary); }
+.lost-orphans { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.lost-orphans li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 90px; align-items: center; gap: var(--space-3); font-size: var(--fs-secondary); }
 .lost-orphans small { color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
 .lost-orphans strong { text-align: right; font-variant-numeric: tabular-nums; }
-.lost-orphans__bar { display: flex; align-items: center; gap: 10px; }
+.lost-orphans__bar { display: flex; align-items: center; gap: var(--space-3); }
 .lost-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 </style>

@@ -1,8 +1,9 @@
 <template>
   <section class="page-content insights-page">
-    <div class="insights-heading">
-      <div><h2>片库洞察</h2><p>基于本地片库与观看状态的只读统计</p></div>
-      <!-- 「存储体检」（2026-10-12）：空间都去哪了、哪些能回收，列出的久未观看大文件可以直接移到废纸篓。 -->
+    <PageHeader title="片库洞察" subtitle="基于本地片库与观看状态的只读统计">
+      <template #actions>
+      <!-- 「存储体检」（2026-10-12）：空间都去哪了、哪些能回收，列出的久未观看大文件可以直接移到废纸篓。
+           页签暂沿用原写法：AppTabs 还不能给每个页签挂 data-test（insights-tab-*），见统一设计第 0 步 B3b 交接。 -->
       <nav class="insights-tabs" role="tablist" aria-label="洞察内容">
         <button
           v-for="item in tabs"
@@ -19,19 +20,20 @@
       <button
         v-if="tab === 'overview'"
         type="button"
-        class="btn-secondary"
+        class="btn btn--secondary"
         :disabled="loading || imageLoading"
         @click="refresh"
-      >{{ loading || imageLoading ? '统计中...' : '刷新' }}</button>
+      >{{ loading || imageLoading ? '统计中…' : '刷新' }}</button>
       <button
         v-else
         type="button"
-        class="btn-secondary"
+        class="btn btn--secondary"
         :disabled="storageStatus.loading || storageStatus.processing"
         data-test="storage-refresh"
         @click="refreshStorage"
-      >{{ storageStatus.loading ? '体检中...' : '刷新' }}</button>
-    </div>
+      >{{ storageStatus.loading ? '体检中…' : '刷新' }}</button>
+      </template>
+    </PageHeader>
     <StorageHealthPanel
       v-if="tab === 'storage'"
       ref="storagePanel"
@@ -41,11 +43,9 @@
       @status-change="setStorageStatus"
     />
     <template v-else>
-    <p v-if="error" class="insights-error" role="alert">{{ error }}</p>
-    <div v-else-if="loading && !stats" class="insights-empty">正在汇总片库...</div>
-    <div v-else-if="!stats?.summary?.video_count" class="insights-empty">
-      <h3>片库还没有视频</h3><p>完成一次扫描后，这里会显示存储、观看和标签分布。</p>
-    </div>
+    <AppBanner v-if="error" tone="danger" title="读取片库洞察失败" :message="error" data-test="insights-error" />
+    <div v-else-if="loading && !stats" class="insights-loading" role="status" aria-label="正在汇总片库"><SkeletonBlock :lines="5" /></div>
+    <EmptyState v-else-if="!stats?.summary?.video_count" icon="videos" title="片库还没有视频" message="完成一次扫描后，这里会显示存储、观看和标签分布。" />
     <template v-else>
       <div class="insights-summary">
         <article>
@@ -97,7 +97,7 @@
               @click="heatmapSource = option.source"
             >{{ option.label }}<small>{{ formatNumber(option.count) }}</small></button>
           </div>
-          <p data-test="insights-play-events">{{ playEventsSummaryText }}</p>
+          <p class="insights-play-events" data-test="insights-play-events">{{ playEventsSummaryText }}</p>
           <p class="insights-play-events-note" data-test="insights-watch-records-note">口径：「启动播放」在应用启动外部播放器时即记一次，不代表看了多久；内嵌观看、手机观看与 Jellyfin 观看在同一次播放累计超过 60 秒（短片取时长的一半）或看完时记一次。累计事件包含重复播放及已删除影片；历史事件每部仅补记一次。热力图仅展示近一年。</p>
           <div class="watch-heatmap" aria-label="近一年观看记录热力图">
             <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="day.title"></span>
@@ -129,14 +129,10 @@
       </div>
     </template>
 
-    <div class="insights-heading insights-heading--section">
-      <div><h2>图片</h2><p>基于图片库的只读统计</p></div>
-    </div>
-    <p v-if="imageError" class="insights-error" role="alert">{{ imageError }}</p>
-    <div v-else-if="imageLoading && !imageStats" class="insights-empty">正在汇总图片库...</div>
-    <div v-else-if="!imageStats?.summary?.image_count" class="insights-empty">
-      <h3>图片库还没有图片</h3><p>完成一次图片扫描后，这里会显示存储与格式分布。</p>
-    </div>
+    <PageHeader class="insights-section-head" level="section" title="图片" subtitle="基于图片库的只读统计" />
+    <AppBanner v-if="imageError" tone="danger" title="读取图片洞察失败" :message="imageError" data-test="insights-image-error" />
+    <div v-else-if="imageLoading && !imageStats" class="insights-loading" role="status" aria-label="正在汇总图片库"><SkeletonBlock :lines="3" /></div>
+    <EmptyState v-else-if="!imageStats?.summary?.image_count" icon="images" title="图片库还没有图片" message="完成一次图片扫描后，这里会显示存储与格式分布。" />
     <template v-else>
       <div class="insights-summary insights-summary--images">
         <article><span>图片总数</span><strong>{{ formatNumber(imageStats.summary.image_count) }}</strong></article>
@@ -156,6 +152,10 @@
 import { GetImageInsights, GetLibraryInsights } from '../../wailsjs/go/main/App';
 import BucketChart from './insights/BucketChart.vue';
 import StorageHealthPanel from './insights/StorageHealthPanel.vue';
+import AppBanner from './ui/AppBanner.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
 // 播放账本各来源的叫法（D-PC43）。桌面两种来源在启动外部播放器时即记，叫「启动播放」；
@@ -183,7 +183,7 @@ function playSourceLabel(source) {
 
 export default {
   name: 'InsightsPage',
-  components: { BucketChart, StorageHealthPanel },
+  components: { AppBanner, BucketChart, EmptyState, PageHeader, SkeletonBlock, StorageHealthPanel },
   // busy-change：存储体检正在删除视频，App 据此不让切走（撤销条挂在本页上）。
   emits: ['open-video-id', 'run-command', 'videos-changed', 'busy-change'],
   props: {
@@ -371,7 +371,7 @@ export default {
       if (this.loading) { this.statsReloadPending = true; return; }
       this.loading = true; this.error = '';
       try { this.stats = await GetLibraryInsights(); }
-      catch (err) { this.error = '读取片库洞察失败：' + err; }
+      catch (err) { this.error = String(err?.message || err || '').trim() || '请稍后重试'; }
       finally {
         this.loading = false;
         if (this.statsReloadPending) { this.statsReloadPending = false; this.loadStats(); }
@@ -381,7 +381,7 @@ export default {
       if (this.imageLoading) return;
       this.imageLoading = true; this.imageError = '';
       try { this.imageStats = await GetImageInsights(); }
-      catch (err) { this.imageError = '读取图片洞察失败：' + err; }
+      catch (err) { this.imageError = String(err?.message || err || '').trim() || '请稍后重试'; }
       finally { this.imageLoading = false; }
     },
     formatNumber(value) { return new Intl.NumberFormat('zh-CN').format(Number(value || 0)); },
@@ -403,48 +403,49 @@ export default {
 </script>
 
 <style scoped>
-.insights-play-events-note { color: var(--text-muted); font-size: 12px; margin: 6px 0 12px; }
-.insights-page { display: grid; gap: 18px; }
-.insights-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.insights-heading > div:first-child { flex: 1 1 auto; }
-.insights-tabs { display: inline-flex; gap: 6px; padding: 4px; border: 1px solid var(--hairline); border-radius: 999px; background: var(--panel-bg); }
-.insights-tabs .toolbar-btn { border-radius: 999px; border-color: transparent; }
+.insights-play-events-note { color: var(--text-muted); font-size: var(--fs-caption); margin: 6px 0 var(--space-3); }
+.insights-page { display: grid; gap: var(--space-4); }
+.insights-page > :deep(.ui-page-header) { margin-bottom: 0; }
+.insights-section-head { margin-top: 6px; }
+.insights-tabs { display: inline-flex; gap: 6px; padding: var(--space-1); border: 1px solid var(--hairline); border-radius: var(--radius-pill); background: var(--panel-bg); }
+.insights-tabs .toolbar-btn { border-radius: var(--radius-pill); border-color: transparent; }
 .insights-tabs .toolbar-btn--on { border-color: var(--accent-color); }
-.insights-heading p, .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
-.insights-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
+.insights-loading { padding: var(--space-4) 0; }
+.insights-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
 .insights-summary--images { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.insights-heading--section { margin-top: 6px; }
-.insights-summary article, .insights-panel, .insights-empty { border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); padding: 14px 16px; }
-.insights-summary article { display: grid; gap: 4px; align-content: start; }
-.insights-summary span { color: var(--text-muted); font-size: 12px; }
-.insights-summary strong { color: var(--text-primary); font-size: 30px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.02em; }
-.insights-summary small { color: var(--text-muted); font-size: 11.5px; }
-.insights-summary__inline { display: flex; align-items: baseline; gap: 8px; }
+.insights-summary article, .insights-panel { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); padding: 14px var(--space-4); }
+.insights-summary article { display: grid; gap: var(--space-1); align-content: start; }
+.insights-summary span { color: var(--text-muted); font-size: var(--fs-caption); }
+.insights-summary strong { color: var(--text-primary); font-size: var(--fs-display); font-weight: var(--fw-bold); font-family: var(--font-mono); letter-spacing: -0.02em; }
+.insights-summary small { color: var(--text-muted); font-size: var(--fs-caption); }
+.insights-summary__inline { display: flex; align-items: baseline; gap: var(--space-2); }
 .insights-summary__inline small { font-family: var(--font-mono); }
 .insights-progress { height: 5px; margin-top: 3px; border-radius: 3px; background: var(--neutral-softer); }
 .insights-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent-color); }
-.heatmap-legend { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-muted); font-size: 11px; }
-.heatmap-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-.heatmap-source { display: inline-flex; align-items: baseline; gap: 6px; height: var(--h-compact); padding: 0 10px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
-.heatmap-source small { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+.heatmap-legend { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-muted); font-size: var(--fs-caption); }
+.heatmap-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--space-3); }
+.heatmap-source { display: inline-flex; align-items: baseline; gap: 6px; height: var(--h-compact); padding: 0 var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-pill); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-caption); cursor: pointer; }
+.heatmap-source small { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-caption); }
 .heatmap-source:hover { border-color: var(--border-strong); background: var(--control-hover-bg); }
-.heatmap-source.active { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.heatmap-source.active { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
 .heatmap-legend i { width: 10px; height: 10px; border-radius: 2px; }
 .insights-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .insights-panel--wide { grid-column: 1 / -1; }
-.insights-panel__heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
-.insights-panel__heading h3 { font-size: 13px; }
+.insights-panel__heading { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: 14px; }
+.insights-panel__heading h3 { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.insights-panel__heading span { font-size: var(--fs-secondary); }
+.insights-play-events { font-size: var(--fs-secondary); }
 .watch-heatmap { display: grid; grid-template-columns: repeat(53, minmax(5px, 1fr)); grid-auto-flow: column; grid-template-rows: repeat(7, 8px); gap: 3px; }
 .watch-heatmap span, .heatmap-legend .heat-0 { border-radius: 2px; background: var(--neutral-faint); }
 .watch-heatmap .heat-1, .heatmap-legend .heat-1 { background: color-mix(in srgb, var(--accent-color) 30%, var(--neutral-faint)); }
 .watch-heatmap .heat-2, .heatmap-legend .heat-2 { background: color-mix(in srgb, var(--accent-color) 50%, var(--neutral-faint)); }
 .watch-heatmap .heat-3, .heatmap-legend .heat-3 { background: color-mix(in srgb, var(--accent-color) 72%, var(--neutral-faint)); }
 .watch-heatmap .heat-4, .heatmap-legend .heat-4 { background: var(--accent-color); }
-.rating-bars { display: flex; align-items: flex-end; height: 120px; gap: 4px; }
+.rating-bars { display: flex; align-items: flex-end; height: 120px; gap: var(--space-1); }
 .rating-bar { flex: 1; display: grid; grid-template-rows: 1fr auto; align-items: end; min-width: 0; text-align: center; }
 .rating-bar i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--accent-color); opacity: 0.9; }
-.rating-bar small { color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); }
-.insights-error { color: var(--danger-color); }
+.rating-bar small { color: var(--text-muted); font-size: var(--fs-caption); font-family: var(--font-mono); }
 @media (max-width: 900px) { .insights-summary, .insights-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 620px) { .insights-summary, .insights-grid { grid-template-columns: 1fr; } .insights-panel--wide { grid-column: auto; } }
 </style>

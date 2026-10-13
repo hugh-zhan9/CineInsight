@@ -84,7 +84,8 @@ describe('数据体检面板（D-DH-04 / D-DH-05）', () => {
     await find(wrapper, 'data-health-run').trigger('click');
     progressHandler({ phase: 'check', check: 'dangling_refs', done: 1, total: 7 });
     await flushPromises();
-    expect(find(wrapper, 'data-health-progress').text()).toBe('正在检查：引用悬挂（2/7）');
+    expect(find(wrapper, 'data-health-progress').get('[role="progressbar"]').attributes('aria-label')).toBe('正在检查：引用悬挂（2/7）');
+    expect(find(wrapper, 'data-health-progress').get('[role="progressbar"]').attributes('aria-valuenow')).toBe('14');
     expect(find(wrapper, 'data-health-run').attributes('disabled')).toBeDefined();
     await find(wrapper, 'data-health-cancel').trigger('click');
     expect(api.CancelDataHealthCheck).toHaveBeenCalledTimes(1);
@@ -127,7 +128,7 @@ describe('数据体检面板（D-DH-04 / D-DH-05）', () => {
   it('回到页签时体检仍在跑：显示进度，跑完后读回新报告', async () => {
     api.GetLatestDataHealthReport.mockResolvedValueOnce({ running: true, progress: { phase: 'check', check: 'backups', done: 5, total: 7 }, report: null });
     const wrapper = await mountPanel();
-    expect(find(wrapper, 'data-health-progress').text()).toBe('正在检查：备份状态（6/7）');
+    expect(find(wrapper, 'data-health-progress').get('[role="progressbar"]').attributes('aria-label')).toBe('正在检查：备份状态（6/7）');
     api.GetLatestDataHealthReport.mockResolvedValueOnce({ running: false, progress: { phase: 'idle' }, report });
     progressHandler({ phase: 'idle', check: '', done: 0, total: 0 });
     await flushPromises();

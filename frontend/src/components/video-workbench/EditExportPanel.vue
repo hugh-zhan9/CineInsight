@@ -8,7 +8,7 @@
     <p v-if="fastReasons.length" class="help-text" data-test="edit-fast-reasons">快速模式不可用：{{ fastReasons.join('；') }}</p>
 
     <div class="edit-inline">
-      <button type="button" class="btn-secondary btn-compact" :disabled="loading" data-test="edit-run-preflight" @click="$emit('run-preflight')">{{ loading ? '正在预检…' : (preflight ? '重新预检' : '预检') }}</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="loading" data-test="edit-run-preflight" @click="$emit('run-preflight')">{{ loading ? '正在预检…' : (preflight ? '重新预检' : '预检') }}</button>
       <span v-if="preflight && !fresh" class="edit-flag" data-test="edit-preflight-stale">配方或模式改过了，预检结果已过期，请重新预检。</span>
       <span v-if="error" class="edit-error" role="alert" data-test="edit-preflight-error">{{ error }}</span>
     </div>
@@ -66,7 +66,7 @@
     </template>
 
     <div class="edit-inline">
-      <button type="button" class="btn-primary" :disabled="!canQueue" data-test="edit-queue" @click="$emit('queue', acknowledged.filter(key => warningKeys.includes(key)))">{{ requeue ? '继续未完成项' : '排队导出' }}</button>
+      <button type="button" class="btn btn--primary" :disabled="!canQueue" data-test="edit-queue" @click="$emit('queue', acknowledged.filter(key => warningKeys.includes(key)))">{{ requeue ? '继续未完成项' : '排队导出' }}</button>
       <span v-if="queueHint" class="help-text" data-test="edit-queue-hint">{{ queueHint }}</span>
     </div>
   </section>

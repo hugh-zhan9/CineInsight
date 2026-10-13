@@ -6,9 +6,8 @@
         <div class="edit-list__row">
           <span class="edit-list__index">{{ item.seq }}</span>
           <span class="edit-list__name" :title="item.output_name">{{ item.output_name || `第 ${item.seq} 项` }}</span>
-          <span class="edit-badge">{{ statusText(item) }}</span>
-          <span v-if="item.status === 'running'" class="edit-progress"><i :style="{ width: `${percent(item)}%` }"></i></span>
-          <span v-if="item.status === 'running'" class="help-text">{{ phaseText(item) }} {{ percent(item) }}%</span>
+          <AppBadge class="edit-badge">{{ statusText(item) }}</AppBadge>
+          <ProgressBar v-if="item.status === 'running'" class="edit-progress" :value="percent(item) / 100" :label="phaseText(item)" />
         </div>
         <p v-if="failureText(item)" class="edit-error" :data-test="`edit-result-error-${item.id}`">{{ failureText(item) }}</p>
         <p v-if="item.status === 'completed' && item.error_message" class="help-text">提示：{{ item.error_message }}</p>
@@ -18,7 +17,7 @@
           :data-test="`edit-result-missing-${item.id}`"
         >成品已不在片库</p>
         <div v-if="item.status === 'completed' && item.output_video_id && outputState[item.output_video_id] === 'present'" class="edit-inline">
-          <button type="button" class="btn-secondary btn-compact" :data-test="`edit-result-preview-${item.id}`" @click="$emit('open-video', item.output_video_id)">预览成品</button>
+          <button type="button" class="btn btn--secondary btn--sm" :data-test="`edit-result-preview-${item.id}`" @click="$emit('open-video', item.output_video_id)">预览成品</button>
           <label class="edit-check">
             <input type="checkbox" :checked="Boolean(verified[item.id])" :data-test="`edit-result-confirm-${item.id}`" @change="setVerified(item.id, $event.target.checked)" />
             确认成品无误
@@ -26,14 +25,14 @@
           <button
             v-if="verified[item.id]"
             type="button"
-            class="btn-danger btn-compact"
+            class="btn btn--danger btn--sm"
             :data-test="`edit-result-cleanup-${item.id}`"
             @click="$emit('cleanup-sources', [...(item.source_video_ids || [])])"
           >清理原片…</button>
           <button
             v-if="canLinkVersion"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="linking"
             :data-test="`edit-result-version-${item.id}`"
             @click="linkVersion(item)"
@@ -49,6 +48,8 @@ import { AddVersionMembers, CreateVersionGroup, GetVersionGroup, GetVideosByIDs 
 import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
 import { parseVersionMemberConflict, versionGroupErrorText } from '../../utils/versionGroups.js';
 import { EDIT_ITEM_ERROR_LABELS, EDIT_PHASE_LABELS, editStatusLabel } from '../../utils/videoEdit.js';
+import AppBadge from '../ui/AppBadge.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 
 // 导出结果（Q4、TC-23）：成品「预览成品」交给宿主打开详情抽屉；勾选「确认成品无误」之后才出现
 // 「清理原片…」，它只把来源 ID 交给宿主走片库既有的删除确认与废纸篓流程——这里从不直接删除。
@@ -57,6 +58,7 @@ import { EDIT_ITEM_ERROR_LABELS, EDIT_PHASE_LABELS, editStatusLabel } from '../.
 // 否则只提示「成品已不在片库」——不能让用户在没有成品的情况下去清理原片。
 export default {
   name: 'EditResults',
+  components: { AppBadge, ProgressBar },
   props: {
     project: { type: Object, required: true }
   },

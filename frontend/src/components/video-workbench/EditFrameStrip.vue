@@ -33,10 +33,10 @@ export default {
 </script>
 
 <style scoped>
-.edit-frames { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 6px 0; }
-.edit-frames__title { flex-basis: 100%; font-size: 12px; color: var(--text-secondary); }
+.edit-frames { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); margin: 6px 0; }
+.edit-frames__title { flex-basis: 100%; font-size: var(--fs-caption); color: var(--text-secondary); }
 .edit-frames__frame { margin: 0; display: grid; gap: 3px; }
-.edit-frames__frame img { width: 160px; height: 90px; object-fit: contain; border-radius: 4px; background: var(--control-bg); }
-.edit-frames__frame figcaption { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.edit-frames__fast { flex-basis: 100%; font-size: 12px; color: var(--warning-color, var(--accent-text)); }
+.edit-frames__frame img { width: 160px; height: 90px; object-fit: contain; border-radius: var(--radius-sm); background: var(--control-bg); }
+.edit-frames__frame figcaption { font-size: var(--fs-caption); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.edit-frames__fast { flex-basis: 100%; font-size: var(--fs-caption); color: var(--warning-text); }
 </style>

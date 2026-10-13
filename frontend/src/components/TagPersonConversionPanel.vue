@@ -1,6 +1,6 @@
 <template>
+  <!-- 标题「转为人物」由宿主对话框（标签管理的 DialogShell）给出。 -->
   <section class="tag-person-conversion" aria-label="标签转为人物">
-    <h2>转为人物</h2>
     <p v-if="loading" role="status">正在读取标签和关联媒体…</p>
     <template v-else-if="preview">
       <p>将姓名标签「{{ preview.tag_name }}」转为人物，关联 {{ preview.video_count }} 部视频、{{ preview.image_count }} 张图片。</p>
@@ -22,10 +22,10 @@
       </fieldset>
     </template>
     <p v-if="error" class="tag-person-conversion__error" role="alert">{{ error }}</p>
-    <div class="modal-actions">
-      <button type="button" class="btn-secondary" :disabled="saving" @click="$emit('back')">返回标签管理</button>
-      <button v-if="!loading && !preview" type="button" class="btn-secondary" @click="loadPreview">重试</button>
-      <button type="button" class="btn-primary" :disabled="loading || saving || !preview || !target" @click="convert">{{ saving ? '转换中…' : '转换并删除原标签' }}</button>
+    <div class="tag-person-conversion__actions">
+      <button type="button" class="btn btn--secondary" :disabled="saving" @click="$emit('back')">返回标签管理</button>
+      <button v-if="!loading && !preview" type="button" class="btn btn--secondary" @click="loadPreview">重试</button>
+      <button type="button" class="btn btn--primary" :disabled="loading || saving || !preview || !target" @click="convert">{{ saving ? '转换中…' : '转换并删除原标签' }}</button>
     </div>
   </section>
 </template>
@@ -83,10 +83,14 @@ export default {
 </script>
 
 <style scoped>
-.tag-person-conversion > p { margin: 12px 0; line-height: 1.6; }
-.tag-person-conversion__choices { display: flex; flex-direction: column; gap: 12px; max-height: 40vh; overflow-y: auto; margin-top: 18px; padding: 14px; border: 1px solid var(--border-color); border-radius: var(--radius); }
-.tag-person-conversion__choices label { display: flex; align-items: baseline; gap: 8px; overflow-wrap: anywhere; }
+.tag-person-conversion > p { margin: var(--space-3) 0; line-height: 1.6; }
+.tag-person-conversion > p:first-child { margin-top: 0; }
+.tag-person-conversion__choices { display: flex; flex-direction: column; gap: var(--space-3); max-height: 40vh; overflow-y: auto; margin-top: 18px; padding: 14px; border: 1px solid var(--border-color); border-radius: var(--radius); }
+.tag-person-conversion__choices label { display: flex; align-items: baseline; gap: var(--space-2); overflow-wrap: anywhere; }
 .tag-person-conversion__choices small { color: var(--text-muted); }
-.tag-person-conversion__error { color: var(--danger-color); }
-.tag-person-conversion__consequences { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.tag-person-conversion__error { color: var(--danger-text); }
+.tag-person-conversion__consequences { display: grid; gap: var(--space-1); margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: var(--fs-secondary); line-height: 1.5; }
+/* 「返回标签管理」在左，主操作在右（D-UD-13）。 */
+.tag-person-conversion__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: 22px; }
+.tag-person-conversion__actions > :first-child { margin-right: auto; }
 </style>

@@ -7,15 +7,14 @@
       <dt>高清版</dt>
       <dd data-test="hd-high">{{ videoName(hd.hd_video_id) }} <span class="help-text">{{ durationText(hd.hd_video_id) }}</span></dd>
     </dl>
-    <button type="button" class="btn-secondary btn-compact" :disabled="!editable" data-test="hd-swap" @click="swapSources">互换长版与高清版</button>
+    <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="hd-swap" @click="swapSources">互换长版与高清版</button>
 
     <h3>自动对齐</h3>
     <div class="edit-inline">
-      <button v-if="!analyzing" type="button" class="btn-secondary btn-compact" :disabled="!editable" data-test="hd-analyze" @click="$emit('analyze', 0)">自动对齐</button>
+      <button v-if="!analyzing" type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="hd-analyze" @click="$emit('analyze', 0)">自动对齐</button>
       <template v-else>
-        <span class="edit-progress" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100" data-test="hd-analysis-progress"><i :style="{ width: `${percent}%` }"></i></span>
-        <span class="help-text">正在对齐 {{ percent }}%</span>
-        <button type="button" class="btn-secondary btn-compact" data-test="hd-cancel-analysis" @click="$emit('cancel-analysis')">取消对齐</button>
+        <ProgressBar class="edit-progress" :value="percent / 100" label="正在对齐" data-test="hd-analysis-progress" />
+        <button type="button" class="btn btn--secondary btn--sm" data-test="hd-cancel-analysis" @click="$emit('cancel-analysis')">取消对齐</button>
       </template>
       <span class="help-text">已确认的段保留；变速、镜像、裁剪的画面不做匹配。</span>
     </div>
@@ -23,7 +22,7 @@
 
     <div class="edit-inline edit-inline--spread">
       <h3>替换段（已确认 {{ confirmedCount }}/{{ segments.length }}）</h3>
-      <button type="button" class="btn-secondary btn-compact" :disabled="!editable || !canAdd" data-test="hd-add-segment" @click="$emit('change', addSegment())">添加替换段</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || !canAdd" data-test="hd-add-segment" @click="$emit('change', addSegment())">添加替换段</button>
     </div>
     <p v-if="!segments.length" class="help-text" data-test="hd-empty">还没有替换段：先「自动对齐」，或手动添加。</p>
     <ol class="edit-list">
@@ -33,20 +32,20 @@
           <span>长版 {{ time(segment.long_start_ms) }} – {{ time(segment.long_end_ms) }} ↔ 高清 {{ time(segment.hd_start_ms) }} – {{ time(segment.hd_end_ms) }}</span>
           <span class="edit-badge">{{ segment.origin === 'detected' ? `自动对齐 ${Math.round(segment.match_rate * 100)}%` : '手动' }}</span>
           <span class="edit-list__spacer"></span>
-          <button type="button" class="row-btn" :disabled="!editable" :data-test="`hd-remove-${index}`" @click="$emit('change', removeAt(index))">删除</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" :data-test="`hd-remove-${index}`" @click="$emit('change', removeAt(index))">删除</button>
         </div>
         <p v-if="segment.status === 'conflict'" class="edit-flag">与另一段在长版上冲突（匹配率较低的一段），请调整或删除。</p>
         <div v-for="edge in edges" :key="edge.key" class="edit-inline">
           <span class="edit-inline__label">{{ edge.label }}</span>
           <input type="number" min="0" step="1" class="text-input edit-ms" :value="segment[`long_${edge.key}_ms`]" :disabled="!editable" :aria-label="`${edge.label}（毫秒）`" :data-test="`hd-${edge.key}-ms-${index}`" @change="setEdge(index, edge.key, $event.target.value)" />
           <span class="help-text">毫秒</span>
-          <button v-for="step in steps" :key="step.label" type="button" class="row-btn" :disabled="!editable || stepDelta(segment[`long_${edge.key}_ms`], step, longFps) === null" :data-test="`hd-${edge.key}-${step.key}-${index}`" @click="shiftEdge(index, edge.key, segment[`long_${edge.key}_ms`], step)">{{ step.label }}</button>
+          <button v-for="step in steps" :key="step.label" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || stepDelta(segment[`long_${edge.key}_ms`], step, longFps) === null" :data-test="`hd-${edge.key}-${step.key}-${index}`" @click="shiftEdge(index, edge.key, segment[`long_${edge.key}_ms`], step)">{{ step.label }}</button>
         </div>
         <div class="edit-inline">
           <span class="edit-inline__label">高清对应起点</span>
           <input type="number" min="0" step="1" class="text-input edit-ms" :value="segment.hd_start_ms" :disabled="!editable" aria-label="高清对应起点（毫秒）" :data-test="`hd-hdstart-ms-${index}`" @change="setHDStart(index, $event.target.value)" />
           <span class="help-text">毫秒</span>
-          <button v-for="step in steps" :key="step.label" type="button" class="row-btn" :disabled="!editable || stepDelta(segment.hd_start_ms, step, hdFps) === null" :data-test="`hd-hdstart-${step.key}-${index}`" @click="shiftHD(index, segment.hd_start_ms, step)">{{ step.label }}</button>
+          <button v-for="step in steps" :key="step.label" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || stepDelta(segment.hd_start_ms, step, hdFps) === null" :data-test="`hd-hdstart-${step.key}-${index}`" @click="shiftHD(index, segment.hd_start_ms, step)">{{ step.label }}</button>
         </div>
         <EditFrameStrip title="段起点：长版接到高清" :frames="startFrames(segment)" :actual-ms="fastActual(hd.hd_video_id, segment.hd_start_ms)" />
         <EditFrameStrip title="段终点：高清接回长版" :frames="endFrames(segment)" :actual-ms="fastActual(hd.long_video_id, segment.long_end_ms)" />
@@ -75,6 +74,7 @@
 </template>
 
 <script>
+import ProgressBar from '../ui/ProgressBar.vue';
 import EditFrameStrip from './EditFrameStrip.vue';
 import { workbenchVideoMixin } from './workbenchVideo.js';
 import {
@@ -94,7 +94,7 @@ const STEPS = [
 // （长版与高清两侧时长始终相等）、选音频来源并确认；未被覆盖的长版区间明确显示为「保留长版」。
 export default {
   name: 'HDReplaceEditor',
-  components: { EditFrameStrip },
+  components: { EditFrameStrip, ProgressBar },
   mixins: [workbenchVideoMixin],
   props: {
     recipe: { type: Object, required: true },

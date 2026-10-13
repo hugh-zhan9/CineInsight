@@ -6,7 +6,7 @@
       <EditTimeField :model-value="uniformStart" label="统一移除开始" :disabled="!editable" data-test="trim-uniform-start" @commit="uniformStart = $event" />
       <span>至</span>
       <EditTimeField :model-value="uniformEnd" label="统一移除结束" :disabled="!editable" data-test="trim-uniform-end" @commit="uniformEnd = $event" />
-      <button type="button" class="btn-secondary btn-compact" :disabled="!editable || uniformEnd <= uniformStart" data-test="trim-apply-uniform" @click="applyUniform">应用到全部</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || uniformEnd <= uniformStart" data-test="trim-apply-uniform" @click="applyUniform">应用到全部</button>
     </div>
 
     <h3>自动识别片头</h3>
@@ -16,11 +16,10 @@
           <option v-for="minutes in windowOptions" :key="minutes" :value="minutes">{{ minutes }} 分钟</option>
         </select>
       </label>
-      <button v-if="!analyzing" type="button" class="btn-secondary btn-compact" :disabled="!editable || items.length < 2" data-test="trim-analyze" @click="$emit('analyze', windowMinutes * 60000)">自动识别片头</button>
+      <button v-if="!analyzing" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || items.length < 2" data-test="trim-analyze" @click="$emit('analyze', windowMinutes * 60000)">自动识别片头</button>
       <template v-else>
-        <span class="edit-progress" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100" data-test="trim-analysis-progress"><i :style="{ width: `${percent}%` }"></i></span>
-        <span class="help-text">正在识别 {{ percent }}%</span>
-        <button type="button" class="btn-secondary btn-compact" data-test="trim-cancel-analysis" @click="$emit('cancel-analysis')">取消识别</button>
+        <ProgressBar class="edit-progress" :value="percent / 100" label="正在识别" data-test="trim-analysis-progress" />
+        <button type="button" class="btn btn--secondary btn--sm" data-test="trim-cancel-analysis" @click="$emit('cancel-analysis')">取消识别</button>
       </template>
       <span v-if="items.length < 2" class="help-text">至少两项才能比对重复片头。</span>
     </div>
@@ -28,7 +27,7 @@
 
     <div class="edit-inline edit-inline--spread">
       <h3>逐项区间（已确认 {{ confirmedCount }}/{{ items.length }}）</h3>
-      <button type="button" class="btn-secondary btn-compact" :disabled="!editable" data-test="trim-confirm-all" @click="confirmAll">全部确认</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="trim-confirm-all" @click="confirmAll">全部确认</button>
     </div>
     <ol class="edit-list">
       <li v-for="(item, index) in items" :key="item.video_id" :class="['edit-list__item', { 'edit-list__item--flagged': flag(item) }]" :data-test="`trim-item-${item.video_id}`">
@@ -38,7 +37,7 @@
           <span class="edit-badge">{{ originLabel(item) }}</span>
           <span class="help-text">{{ durationText(item.video_id) }}</span>
           <span class="edit-list__spacer"></span>
-          <button type="button" class="row-btn" :disabled="!editable || items.length <= 1" :data-test="`trim-remove-${item.video_id}`" @click="$emit('change', removeItem(index))">移出</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || items.length <= 1" :data-test="`trim-remove-${item.video_id}`" @click="$emit('change', removeItem(index))">移出</button>
         </div>
         <p v-if="flag(item)" class="edit-flag" :data-test="`trim-flag-${item.video_id}`">{{ flag(item) }}</p>
         <div class="edit-inline">
@@ -61,6 +60,7 @@
 </template>
 
 <script>
+import ProgressBar from '../ui/ProgressBar.vue';
 import EditFrameStrip from './EditFrameStrip.vue';
 import EditTimeField from './EditTimeField.vue';
 import { workbenchVideoMixin } from './workbenchVideo.js';
@@ -76,7 +76,7 @@ const ORIGIN_LABELS = { uniform: '统一时间', manual: '手动', detected: '�
 // 接事件）；未识别/有歧义的项明确标出；逐项或全部确认。fastPreflight 只在快速模式且预检有效时给出。
 export default {
   name: 'TrimIntroEditor',
-  components: { EditFrameStrip, EditTimeField },
+  components: { EditFrameStrip, EditTimeField, ProgressBar },
   mixins: [workbenchVideoMixin],
   props: {
     recipe: { type: Object, required: true },

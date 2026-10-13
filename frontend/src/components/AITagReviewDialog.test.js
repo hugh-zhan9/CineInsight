@@ -242,15 +242,22 @@ describe('AITagReviewDialog same-source review', () => {
     await flushPromises();
     await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
 
-    const deleteA = wrapper.findAll('.same-source-row button').find(button => button.text() === '删除 A');
-    const deleteB = wrapper.findAll('.same-source-row button').find(button => button.text() === '删除 B');
+    const deleteA = wrapper.findAll('.same-source-row button').find(button => button.text() === '从片库移除 A');
+    const deleteB = wrapper.findAll('.same-source-row button').find(button => button.text() === '从片库移除 B');
     expect(deleteA).toBeTruthy();
     expect(deleteB).toBeTruthy();
+    // 先答「取消」：什么都不删（D-UD-07 第 2 级「要确认」）。
+    feedback.confirmAction.mockResolvedValueOnce(false);
     await deleteA.trigger('click');
-
-    expect(wrapper.text()).toContain('磁盘上的原文件会保留');
-    expect(wrapper.text()).toContain('/media/Left.mp4');
-    await wrapper.findAll('.ai-confirm-actions button').find(button => button.text() === '确认删除记录').trigger('click');
+    await flushPromises();
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
+    expect(feedback.confirmAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      level: 'confirm',
+      confirmText: '从片库移除',
+      impact: expect.stringContaining('磁盘上的原文件会保留'),
+      message: expect.stringContaining('/media/Left.mp4')
+    }));
+    await deleteA.trigger('click');
     await flushPromises();
 
     // P-034：改走带结果码的删除，仍只删记录；删完给整批撤销条（D-PC04）。
@@ -273,8 +280,7 @@ describe('AITagReviewDialog same-source review', () => {
     await wrapper.vm.loadCandidates();
     await flushPromises();
     await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
-    await wrapper.findAll('.same-source-row button').find(button => button.text() === '删除 B').trigger('click');
-    await wrapper.findAll('.ai-confirm-actions button').find(button => button.text() === '确认删除记录').trigger('click');
+    await wrapper.findAll('.same-source-row button').find(button => button.text() === '从片库移除 B').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('changed')).toHaveLength(1);
 
@@ -296,8 +302,7 @@ describe('AITagReviewDialog same-source review', () => {
     await wrapper.vm.loadCandidates();
     await flushPromises();
     await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
-    await wrapper.findAll('.same-source-row button').find(button => button.text() === '删除 A').trigger('click');
-    await wrapper.findAll('.ai-confirm-actions button').find(button => button.text() === '确认删除记录').trigger('click');
+    await wrapper.findAll('.same-source-row button').find(button => button.text() === '从片库移除 A').trigger('click');
     await flushPromises();
     expect(wrapper.vm.error).toContain('删除失败');
     expect(wrapper.vm.sameSourceRelations.map(item => item.id)).toEqual([13]);
@@ -735,5 +740,58 @@ describe('AITagReviewDialog META-06 手动加标签', () => {
     expect(wrapper.vm.groups[0].videoTags.map(tag => tag.name)).toEqual(['动作']);
     expect(wrapper.get('[data-test="ai-review-notice"]').text()).toContain('其他候选保留');
     expect(wrapper.emitted('changed')).toHaveLength(1);
+  });
+});
+
+// 统一设计第 0 步（D-UD-07、D-UD-13）：外层是 DialogShell，Esc 与 × 都能关；重命名叠一层对话框，
+// Esc 只关最上面这一层；「全部拒绝」走统一确认框，答「取消」就不拒绝。
+describe('AITagReviewDialog unified dialogs', () => {
+  async function mountWithCandidate() {
+    api.ListAITagCandidatePage.mockResolvedValue(candidatePage([tagCandidate()]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true }, attachTo: document.body });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('renames through a stacked dialog; Esc closes only the rename layer, then the review dialog', async () => {
+    api.RenameVideo.mockResolvedValue();
+    const wrapper = await mountWithCandidate();
+    await wrapper.findAll('button').find(button => button.text() === '重命名').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="ai-rename-dialog"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="ai-rename-input"]').element.value).toBe('fight');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="ai-rename-dialog"]').exists()).toBe(false);
+    expect(wrapper.emitted('close')).toBeUndefined();
+
+    await wrapper.findAll('button').find(button => button.text() === '重命名').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="ai-rename-input"]').setValue('brawl');
+    await wrapper.get('[data-test="ai-rename-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.RenameVideo).toHaveBeenCalledWith(10, 'brawl');
+    expect(wrapper.find('[data-test="ai-rename-dialog"]').exists()).toBe(false);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('reject-all asks first and does nothing when declined', async () => {
+    api.RejectAITagCandidatesByVideo.mockResolvedValue();
+    const wrapper = await mountWithCandidate();
+    const rejectAll = () => wrapper.findAll('button').find(button => button.text() === '全部拒绝');
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await rejectAll().trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenLastCalledWith(expect.objectContaining({ title: '确认全部拒绝', message: expect.stringContaining('fight.mp4') }));
+    expect(api.RejectAITagCandidatesByVideo).not.toHaveBeenCalled();
+    await rejectAll().trigger('click');
+    await flushPromises();
+    expect(api.RejectAITagCandidatesByVideo).toHaveBeenCalledWith(10);
+    wrapper.unmount();
   });
 });

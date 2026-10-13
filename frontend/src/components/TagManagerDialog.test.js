@@ -63,7 +63,7 @@ describe('标签转为人物入口', () => {
     await rows[0].findAll('button').find(button => button.text() === '转为人物').trigger('click');
     await flushPromises();
     expect(wrapper.get('.tag-person-conversion').text()).toContain('2 部视频、1 张图片');
-    await wrapper.get('.tag-person-conversion .btn-primary').trigger('click');
+    await wrapper.get('.tag-person-conversion .btn--primary').trigger('click');
     await flushPromises();
     expect(wrapper.find('.tag-person-conversion').exists()).toBe(false);
     expect(wrapper.findAll('.tag-edit-row')).toHaveLength(tags.length - 1);
@@ -82,7 +82,7 @@ describe('标签转为人物入口', () => {
     await row.get('input[type="text"]').setValue('旅行');
     await row.findAll('button').find(button => button.text() === '转为人物').trigger('click');
     await flushPromises();
-    await wrapper.get('.tag-person-conversion .btn-secondary').trigger('click');
+    await wrapper.get('.tag-person-conversion .btn--secondary').trigger('click');
     expect(wrapper.emitted('close')).toBeUndefined();
     expect(wrapper.find('.tag-list-container').exists()).toBe(true);
     wrapper.unmount();
@@ -129,7 +129,7 @@ describe('TagManagerDialog merge picker', () => {
     await sources[0].get('input[type="checkbox"]').setValue(true);
     expect(wrapper.text()).toContain('已选 1 个');
 
-    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await wrapper.get('.merge-actions .btn--primary').trigger('click');
     await flushPromises();
 
     expect(feedback.confirmAction).toHaveBeenCalledOnce();
@@ -153,7 +153,7 @@ describe('TagManagerDialog merge picker', () => {
     expect(wrapper.findAll('.merge-source-option').map(option => option.text())).not.toContain('短视频自动标签');
 
     await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
-    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await wrapper.get('.merge-actions .btn--primary').trigger('click');
     await flushPromises();
 
     expect(api.MergeTags).toHaveBeenCalledWith([1], 3);
@@ -166,7 +166,7 @@ describe('TagManagerDialog merge picker', () => {
 
     expect(wrapper.findAll('.merge-source-option').map(option => option.text())).toEqual(['动作', '激烈动作']);
     await wrapper.findAll('.merge-source-option input[type="checkbox"]')[0].setValue(true);
-    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await wrapper.get('.merge-actions .btn--primary').trigger('click');
     await flushPromises();
 
     expect(api.MergeTags).toHaveBeenCalledWith([3], 1);
@@ -263,11 +263,11 @@ describe('TagManagerDialog categories', () => {
   it('creates a tag with a category and clears both inputs after success', async () => {
     api.CreateTagWithCategory.mockResolvedValue({ id: 6, name: '夜景', namespace: '场景' });
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: tags.map(t => t.id === 1 ? { ...t, namespace: '场景' } : t) } });
-    await wrapper.get('input[placeholder="输入标签名称..."]').setValue('夜景');
+    await wrapper.get('input[placeholder="输入标签名称…"]').setValue('夜景');
     await wrapper.get('[aria-label="新标签的主题分类"]').setValue('场景');
-    await wrapper.get('.setting-item .btn-primary').trigger('click');
+    await wrapper.get('.setting-item .btn--primary').trigger('click');
     expect(api.CreateTagWithCategory).toHaveBeenCalledWith('夜景', '', '场景');
-    expect(wrapper.get('input[placeholder="输入标签名称..."]').element.value).toBe('');
+    expect(wrapper.get('input[placeholder="输入标签名称…"]').element.value).toBe('');
     expect(wrapper.get('[aria-label="新标签的主题分类"]').element.value).toBe('');
     expect(wrapper.emitted('tags-changed')).toHaveLength(1);
   });
@@ -301,7 +301,7 @@ describe('TagManagerDialog categories', () => {
     expect(api.CreateTagCategory).toHaveBeenCalledWith('题材', [1, 3]);
     expect(wrapper.text()).toContain('题材 · 2 个标签');
     await wrapper.get('[aria-label="重命名分类 题材"]').setValue('内容');
-    await wrapper.get('.category-row .btn-secondary').trigger('click');
+    await wrapper.get('.category-row .btn--secondary').trigger('click');
     await flushPromises();
     expect(api.RenameTagCategory).toHaveBeenCalledWith('题材', '内容');
     await wrapper.get('.category-delete').trigger('click');
@@ -356,7 +356,7 @@ describe('TagManagerDialog META-14 防误删与未保存修改', () => {
   it('META-14 asks before discarding unsaved rows and keeps the dialog when declined', async () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
     // 没有改动时直接关闭，不打扰。
-    await wrapper.findAll('.modal-actions .btn-secondary').at(-1).trigger('click');
+    await wrapper.get('[data-test="tag-manager-close"]').trigger('click');
     await flushPromises();
     expect(feedback.confirmAction).not.toHaveBeenCalled();
     expect(wrapper.emitted('close')).toHaveLength(1);
@@ -368,12 +368,12 @@ describe('TagManagerDialog META-14 防误删与未保存修改', () => {
     expect(wrapper.find('[data-test="tag-dirty-3"]').exists()).toBe(true);
 
     feedback.confirmAction.mockResolvedValueOnce(false);
-    await wrapper.findAll('.modal-actions .btn-secondary').at(-1).trigger('click');
+    await wrapper.get('[data-test="tag-manager-close"]').trigger('click');
     await flushPromises();
     expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('放弃 2 项未保存修改？') }));
     expect(wrapper.emitted('close')).toHaveLength(1);
 
-    await wrapper.findAll('.modal-actions .btn-secondary').at(-1).trigger('click');
+    await wrapper.get('[data-test="tag-manager-close"]').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('close')).toHaveLength(2);
   });
@@ -386,7 +386,7 @@ describe('TagManagerDialog META-14 防误删与未保存修改', () => {
     await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
 
     feedback.confirmAction.mockResolvedValueOnce(false);
-    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await wrapper.get('.merge-actions .btn--primary').trigger('click');
     await flushPromises();
     expect(api.GetTagUsageCounts).toHaveBeenCalledWith([2]);
     const message = feedback.confirmAction.mock.calls[0][0].message;

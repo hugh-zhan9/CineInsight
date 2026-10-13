@@ -1,24 +1,30 @@
 <template>
-  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks style="max-width: 900px; max-height: 90vh; overflow-y: auto;" @close="handleClose">
+  <DialogShell
+    v-if="visible"
+    :title="conversionTagID ? '转为人物' : '标签管理'"
+    size="xl"
+    stop-modal-clicks
+    class="tag-manager"
+    data-test="tag-manager"
+    @close="handleClose"
+  >
     <TagPersonConversionPanel v-if="conversionTagID" :key="conversionTagID" :tag-id="conversionTagID" @back="handleClose" @busy="conversionBusy = $event" @converted="handlePersonConverted" />
     <template v-else>
-      <h2>标签管理</h2>
       <!-- 创建新标签 -->
       <div class="setting-item">
         <label>新建标签</label>
-        <div style="display: flex; gap: 8px; margin-top: 8px;">
-          <input 
-            v-model="newTag.name" 
-            type="text" 
-            placeholder="输入标签名称..." 
-            class="text-input" 
-            style="flex: 1;"
-            @keyup.enter="handleCreateTag" 
+        <div class="tag-create-row">
+          <input
+            v-model="newTag.name"
+            type="text"
+            placeholder="输入标签名称…"
+            class="text-input tag-create-input"
+            @keyup.enter="handleCreateTag"
           />
-          <button @click="handleCreateTag" class="btn-primary" :disabled="createTagLoading">添加</button>
+          <button @click="handleCreateTag" class="btn btn--primary" :disabled="createTagLoading">添加</button>
         </div>
-		<select v-model="newTag.namespace" class="select-input tag-category-create" aria-label="新标签的主题分类"><option value="">未分类</option><option v-for="category in assignableCategories" :key="category" :value="category">{{ category }}</option></select>
-        <p v-if="tagCreateError" class="help-text" style="color: var(--danger-color);">{{ tagCreateError }}</p>
+        <select v-model="newTag.namespace" class="select-input tag-category-create" aria-label="新标签的主题分类"><option value="">未分类</option><option v-for="category in assignableCategories" :key="category" :value="category">{{ category }}</option></select>
+        <p v-if="tagCreateError" class="help-text merge-error">{{ tagCreateError }}</p>
       </div>
 
       <div class="divider"></div>
@@ -42,13 +48,18 @@
             v-model.trim="mergeKeyword"
             type="search"
             class="text-input merge-filter-input"
-            placeholder="筛选来源标签名称..."
+            placeholder="筛选来源标签名称…"
             aria-label="筛选待合并标签"
           />
           <div v-if="selectedMergeSourceTags.length" class="merge-selected-tags" aria-label="已选择的来源标签">
-            <button v-for="tag in selectedMergeSourceTags" :key="`selected-${tag.id}`" type="button" @click="toggleMergeSource(tag.id, false)">
-              {{ tag.name }} <span>×</span>
-            </button>
+            <button
+              v-for="tag in selectedMergeSourceTags"
+              :key="`selected-${tag.id}`"
+              type="button"
+              class="btn btn--sm merge-selected-tag"
+              :aria-label="`取消选择 ${tag.name}`"
+              @click="toggleMergeSource(tag.id, false)"
+            >{{ tag.name }}<AppIcon name="close" :size="16" /></button>
           </div>
           <div class="merge-source-list">
             <label v-for="tag in filteredMergeSourceTags" :key="`source-${tag.id}`" class="merge-source-option">
@@ -63,15 +74,15 @@
             <div v-if="filteredMergeSourceTags.length === 0" class="merge-source-empty">没有符合筛选条件的来源标签</div>
           </div>
           <div class="merge-source-tools">
-            <button type="button" class="btn-secondary btn-compact" :disabled="filteredMergeSourceTags.length === 0" @click="selectAllVisibleMergeSources">全选筛选结果</button>
-            <button type="button" class="btn-secondary btn-compact" :disabled="mergeSourceIds.length === 0" @click="clearMergeSources">清空已选</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="filteredMergeSourceTags.length === 0" @click="selectAllVisibleMergeSources">全选当前结果（{{ filteredMergeSourceTags.length }}）</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="mergeSourceIds.length === 0" @click="clearMergeSources">取消选择</button>
           </div>
         </div>
         <p v-else class="merge-source-empty merge-source-empty--target">选择要保留的标签后即可多选来源标签。</p>
         <div class="merge-actions">
           <span v-if="mergeError" class="help-text merge-error">{{ mergeError }}</span>
-          <button class="btn-primary" :disabled="mergeLoading || !canMerge" @click="handleMergeTags">
-            {{ mergeLoading ? '合并中...' : '合并标签' }}
+          <button class="btn btn--primary" :disabled="mergeLoading || !canMerge" @click="handleMergeTags">
+            {{ mergeLoading ? '合并中…' : '合并标签' }}
           </button>
         </div>
       </div>
@@ -88,37 +99,37 @@
         v-model.trim="tagKeyword"
         type="search"
         class="text-input tag-filter-input"
-        placeholder="搜索标签名称..."
+        placeholder="搜索标签名称…"
         aria-label="搜索标签"
       />
-	  <p class="help-text tag-category-help">所有非自动标签都可供 AI 打标选择。分类可在下方统一管理。</p>
-      <div class="tag-list-container" style="max-height: 260px; overflow-y: auto; padding-right: 4px;">
+      <p class="help-text tag-category-help">所有非自动标签都可供 AI 打标选择。分类可在下方统一管理。</p>
+      <div class="tag-list-container">
         <div v-for="tag in filteredTags" :key="tag.id" class="tag-edit-row">
-          <input v-model="tag.color" type="color" class="color-picker" :disabled="Boolean(tag.automatic_kind)" style="width: 28px; height: 28px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 4px;" />
-          <input v-model="tag.name" type="text" class="text-input" :disabled="Boolean(tag.automatic_kind)" style="height: 32px; font-size: 13px;" />
-		  <select v-model="tag.namespace" class="select-input tag-category-edit" :disabled="Boolean(tag.automatic_kind)" :aria-label="`${tag.name}的主题分类`"><option value="">未分类</option><option v-if="tag.namespace && !assignableCategories.includes(tag.namespace)" :value="tag.namespace">{{ tag.namespace }}</option><option v-for="category in assignableCategories" :key="category" :value="category">{{ category }}</option></select>
-          <div style="display: flex; gap: 6px;">
+          <input v-model="tag.color" type="color" class="color-picker" :disabled="Boolean(tag.automatic_kind)" :aria-label="`${tag.name}的颜色`" />
+          <input v-model="tag.name" type="text" class="text-input tag-name-input" :disabled="Boolean(tag.automatic_kind)" />
+          <select v-model="tag.namespace" class="select-input tag-category-edit" :disabled="Boolean(tag.automatic_kind)" :aria-label="`${tag.name}的主题分类`"><option value="">未分类</option><option v-if="tag.namespace && !assignableCategories.includes(tag.namespace)" :value="tag.namespace">{{ tag.namespace }}</option><option v-for="category in assignableCategories" :key="category" :value="category">{{ category }}</option></select>
+          <div class="tag-edit-actions">
             <span v-if="tag.automatic_kind" class="system-tag-note">自动标签</span>
             <template v-else>
               <span v-if="isDirtyTag(tag)" class="tag-dirty-note" :data-test="`tag-dirty-${tag.id}`">未保存</span>
-              <button @click="saveTag(tag)" class="btn-secondary">保存</button>
-              <button v-if="canConvertToPerson(tag)" type="button" class="btn-secondary" @click="openPersonConversion(tag)">转为人物</button>
-              <button @click.stop="$emit('request-delete-tag', tag)" class="btn-secondary" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
+              <button @click="saveTag(tag)" class="btn btn--secondary btn--sm">保存</button>
+              <button v-if="canConvertToPerson(tag)" type="button" class="btn btn--secondary btn--sm" @click="openPersonConversion(tag)">转为人物</button>
+              <button @click.stop="$emit('request-delete-tag', tag)" class="btn btn--danger btn--sm">删除</button>
             </template>
           </div>
         </div>
-        <div v-if="localTags.length === 0" class="help-text" style="text-align: center; padding: 20px;">暂无标签</div>
-        <div v-else-if="filteredTags.length === 0" class="help-text" style="text-align: center; padding: 20px;">没有匹配“{{ tagKeyword }}”的标签</div>
+        <p v-if="localTags.length === 0" class="help-text tag-list-empty">暂无标签</p>
+        <p v-else-if="filteredTags.length === 0" class="help-text tag-list-empty">没有匹配“{{ tagKeyword }}”的标签</p>
       </div>
 
       <div class="divider"></div>
       <div class="tag-manager-panel">
         <h3>分类管理</h3>
         <p class="help-text">标签按主题分类。新建分类时选择至少一个标签；删除分类只清除分类归属，标签仍保留。</p>
-        <div class="category-create"><input v-model.trim="newCategoryName" class="text-input" placeholder="新分类名称" aria-label="新分类名称" /><button type="button" class="btn-primary" :disabled="categorySaving" @click="handleCreateCategory">新建分类</button></div>
+        <div class="category-create"><input v-model.trim="newCategoryName" class="text-input" placeholder="新分类名称" aria-label="新分类名称" /><button type="button" class="btn btn--primary" :disabled="categorySaving" @click="handleCreateCategory">新建分类</button></div>
         <div class="category-tag-picker" aria-label="选择加入新分类的标签"><label v-for="tag in categoryEligibleTags" :key="tag.id"><input v-model="newCategoryTagIDs" type="checkbox" :value="Number(tag.id)" />{{ tag.name }}</label><p v-if="!categoryEligibleTags.length" class="help-text">请先创建一个标签。</p></div>
         <p v-if="categoryError" role="alert" class="merge-error">{{ categoryError }}</p>
-        <div v-for="category in categorySuggestions" :key="category" class="category-row"><span>{{ category }} · {{ categoryCount(category) }} 个标签</span><template v-if="category === '自动'"><span class="help-text">系统分类，不可改名或删除</span></template><template v-else><input v-model.trim="categoryDrafts[category]" class="text-input" :aria-label="`重命名分类 ${category}`" /><button type="button" class="btn-secondary" :disabled="categorySaving" @click="handleRenameCategory(category)">改名</button><button type="button" class="btn-secondary category-delete" :disabled="categorySaving" @click="handleDeleteCategory(category)">删除</button></template></div>
+        <div v-for="category in categorySuggestions" :key="category" class="category-row"><span>{{ category }} · {{ categoryCount(category) }} 个标签</span><template v-if="category === '自动'"><span class="help-text">系统分类，不可改名或删除</span></template><template v-else><input v-model.trim="categoryDrafts[category]" class="text-input" :aria-label="`重命名分类 ${category}`" /><button type="button" class="btn btn--secondary btn--sm" :disabled="categorySaving" @click="handleRenameCategory(category)">改名</button><button type="button" class="btn btn--danger btn--sm category-delete" :disabled="categorySaving" @click="handleDeleteCategory(category)">删除</button></template></div>
         <p v-if="!categorySuggestions.length" class="help-text">暂无分类。</p>
       </div>
 
@@ -139,7 +150,7 @@
           <button
             v-else-if="record.undoable"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="undoingConversionID !== 0"
             :data-test="`tag-conversion-undo-${record.id}`"
             @click="undoConversion(record)"
@@ -148,16 +159,17 @@
         </div>
       </div>
 
-      <div class="modal-actions">
-        <button @click="handleClose" class="btn-secondary">完成</button>
-      </div>
     </template>
-  </BaseModal>
+    <template v-if="!conversionTagID" #footer>
+      <button type="button" class="btn btn--secondary" data-test="tag-manager-close" @click="handleClose">关闭</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { CreateTagWithCategory, MergeTags, UpdateTagWithCategory, TriggerAITagging, CreateTagCategory, RenameTagCategory, DeleteTagCategory, GetTagUsageCounts, ListTagPersonConversions, UndoTagPersonConversion } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
 import TagPersonConversionPanel from './TagPersonConversionPanel.vue';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 
@@ -184,7 +196,7 @@ function usageSummary(counts, ids) {
 
 export default {
   name: 'TagManagerDialog',
-  components: { BaseModal, TagPersonConversionPanel },
+  components: { AppIcon, DialogShell, TagPersonConversionPanel },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] }
@@ -557,50 +569,54 @@ export default {
 
 <style scoped>
 .tag-manager-panel { min-height: 250px; }
-.category-create { display: flex; gap: 8px; margin-top: 14px; }
+.tag-create-row { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.tag-create-input { flex: 1; min-width: 0; }
+.category-create { display: flex; gap: var(--space-2); margin-top: 14px; }
 .category-create input { flex: 1; min-width: 0; }
-.category-tag-picker { display: flex; flex-wrap: wrap; gap: 8px; max-height: 160px; overflow-y: auto; margin: 10px 0 18px; }
-.category-tag-picker label { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid var(--border-color); border-radius: 7px; }
+.category-tag-picker { display: flex; flex-wrap: wrap; gap: var(--space-2); max-height: 160px; overflow-y: auto; margin: var(--space-3) 0 18px; }
+.category-tag-picker label { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); }
 .category-tag-picker small { color: var(--text-secondary); }
-.category-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(120px, 1fr) auto auto; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--border-color); }
-.category-delete { color: var(--danger-color); border-color: var(--danger-color); }
-.tag-edit-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border-color); }
-.tag-edit-row > input[type="text"] { min-width: 0; flex: 1; }
-.tag-category-create { width: 100%; margin-top: 8px; }
+.category-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(120px, 1fr) auto auto; align-items: center; gap: var(--space-2); padding: var(--space-3) 0; border-top: 1px solid var(--border-color); }
+.tag-list-container { max-height: 260px; overflow-y: auto; padding-right: var(--space-1); }
+.tag-list-empty { padding: var(--space-5); text-align: center; }
+.tag-edit-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-color); }
+.tag-edit-row > .tag-name-input { flex: 1; min-width: 0; height: var(--h-unit); font-size: var(--fs-secondary); }
+.tag-edit-actions { display: flex; gap: 6px; }
+.tag-category-create { width: 100%; margin-top: var(--space-2); }
 .tag-category-help { margin: 0 0 6px; }
 .tag-edit-row > .tag-category-edit { flex: 0 0 130px; min-width: 0; }
 .tag-list-container::-webkit-scrollbar { width: 4px; }
-.merge-filter-input { width: calc(100% - 16px); margin: 8px 8px 0; }
-.tag-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.tag-list-count { color: var(--text-secondary); font-size: 12px; }
-.tag-filter-input { width: 100%; margin: 8px 0; }
-.merge-target-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
+.merge-filter-input { width: calc(100% - 16px); margin: var(--space-2) var(--space-2) 0; }
+.tag-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.tag-list-count { color: var(--text-secondary); font-size: var(--fs-caption); }
+.tag-filter-input { width: 100%; margin: var(--space-2) 0; }
+.merge-target-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: var(--space-3); margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--fs-caption); }
 .merge-target-select { width: 100%; }
-.merge-source-picker { margin-top: 10px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 10px; background: var(--control-bg); }
-.merge-source-heading { display: flex; justify-content: space-between; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); font-size: 12px; }
-.merge-selected-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
-.merge-selected-tags button { height: 25px; padding: 0 8px; border: 1px solid var(--accent-border); border-radius: 999px; background: var(--accent-soft); color: var(--accent-color); cursor: pointer; font-size: 11px; }
-.merge-selected-tags button span { margin-left: 3px; }
+.merge-source-picker { margin-top: var(--space-3); overflow: hidden; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); }
+.merge-source-heading { display: flex; justify-content: space-between; gap: var(--space-2); padding: 9px var(--space-3); border-bottom: 1px solid var(--border-color); color: var(--text-secondary); font-size: var(--fs-caption); }
+.merge-selected-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: var(--space-2) var(--space-3) 0; }
+.merge-selected-tag { gap: 2px; border-color: var(--accent-border); border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-medium); }
 .merge-source-list { max-height: 168px; overflow-y: auto; padding: 7px; }
-.merge-source-option { display: grid; grid-template-columns: 18px 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 34px; padding: 4px 7px; border-radius: 7px; cursor: pointer; }
+.merge-source-option { display: grid; grid-template-columns: 18px 10px minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-height: 34px; padding: var(--space-1) 7px; border-radius: var(--radius-sm); cursor: pointer; }
 .merge-source-option:hover { background: var(--control-hover-bg); }
 .merge-source-option input { width: 15px; height: 15px; accent-color: var(--accent-color); }
 .merge-source-color { width: 9px; height: 9px; border-radius: 50%; }
 .merge-source-name { overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
-.merge-source-option small { color: var(--text-muted); font-size: 11px; }
-.merge-source-empty { padding: 18px 10px; color: var(--text-muted); text-align: center; font-size: 12px; }
-.merge-source-empty--target { margin-top: 8px; padding: 12px; border: 1px dashed var(--border-color); border-radius: 9px; }
-.merge-source-tools { display: flex; justify-content: flex-end; gap: 7px; padding: 8px; border-top: 1px solid var(--border-color); }
-.merge-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; }
-.merge-error { color: var(--danger-color); }
+.merge-source-option small { color: var(--text-muted); font-size: var(--fs-caption); }
+.merge-source-empty { padding: 18px var(--space-3); color: var(--text-muted); text-align: center; font-size: var(--fs-caption); }
+.merge-source-empty--target { margin-top: var(--space-2); padding: var(--space-3); border: 1px dashed var(--border-color); border-radius: var(--radius); }
+.merge-source-tools { display: flex; justify-content: flex-end; gap: 7px; padding: var(--space-2); border-top: 1px solid var(--border-color); }
+.merge-actions { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.merge-error { color: var(--danger-text); }
 .tag-list-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+.color-picker { width: 28px; height: 28px; padding: 0; border: none; border-radius: 4px; background: none; cursor: pointer; }
 .color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 .color-picker::-webkit-color-swatch { border: 1px solid var(--border-color); border-radius: 4px; }
-.system-tag-note { align-self: center; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
-.tag-dirty-note { align-self: center; color: var(--warning-text); font-size: 12px; white-space: nowrap; }
+.system-tag-note { align-self: center; color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
+.tag-dirty-note { align-self: center; color: var(--warning-text); font-size: var(--fs-caption); white-space: nowrap; }
 .tag-conversion-history { min-height: 0; }
-.conversion-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-color); }
+.conversion-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border-color); }
 .conversion-row__main { display: grid; flex: 1; gap: 3px; min-width: 0; }
-.conversion-row__main strong { overflow-wrap: anywhere; font-size: 13px; }
-.conversion-row__main small { color: var(--text-secondary); font-size: 12px; }
+.conversion-row__main strong { overflow-wrap: anywhere; font-size: var(--fs-secondary); }
+.conversion-row__main small { color: var(--text-secondary); font-size: var(--fs-caption); }
 </style>

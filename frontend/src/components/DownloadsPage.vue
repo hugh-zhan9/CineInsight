@@ -1,22 +1,21 @@
 <template>
   <section class="page-content downloads-page">
-    <div class="downloads-heading">
-      <div>
-        <h2>下载</h2>
-        <p>浏览器插件推过来的任务。进度由后端实时推送，不用手动刷新。</p>
-      </div>
-      <button
-        type="button"
-        class="btn-secondary"
-        :disabled="finishedTasks.length === 0"
-        @click="clearFinished"
-      >
-        清掉已结束
-      </button>
-    </div>
+    <PageHeader title="下载" subtitle="浏览器插件推过来的任务。进度由后端实时推送，不用手动刷新。">
+      <template #actions>
+        <button
+          type="button"
+          class="btn btn--secondary"
+          :disabled="finishedTasks.length === 0"
+          @click="clearFinished"
+        >
+          清掉已结束
+        </button>
+      </template>
+    </PageHeader>
 
-    <p v-if="errorMessage" class="downloads-error" role="alert" data-test="downloads-error">{{ errorMessage }}</p>
-    <!-- 查重提示里「把这次下载移到废纸篓」走片库同一个删除宿主：进度、磁盘不支持废纸篓时的二选一、整批撤销。 -->
+    <AppBanner v-if="errorMessage" tone="danger" :title="errorMessage" data-test="downloads-error" />
+    <!-- 查重提示里「把这次下载移到废纸篓」走片库同一个删除宿主：进度、磁盘不支持废纸篓时的二选一、整批撤销。
+         删前确不确认看设置「删除前确认」（默认开）。 -->
     <TrashUndoBanner ref="trashUndo" kind="video" :after-restore="afterTrashRestore" />
 
     <div class="downloads-summary" data-test="downloads-summary">
@@ -42,11 +41,14 @@
       </article>
     </div>
 
-    <div v-if="tasks.length === 0" class="downloads-empty" data-test="downloads-empty">
-      <h3>还没有下载任务</h3>
-      <!-- 下载目录不会自动加进扫描目录（D-B05），「下完自动进片库」只在目录已在扫描范围内时成立。 -->
-      <p>在浏览器插件里抓到视频后点「发送到 CineInsight」，任务会出现在这里；下载目录在扫描范围内时，下完会自动入库。</p>
-    </div>
+    <!-- 下载目录不会自动加进扫描目录（D-B05），「下完自动进片库」只在目录已在扫描范围内时成立。 -->
+    <EmptyState
+      v-if="tasks.length === 0"
+      icon="inbox"
+      title="还没有下载任务"
+      message="在浏览器插件里抓到视频后点「发送到 CineInsight」，任务会出现在这里；下载目录在扫描范围内时，下完会自动入库。"
+      data-test="downloads-empty"
+    />
 
     <template v-else>
       <div v-if="activeTasks.length || queuedTasks.length" class="downloads-group">
@@ -91,7 +93,11 @@ import {
 } from '../../wailsjs/go/main/App';
 import DownloadRow from './downloads/DownloadRow.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
+import AppBanner from './ui/AppBanner.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
 import { confirmAction } from '../utils/feedback.js';
+import { shouldConfirmTrash } from '../utils/trashConfirm.js';
 import { openVersionCompare } from '../utils/versionCompare.js';
 
 // 后端从不发出 remuxing（MEDIA-15），状态集合以 browser_download_service.go 为准。
@@ -112,7 +118,7 @@ const ACTION_CODE_TEXTS = {
   queue_full: { level: 'warn', text: '下载队列已满，等前面的任务跑完再试。' },
   not_finished: { level: 'warn', text: '任务还没有下载完成。' },
   file_missing: { level: 'error', text: '下载的文件已经不在了。' },
-  reveal_failed: { level: 'error', text: '无法打开所在目录。' },
+  reveal_failed: { level: 'error', text: '无法在访达中显示。' },
   service_unavailable: { level: 'error', text: '下载服务未启用。' },
   task_not_found: { level: 'error', text: '没有这个下载任务。' },
   duplicate_not_found: { level: 'warn', text: '这条提示已经处理过了。' }
@@ -132,7 +138,7 @@ const ACTION_SUCCESS_TEXTS = {
 // 既看不到又要手动刷新。这里由后端推 browser-download-tasks 事件驱动，不轮询。
 export default {
   name: 'DownloadsPage',
-  components: { DownloadRow, TrashUndoBanner },
+  components: { AppBanner, DownloadRow, EmptyState, PageHeader, TrashUndoBanner },
   data() {
     return { tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
   },
@@ -197,7 +203,7 @@ export default {
         this.errorMessage = `取消任务失败：${err}`;
       }
     },
-    // 重试 / 加入扫描目录 / 重新入库 / 打开所在目录（D-PC25）。结果按行显示，
+    // 重试 / 加入扫描目录 / 重新入库 / 在访达中显示（D-PC25）。结果按行显示，
     // 不用一条全页报错盖住其他任务。
     async runAction({ action, task }) {
       const call = {
@@ -260,6 +266,7 @@ export default {
       }
     },
     // 删之前按此刻的片库重取一次：提示可能已经过期（对方或这次下载已被删、文件换过），过期就不删。
+    // 设置「删除前确认」开着（默认）就先确认，关了直接执行；删完都由删除宿主给「撤销」。
     async trashDownload(staleTask, staleMatch) {
       await this.loadTasks();
       const task = this.tasks.find(item => item.id === staleTask.id);
@@ -269,13 +276,18 @@ export default {
         return;
       }
       const name = task.filename || task.title || '这次下载';
-      const confirmed = await confirmAction({
-        title: '把这次下载移到废纸篓',
-        message: `把「${name}」移到废纸篓？片库里保留《${match.title}》。之后可在回收站撤销。`,
-        confirmText: '移到废纸篓',
-        danger: true
-      });
-      if (!confirmed || this.busyIds.includes(task.id)) return;
+      if (await shouldConfirmTrash()) {
+        const confirmed = await confirmAction({
+          level: 'confirm',
+          title: '把这次下载移到废纸篓',
+          message: `把「${name}」移到废纸篓？片库里保留《${match.title}》。`,
+          impact: '移到废纸篓后可以撤销，也能在回收站找回。',
+          confirmText: '移到废纸篓',
+          danger: true
+        });
+        if (!confirmed) return;
+      }
+      if (this.busyIds.includes(task.id)) return;
       this.busyIds = [...this.busyIds, task.id];
       try {
         const banner = this.$refs.trashUndo;
@@ -314,69 +326,42 @@ export default {
 
 <style scoped>
 .downloads-page {
-  padding: 20px 24px 40px;
+  padding: var(--space-5) var(--space-5) 40px;
   max-width: 1040px;
   margin: 0 auto;
 }
 
-.downloads-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-
-.downloads-heading h2 { margin: 0 0 4px; }
-.downloads-heading p { margin: 0; color: var(--text-secondary); font-size: 13px; }
+.downloads-page :deep(.ui-banner) { margin-bottom: var(--space-4); }
 
 .downloads-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   margin-bottom: 22px;
 }
 
 .downloads-summary article {
   display: grid;
   gap: 2px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color, transparent);
+  padding: var(--space-3) 14px;
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  border: 1px solid var(--hairline);
 }
 
-.downloads-summary span { color: var(--text-secondary); font-size: 12px; }
-.downloads-summary strong { font-size: 24px; line-height: 1.2; }
-.downloads-summary small { color: var(--text-secondary); font-size: 12px; }
-.downloads-summary--bad strong { color: var(--danger-color, #c0392b); }
+.downloads-summary span { color: var(--text-secondary); font-size: var(--fs-caption); }
+.downloads-summary strong { font-size: var(--fs-display); font-weight: var(--fw-bold); line-height: 1.2; }
+.downloads-summary small { color: var(--text-secondary); font-size: var(--fs-caption); }
+.downloads-summary--bad strong { color: var(--danger-text); }
 
-.downloads-group { margin-bottom: 24px; }
+.downloads-group { margin-bottom: var(--space-5); }
 
 .downloads-group__title {
-  margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 600;
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-semibold);
   color: var(--text-secondary);
 }
 
-.downloads-list { display: grid; gap: 10px; }
-
-.downloads-empty {
-  padding: 40px 24px;
-  text-align: center;
-  border-radius: 12px;
-  background: var(--bg-color);
-}
-
-.downloads-empty h3 { margin: 0 0 6px; }
-.downloads-empty p { margin: 0; color: var(--text-secondary); }
-
-.downloads-error {
-  padding: 12px 14px;
-  border-radius: 8px;
-  margin-bottom: 16px;
-  color: var(--danger-color, #c0392b);
-  background: var(--bg-color);
-}
+.downloads-list { display: grid; gap: var(--space-3); }
 </style>

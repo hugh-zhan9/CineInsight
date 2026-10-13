@@ -9,14 +9,14 @@
         <small v-else-if="!loading" data-test="data-health-never">还没有体检过</small>
       </div>
       <div class="data-health__actions">
-        <button type="button" class="btn-primary" :disabled="running || loading" data-test="data-health-run" @click="run">
+        <button type="button" class="btn btn--primary" :disabled="running || loading" data-test="data-health-run" @click="run">
           {{ running && progress.phase !== 'repair' ? '体检中…' : '开始体检' }}
         </button>
-        <button v-if="running" type="button" class="btn-secondary" data-test="data-health-cancel" @click="cancel">取消</button>
+        <button v-if="running" type="button" class="btn btn--secondary" data-test="data-health-cancel" @click="cancel">取消</button>
       </div>
     </header>
 
-    <p v-if="running" class="data-health__progress" role="status" data-test="data-health-progress">{{ progressText }}</p>
+    <ProgressBar v-if="running" class="data-health__progress" :value="progressValue" :label="progressText" data-test="data-health-progress" />
     <p v-if="error" class="data-health__error" role="alert" data-test="data-health-error">{{ error }}</p>
     <p v-if="notice" class="data-health__notice" role="status" data-test="data-health-notice">{{ notice }}</p>
 
@@ -30,7 +30,7 @@
           <button
             v-if="check.repairable"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="running"
             :data-test="`data-health-repair-${check.check}`"
             @click="repair(check)"
@@ -38,7 +38,7 @@
           <button
             v-if="check.link"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :data-test="`data-health-link-${check.check}`"
             @click="follow(check.link)"
           >{{ linkLabel(check.link) }}</button>
@@ -55,7 +55,7 @@
         <p v-if="check.examples && check.examples.length" class="data-health__examples">示例：{{ check.examples.join('、') }}</p>
       </li>
     </ul>
-    <p v-else-if="!loading && !running" class="data-health__empty" data-test="data-health-empty">点「开始体检」检查数据库与备份。</p>
+    <EmptyState v-else-if="!loading && !running" icon="database" title="还没有体检报告" message="点「开始体检」检查数据库与备份。" data-test="data-health-empty" />
   </section>
 </template>
 
@@ -65,6 +65,8 @@ import {
 } from '../../../wailsjs/go/main/App';
 import { confirmAction } from '../../utils/feedback.js';
 import { formatBytes } from '../../utils/mediaDetails.js';
+import EmptyState from '../ui/EmptyState.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 
 // 各检查项的名称、说明与修复按钮（结论与数量来自后端报告）。
 export const DATA_HEALTH_CHECKS = {
@@ -119,6 +121,7 @@ function errorText(err) {
 
 export default {
   name: 'DataHealthPanel',
+  components: { EmptyState, ProgressBar },
   props: { directories: { type: Array, default: () => [] } },
   emits: ['open-video-id', 'run-command', 'videos-changed', 'open-library-missing', 'navigate'],
   data() {
@@ -132,6 +135,12 @@ export default {
     };
   },
   computed: {
+    // 检查阶段按已完成项数给比例；准备与修复阶段没有总数，进度条为不确定态。
+    progressValue() {
+      const total = Number(this.progress.total || 0);
+      if (this.progress.phase === 'repair' || total <= 0) return null;
+      return Math.min(1, Math.max(0, Number(this.progress.done || 0) / total));
+    },
     progressText() {
       const label = this.checkLabel(this.progress.check);
       if (this.progress.phase === 'repair') return label ? `正在修复：${label}…` : '正在修复…';
@@ -267,26 +276,26 @@ export default {
 
 <style scoped>
 .data-health { display: grid; gap: 14px; }
-.data-health__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.data-health__intro { display: grid; gap: 4px; min-width: 0; }
-.data-health__intro p, .data-health__intro small { color: var(--text-secondary); }
-.data-health__actions { display: flex; gap: 8px; }
-.data-health__progress, .data-health__notice { color: var(--text-secondary); font-size: 13px; }
-.data-health__error { color: var(--danger-text); font-size: 13px; }
-.data-health__checks { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.data-health__check { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
-.data-health__check-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.data-health__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.data-health__intro { display: grid; gap: var(--space-1); min-width: 0; }
+.data-health__intro h3 { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.data-health__intro p, .data-health__intro small { color: var(--text-secondary); font-size: var(--fs-caption); }
+.data-health__actions { display: flex; gap: var(--space-2); }
+.data-health__notice { color: var(--text-secondary); font-size: var(--fs-secondary); }
+.data-health__error { color: var(--danger-text); font-size: var(--fs-secondary); }
+.data-health__checks { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.data-health__check { display: grid; gap: 6px; padding: var(--space-3) 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.data-health__check-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .data-health__spacer { flex: 1 1 auto; }
 .data-health__count { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.data-health__status { padding: 1px 8px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 11.5px; white-space: nowrap; }
+.data-health__status { padding: 1px var(--space-2); border-radius: var(--radius-pill); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
 .data-health__status--ok { background: var(--accent-soft); color: var(--accent-text); }
 .data-health__status--warning, .data-health__status--timeout { background: var(--warning-soft); color: var(--warning-text); }
 .data-health__status--problem, .data-health__status--error { background: var(--danger-soft); color: var(--danger-text); }
-.data-health__summary { font-size: 13px; }
-.data-health__explain { color: var(--text-muted); font-size: 12px; }
-.data-health__groups { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
-.data-health__groups li { display: grid; grid-template-columns: minmax(0, 14em) auto minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.data-health__summary { font-size: var(--fs-secondary); }
+.data-health__explain { color: var(--text-muted); font-size: var(--fs-caption); }
+.data-health__groups { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; font-size: var(--fs-secondary); }
+.data-health__groups li { display: grid; grid-template-columns: minmax(0, 14em) auto minmax(0, 1fr); gap: var(--space-3); align-items: baseline; }
 .data-health__group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.data-health__examples { overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; }
-.data-health__empty { color: var(--text-muted); }
+.data-health__examples { overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--fs-caption); }
 </style>

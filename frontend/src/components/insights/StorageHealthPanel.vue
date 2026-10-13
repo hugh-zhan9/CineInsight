@@ -3,8 +3,10 @@
     <!-- 删除走片库同一个删除宿主：进度与取消、磁盘不支持废纸篓时的二选一、按批次撤销。 -->
     <TrashUndoBanner ref="trashUndo" kind="video" :after-restore="afterTrashRestore" />
 
-    <p v-if="error" class="storage-alert" role="alert" data-test="storage-error">{{ error }}</p>
-    <div v-if="loading && !report" class="storage-empty" data-test="storage-loading">正在体检…</div>
+    <AppBanner v-if="error" tone="danger" :title="error" data-test="storage-error" />
+    <div v-if="loading && !report" class="storage-loading" role="status" aria-label="正在体检" data-test="storage-loading">
+      <SkeletonBlock :lines="6" />
+    </div>
 
     <template v-else-if="report">
       <div class="storage-tiles" data-test="storage-tiles">
@@ -34,7 +36,7 @@
               <span class="storage-spacer"></span>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :disabled="processing"
                 :data-test="`storage-open-${media.key}-cleanup`"
                 @click="$emit('run-command', media.command, media.commandLabel)"
@@ -80,22 +82,13 @@
                 :checked="allListedSelected"
                 :indeterminate.prop="selection.length > 0 && !allListedSelected"
                 :disabled="selectionLocked"
+                :aria-label="`全选当前结果（${unwatchedItems.length}）`"
                 data-test="storage-select-all"
                 @change="toggleAllListed"
               />
-              全选已列出的 {{ unwatchedItems.length }} 部
+              全选
             </label>
-            <span class="storage-muted">共 {{ report.unwatched.count }} 部 · {{ formatBytes(report.unwatched.bytes) }}</span>
-            <span class="storage-spacer"></span>
-            <span v-if="selection.length" class="storage-list__picked" data-test="storage-selected-summary">已选 {{ selection.length }} 部 · {{ formatBytes(selectedBytes) }}</span>
-            <button
-              type="button"
-              class="btn-danger btn-compact"
-              :disabled="selection.length === 0 || selectionLocked"
-              :title="loading && !processing ? '正在重新取数，完成后再删除' : ''"
-              data-test="storage-delete-selected"
-              @click="askDelete"
-            >{{ processing ? '处理中…' : `移到废纸篓 (${selection.length})` }}</button>
+            <span class="storage-muted">共 {{ report.unwatched.count }} 部 · {{ formatBytes(report.unwatched.bytes) }}<template v-if="report.unwatched.count > unwatchedItems.length">，列出了前 {{ unwatchedItems.length }} 部</template></span>
           </div>
           <ul v-if="unwatchedItems.length" class="storage-list">
             <li
@@ -115,26 +108,49 @@
               />
               <img class="storage-row__thumb" :src="`/preview/thumbnail/${item.id}`" alt="" loading="lazy" />
               <div class="storage-row__main">
-                <button type="button" class="storage-row__title" :title="item.title" :disabled="processing" @click="$emit('open-video-id', item.id)">{{ item.title }}</button>
+                <button type="button" class="btn-link storage-row__title" :title="item.title" :disabled="processing" @click="$emit('open-video-id', item.id)">{{ item.title }}</button>
                 <small class="storage-row__meta">{{ itemFacts(item) }} · {{ watchedText(item) }}</small>
                 <small class="storage-row__path" :title="item.path">{{ item.path }}</small>
               </div>
-              <span v-if="item.is_favorite" class="storage-chip storage-chip--keep">★ 收藏</span>
+              <span v-if="item.is_favorite" class="storage-chip storage-chip--keep"><AppIcon name="star" :size="16" />收藏</span>
               <span v-if="item.personal_rating != null" class="storage-chip storage-chip--keep">评分 {{ item.personal_rating }}</span>
               <strong class="storage-row__size">{{ formatBytes(item.size) }}</strong>
-              <button type="button" class="btn-secondary btn-compact" data-test="storage-reveal" @click="reveal(item)">打开目录</button>
+              <button type="button" class="btn btn--secondary btn--sm" data-test="storage-reveal" @click="reveal(item)">在访达中显示</button>
             </li>
           </ul>
           <p v-else class="storage-muted" data-test="storage-unwatched-empty">没有至少 {{ minGiB }} GB、超过 {{ months }} 个月没看的视频。</p>
           <button
             v-if="canShowMore('unwatched')"
             type="button"
-            class="btn-secondary btn-compact storage-more"
+            class="btn btn--secondary btn--sm storage-more"
             :disabled="loading"
             data-test="storage-unwatched-more"
             @click="showMore('unwatched')"
           >显示更多（还有 {{ report.unwatched.count - unwatchedItems.length }} 部）</button>
           <p v-else-if="report.unwatched.has_more" class="storage-muted storage-more" data-test="storage-unwatched-capped">最多列出前 {{ MAX_LIST }} 部，可以调高门槛缩小范围。</p>
+          <!-- 选择操作条（D-UD-10）：有勾选才出现，只处理勾选的；「全选当前结果（N）」的 N 是列出的部数。
+               移到废纸篓前确不确认看设置「删除前确认」（默认开）；做完由删除宿主给「撤销」。 -->
+          <SelectionBar
+            :count="selection.length"
+            :total-matching="unwatchedItems.length"
+            :all-matching-selected="allListedSelected"
+            data-test="storage-selection-bar"
+            @select-all-matching="selectAllListed"
+            @clear="clearSelection"
+          >
+            <template #actions>
+              <span class="storage-list__picked" data-test="storage-selected-summary">共 {{ formatBytes(selectedBytes) }}</span>
+              <span v-if="selectedCurated" class="storage-selection__warn" data-test="storage-selected-curated">其中 {{ selectedCurated }} 部已收藏或评过分</span>
+              <button
+                type="button"
+                class="btn btn--danger btn--sm"
+                :disabled="selectionLocked"
+                :title="loading && !processing ? '正在重新取数，完成后再处理' : ''"
+                data-test="storage-delete-selected"
+                @click="deleteSelected"
+              >{{ processing ? '处理中…' : `移到废纸篓（${selection.length}）` }}</button>
+            </template>
+          </SelectionBar>
         </div>
       </section>
 
@@ -147,7 +163,7 @@
           还有 {{ unprobedCount }} 部视频没有技术信息（还没探测或探测失败），不参与编码分布与转码估算。
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="probeStarting"
             data-test="storage-start-probe"
             @click="startProbe"
@@ -158,20 +174,20 @@
             <li v-for="item in transcodeItems" :key="item.id" class="storage-row" data-test="storage-transcode-row">
               <img class="storage-row__thumb" :src="`/preview/thumbnail/${item.id}`" alt="" loading="lazy" />
               <div class="storage-row__main">
-                <button type="button" class="storage-row__title" :title="item.title" :disabled="processing" @click="$emit('open-video-id', item.id)">{{ item.title }}</button>
+                <button type="button" class="btn-link storage-row__title" :title="item.title" :disabled="processing" @click="$emit('open-video-id', item.id)">{{ item.title }}</button>
                 <small class="storage-row__meta">{{ itemFacts(item) }} · {{ formatBitRate(item.bit_rate) }}</small>
                 <small class="storage-row__path" :title="item.path">{{ item.path }}</small>
               </div>
               <span class="storage-row__estimate">{{ formatBytes(item.size) }} → ≈ {{ formatBytes(item.estimated_size) }}</span>
               <span class="storage-chip storage-chip--safe">可省 {{ formatBytes(item.estimated_savings) }}</span>
-              <button type="button" class="btn-secondary btn-compact" @click="reveal(item)">打开目录</button>
+              <button type="button" class="btn btn--secondary btn--sm" @click="reveal(item)">在访达中显示</button>
             </li>
           </ul>
           <p v-else class="storage-muted" data-test="storage-transcode-empty">没有转码能明显省空间的视频。</p>
           <button
             v-if="canShowMore('transcode')"
             type="button"
-            class="btn-secondary btn-compact storage-more"
+            class="btn btn--secondary btn--sm storage-more"
             :disabled="loading"
             data-test="storage-transcode-more"
             @click="showMore('transcode')"
@@ -190,21 +206,21 @@
       </section>
     </template>
 
-    <BaseModal
+    <DialogShell
       v-if="confirm.show"
-      aria-labelledby="storage-delete-confirm-title"
+      title="移到废纸篓"
+      size="sm"
       data-test="storage-delete-confirm-dialog"
       @close="answerDelete(false)"
     >
-      <h2 id="storage-delete-confirm-title">移到废纸篓</h2>
       <p data-test="storage-delete-summary">将把 {{ confirm.ids.length }} 个视频移到废纸篓，共 {{ formatBytes(confirm.bytes) }}。</p>
       <p v-if="confirm.curated > 0" class="storage-confirm__warn" data-test="storage-delete-curated">其中 {{ confirm.curated }} 个已收藏或评过分，请确认确实不要了。</p>
-      <p class="storage-confirm__help">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间。所在磁盘不支持废纸篓时，会先问你怎么处理。</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" data-test="storage-delete-cancel" @click="answerDelete(false)">取消</button>
-        <button type="button" class="btn-danger" data-test="storage-delete-confirm" @click="answerDelete(true)">移到废纸篓</button>
-      </div>
-    </BaseModal>
+      <p class="storage-confirm__help">移到废纸篓后可以撤销，也能在回收站找回；在访达清空废纸篓才会释放空间。所在磁盘不支持废纸篓时，会先问你怎么处理。</p>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="storage-delete-cancel" @click="answerDelete(false)">取消</button>
+        <button type="button" class="btn btn--danger" data-test="storage-delete-confirm" @click="answerDelete(true)">移到废纸篓</button>
+      </template>
+    </DialogShell>
   </section>
 </template>
 
@@ -212,12 +228,17 @@
 import { markRaw } from 'vue';
 import { GetCleanupStatus, GetImageCleanupStatus, GetStorageReport, OpenDirectory, StartTechnicalBackfill } from '../../../wailsjs/go/main/App';
 import BucketChart from './BucketChart.vue';
-import BaseModal from '../ui/BaseModal.vue';
+import AppBanner from '../ui/AppBanner.vue';
+import AppIcon from '../ui/AppIcon.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import SelectionBar from '../ui/SelectionBar.vue';
+import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import StatTile from '../ui/StatTile.vue';
 import TrashUndoBanner from '../video-list/TrashUndoBanner.vue';
 import { summarizeTrashFailures } from '../TrashCenterDialog.vue';
 import { formatBytes } from '../../utils/mediaDetails.js';
 import { reclaimHeadline, reclaimSummary } from '../../utils/storageReclaim.js';
+import { shouldConfirmTrash } from '../../utils/trashConfirm.js';
 
 const GIB = 1024 ** 3;
 const PAGE = 50;
@@ -225,12 +246,8 @@ const PAGE = 50;
 const MAX_LIST = 500;
 const SIZE_OPTIONS = [1, 2, 5, 10, 20];
 const MONTH_OPTIONS = [6, 12, 24, 36];
-const ICONS = {
-  total: ['M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z', 'M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7', 'M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
-  reclaim: ['M4 7h16', 'M9.5 7V4.5h5V7', 'M6.5 7l1 13h9l1-13', 'M10.5 11v5.5', 'M13.5 11v5.5'],
-  unwatched: ['M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17z', 'M12 7.5V12l3 2'],
-  transcode: ['M4 8h12l-3-3', 'M20 16H8l3 3']
-};
+// 统计卡图标：图标集 ui/icons.js 里的名字（D-UD-06）。
+const ICONS = { total: 'database', reclaim: 'trash', unwatched: 'clock', transcode: 'transcode' };
 const STATE_TEXT = {
   ready: ['已分析', 'safe'],
   stale: ['结果可能已过期', 'review'],
@@ -241,7 +258,7 @@ const STATE_TEXT = {
 
 export default {
   name: 'StorageHealthPanel',
-  components: { BucketChart, BaseModal, StatTile, TrashUndoBanner },
+  components: { AppBanner, AppIcon, BucketChart, DialogShell, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
   // open-video-id：打开片库详情；run-command：按固定命令 ID 打开清理中心；
   // videos-changed：这里删除或撤销删除了视频，片库与顶栏计数据此刷新；
   // status-change：{ loading, processing }，宿主据此显示刷新状态、删除进行中不让离开。
@@ -280,6 +297,13 @@ export default {
     selectionLocked() { return this.processing || this.loading || this.undoing; },
     itemsByID() { return new Map(this.unwatchedItems.map(item => [item.id, item])); },
     selectedBytes() { return this.selection.reduce((sum, id) => sum + Number(this.itemsByID.get(id)?.size || 0), 0); },
+    // 勾选里收藏或评过分的部数：移到废纸篓不弹确认，在操作条上提醒一句。
+    selectedCurated() {
+      return this.selection.filter(id => {
+        const item = this.itemsByID.get(id);
+        return item && (item.is_favorite || item.personal_rating != null);
+      }).length;
+    },
     allListedSelected() { return this.unwatchedItems.length > 0 && this.unwatchedItems.every(item => this.selectedIDs.has(item.id)); },
     unprobedCount() { return Math.max(0, Number(this.report?.probe?.total || 0) - Number(this.report?.probe?.probed || 0)); },
     reclaim() { return reclaimSummary(this.videoCleanup, this.imageCleanup, { excludedVideoIDs: this.removedIDs }); },
@@ -325,13 +349,13 @@ export default {
     processing() { this.emitStatus(); },
     undoing() { this.emitStatus(); }
   },
+  beforeUnmount() {
+    if (this._resolveDelete) this._resolveDelete(false);
+  },
   mounted() {
     // 撤销条常驻在本面板里，挂载后就有：跟着它的撤销状态走。
     this.$watch(() => Boolean(this.$refs.trashUndo?.undoing), value => { this.undoing = value; });
     this.refresh();
-  },
-  beforeUnmount() {
-    if (this._resolveDelete) this._resolveDelete(false);
   },
   methods: {
     formatBytes,
@@ -403,6 +427,14 @@ export default {
       if (this.selectionLocked) return;
       this.selection = this.allListedSelected ? [] : this.unwatchedItems.map(item => item.id);
     },
+    selectAllListed() {
+      if (this.selectionLocked) return;
+      this.selection = this.unwatchedItems.map(item => item.id);
+    },
+    clearSelection() {
+      if (this.selectionLocked) return;
+      this.selection = [];
+    },
     itemFacts(item) {
       const resolution = item.width && item.height ? `${item.width}×${item.height}` : '分辨率未知';
       return `${resolution} · ${item.codec || '编码未探测'}`;
@@ -437,8 +469,17 @@ export default {
         this.probeStarting = false;
       }
     },
+    // 移到废纸篓：设置「删除前确认」开着（默认）就先汇总确认，关了直接执行；都由删除宿主给「撤销」。
+    // 取数、删除或撤销进行中（selectionLocked）不执行：取回来的清单可能已经不含勾着的行（审查 I-2）。
+    async deleteSelected() {
+      if (this.selectionLocked || this.selection.length === 0) return undefined;
+      const confirmFirst = await shouldConfirmTrash();
+      if (this.selectionLocked || this.selection.length === 0) return undefined;
+      if (confirmFirst) return this.askDelete();
+      return this.deleteIDs(this.selection.filter(id => this.itemsByID.has(id)));
+    },
     askDelete() {
-      if (this.selectionLocked || this.selection.length === 0) return;
+      if (this.selectionLocked || this.selection.length === 0) return undefined;
       const items = this.selection.map(id => this.itemsByID.get(id)).filter(Boolean);
       this.confirm = {
         show: true,
@@ -507,58 +548,58 @@ export default {
 </script>
 
 <style scoped>
-.storage-health { display: grid; gap: 22px; }
-.storage-alert { margin: 0; padding: 9px 14px; border: 1px solid var(--danger-color); border-radius: 10px; color: var(--danger-color); font-size: 12px; }
-.storage-empty { padding: 48px 8px; color: var(--text-secondary); text-align: center; }
-.storage-muted { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.storage-health { display: grid; gap: var(--space-5); }
+.storage-loading { padding: var(--space-5) 0; }
+.storage-muted { margin: 0; color: var(--text-muted); font-size: var(--fs-secondary); }
 .storage-spacer { flex: 1; }
-.storage-note { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0; padding: 9px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--control-bg); color: var(--text-secondary); font-size: 12px; }
+.storage-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: 0; padding: 9px 14px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-caption); }
 
 /* 统计卡本身是共用的 StatTile（D-UI-08），这里只排网格。 */
 .storage-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
 
-.storage-section { display: grid; gap: 12px; }
-.storage-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.storage-section__head h3 { margin: 0; font-size: 17px; font-weight: 750; }
-.storage-section__head small { color: var(--text-muted); font-size: 12px; }
-.storage-filter { display: inline-flex; flex: none; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.storage-section { display: grid; gap: var(--space-3); }
+.storage-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.storage-section__head h3 { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.storage-section__head small { color: var(--text-muted); font-size: var(--fs-caption); }
+.storage-filter { display: inline-flex; flex: none; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
 .storage-filter .select-input { width: auto; min-width: 88px; }
 
-.storage-panel { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
-.storage-panel__head { display: flex; align-items: center; gap: 10px; }
+.storage-panel { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: 14px var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.storage-panel__head { display: flex; align-items: center; gap: var(--space-3); }
 .storage-reclaim { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
-.storage-reclaim__rows { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.storage-reclaim__rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px 90px; align-items: center; gap: 10px; font-size: 13px; }
+.storage-reclaim__rows { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.storage-reclaim__rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px 90px; align-items: center; gap: var(--space-3); font-size: var(--fs-secondary); }
 .storage-reclaim__rows small { color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
 .storage-reclaim__rows strong { text-align: right; font-variant-numeric: tabular-nums; }
 .storage-reclaim__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.storage-chip { padding: 1px 8px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.storage-chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px var(--space-2); border-radius: var(--radius-pill); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
 .storage-chip--safe { background: var(--accent-soft); color: var(--accent-text); }
 .storage-chip--review { background: var(--warning-soft); color: var(--warning-text); }
 .storage-chip--keep { border: 1px solid var(--accent-color); background: transparent; color: var(--accent-text); }
 .storage-chip--muted { color: var(--text-muted); }
 
-.storage-list__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font-size: 12.5px; }
+.storage-list__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) 14px; font-size: var(--fs-secondary); }
 .storage-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer; }
-.storage-list__picked { color: var(--text-primary); font-weight: 600; }
+.storage-list__picked { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.storage-selection__warn { color: var(--warning-text); }
 .storage-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.storage-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; }
+.storage-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius); }
 .storage-row:hover { background: var(--control-hover-bg); }
 .storage-row--marked { border-color: var(--danger-color); }
 .storage-row__check { flex: none; }
-.storage-row__thumb { flex: none; width: 96px; height: 54px; border-radius: 6px; background: var(--thumb-bg); object-fit: cover; }
+.storage-row__thumb { flex: none; width: 96px; height: 54px; border-radius: var(--radius-sm); background: var(--thumb-bg); object-fit: cover; }
 .storage-row__main { display: grid; flex: 1; gap: 2px; min-width: 0; }
-.storage-row__title { overflow: hidden; padding: 0; border: 0; background: none; color: var(--text-primary); font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.storage-row__title:hover { color: var(--accent-text); }
-.storage-row__meta { color: var(--text-secondary); font-size: 12px; }
-.storage-row__path { overflow: hidden; color: var(--text-muted); font-size: 11px; font-family: var(--font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
+.storage-row__title { display: block; overflow: hidden; color: var(--text-primary); font-size: var(--fs-body); font-weight: var(--fw-semibold); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.storage-row__title:hover:not(:disabled) { color: var(--accent-text); text-decoration: none; }
+.storage-row__meta { color: var(--text-secondary); font-size: var(--fs-caption); }
+.storage-row__path { overflow: hidden; color: var(--text-muted); font-size: var(--fs-caption); font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .storage-row__size { flex: none; min-width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
-.storage-row__estimate { flex: none; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.storage-row__estimate { flex: none; color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 .storage-more { justify-self: center; }
 
 .storage-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 
 .storage-confirm__warn { color: var(--warning-text); }
-.storage-confirm__help { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; }
+.storage-confirm__help { margin: 6px 0 0; color: var(--text-muted); font-size: var(--fs-caption); }
 </style>
