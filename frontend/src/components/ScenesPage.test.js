@@ -383,3 +383,44 @@ it('以图模式独立建立苹果索引，不要求准备中文模型', async (
   await flushPromises();
   expect(api.StartSceneIndex).toHaveBeenCalledWith({ video_ids: [], filter: null, provider: 'apple' });
 });
+
+// ===== ⌘K 统一搜索「查看全部」带进来的参数（D-P2-05）=====
+describe('统一搜索带来的初始查询', () => {
+  it('带 query + mode 进来：填好查询、切到该模式、直接在全部视频里检索', async () => {
+    const wrapper = mountPage({ scopeRequest: { query: '  雨夜里的告白 ', mode: 'dialogue', token: 1 } });
+    await flushPromises();
+    expect(api.SearchScenes).toHaveBeenCalledTimes(1);
+    expect(api.SearchScenes).toHaveBeenCalledWith({ query: '雨夜里的告白', mode: 'dialogue', filter: null, limit: 50 });
+    expect(wrapper.get('[data-test="scenes-query"]').element.value).toBe('雨夜里的告白');
+    expect(wrapper.get('[data-test="scenes-mode-dialogue"]').attributes('aria-checked')).toBe('true');
+    expect(wrapper.get('[data-test="scenes-scope"]').text()).toContain('全部视频');
+  });
+
+  it('已挂载的页面换一次请求就按新的查询与模式再检索一次；认不得的模式不换', async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(api.SearchScenes).not.toHaveBeenCalled();
+    await wrapper.setProps({ scopeRequest: { query: '海边', mode: 'visual', token: 2 } });
+    await flushPromises();
+    expect(api.SearchScenes).toHaveBeenLastCalledWith({ query: '海边', mode: 'visual', filter: null, limit: 50 });
+    await wrapper.setProps({ scopeRequest: { query: '日落', mode: 'bogus', token: 3 } });
+    await flushPromises();
+    expect(api.SearchScenes).toHaveBeenLastCalledWith({ query: '日落', mode: 'visual', filter: null, limit: 50 });
+  });
+
+  it('带图进来：显示这张图并直接按图检索（只发 base64 部分）', async () => {
+    api.SearchScenesByImage.mockResolvedValue({ hits: [], notices: [], coverage: { ...COVERAGE, image_available: true } });
+    const wrapper = mountPage({ scopeRequest: { image: { dataURL: 'data:image/jpeg;base64,QUJD', name: 'shot.png' }, token: 4 } });
+    await flushPromises();
+    expect(api.SearchScenesByImage).toHaveBeenCalledWith({ image_base64: 'QUJD', video_id: 0, at_ms: 0, filter: null, limit: 50 });
+    expect(api.SearchScenes).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="scenes-image-query"]').text()).toContain('按这张图找画面：shot.png');
+  });
+
+  it('只带范围（片库「在当前筛选中搜场景」）时照旧不自动检索', async () => {
+    mountPage({ scopeRequest: { filter: { keyword: '海' }, token: 5 } });
+    await flushPromises();
+    expect(api.SearchScenes).not.toHaveBeenCalled();
+    expect(api.SearchScenesByImage).not.toHaveBeenCalled();
+  });
+});

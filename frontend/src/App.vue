@@ -225,6 +225,7 @@
       v-if="!startupError"
       :open="commandPaletteOpen"
       :open-video="openVideoFromCommand"
+      :navigate="navigateTo" :open-entity="openRecapEntity" :open-video-at="openVideoAt"
       :before-run="prepareCommandRun"
       @close="closeCommandPalette"
     />
