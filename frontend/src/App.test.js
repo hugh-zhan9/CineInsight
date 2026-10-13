@@ -963,18 +963,14 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('「AI 图片标签」暂时打不开');
   });
 
-  it('D-P3-01 待处理页「打开清理中心」走全局命令 action:cleanup（之后由它决定去哪儿）', async () => {
+  it('D-P3-01 待处理页「打开清理中心」走全局命令 action:cleanup（三期起它打开清理中心页，D-P3-02）', async () => {
     const wrapper = await mountApp();
     await wrapper.setData({ currentPage: 'pending-work' });
-    const run = vi.fn();
-    registerCommands('test-pending-cleanup', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
 
     wrapper.findComponent({ name: 'PendingWorkPage' }).vm.$emit('run-command', 'action:cleanup', '清理候选');
     await flushPromises();
 
-    unregisterCommands('test-pending-cleanup');
-    expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.currentPage).toBe('cleanup');
   });
 
   // D-UI-07：任务中心属于管理侧，仍是「切到片库管理 + 详情抽屉」。
