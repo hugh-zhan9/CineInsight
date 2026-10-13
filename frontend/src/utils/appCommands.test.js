@@ -30,12 +30,14 @@ const Host = {
   mixins: [appCommandsMixin],
   props: { settings: { type: Object, default: () => ({}) } },
   data() {
-    return { currentPage: 'videos', startupError: '', taskCenterOpen: false, pendingWorkOpen: false };
+    return { currentPage: 'videos', startupError: '', taskCenterOpen: false, pendingWorkOpen: false, navigateParams: null };
   },
   methods: {
     debugLog: vi.fn(),
-    navigateTo(page) {
+    // params：App.vue 交给目标页的一次性参数（「视频」海报墙的 { watch } 等），这里记下最近一次。
+    navigateTo(page, params = null) {
       this.currentPage = page;
+      this.navigateParams = params;
       return true;
     },
     openVideo() {},
@@ -166,19 +168,43 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('home');
   });
 
-  it('D-UI-09 智能视图与保存视图落在当前区域的片库页：观看侧「视频」，管理侧「片库管理」', async () => {
-    const wrapper = host();
+  // 二期（D-P2-01）：观看侧「视频」是海报墙，它的观看状态只有全部 / 没看过 / 在看 / 看过 / 收藏，作为参数带过去；
+  // 其余智能视图与保存视图只有片库管理能套。管理侧照旧落在「片库管理」。
+  it('D-UI-09 智能视图落在当前区域的视频页：观看侧海报墙认得的带参数去「视频」，其余与保存视图去「片库管理」', async () => {
+    // 片库页在 App.vue 里是 ref="videoListPage"：这里用一个带同名 ref 的元素顶上，接住两个入口。
+    const wrapper = mount({ ...Host, template: '<div><i ref="videoListPage" /></div>' });
+    wrappers.push(wrapper);
+    const applySmartView = vi.fn();
+    const applySavedView = vi.fn();
+    Object.assign(wrapper.vm.$refs.videoListPage, { applySmartViewCommand: applySmartView, applySavedViewCommand: applySavedView });
+
     wrapper.vm.currentPage = 'home';
     await commandByID('nav:smart:favorites').run();
     expect(wrapper.vm.currentPage).toBe('videos');
+    expect(wrapper.vm.navigateParams).toEqual({ watch: 'favorites' });
+    wrapper.vm.currentPage = 'recap';
+    await commandByID('nav:smart:all').run();
+    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(wrapper.vm.navigateParams).toEqual({ watch: '' });
+    expect(applySmartView).not.toHaveBeenCalled();
+
+    wrapper.vm.currentPage = 'home';
+    await commandByID('nav:smart:liked').run();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(applySmartView).toHaveBeenLastCalledWith('liked');
 
     wrapper.vm.currentPage = 'insights';
     await commandByID('nav:smart:favorites').run();
     expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(applySmartView).toHaveBeenLastCalledWith('favorites');
 
     wrapper.vm.currentPage = 'settings';
     await wrapper.vm.applySavedViewFromCommand(3);
     expect(wrapper.vm.currentPage).toBe('library-manage');
+    wrapper.vm.currentPage = 'videos';
+    await wrapper.vm.applySavedViewFromCommand(4);
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(applySavedView.mock.calls).toEqual([[3], [4]]);
   });
 
   it('D-UI-07 命令面板打开一部片交给 App 的分流，来源标为命令面板', () => {

@@ -545,7 +545,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, ListContinueWatchingWithFilter, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, RerollRandom, PickRandomVideos, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, ListContinueWatchingWithFilter, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, PickRandomVideos, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -602,7 +602,7 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/
 import { resumable, resumePosition } from '../utils/watchState.js';
 import { scrubAbsolutePaths } from '../utils/pathText.js';
 import { formatLocalTime, subtitleExceptionText } from '../utils/subtitleTools.js';
-import { loadRandomConditions, loadRecentRandomIDs, normalizeRecentRandomIDs, randomConditionFields, RANDOM_REROLL_WINDOW_MS, rerollWindowOpen, saveRandomConditions, saveRecentRandomIDs } from '../utils/randomPlayback.js';
+import { randomConditionFields, randomPlaybackMixin } from '../utils/randomPlayback.js';
 
 // 「随机 N 部」一次抽取的条数。
 const RANDOM_PICK_SIZE = 10;
@@ -647,7 +647,9 @@ function relocateErrorText(err) {
 
 export default {
   name: 'VideoListPage',
-  mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin],
+  // 随机播放一部（主键、今晚看什么里的「随机播放一部」、结果条「换一个」）与随机条件、最近排除表在 randomPlaybackMixin，
+  // 与视频海报墙共用（D-P2-01）；本页提供 randomPlayFilter / randomPlayBlockedReason / applyPlaybackAttemptResult。
+  mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin, randomPlaybackMixin],
   components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
   props: {
     tags: { type: Array, default: () => [] },
@@ -688,16 +690,13 @@ export default {
       filteredCount: null,
       libraryTotalCount: null,
       countToken: 0,
-      // 随机模式与「最近 12 次」排除表存在本机（D-PC44），重启后仍然生效。
+      // 随机条件与「最近 12 次」排除表（randomConditions / recentRandomVideoIDs）在 randomPlaybackMixin，存在本机（D-PC44）。
       tonightOpen: false,
       // 元数据批量编辑（D-MC-04）：打开时记下所选与当前筛选；null 表示没开。
       metadataBatchEdit: null,
       tonightFilter: {},
-      randomConditions: loadRandomConditions(),
-      recentRandomVideoIDs: loadRecentRandomIDs(),
       randomPick: { active: false, ids: [], reason: '', loading: false },
-      // 最近一次随机播放（D-PC43、D-PC44）：token 是 30 秒内「换一个」用的令牌，startedAt 为本机时刻。
-      randomPlay: { active: false, video: null, reason: '', token: '', startedAt: 0, rerollable: false, loading: false },
+      // 最近一次随机播放（D-PC43、D-PC44）在 randomPlaybackMixin 的 randomPlay。
       randomPickToken: 0,
       selectedTags: [],
       // 人物筛选（D-PC33）：[{ id, name }]，与工具栏的 selected-people 双向对应；筛选 DTO 只带 id。
@@ -917,9 +916,6 @@ export default {
         if (opened !== false && this.consolidationRoute === route) this.$emit('consolidation-opened');
       }
     },
-    randomConditions(conditions) {
-      saveRandomConditions(conditions);
-    },
     subtitleIndexNoticeVisible: {
       immediate: true,
       handler(visible) {
@@ -946,7 +942,6 @@ export default {
     }
   },
   beforeUnmount() {
-    clearTimeout(this._randomRerollTimer);
     unregisterCommands('video-list');
 	window.removeEventListener('keydown', this.handleLibraryShortcut);
 	window.removeEventListener('keydown', this.handleToolbarShortcut);
@@ -984,17 +979,6 @@ export default {
         : '字幕索引本次启动后还没有同步过，列表先按现有索引显示。');
       if (status?.error) parts.push(`上次同步失败：${scrubAbsolutePaths(status.error)}`);
       return parts.join(' ');
-    },
-    randomPlayBanner() {
-      const play = this.randomPlay;
-      if (!play.active || !play.video) return null;
-      return {
-        active: true,
-        videoName: play.video.display_title || play.video.name || `视频 #${play.video.id}`,
-        reason: play.reason,
-        rerollable: play.rerollable,
-        loading: play.loading
-      };
     },
     // 能力不可用时把「语义」入口置灰并说明原因，而不是让用户搜完看到一个空结果——
     // 空结果会被读成"库里没有匹配内容"，而不是"这个能力现在用不了"。
@@ -1941,9 +1925,7 @@ export default {
         this.enterRandomPick();
         return;
       }
-      if (item.id.startsWith('watch:')) this.randomConditions = { ...this.randomConditions, watchState: item.id.slice(6) };
-      else if (item.id === 'favorites') this.randomConditions = { ...this.randomConditions, favoritesOnly: !this.randomConditions.favoritesOnly };
-      else if (item.id === 'duration:clear') this.randomConditions = { ...this.randomConditions, maxMinutes: 0 };
+      this.applyRandomConditionItem(item.id);
     },
     currentQueryKeyword() {
       return this.searchKeyword.trim();
@@ -2838,94 +2820,13 @@ export default {
       this.deactivateRandomPick();
       await this.resetAndLoadVideos();
     },
-    async playRandom() {
-      // 语义模式下随机会忽略搜索词、从全库抽取（PLAY-08）：入口已禁用，这里再挡一次快捷键与命令面板。
-      if (this.searchMode === 'semantic') {
-        notify('语义搜索结果不支持随机，请切回文件或字幕搜索。');
-        return;
-      }
-      if (this.randomPlay.loading) return;
-      this.randomPlay = { ...this.randomPlay, loading: true };
-      try {
-        const result = await PlayRandomVideoWithFilter({
-          filter: this.currentLibraryFilter(),
-          ...randomConditionFields(this.randomConditions),
-          exclude_ids: this.recentRandomVideoIDs.slice(-12)
-        });
-        await this.handleRandomPlayResult(result);
-      } catch (err) {
-        console.error('随机播放失败:', err);
-        notifyError('随机播放失败: ' + err);
-      } finally {
-        this.randomPlay = { ...this.randomPlay, loading: false };
-      }
+    // randomPlaybackMixin 的宿主钩子：随机播放只在当前片库筛选里抽。
+    randomPlayFilter() {
+      return this.currentLibraryFilter();
     },
-    // 结果条上的「换一个」（D-PC44）：30 秒窗口内用令牌换，这次随机不计数、不记账；
-    // 窗口已过、没有令牌，或后端答 reroll_expired（已提交）时，改为普通的再随机一次。
-    async rerollRandomPlay() {
-      const current = this.randomPlay;
-      if (current.loading) return;
-      if (!current.token || !rerollWindowOpen(current.startedAt)) {
-        await this.playRandom();
-        return;
-      }
-      this.randomPlay = { ...current, loading: true };
-      let expired = false;
-      try {
-        const result = await RerollRandom(current.token);
-        if (result?.reason_code === 'reroll_expired') {
-          expired = true;
-        } else {
-          await this.handleRandomPlayResult(result);
-        }
-      } catch (err) {
-        console.error('换一个失败:', err);
-        notifyError('换一个失败: ' + err);
-      } finally {
-        this.randomPlay = { ...this.randomPlay, loading: false };
-      }
-      if (expired) {
-        this.randomPlay = { ...this.randomPlay, token: '', rerollable: false };
-        await this.playRandom();
-      }
-    },
-    async handleRandomPlayResult(result) {
-      if (result?.dispatch_succeeded && result.video) {
-        this.rememberRandomVideo(result.video.id);
-        this.showRandomPlayResult(result);
-        // 返回的 video 是库里的现值：计数与 last_played_at 要等 30 秒后提交才变，这里不自行加一。
-        await this.applyPlaybackAttemptResult(result);
-        return;
-      }
-      // 没抽到或没播起来：结果条上那一部已经不是「正在随机播放」的了。
-      this.dismissRandomPlay();
-      await this.applyPlaybackAttemptResult(result);
-    },
-    showRandomPlayResult(result) {
-      clearTimeout(this._randomRerollTimer);
-      const token = String(result.reroll_token || '');
-      this.randomPlay = {
-        active: true,
-        video: result.video,
-        reason: result.selection_reason || '按当前筛选条件选择',
-        token,
-        startedAt: Date.now(),
-        rerollable: Boolean(token),
-        loading: this.randomPlay.loading
-      };
-      if (!token) return;
-      // 窗口到点就把结果条改成「已计入」；令牌本身由后端判定，这里只管说法。
-      this._randomRerollTimer = setTimeout(() => {
-        if (this.randomPlay.token === token) this.randomPlay = { ...this.randomPlay, rerollable: false };
-      }, RANDOM_REROLL_WINDOW_MS);
-    },
-    dismissRandomPlay() {
-      clearTimeout(this._randomRerollTimer);
-      this.randomPlay = { active: false, video: null, reason: '', token: '', startedAt: 0, rerollable: false, loading: this.randomPlay.loading };
-    },
-    rememberRandomVideo(videoID) {
-      this.recentRandomVideoIDs = normalizeRecentRandomIDs([...this.recentRandomVideoIDs, videoID]);
-      saveRecentRandomIDs(this.recentRandomVideoIDs);
+    // 语义模式下随机会忽略搜索词、从全库抽取（PLAY-08）：入口已禁用，这里再挡一次快捷键与命令面板。
+    randomPlayBlockedReason() {
+      return this.searchMode === 'semantic' ? '语义搜索结果不支持随机，请切回文件或字幕搜索。' : '';
     },
     async playVideo(id) {
       try {

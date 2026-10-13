@@ -7,8 +7,8 @@
 // 因此这里依赖 App.vue 的状态、ref 与方法：
 //   this.currentPage / this.startupError / this.settings（可缺省）
 //   this.$refs.videoListPage（常挂载，v-show 切换）/ this.$refs.settingsPage（v-if）
-//   this.navigateTo(page)：切页。能直接切时同步返回 true；设置页有未保存修改时返回 Promise，
-//     用户放弃切页时 resolve 为 false（见下面的 whenNavigated）
+//   this.navigateTo(page, params?)：切页，params 是交给目标页的一次性参数（「视频」认 { keyword } / { watch } / { tagId }）。
+//     能直接切时同步返回 true；设置页有未保存修改时返回 Promise，用户放弃切页时 resolve 为 false（见下面的 whenNavigated）
 //   this.openTaskCenter() / this.openPendingWork()：打开任务中心抽屉与待处理工作台
 //   this.openVideo(video, { from })：打开一部片，按调用方区域分流到整页详情或片库管理的抽屉（D-UI-07）
 // 以及 App.vue 的 debugLog()。
@@ -25,7 +25,8 @@ import { recordBackgroundTasks } from './sessionChanges.js';
 
 // 观看与管理两套导航（D-UI-02、D-UI-09）：key 与 App.vue 的 currentPage 一致，每个页面 key 只属于一个区域；
 // 顶栏只显示当前区域那一套，命令面板列出两边全部页面（APP-12、APP-14：两边读同一份清单，不会各自漏页）。
-// 「视频」与「片库管理」是同一个常挂载片库页的两个 key，「图片」与「图片管理」同理，key 只决定顶栏归属。
+// 「视频」是观看侧的海报墙（VideoBrowsePage，D-P2-01），「片库管理」是常挂载的片库页（VideoListPage），两页筛选各自独立；
+// 「图片」与「图片管理」仍是同一个常挂载实例的两个 key，key 只决定顶栏归属。
 // requiresBrowserBridge：只在设置里开启了浏览器插件桥接时显示（「下载」页）。
 // menu：这一组在顶栏收成一个下拉按钮（「片单」）。
 export const VIEWER_NAV_GROUPS = [
@@ -158,6 +159,10 @@ const COMMAND_SMART_VIEWS = [
   { value: 'local_metadata_updated', label: '本地资料有更新' },
   { value: 'stale', label: '路径失效' }
 ];
+
+// 「视频」海报墙（viewer/VideoBrowsePage.vue）的观看状态对应的智能视图，与它的 VIDEO_BROWSE_WATCH_OPTIONS 逐项一致
+// （VideoBrowsePage.test.js 钉住）。写在这里而不从页面导入：页面经 viewerNavigation.js 已经依赖本文件，反过来会成环。
+export const VIDEO_BROWSE_SMART_VIEWS = Object.freeze(['', 'unwatched', 'continue_watching', 'watched', 'favorites']);
 
 // 固定命令 ID → 宿主页（详细设计 §6.1）。命令由宿主页（或它的常挂载子组件）注册；宿主页可能
 // 还没挂载（人物页、图片页按需挂载），所以跳转前先切到宿主页、等它挂载完再按 ID 执行。
@@ -495,19 +500,22 @@ export const appCommandsMixin = {
       };
       this.registerTaskCommands();
     },
-    // 智能视图与保存视图落在当前区域的片库页 key 上（观看侧「视频」、管理侧「片库管理」，同一个实例），
-    // 不为套一个筛选把用户换到另一侧。
-    libraryPageForCurrentArea() {
-      return pageArea(this.currentPage) === 'manage' ? 'library-manage' : 'videos';
-    },
+    // 智能视图落在当前区域的视频页上，不为套一个筛选把用户换到另一侧：观看侧是「视频」海报墙（D-P2-01），
+    // 它的观看状态只有全部 / 没看过 / 在看 / 看过 / 收藏这几个智能视图，作为参数带过去（新的一次浏览）；
+    // 其余智能视图（点赞、最近播放、未打标签、路径失效……）只有片库管理能套，去「片库管理」。
     applySmartViewFromCommand(value) {
-      return whenNavigated(this.navigateTo(this.libraryPageForCurrentArea()), async () => {
+      const view = value || '';
+      if (pageArea(this.currentPage) !== 'manage' && VIDEO_BROWSE_SMART_VIEWS.includes(view)) {
+        return this.navigateTo('videos', { watch: view });
+      }
+      return whenNavigated(this.navigateTo('library-manage'), async () => {
         await this.$nextTick();
-        await this.$refs.videoListPage?.applySmartViewCommand(value);
+        await this.$refs.videoListPage?.applySmartViewCommand(view);
       });
     },
+    // 保存视图是片库管理的整套筛选（体积、分辨率、评分、缺失项……），海报墙装不下，一律在「片库管理」打开。
     applySavedViewFromCommand(viewID) {
-      return whenNavigated(this.navigateTo(this.libraryPageForCurrentArea()), async () => {
+      return whenNavigated(this.navigateTo('library-manage'), async () => {
         await this.$nextTick();
         await this.$refs.videoListPage?.applySavedViewCommand(viewID);
       });

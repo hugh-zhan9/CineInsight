@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({
   GetRecap: vi.fn(),
   GetVideoDetails: vi.fn(),
+  ListCollectionProgress: vi.fn(),
   ListContinueWatchingWithFilter: vi.fn(),
+  ListWatchlistInLibrary: vi.fn(),
   SearchLibraryVideoPage: vi.fn(),
   SuggestTonightVideos: vi.fn()
 }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
-import HomePage, { HOME_PEOPLE_LIMIT, homeProgressText, pickHomeHero } from './HomePage.vue';
+import HomePage, { HOME_PEOPLE_LIMIT, HOME_PROGRESS_LIMIT, HOME_WATCHLIST_LIMIT, homeProgressText, pickHomeHero } from './HomePage.vue';
 import RecapBackdrop from '../recap/RecapBackdrop.vue';
 
 enableAutoUnmount(afterEach);
@@ -33,6 +35,8 @@ beforeEach(() => {
   api.SearchLibraryVideoPage.mockReset().mockResolvedValue({ videos: [video(21), video(22)] });
   api.GetRecap.mockReset().mockResolvedValue(recap());
   api.GetVideoDetails.mockReset().mockResolvedValue({ artwork: { has_poster: false, has_fanart: false } });
+  api.ListCollectionProgress.mockReset().mockResolvedValue([]);
+  api.ListWatchlistInLibrary.mockReset().mockResolvedValue([]);
 });
 
 async function mountPage(props = {}) {
@@ -93,7 +97,7 @@ describe('HomePage blocks', () => {
     api.SearchLibraryVideoPage.mockResolvedValue({ videos: null });
     api.GetRecap.mockResolvedValue(recap({ empty: true, top_people: [], favorite: null }));
     const wrapper = await mountPage();
-    for (const block of ['home-continue', 'home-recent', 'home-people', 'home-highlight']) {
+    for (const block of ['home-continue', 'home-progress', 'home-recent', 'home-watchlist', 'home-people', 'home-highlight']) {
       expect(wrapper.find(`[data-test="${block}"]`).exists()).toBe(false);
     }
     expect(wrapper.find('[data-test="home-tonight"]').exists()).toBe(true);
@@ -252,5 +256,100 @@ describe('HomePage actions', () => {
     expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片11');
     expect(wrapper.get('[data-test="home-hero-meta"]').text()).toBe('没看过 · 收藏');
     expect(api.GetVideoDetails).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 二期两栏（D-P2-07）：追到哪了（D-P2-02）放在继续观看之后，想看的片片库里已有（D-P2-03）放在最近添加之后，
+// 各自独立加载、独立失败，没有数据不显示。
+describe('HomePage phase-2 sections', () => {
+  const progress = (id, extra = {}) => ({
+    collection_id: id, name: `作品集${id}`, has_cover: false, total_works: 4, watched_works: 1, complete: false,
+    next: { video_id: 200 + id, title: `第二部${id}`, work_index: 2, resume: false }, ...extra
+  });
+  const wish = (id, extra = {}) => ({
+    entry_id: id, entry_title: `想看${id}`, kind: 'movie', year: 1990 + id, has_poster: false, video_id: 300 + id, video_title: `片库${id}`, origin: 'manual', ...extra
+  });
+  const sectionOrder = wrapper => wrapper.findAll('section.recap-section').map(section => section.attributes('data-test'));
+
+  it('loads both with the documented arguments and places them after 继续观看 / 最近添加', async () => {
+    api.ListCollectionProgress.mockResolvedValue([progress(1, { has_cover: true }), progress(2, { next: null, complete: true }), progress(3, { next: { video_id: 203, title: '续', work_index: 3, resume: true } })]);
+    api.ListWatchlistInLibrary.mockResolvedValue([wish(1, { has_poster: true }), wish(2, { origin: 'auto' }), wish(3, { video_id: 0 })]);
+    const wrapper = await mountPage();
+    expect(api.ListCollectionProgress).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, limit: HOME_PROGRESS_LIMIT });
+    expect(HOME_PROGRESS_LIMIT).toBe(12);
+    expect(api.ListWatchlistInLibrary).toHaveBeenCalledWith(HOME_WATCHLIST_LIMIT);
+    expect(HOME_WATCHLIST_LIMIT).toBe(12);
+    expect(sectionOrder(wrapper)).toEqual(['home-continue', 'home-progress', 'home-tonight', 'home-recent', 'home-watchlist', 'home-people', 'home-highlight']);
+
+    const progressCards = wrapper.findAll('[data-test="home-progress-item"]');
+    expect(progressCards).toHaveLength(2);
+    expect(progressCards[0].text()).toContain('作品集1');
+    expect(progressCards[0].text()).toContain('第 2 / 4 部 · 第二部1');
+    expect(progressCards[0].get('img').attributes('src')).toBe('/preview/collection-cover/1');
+    expect(progressCards[1].get('img').attributes('src')).toBe('/preview/video-artwork/203?kind=poster');
+    expect(progressCards[1].text()).toContain('续播');
+
+    const wishes = wrapper.findAll('[data-test="home-watchlist-item"]');
+    expect(wishes).toHaveLength(2);
+    expect(wishes[0].text()).toContain('想看1');
+    expect(wishes[0].get('img').attributes('src')).toBe('/preview/watchlist-poster/1');
+    expect(wishes[1].get('img').attributes('src')).toBe('/preview/video-artwork/302?kind=poster');
+    expect(wishes[1].text()).toContain('1992 · 自动匹配');
+
+    await progressCards[1].trigger('click');
+    await wishes[0].get('[data-test="home-watchlist-play"]').trigger('click');
+    await wishes[1].get('[data-test="recap-card-video"]').trigger('click');
+    expect(wrapper.emitted('open-video')).toEqual([[203], [301], [302]]);
+  });
+
+  it('shows skeletons while loading and a retryable error per section, without touching the others', async () => {
+    api.ListCollectionProgress.mockReturnValueOnce(new Promise(() => {}));
+    api.ListWatchlistInLibrary.mockReturnValueOnce(new Promise(() => {}));
+    const loading = await mountPage();
+    expect(loading.find('[data-test="home-progress-loading"]').exists()).toBe(true);
+    expect(loading.find('[data-test="home-watchlist-loading"]').exists()).toBe(true);
+    loading.unmount();
+
+    api.ListCollectionProgress.mockRejectedValueOnce('数据库不可用');
+    api.ListWatchlistInLibrary.mockRejectedValueOnce(new Error('超时'));
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="home-progress-error"]').text()).toContain('读取追到哪了失败：数据库不可用');
+    expect(wrapper.get('[data-test="home-watchlist-error"]').text()).toContain('读取想看片单失败：超时');
+    expect(wrapper.findAll('[data-test="home-recent-item"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-test="home-continue"] [data-test="recap-card-video"]')).toHaveLength(2);
+
+    api.ListCollectionProgress.mockResolvedValueOnce([progress(1)]);
+    api.ListWatchlistInLibrary.mockResolvedValueOnce([wish(1)]);
+    await wrapper.get('[data-test="home-progress-retry"]').trigger('click');
+    await wrapper.get('[data-test="home-watchlist-retry"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="home-progress-error"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="home-progress-item"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-test="home-watchlist-item"]')).toHaveLength(1);
+  });
+
+  it('refreshes both when the page becomes active again (watching changes them)', async () => {
+    api.ListCollectionProgress.mockResolvedValueOnce([progress(1)]);
+    api.ListWatchlistInLibrary.mockResolvedValueOnce([wish(1)]);
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="home-progress-item"]')).toHaveLength(1);
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(api.ListCollectionProgress).toHaveBeenCalledTimes(2);
+    expect(api.ListWatchlistInLibrary).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-test="home-progress"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="home-watchlist"]').exists()).toBe(false);
+  });
+});
+
+describe('HomePage highlight layout', () => {
+  it('lets the stat tiles take the whole row when the month has no favorite', async () => {
+    api.GetRecap.mockResolvedValue(recap({ favorite: null }));
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="home-highlight"] .viewer-home__highlight').classes()).toContain('viewer-home__highlight--solo');
+    api.GetRecap.mockResolvedValue(recap());
+    const withFavorite = await mountPage();
+    expect(withFavorite.get('[data-test="home-highlight"] .viewer-home__highlight').classes()).not.toContain('viewer-home__highlight--solo');
   });
 });
