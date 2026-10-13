@@ -1,0 +1,46 @@
+{
+  "owner": "B2 图片（PhotoLibraryPage、PhotoCleanupPage、图片查看器与图片相关对话框）",
+  "pending": {
+    "colors": [
+      "components/PhotoCleanupPage.vue",
+      "components/PhotoLibraryPage.vue",
+      "components/WallpaperButton.vue"
+    ],
+    "font-scale": [
+      "components/PhotoAITaskPanel.vue",
+      "components/PhotoCleanupPage.vue",
+      "components/PhotoLibraryPage.vue"
+    ],
+    "z-index": [
+      "components/ImageLibraryPicker.vue",
+      "components/ImageSourceDialog.vue",
+      "components/PhotoCleanupPage.vue",
+      "components/PhotoLibraryPage.vue"
+    ],
+    "vars": [],
+    "dialogs": [
+      "components/ImageLibraryPicker.vue",
+      "components/ImageSourceDialog.vue",
+      "components/PhotoCleanupPage.vue",
+      "components/PhotoLibraryPage.vue"
+    ],
+    "page-header": [
+      "components/PhotoLibraryPage.vue"
+    ],
+    "wording": [
+      "components/ImageBatchTagControls.vue",
+      "components/ImageSourceDialog.vue",
+      "components/PhotoCleanupPage.vue",
+      "components/PhotoLibraryPage.vue"
+    ],
+    "buttons": [
+      "components/ImageBatchTagControls.vue",
+      "components/ImageLibraryPicker.vue",
+      "components/ImageSourceDialog.vue",
+      "components/PhotoAITaskPanel.vue",
+      "components/PhotoCleanupPage.vue",
+      "components/PhotoLibraryPage.vue",
+      "components/WallpaperButton.vue"
+    ]
+  }
+}

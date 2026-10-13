@@ -267,7 +267,7 @@ export default {
   display: block;
   padding: 7px 10px;
   border: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
   font-size: 13px;

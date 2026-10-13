@@ -9,62 +9,113 @@
       >
         <span class="app-toast__text">{{ toast.message }}</span>
         <button
+          v-if="toast.action"
           type="button"
-          class="app-toast__close"
+          class="btn-link app-toast__action"
+          data-test="app-toast-action"
+          @click="runToastAction(toast.id)"
+        >{{ toast.action.label }}</button>
+        <button
+          type="button"
+          class="btn-icon btn--sm app-toast__close"
           aria-label="关闭提示"
           data-test="app-toast-close"
           @click="dismissToast(toast.id)"
-        >×</button>
+        ><AppIcon name="close" :size="16" /></button>
       </div>
     </div>
 
-    <BaseModal v-if="confirm" @close="resolveConfirm(false)">
-      <h2>{{ confirm.title }}</h2>
+    <DialogShell
+      v-if="confirm"
+      :title="confirm.title"
+      size="sm"
+      class="app-confirm"
+      data-test="app-confirm"
+      @close="resolveConfirm(false)"
+    >
       <p class="app-confirm__message">{{ confirm.message }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" data-test="app-confirm-cancel" @click="resolveConfirm(false)">
+      <p v-if="confirm.impact" class="app-confirm__impact" data-test="app-confirm-impact">{{ confirm.impact }}</p>
+      <label v-if="confirm.requiredText" class="app-confirm__typed">
+        <span>输入「{{ confirm.requiredText }}」以确认，此操作无法撤销</span>
+        <input
+          ref="typedInput"
+          v-model="typed"
+          type="text"
+          class="text-input"
+          autocomplete="off"
+          spellcheck="false"
+          data-test="app-confirm-input"
+          @keydown.enter.prevent="confirmOk"
+        >
+      </label>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="app-confirm-cancel" @click="resolveConfirm(false)">
           {{ confirm.cancelText }}
         </button>
         <button
           type="button"
-          :class="confirm.danger ? 'btn-danger' : 'btn-primary'"
+          :class="['btn', confirm.danger ? 'btn--danger' : 'btn--primary']"
+          :disabled="!canConfirm"
           data-test="app-confirm-ok"
-          @click="resolveConfirm(true)"
+          @click="confirmOk"
         >{{ confirm.confirmText }}</button>
-      </div>
-    </BaseModal>
+      </template>
+    </DialogShell>
   </div>
 </template>
 
 <script>
-import BaseModal from './ui/BaseModal.vue';
-import { dismissToast, feedbackState, resolveConfirm } from '../utils/feedback.js';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
+import { confirmTextMatches, dismissToast, feedbackState, resolveConfirm, runToastAction } from '../utils/feedback.js';
 
 // 全局唯一的提示宿主，挂在 App 根上。业务代码只调 utils/feedback.js 里的函数，
-// 不需要把提示状态一层层往下传。
+// 不需要把提示状态一层层往下传。提示最多带一个动作（撤销 / 重试 / 查看）；确认框分两级，
+// 不可逆的要原样输入按钮上的文字才能点（D-UD-07）。
 export default {
   name: 'AppFeedback',
-  components: { BaseModal },
+  components: { AppIcon, DialogShell },
+  data() {
+    return { typed: '' };
+  },
   computed: {
     toasts() { return feedbackState.toasts; },
-    confirm() { return feedbackState.confirm; }
+    confirm() { return feedbackState.confirm; },
+    canConfirm() { return confirmTextMatches(this.confirm, this.typed); }
   },
-  methods: { dismissToast, resolveConfirm }
+  watch: {
+    // 换了一个确认框就清空输入；不可逆确认把焦点放进输入框。
+    confirm: {
+      handler(next) {
+        this.typed = '';
+        if (next?.requiredText) this.$nextTick(() => this.$refs.typedInput?.focus());
+      }
+    }
+  },
+  methods: {
+    dismissToast,
+    resolveConfirm,
+    runToastAction,
+    confirmOk() {
+      if (this.canConfirm) resolveConfirm(true);
+    }
+  }
 };
 </script>
 
 <style scoped>
-/* Confirmations must remain above teleported image and face previews. */
+/* 层级：确认框要盖在图片查看器、人脸预览等 teleport 浮层（最高 1300）之上，提示条要盖在弹窗（1000）
+   和浮层（1200）之上，弹窗里触发的错误也必须能看见。这两个值等各页浮层统一换成 --z-* 刻度后
+   （统一设计第 0 步 C 组）再改成 var(--z-critical) / var(--z-toast)。 */
 .app-feedback :deep(.modal-overlay) { z-index: 1500; }
-/* 盖在弹窗（1000）和浮层（1200）之上：弹窗里触发的错误也必须能看见。 */
 .app-toasts {
   position: fixed;
   z-index: 1400;
-  right: 16px;
-  bottom: 16px;
+  right: var(--space-4);
+  bottom: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: min(420px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
   overflow-y: auto;
@@ -73,14 +124,14 @@ export default {
 .app-toast {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: var(--space-2);
+  padding: 10px var(--space-2) 10px var(--space-3);
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--panel-bg);
   box-shadow: var(--shadow-popover);
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
   line-height: 1.5;
 }
 
@@ -106,23 +157,26 @@ export default {
   white-space: pre-line;
 }
 
-.app-toast__close {
+/* 动作跟随提示的字色，下划线标出可点。 */
+.app-toast__action {
   flex: none;
-  border: 0;
-  background: transparent;
   color: inherit;
-  opacity: 0.6;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
+  font-weight: var(--fw-semibold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.app-toast__close:hover { opacity: 1; }
+.app-toast__close { width: 22px; height: 22px; margin: -1px 0; color: inherit; opacity: 0.7; }
+.app-toast__close:hover:not(:disabled) { background: transparent; color: inherit; opacity: 1; }
 
 .app-confirm__message {
+  margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   line-height: 1.6;
   white-space: pre-line;
 }
+.app-confirm__message:empty { display: none; }
+.app-confirm__impact { margin: var(--space-2) 0 0; color: var(--text-primary); font-size: var(--fs-secondary); font-weight: var(--fw-medium); }
+.app-confirm__typed { display: grid; gap: 6px; margin-top: var(--space-4); color: var(--text-secondary); font-size: var(--fs-caption); }
 </style>

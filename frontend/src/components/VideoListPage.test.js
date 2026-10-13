@@ -92,13 +92,13 @@ it('别的页面删掉了视频：从列表拿掉、关掉对应预览、总数�
   wrapper.unmount();
 });
 
-// M-6：本页同时是观看侧「视频」与管理侧「片库管理」。在「视频」上（cleanupHotkey=false）不接 ⌘K，
-// 让 App 的全局 ⌘K 先切到片库管理再开清理中心；其余工具栏快捷键照旧。
-it('cleanupHotkey 为 false 时本页不接 ⌘K（不 preventDefault、不开清理中心），为 true 时照旧', async () => {
+// M-6：本页同时是观看侧「视频」与管理侧「片库管理」。在「视频」上（cleanupHotkey=false）不接 ⌘⇧K，
+// 让 App 的全局 ⌘⇧K 先切到片库管理再开清理中心；其余工具栏快捷键照旧。D-UD-03：⌘K 归命令面板，本页不接。
+it('cleanupHotkey 为 false 时本页不接 ⌘⇧K（不 preventDefault、不开清理中心），为 true 时照旧；⌘K 本页从不接', async () => {
   const wrapper = await mountPage({ pageActive: true, cleanupHotkey: false });
   const openCleanup = vi.spyOn(wrapper.vm, 'openCleanupDialog').mockImplementation(() => {});
-  const press = () => {
-    const event = new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, cancelable: true });
+  const press = (shiftKey = true) => {
+    const event = new KeyboardEvent('keydown', { key: shiftKey ? 'K' : 'k', code: 'KeyK', metaKey: true, shiftKey, cancelable: true });
     window.dispatchEvent(event);
     return event;
   };
@@ -106,6 +106,8 @@ it('cleanupHotkey 为 false 时本页不接 ⌘K（不 preventDefault、不开�
   expect(openCleanup).not.toHaveBeenCalled();
 
   await wrapper.setProps({ cleanupHotkey: true });
+  expect(press(false).defaultPrevented).toBe(false);
+  expect(openCleanup).not.toHaveBeenCalled();
   expect(press().defaultPrevented).toBe(true);
   expect(openCleanup).toHaveBeenCalledTimes(1);
   wrapper.unmount();

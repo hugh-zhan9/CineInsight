@@ -81,7 +81,7 @@ export default {
 .hd-picker__search { display: flex; gap: 8px; margin: 10px 0; }
 .hd-picker__search input { flex: 1; min-width: 0; }
 .hd-picker__results { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; display: grid; gap: 4px; }
-.hd-picker__item { display: grid; gap: 2px; width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: var(--radius); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.hd-picker__item { display: grid; gap: 2px; width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .hd-picker__item:hover:not(:disabled) { border-color: var(--accent-color); }
 .hd-picker__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-picker__error { color: var(--danger-color); font-size: 13px; }

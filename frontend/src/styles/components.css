@@ -22,7 +22,7 @@
   height: var(--h-unit);
   padding: 0 11px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: var(--text-primary);
   font-size: 13px;
@@ -53,16 +53,27 @@
   background: var(--control-hover-bg);
 }
 
+/* 按钮（统一设计 D-UD-06，详细设计 §2）：.btn + 外观 .btn--primary / --secondary / --ghost / --danger
+   + 尺寸 .btn--sm；文字链接 .btn-link；只有图标的 .btn-icon（必须带 aria-label）。
+   旧类与新类同用下面的规则（页面标记暂不改）：btn-primary → btn--primary，btn-secondary / btn-random /
+   row-btn / toolbar-btn → btn--secondary，btn-danger → btn--danger，btn-danger-outline → btn--danger，
+   btn-compact / row-btn → btn--sm，link-btn → btn-link。B 组逐页换成新类，第 0 步 C 组删掉旧类与
+   本节末尾的「旧类差异」。 */
+.btn,
 .btn-primary,
 .btn-random,
 .btn-secondary,
-.btn-danger {
+.btn-danger,
+.btn-danger-outline,
+.btn-icon,
+.row-btn,
+.toolbar-btn {
   height: var(--h-unit);
   padding: 0 14px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
-  font-size: 13px;
-  font-weight: 600;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -72,86 +83,131 @@
   transition: transform var(--transition), border-color var(--transition), background var(--transition), color var(--transition);
 }
 
+.btn:focus-visible,
+.btn-icon:focus-visible,
+.btn-link:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* 只有图标：方形、默认无底色；放在外观规则前面，组合 .btn--secondary 等时由外观覆盖底色。 */
+.btn-icon {
+  width: var(--h-unit);
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.btn-icon:hover:not(:disabled) { background: var(--control-hover-bg); color: var(--text-primary); }
+
+.btn--primary,
 .btn-primary {
   background: var(--accent-color);
   color: var(--accent-on);
 }
+.btn--primary:hover:not(:disabled),
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 
-/* 原型把随机收敛成一个拆分按钮，不再用独立的琥珀色；这里先按普通控件着色，
-   拆分按钮结构在工具栏重排里给出。 */
-.btn-random {
-  background: var(--control-bg);
-  border-color: var(--border-color);
-  color: var(--accent-text);
-}
-
-.btn-secondary {
+.btn--secondary,
+.btn-secondary,
+.btn-random,
+.btn-danger-outline,
+.row-btn,
+.toolbar-btn {
   background: var(--control-bg);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
+.btn--secondary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled),
+.btn-random:hover:not(:disabled) {
+  background: var(--control-hover-bg);
+  border-color: var(--border-strong);
+}
+/* 行内与工具栏按钮的悬停保持原来的优先级：后面的 --primary / .active / --on 修饰在悬停时仍然生效。 */
+.row-btn:hover { background: var(--control-hover-bg); border-color: var(--border-strong); }
+.toolbar-btn:hover:not(:disabled) { background: var(--control-hover-bg); }
 
+.btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+.btn--ghost:hover:not(:disabled) { background: var(--control-hover-bg); color: var(--text-primary); }
+
+.btn--danger,
 .btn-danger {
   background: var(--danger-soft);
   border-color: var(--danger-border);
   color: var(--danger-text);
 }
+.btn--danger:hover:not(:disabled),
+.btn-danger:hover:not(:disabled) { border-color: var(--danger-color); }
 
+/* 有底色的三种外观悬停时上浮 1px（沿用旧按钮的手感）；幽灵、图标、行内与工具栏按钮不浮。 */
+.btn--primary:hover:not(:disabled),
+.btn--secondary:hover:not(:disabled),
+.btn--danger:hover:not(:disabled),
 .btn-primary:hover:not(:disabled),
 .btn-random:hover:not(:disabled),
 .btn-secondary:hover:not(:disabled),
 .btn-danger:hover:not(:disabled) {
   transform: translateY(-1px);
 }
+.btn-icon:hover:not(:disabled) { transform: none; }
 
-.btn-secondary:hover:not(:disabled) {
-  background: var(--control-hover-bg);
-  border-color: var(--border-strong);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: var(--danger-soft);
-  border-color: var(--danger-color);
-}
-
-.btn-danger-outline {
-  border-color: var(--danger-color);
-  color: var(--danger-color);
-}
-
+.btn:disabled,
+.btn-icon:disabled,
+.btn-link:disabled,
 .btn-primary:disabled,
 .btn-secondary:disabled,
 .btn-random:disabled,
-.btn-danger:disabled {
+.btn-danger:disabled,
+.btn-danger-outline:disabled,
+.row-btn:disabled,
+.toolbar-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }
 
-.btn-compact {
+.btn--sm,
+.btn-compact,
+.row-btn {
   height: var(--h-compact);
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
+.btn-icon.btn--sm { width: var(--h-compact); padding: 0; }
 
-.toolbar-btn {
+.btn-link,
+.link-btn {
   display: inline-flex;
-  flex: none;
   align-items: center;
-  gap: 7px;
-  height: var(--h-unit);
-  padding: 0 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: var(--control-bg);
-  color: var(--text-primary);
-  font-size: 13px;
+  gap: 4px;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-medium);
   cursor: pointer;
-  white-space: nowrap;
 }
+.btn-link:hover:not(:disabled),
+.link-btn:hover:not(:disabled) { text-decoration: underline; }
 
-.toolbar-btn:hover:not(:disabled) { background: var(--control-hover-bg); }
-.toolbar-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 旧类差异（第 0 步 C 组随旧类一起删）：这些旧类原有的字色、边框与尺寸，换装前保持原样。 */
+.btn-random { color: var(--accent-text); }
+.btn-danger-outline { border-color: var(--danger-color); color: var(--danger-color); }
+.row-btn { padding: 0 11px; border-color: var(--hairline); font-weight: var(--fw-regular); }
+.toolbar-btn {
+  flex: none;
+  gap: 7px;
+  padding: 0 12px;
+  border-color: var(--hairline);
+  font-weight: var(--fw-regular);
+  justify-content: flex-start;
+}
 .toolbar-btn--strong { font-weight: 600; }
 
 .toolbar-btn--on {
@@ -522,15 +578,6 @@ input:checked + .slider::before {
 }
 
 .video-actions { flex: none; display: flex; align-items: center; gap: 4px; }
-.row-btn {
-  height: 30px; padding: 0 11px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--hairline); border-radius: var(--radius);
-  background: var(--control-bg); color: var(--text-primary);
-  font-size: 12.5px; cursor: pointer; white-space: nowrap;
-  transition: border-color var(--transition), background var(--transition);
-}
-.row-btn:hover { border-color: var(--border-strong); background: var(--control-hover-bg); }
 .row-btn--icon { width: 32px; padding: 0; font-size: 13px; color: var(--text-secondary); }
 .row-btn--primary { border-color: var(--accent-color); background: var(--accent-color); color: var(--accent-on); font-weight: 600; }
 .row-btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }

@@ -610,7 +610,7 @@ export default {
       return this.filterPreviewCount === null ? '' : `（${this.formatCount(this.filterPreviewCount)}）`;
     },
     // 「管理」菜单（D-PC59）：「AI 标签管理」「清理审阅」与菜单徽标已并入顶栏的待处理工作台
-    // （⌘K 打开清理中心），这里只留扫描、整理、补全与标签管理等库维护动作（APP-11）。
+    // （⌘⇧K 打开清理中心），这里只留扫描、整理、补全与标签管理等库维护动作（APP-11）。
     manageMenuItems() {
       const items = [
         { heading: '扫描' },
@@ -1030,7 +1030,7 @@ export default {
   padding: 3px;
   gap: 2px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--panel-muted-bg);
 }
 
@@ -1071,7 +1071,7 @@ export default {
   height: var(--h-unit);
   padding: 0 10px 0 12px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--input-bg);
 }
 
@@ -1113,7 +1113,7 @@ export default {
   align-items: stretch;
   height: var(--h-unit);
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--control-bg);
   overflow: hidden;
 }

@@ -1,4 +1,4 @@
-// App.vue 的命令面板接线（D-029、D-PC60）：全局 ⌘⇧P / Ctrl+Shift+P 与 ⌘K、面板开关、导航组与
+// App.vue 的命令面板接线（D-029、D-PC60、D-UD-03）：全局 ⌘K 与 ⌘⇧P（命令面板）、⌘⇧K（清理中心）、面板开关、导航组与
 // 应用级动作组、以及跟着事件刷新的任务组；另外收口顶栏的信息架构（D-PC59）与「按固定命令 ID
 // 跳到宿主页」（待处理工作台与全局命令共用，详细设计 §6.1）。
 //
@@ -188,9 +188,21 @@ export function whenNavigated(result, next) {
   return next();
 }
 
+// 按下 Shift 时 event.key 是大写字母，键盘布局不同还可能是别的字符；code 是物理键位，两种都认。
+function isLetterKey(event, letter) {
+  return event.code === `Key${letter.toUpperCase()}` || String(event.key || '').toLowerCase() === letter;
+}
+
+// 命令面板（D-UD-03）：⌘K 与 ⌘⇧P（Ctrl 同理）是同一个面板的两个快捷键。
+function isCommandPaletteHotkey(event) {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return false;
+  return event.shiftKey ? isLetterKey(event, 'p') : isLetterKey(event, 'k');
+}
+
+// 清理中心（D-UD-03）：⌘⇧K。原先的 ⌘K 让给了命令面板。
 function isCleanupHotkey(event) {
-  if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return false;
-  return event.code === 'KeyK' || String(event.key || '').toLowerCase() === 'k';
+  if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey) return false;
+  return isLetterKey(event, 'k');
 }
 
 export const appCommandsMixin = {
@@ -235,14 +247,10 @@ export const appCommandsMixin = {
     unregisterCommands('app:tasks');
   },
   methods: {
-    // ⌘⇧P（macOS 的 metaKey）/ Ctrl+Shift+P。
+    // ⌘K 或 ⌘⇧P（macOS 的 metaKey）/ Ctrl+K、Ctrl+Shift+P：开关命令面板（D-UD-03）。
     // 挂在 window 上、不判断事件源，所以焦点在搜索框之类的输入框里时同样生效。
     handleCommandPaletteHotkey(event) {
-      if (!event || event.isComposing) return;
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey) return;
-      // 按下 Shift 时 event.key 会是大写 'P'，键盘布局不同还可能是别的字符；
-      // code 是物理键位，两种都认。
-      if (event.code !== 'KeyP' && String(event.key || '').toLowerCase() !== 'p') return;
+      if (!event || event.isComposing || !isCommandPaletteHotkey(event)) return;
       // 已经被先注册的处理器接手（并 preventDefault）的按键不抢第二次。
       if (event.defaultPrevented) return;
       if (this.startupError) return;
@@ -253,9 +261,9 @@ export const appCommandsMixin = {
       }
       this.openCommandPalette();
     },
-    // ⌘K：打开清理中心（D-PC59：「管理」菜单去掉清理审阅后，⌘K 改为走待处理工作台的清理入口，
-    // 也就是 library.openCleanup）。任何页面都能按：先切到片库管理（管理区）再打开。
-    // 片库页自己也监听 ⌘K（它先挂载、先收到并 preventDefault），在片库页上这里让位；
+    // ⌘⇧K：打开清理中心（D-UD-03；原先是 ⌘K，D-PC59 起走待处理工作台的清理入口 library.openCleanup）。
+    // 任何页面都能按：先切到片库管理（管理区）再打开。
+    // 片库页自己也监听 ⌘⇧K（它先挂载、先收到并 preventDefault），在片库页上这里让位；
     // 有弹窗开着时同片库页一样不响应，免得把清理中心叠在别的弹窗上。
     handleCleanupHotkey(event) {
       if (!event || event.isComposing || !isCleanupHotkey(event)) return;
@@ -386,7 +394,7 @@ export const appCommandsMixin = {
           id: 'action:cleanup',
           group: 'action',
           label: '打开清理中心',
-          keywords: ['cleanup', '清理', '重复', 'qingli', '⌘K'],
+          keywords: ['cleanup', '清理', '重复', 'qingli', '⌘⇧K'],
           run: () => this.runHostCommand('library.openCleanup', '清理中心')
         },
         {

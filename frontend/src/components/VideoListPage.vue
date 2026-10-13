@@ -644,8 +644,8 @@ export default {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     pageActive: { type: Boolean, default: true },
-    // ⌘K 由本页直接开清理中心。观看侧「视频」与管理侧「片库管理」共用本页：在「视频」上 App 传 false，
-    // 让 App 的全局 ⌘K 先切到片库管理再开，与其他页面一致（D-UI-03）。
+    // ⌘⇧K 由本页直接开清理中心（D-UD-03；⌘K 归命令面板）。观看侧「视频」与管理侧「片库管理」共用本页：
+    // 在「视频」上 App 传 false，让 App 的全局 ⌘⇧K 先切到片库管理再开，与其他页面一致（D-UI-03）。
     cleanupHotkey: { type: Boolean, default: true },
     consolidationRoute: { type: Object, default: null }
   },
@@ -1082,7 +1082,7 @@ export default {
     }
   },
   methods: {
-	// 管理菜单里印了 ⇧⌘N / ⌘R / ⌘T / ⌘K，搜索框上印了 ⌘F —— 印了就得真的能按，
+	// 管理菜单里印了 ⇧⌘N / ⌘R / ⌘T，清理中心是 ⌘⇧K，搜索框上印了 ⌘F —— 印了就得真的能按，
 	// 否则那些提示是在骗人。这些走独立处理器，不受列表焦点限制。
 	handleToolbarShortcut(event) {
 	  if (!this.pageActive || !(event.metaKey || event.ctrlKey)) return;
@@ -1102,7 +1102,7 @@ export default {
 	  } else if (key === 't' && !event.shiftKey) {
 	    event.preventDefault();
 	    this.openAITagReviewDialog();
-	  } else if (key === 'k' && !event.shiftKey && this.cleanupHotkey) {
+	  } else if (key === 'k' && event.shiftKey && this.cleanupHotkey) {
 	    event.preventDefault();
 	    this.openCleanupDialog();
 	  }

@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import AppFeedback from './AppFeedback.vue';
-import { confirmAction, feedbackState, notify, notifyError, resetFeedback } from '../utils/feedback.js';
+import { confirmAction, feedbackState, notify, notifyError, notifyUndo, resetFeedback } from '../utils/feedback.js';
 
 const SRC = join(process.cwd(), 'src');
 
@@ -54,6 +54,79 @@ describe('应用内提示', () => {
 
     wrapper.unmount();
   });
+
+  it('D-UD-07 提示里的「撤销」按钮执行一次并收起提示；关闭按钮带读屏名', async () => {
+    const wrapper = mount(AppFeedback);
+    let undone = 0;
+    notifyUndo('已移到废纸篓：2 个文件', () => { undone += 1; });
+    notify('已保存', { timeout: 0 });
+    await flushPromises();
+    const toasts = wrapper.findAll('[data-test="app-toast"]');
+    expect(toasts[0].get('[data-test="app-toast-action"]').text()).toBe('撤销');
+    expect(toasts[1].find('[data-test="app-toast-action"]').exists()).toBe(false);
+    expect(toasts[0].get('[data-test="app-toast-close"]').attributes('aria-label')).toBe('关闭提示');
+
+    await toasts[0].get('[data-test="app-toast-action"]').trigger('click');
+    await flushPromises();
+    expect(undone).toBe(1);
+    expect(wrapper.findAll('[data-test="app-toast"]').map(toast => toast.text())).toEqual(['已保存']);
+    wrapper.unmount();
+  });
+
+  it('D-UD-07 确认框是 DialogShell：标题、影响说明、取消在左主操作在右；普通确认不要输入', async () => {
+    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const answer = confirmAction({ title: '从片库移除', message: '移除 3 部视频的记录。', confirmText: '从片库移除', impact: '文件不动，只删记录', danger: true });
+    await flushPromises();
+    const dialog = wrapper.get('[data-test="app-confirm"]');
+    expect(dialog.attributes('role')).toBe('dialog');
+    expect(dialog.get('h2').text()).toBe('从片库移除');
+    expect(dialog.get('[data-test="app-confirm-impact"]').text()).toBe('文件不动，只删记录');
+    expect(dialog.find('[data-test="app-confirm-input"]').exists()).toBe(false);
+    expect(dialog.findAll('.ui-dialog__footer button').map(button => button.attributes('data-test'))).toEqual(['app-confirm-cancel', 'app-confirm-ok']);
+    expect(dialog.get('[data-test="app-confirm-ok"]').classes()).toContain('btn--danger');
+    await dialog.get('[data-test="dialog-shell-close"]').trigger('click');
+    expect(await answer).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('D-UD-07 不可逆确认：输入按钮上的原文前不能点，回车也不放行；对上后才能确认', async () => {
+    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const answer = confirmAction({ title: '永久删除', message: '这 2 条记录会被永久删除。', confirmText: '永久删除', level: 'irreversible' });
+    await flushPromises();
+    const ok = wrapper.get('[data-test="app-confirm-ok"]');
+    const input = wrapper.get('[data-test="app-confirm-input"]');
+    expect(ok.attributes('disabled')).toBeDefined();
+    expect(ok.classes()).toContain('btn--danger');
+    expect(wrapper.text()).toContain('输入「永久删除」以确认');
+    expect(document.activeElement).toBe(input.element);
+
+    await input.setValue('永久');
+    await input.trigger('keydown', { key: 'Enter' });
+    await ok.trigger('click');
+    expect(feedbackState.confirm).not.toBe(null);
+
+    await input.setValue('永久删除');
+    expect(ok.attributes('disabled')).toBeUndefined();
+    await input.trigger('keydown', { key: 'Enter' });
+    expect(await answer).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('换一个确认框时输入清空', async () => {
+    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const first = confirmAction({ confirmText: '清空', level: 'irreversible' });
+    await flushPromises();
+    await wrapper.get('[data-test="app-confirm-input"]').setValue('清空');
+    const second = confirmAction({ confirmText: '永久删除', level: 'irreversible' });
+    await flushPromises();
+    expect(await first).toBe(false);
+    expect(wrapper.get('[data-test="app-confirm-input"]').element.value).toBe('');
+    expect(wrapper.get('[data-test="app-confirm-ok"]').attributes('disabled')).toBeDefined();
+    resetFeedback();
+    await flushPromises();
+    void second;
+    wrapper.unmount();
+  });
 });
 
 describe('禁止再用 webview 里失效的原生弹框', () => {
@@ -84,7 +157,7 @@ describe('提示 API 必须显式导入', () => {
       const source = readFileSync(file, 'utf8');
       const importLine = source.match(/import \{([^}]*)\} from '[^']*utils\/feedback\.js';/);
       const imported = new Set((importLine?.[1] || '').split(',').map(name => name.trim()).filter(Boolean));
-      for (const api of ['notify', 'notifyError', 'notifySuccess', 'confirmAction']) {
+      for (const api of ['notify', 'notifyError', 'notifySuccess', 'notifyUndo', 'confirmAction']) {
         const used = new RegExp(`(?<![\\w.])${api}\\(`).test(source);
         if (used && !imported.has(api)) missing.push(`${relative(SRC, file)} 用了 ${api}() 但没导入`);
       }

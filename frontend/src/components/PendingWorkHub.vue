@@ -54,7 +54,7 @@ export const PENDING_WORK_ROWS = [
   { field: 'face_unnamed', label: '人脸待命名', command: 'people.openFaceReview' },
   { field: 'face_append_pending', label: '人脸待确认追加', command: 'people.openFaceReview' },
   { field: 'collection_suggestions', label: '建议作品集', command: 'library.openCollectionSuggestions' },
-  { field: 'cleanup_candidates', label: '清理候选', command: 'library.openCleanup', shortcut: '⌘K' },
+  { field: 'cleanup_candidates', label: '清理候选', command: 'library.openCleanup', shortcut: '⌘⇧K' },
   { field: 'local_metadata_updates', label: '本地资料有更新', command: 'library.openLocalMetadataUpdates' }
 ];
 

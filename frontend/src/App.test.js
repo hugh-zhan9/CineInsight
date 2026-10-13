@@ -345,16 +345,39 @@ describe('命令面板快捷键', () => {
     expect(wrapper.vm.commandPaletteOpen).toBe(true);
   });
 
-  // D-PC59：「管理」菜单去掉清理审阅后，⌘K 改为走待处理工作台的清理入口（library.openCleanup），
-  // 任何页面都能按；它仍然不是命令面板的快捷键。
-  // D-UI-03：清理中心属于管理侧，宿主页是「片库管理」（与「视频」同一个常挂载片库页）。
-  it('APP-11 ⌘K 在其他页面先切到片库管理，再执行 library.openCleanup', async () => {
+  // D-UD-03：⌘K 改为命令面板（⌘⇧P 是同一个面板的别名），清理中心改为 ⌘⇧K。
+  it('D-UD-03 ⌘K 与 Ctrl+K 打开命令面板，再按一次关闭；不再打开清理中心', async () => {
     const wrapper = await mountApp();
     const run = vi.fn();
     registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
     await wrapper.setData({ currentPage: 'insights' });
 
-    const event = pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    const opened = pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    await flushPromises();
+    expect(opened.defaultPrevented).toBe(true);
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    expect(wrapper.vm.currentPage).toBe('insights');
+
+    pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+
+    pressKey(window, { key: 'k', code: 'KeyK', ctrlKey: true });
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+    unregisterCommands('test-cleanup-host');
+  });
+
+  // D-PC59：「管理」菜单去掉清理审阅后，清理中心走待处理工作台的清理入口（library.openCleanup），任何页面都能按。
+  // D-UD-03：快捷键从 ⌘K 改为 ⌘⇧K。D-UI-03：清理中心属于管理侧，宿主页是「片库管理」。
+  it('APP-11 ⌘⇧K 在其他页面先切到片库管理，再执行 library.openCleanup', async () => {
+    const wrapper = await mountApp();
+    const run = vi.fn();
+    registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+    await wrapper.setData({ currentPage: 'insights' });
+
+    const event = pressKey(window, { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true });
     await flushPromises();
 
     expect(event.defaultPrevented).toBe(true);
@@ -364,7 +387,7 @@ describe('命令面板快捷键', () => {
     unregisterCommands('test-cleanup-host');
   });
 
-  it('APP-11 ⌘K 已被片库页先接手（preventDefault）时让位，不重复打开', async () => {
+  it('APP-11 ⌘⇧K 已被片库页先接手（preventDefault）时让位，不重复打开', async () => {
     const wrapper = await mountApp();
     await wrapper.setData({ currentPage: 'videos' });
     const run = vi.fn();
@@ -372,7 +395,7 @@ describe('命令面板快捷键', () => {
     const claim = event => event.preventDefault();
     window.addEventListener('keydown', claim, true);
 
-    pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    pressKey(window, { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true });
     await flushPromises();
 
     window.removeEventListener('keydown', claim, true);
@@ -633,8 +656,11 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
 
     drawer.vm.$emit('badge-change', { running: 3, failed: true });
     await flushPromises();
-    expect(wrapper.get('[data-test="task-center-badge"]').text()).toBe('3');
+    // D-UD-11：任务指示 = 转圈 + 数量（AppBadge），失败时红点；shallowMount 下读组件 props。
+    expect(wrapper.getComponent('[data-test="task-center-badge"]').props('count')).toBe(3);
+    expect(wrapper.find('[data-test="task-center-spinner"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="task-center-failed-dot"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="open-task-center"]').attributes('aria-label')).toBe('任务与诊断，3 个任务运行中，有任务上一轮失败');
 
     await wrapper.get('[data-test="open-task-center"]').trigger('click');
     await flushPromises();
@@ -1597,15 +1623,15 @@ describe('整页详情改了状态，片库页跟上（M-5）', () => {
   });
 });
 
-describe('「视频」上按 ⌘K 与其他页面一致（M-6）', () => {
-  it('片库页只在「片库管理」上自己接 ⌘K；在「视频」上交给 App 先切到片库管理再开清理中心', async () => {
+describe('「视频」上按 ⌘⇧K 与其他页面一致（M-6、D-UD-03）', () => {
+  it('片库页只在「片库管理」上自己接 ⌘⇧K；在「视频」上交给 App 先切到片库管理再开清理中心', async () => {
     const wrapper = await mountApp();
     await wrapper.setData({ currentPage: 'videos' });
     expect(wrapper.findComponent({ name: 'VideoListPage' }).props('cleanupHotkey')).toBe(false);
 
     const run = vi.fn();
     registerCommands('test-cleanup-videos', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
-    const event = new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent('keydown', { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true, bubbles: true, cancelable: true });
     window.dispatchEvent(event);
     await flushPromises();
     unregisterCommands('test-cleanup-videos');

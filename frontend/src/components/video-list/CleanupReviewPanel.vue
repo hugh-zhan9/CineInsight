@@ -1789,7 +1789,7 @@ export default {
   align-items: center;
   gap: 6px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--panel-bg);
   color: var(--text-secondary);
   font-size: 12px;

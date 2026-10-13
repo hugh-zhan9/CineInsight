@@ -117,13 +117,13 @@ describe('工作台只做跳转（APP-11）', () => {
     expect(PENDING_WORK_ROWS.map(row => row.field).sort()).toEqual(Object.keys(expected).sort());
   });
 
-  it('APP-11 数量为 0 的项「处理」置灰；清理候选标出 ⌘K', async () => {
+  it('APP-11 数量为 0 的项「处理」置灰；清理候选标出 ⌘⇧K（D-UD-03）', async () => {
     api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY, same_source_unconfirmed: 0, total: 43 });
     const wrapper = mountHub();
     await flushPromises();
 
     expect(wrapper.get('[data-test="pending-go-same_source_unconfirmed"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[data-test="pending-row-cleanup_candidates"]').text()).toContain('⌘K');
+    expect(wrapper.get('[data-test="pending-row-cleanup_candidates"]').text()).toContain('⌘⇧K');
   });
 
   it('APP-11 失败的 AI 打标引到任务中心查看', async () => {

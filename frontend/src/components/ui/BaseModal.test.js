@@ -54,4 +54,17 @@ describe('BaseModal', () => {
     stopping.unmount();
     bubbling.unmount();
   });
+
+  it('reports every overlay self-click as overlay-click, whether or not it closes', async () => {
+    const inert = mount(BaseModal);
+    await inert.find('.modal-overlay').trigger('click');
+    await inert.find('.modal').trigger('click');
+    expect(inert.emitted('overlay-click')).toHaveLength(1);
+    expect(inert.emitted('close')).toBeUndefined();
+
+    const closable = mount(BaseModal, { props: { closeOnOverlay: true } });
+    await closable.find('.modal-overlay').trigger('click');
+    expect(closable.emitted('overlay-click')).toHaveLength(1);
+    expect(closable.emitted('close')).toHaveLength(1);
+  });
 });

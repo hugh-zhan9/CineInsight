@@ -416,7 +416,7 @@ export default {
 .dialog-warning {
   margin-top: 12px;
   text-align: left;
-  color: var(--danger, #d9534f);
+  color: var(--danger-text);
   font-size: 12px;
 }
 .dialog-note {

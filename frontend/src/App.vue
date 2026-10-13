@@ -32,12 +32,17 @@
                 type="button"
                 :class="['nav-btn', { active: currentPage === page.key }]"
                 :data-test="page.command ? `open-${page.key}` : `nav-${page.key}`"
+                :aria-label="page.key === 'task-center' ? `${page.label}${taskIndicatorStatus}` : undefined"
                 @click="selectNavItem(page)"
               >
                 {{ page.label }}
                 <span v-if="page.key === 'pending-work' && pendingWorkTotal > 0" class="header-badge" data-test="pending-work-badge">{{ badgeText(pendingWorkTotal) }}</span>
-                <span v-if="page.key === 'task-center' && taskCenterBadge.running > 0" class="header-badge" data-test="task-center-badge">{{ badgeText(taskCenterBadge.running) }}</span>
-                <span v-if="page.key === 'task-center' && taskCenterBadge.failed" class="header-dot" role="img" aria-label="有任务上一轮失败" data-test="task-center-failed-dot"></span>
+                <!-- 任务指示（D-UD-11）：有任务在跑时转圈 + 数量，上一轮有失败时右上角红点；点开任务中心。 -->
+                <template v-if="page.key === 'task-center'">
+                  <AppSpinner v-if="taskCenterBadge.running > 0" class="header-task-spinner" :size="16" data-test="task-center-spinner" />
+                  <AppBadge v-if="taskCenterBadge.running > 0" tone="accent" :count="taskCenterBadge.running" data-test="task-center-badge" />
+                  <span v-if="taskCenterBadge.failed" class="header-dot" role="img" aria-label="有任务上一轮失败" data-test="task-center-failed-dot"></span>
+                </template>
               </button>
             </template>
           </div>
@@ -214,7 +219,7 @@
 	  />
     </div>
 
-    <!-- 命令面板（⌘⇧P / Ctrl+Shift+P）：不新增顶栏按钮，只有快捷键这一个入口 -->
+    <!-- 命令面板（⌘K 或 ⌘⇧P，D-UD-03）：不新增顶栏按钮，只有快捷键这一个入口 -->
     <CommandPalette
       v-if="!startupError"
       :open="commandPaletteOpen"
@@ -304,6 +309,8 @@ import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
 import BaseMenu from './components/ui/BaseMenu.vue';
 import BaseModal from './components/ui/BaseModal.vue';
+import AppBadge from './components/ui/AppBadge.vue';
+import AppSpinner from './components/ui/AppSpinner.vue';
 import SystemHealthPanel from './components/SystemHealthPanel.vue';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
@@ -333,7 +340,7 @@ export default {
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
     MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
-    BaseMenu, BaseModal, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
+    BaseMenu, BaseModal, AppBadge, AppSpinner, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoDetailPage, ManageHomePage
   },
   data() {
@@ -491,6 +498,14 @@ export default {
     }
   },
   computed: {
+    // 任务指示的读屏文字（接在导航名后面）：按钮上只看得到转圈、数字和红点。
+    taskIndicatorStatus() {
+      const { running, failed } = this.taskCenterBadge;
+      const parts = [];
+      if (running > 0) parts.push(`${running} 个任务运行中`);
+      if (failed) parts.push('有任务上一轮失败');
+      return parts.map(part => `，${part}`).join('');
+    },
     // 当前区域（D-UI-09）：由当前页面推出，不单独存。
     area() {
       return pageArea(this.currentPage) || 'viewer';
@@ -1031,7 +1046,7 @@ export default {
   white-space: nowrap;
   background: transparent;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: 13.5px;
   font-weight: 500;
@@ -1073,7 +1088,7 @@ export default {
   align-items: center;
   gap: 6px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: var(--text-secondary);
   font-size: 12.5px;
@@ -1091,6 +1106,8 @@ export default {
   line-height: 18px;
   text-align: center;
 }
+.header-task-spinner { color: var(--accent-text); }
+.nav-btn.active .header-task-spinner { color: inherit; }
 .header-dot {
   position: absolute;
   top: 3px;
@@ -1132,7 +1149,7 @@ export default {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--overlay-bg);
 }
 .relaunch-card {
   max-width: 480px;

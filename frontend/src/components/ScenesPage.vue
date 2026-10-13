@@ -542,9 +542,9 @@ export default {
 .scenes-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .scenes-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .scenes-search__input { flex: 1 1 320px; min-width: 0; }
-.scenes-modes { display: inline-flex; border: 1px solid var(--border-color); border-radius: var(--radius); overflow: hidden; }
+.scenes-modes { display: inline-flex; border: 1px solid var(--border-color); border-radius: var(--radius-sm); overflow: hidden; }
 .scenes-mode { border: 0; background: var(--control-bg); color: var(--text-secondary); padding: 6px 12px; cursor: pointer; font-size: 13px; }
-.scenes-mode.active { background: var(--accent-color); color: #fff; }
+.scenes-mode.active { background: var(--accent-color); color: var(--accent-on); }
 .scenes-scope { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; margin-bottom: 10px; }
 .scenes-coverage { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); font-size: 13px; color: var(--text-secondary); }
 .scenes-coverage__bar { height: 6px; border-radius: 3px; background: var(--border-color); overflow: hidden; }

@@ -514,7 +514,7 @@ export default {
 .settings-nav__item {
   padding: 7px 12px;
   border: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12.5px;

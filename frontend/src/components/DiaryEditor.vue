@@ -58,7 +58,7 @@ export default {
 };
 </script>
 <style scoped>
-.diary-video-choice { display: block; width: 100%; margin: 4px 0; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--control-bg); color: var(--text-primary); font-size: 13px; text-align: left; cursor: pointer; }
+.diary-video-choice { display: block; width: 100%; margin: 4px 0; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--control-bg); color: var(--text-primary); font-size: 13px; text-align: left; cursor: pointer; }
 .diary-video-choice:hover:not(:disabled) { background: var(--control-hover-bg); }
 .diary-video-choice[aria-pressed=true] { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 </style>

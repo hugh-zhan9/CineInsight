@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import StatTile from './StatTile.vue';
+import { ICON_PATHS } from './icons.js';
 
 describe('StatTile', () => {
   it('renders icon paths, value with unit, label, note and hint as an article by default', () => {
@@ -53,5 +54,12 @@ describe('StatTile', () => {
     expect(wrapper.get('[data-test="stat-tile-value"]').text()).toBe('42次');
     expect(wrapper.get('.delta').text()).toBe('↑ 5%');
     expect(wrapper.find('[type]').exists()).toBe(false);
+  });
+
+  it('also takes an icon name from the shared icon set (D-UD-06); unknown names draw nothing', () => {
+    const named = mount(StatTile, { props: { icon: 'trash', label: '可回收' } });
+    expect(named.findAll('.stat-tile__icon path').map(path => path.attributes('d'))).toEqual(ICON_PATHS.trash);
+    const unknown = mount(StatTile, { props: { icon: 'no-such-icon', label: '可回收' } });
+    expect(unknown.find('.stat-tile__icon').exists()).toBe(false);
   });
 });

@@ -439,7 +439,7 @@ export default {
   gap: 2px;
   max-width: min(46%, 460px);
   padding: 6px 10px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--media-badge-bg);
   color: var(--media-badge-fg);
   font-size: 12px;
