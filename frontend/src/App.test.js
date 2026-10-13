@@ -12,8 +12,9 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../wailsjs/go/main/App', () => api);
 
 import App from './App.vue';
+import BaseModal from './components/ui/BaseModal.vue';
 import { registerCommands, unregisterCommands } from './utils/commandRegistry.js';
-import { feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
+import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
 import { closeVersionCompare, openVersionCompare, versionCompareState } from './utils/versionCompare.js';
 import { resetSessionChanges, sessionChanges } from './utils/sessionChanges.js';
 
@@ -367,6 +368,34 @@ describe('命令面板快捷键', () => {
     await flushPromises();
     expect(wrapper.vm.commandPaletteOpen).toBe(true);
     unregisterCommands('test-cleanup-host');
+  });
+
+  // D-UD-03：面板没开时，别的对话框（BaseModal 等 role="dialog"）开着、或确认框还没答复，⌘K / ⌘⇧P 都不响应；
+  // 面板自己开着时照样再按一次关掉（上面的用例）。
+  it('D-UD-03 对话框开着或确认框未答复时 ⌘K / ⌘⇧P 不开面板，关掉后恢复', async () => {
+    const wrapper = await mountApp();
+    // 也用 shallowMount：测试工具的桩替换是全局的，这里换成 mount 会让还挂着的 App 下次重渲染时挂上真页面。
+    const dialog = shallowMount(BaseModal, { attachTo: document.body, slots: { default: '<p>别的对话框</p>' } });
+    mountedWrappers.push(dialog);
+    expect(document.querySelector('[role="dialog"]')).not.toBe(null);
+
+    const blocked = pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    pressKey(window, palette);
+    await flushPromises();
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+    dialog.unmount();
+
+    const answer = confirmAction({ title: '永久删除', confirmText: '永久删除', level: 'irreversible' });
+    pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+    resolveConfirm(false);
+    expect(await answer).toBe(false);
+
+    pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
   });
 
   // D-PC59：「管理」菜单去掉清理审阅后，清理中心走待处理工作台的清理入口（library.openCleanup），任何页面都能按。

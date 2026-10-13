@@ -54,9 +54,15 @@ export default {
     titleSeq += 1;
     return { titleId: `ui-dialog-title-${titleSeq}` };
   },
-  mounted() {
+  beforeMount() {
+    // 打开前的焦点，关闭时还回去。要在内容里的子组件挂载之前记：子组件的 mounted 早于这里的 mounted，
+    // 它可能已经把焦点放进自己的输入框。
     this._returnFocus = document.activeElement;
-    this.$el.querySelector?.('.ui-dialog')?.focus({ preventScroll: true });
+  },
+  mounted() {
+    // 焦点移进对话框；内容已经自己把焦点放在对话框里（例如表单聚焦第一个输入框）时不抢回到容器上。
+    const dialog = this.$el.querySelector?.('.ui-dialog');
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
   },
   beforeUnmount() {
     const target = this._returnFocus;

@@ -19,8 +19,10 @@ import {
   VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS
 } from './appCommands.js';
 import { commandList, findCommand, registerCommands, unregisterCommands } from './commandRegistry.js';
-import { feedbackState, resetFeedback } from './feedback.js';
+import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './feedback.js';
 import { SETTINGS_SECTIONS } from '../components/SettingsPage.vue';
+import CommandPalette from '../components/CommandPalette.vue';
+import BaseModal from '../components/ui/BaseModal.vue';
 
 // 只借 mixin：App.vue 的其余部分（页面、主题、启动错误）与命令注册无关。
 // navigateTo / openTaskCenter / openPendingWork 是 App.vue 提供给 mixin 的方法，这里给最简实现。
@@ -418,6 +420,103 @@ describe('任务组随事件刷新', () => {
 
 // 智能视图的真值来源是 video-list/LibraryToolbar.vue 的 smartViewOptions（本切片不改它）。
 // 两份清单一旦漂移，命令面板会给出一个工具栏里不存在的视图，这条断言把它钉住。
+// D-UD-03：⌘K / ⌘⇧P 开关命令面板。面板开着时再按关掉；面板没开、别的对话框或确认框开着时不响应
+// （与 ⌘⇧K 同一条规矩）。宿主渲染真的 CommandPalette 与 BaseModal，面板自己的 role="dialog" 也在 DOM 里。
+describe('命令面板快捷键与其他对话框（D-UD-03）', () => {
+  const PaletteHost = {
+    mixins: [appCommandsMixin],
+    components: { CommandPalette, BaseModal },
+    data() {
+      return { currentPage: 'videos', startupError: '', otherDialog: false };
+    },
+    methods: {
+      debugLog: vi.fn(),
+      navigateTo(page) { this.currentPage = page; return true; },
+      openVideo() {},
+      openTaskCenter() {},
+      openPendingWork() {}
+    },
+    template: `<div>
+      <CommandPalette :open="commandPaletteOpen" :open-video="openVideo" @close="closeCommandPalette" />
+      <BaseModal v-if="otherDialog" data-test="other-dialog" @close="otherDialog = false"><p>别的对话框</p></BaseModal>
+    </div>`
+  };
+
+  function mountPaletteHost() {
+    const wrapper = mount(PaletteHost, { attachTo: document.body });
+    wrappers.push(wrapper);
+    return wrapper;
+  }
+
+  function press(init) {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+    window.dispatchEvent(event);
+    return event;
+  }
+  const cmdK = { key: 'k', code: 'KeyK', metaKey: true };
+  const cmdShiftP = { key: 'P', code: 'KeyP', metaKey: true, shiftKey: true };
+
+  it('nothing else open: ⌘K opens the palette', async () => {
+    const wrapper = mountPaletteHost();
+    const event = press(cmdK);
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+    expect(wrapper.find('[data-test="command-palette"]').attributes('role')).toBe('dialog');
+  });
+
+  it('the palette itself open: ⌘K and ⌘⇧P close it (toggle)', async () => {
+    const wrapper = mountPaletteHost();
+    press(cmdK);
+    await flushPromises();
+    const closing = press(cmdK);
+    await flushPromises();
+    expect(closing.defaultPrevented).toBe(true);
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+    expect(wrapper.find('[data-test="command-palette"]').exists()).toBe(false);
+
+    press(cmdShiftP);
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+    press(cmdShiftP);
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+  });
+
+  it('a BaseModal dialog open: ⌘K and ⌘⇧P do nothing and leave the key alone', async () => {
+    const wrapper = mountPaletteHost();
+    await wrapper.setData({ otherDialog: true });
+    const k = press(cmdK);
+    const p = press(cmdShiftP);
+    await flushPromises();
+    expect(k.defaultPrevented).toBe(false);
+    expect(p.defaultPrevented).toBe(false);
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+    expect(api.ListSavedLibraryViews).not.toHaveBeenCalled();
+
+    await wrapper.setData({ otherDialog: false });
+    press(cmdK);
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+  });
+
+  it('a confirm pending (even before AppFeedback renders it): ⌘K does nothing until it is answered', async () => {
+    const wrapper = mountPaletteHost();
+    const answer = confirmAction({ title: '从片库移除', message: '移除 2 部视频的记录。' });
+    expect(feedbackState.confirm).not.toBe(null);
+    const event = press(cmdK);
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.vm.commandPaletteOpen).toBe(false);
+
+    resolveConfirm(false);
+    expect(await answer).toBe(false);
+    press(cmdK);
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+  });
+});
+
 describe('智能视图清单防漂移', () => {
   it('与 LibraryToolbar.vue 的 smartViewOptions 逐条一致（含 META-09 的「本地资料有更新」）', () => {
     // vitest 的根就是 frontend/，jsdom 环境下 import.meta.url 不是 file: 协议。

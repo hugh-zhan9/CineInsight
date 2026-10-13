@@ -23,8 +23,10 @@
 <script>
 import { badgeCountText } from './AppBadge.vue';
 
-// 标签页（D-UD-06）：页内一级分区，下划线式。role=tablist/tab，选中项 aria-selected，只有它在 Tab 序列里；
-// ← / → 切到上一个 / 下一个可用页签（首尾循环、跳过 disabled），Home / End 到两端，切到即生效。
+// 标签页（D-UD-06）：页内一级分区，下划线式。role=tablist/tab，选中项 aria-selected，只有它在 Tab 序列里
+// （选中项不可用或没有选中项时，换成第一个可用页签）；← / → 从当前有焦点的页签切到上一个 / 下一个可用页签
+// （首尾循环、跳过 disabled），Home / End 到两端，焦点跟着走，切到即生效。宿主没接住 update:modelValue 时，
+// 焦点照样一路往后走，不会卡在选中项上。
 // 传 idPrefix 时每个页签带 id `${idPrefix}-tab-${key}` 与 aria-controls `${idPrefix}-panel-${key}`，
 // 宿主给对应面板写 role="tabpanel"、同名 id 与 aria-labelledby。
 export default {
@@ -38,7 +40,8 @@ export default {
   computed: {
     selectedIndex() { return this.tabs.findIndex(tab => tab.key === this.modelValue); },
     focusIndex() {
-      if (this.selectedIndex >= 0) return this.selectedIndex;
+      const selected = this.tabs[this.selectedIndex];
+      if (selected && !selected.disabled) return this.selectedIndex;
       return Math.max(0, this.tabs.findIndex(tab => !tab.disabled));
     }
   },
@@ -56,10 +59,18 @@ export default {
       }
       return from;
     },
+    // 方向键的起点：按键所在（或当前有焦点）的页签，都不是时用 Tab 序列里的那一个。
+    currentIndex(event) {
+      const buttons = [...this.$el.querySelectorAll('[role="tab"]')];
+      const fromTarget = buttons.indexOf(event.target?.closest?.('[role="tab"]'));
+      if (fromTarget !== -1) return fromTarget;
+      const fromFocus = buttons.indexOf(document.activeElement);
+      return fromFocus !== -1 ? fromFocus : this.focusIndex;
+    },
     handleKeydown(event) {
       const count = this.tabs.length;
       if (!count) return;
-      const current = this.focusIndex;
+      const current = this.currentIndex(event);
       let next;
       if (event.key === 'ArrowRight') next = this.step(current, 1);
       else if (event.key === 'ArrowLeft') next = this.step(current, -1);
@@ -67,8 +78,9 @@ export default {
       else if (event.key === 'End') next = this.step(0, -1);
       else return;
       event.preventDefault();
+      if (this.tabs[next].disabled) return;
       this.select(this.tabs[next]);
-      this.$nextTick(() => this.$el.querySelectorAll('[role="tab"]')[next]?.focus());
+      this.$el.querySelectorAll('[role="tab"]')[next]?.focus();
     }
   }
 };

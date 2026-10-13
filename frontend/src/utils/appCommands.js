@@ -19,7 +19,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import { SETTINGS_SECTIONS } from '../components/SettingsPage.vue';
 import { findCommand, isCommandEnabled, registerCommands, unregisterCommands } from './commandRegistry.js';
-import { notifyError } from '../utils/feedback.js';
+import { feedbackState, notifyError } from '../utils/feedback.js';
 import { buildTaskCommands } from './taskCommands.js';
 import { recordBackgroundTasks } from './sessionChanges.js';
 
@@ -205,6 +205,14 @@ function isCleanupHotkey(event) {
   return isLetterKey(event, 'k');
 }
 
+// 面板以外有对话框或浮层开着：对话框（role="dialog"，含 BaseModal / DialogShell、抽屉、查看器、浮层）、
+// 任何 aria-modal="true" 的遮罩（如待重启遮罩），或应用内确认框还没答复（读 feedbackState，不依赖它渲染出 DOM）。
+// 调用方先排除「命令面板自己开着」的情况，面板的 BaseModal 同样带 role="dialog"。
+function otherDialogOpen() {
+  if (feedbackState.confirm) return true;
+  return Boolean(document.querySelector('[role="dialog"], [aria-modal="true"]'));
+}
+
 export const appCommandsMixin = {
   data() {
     return {
@@ -249,16 +257,20 @@ export const appCommandsMixin = {
   methods: {
     // ⌘K 或 ⌘⇧P（macOS 的 metaKey）/ Ctrl+K、Ctrl+Shift+P：开关命令面板（D-UD-03）。
     // 挂在 window 上、不判断事件源，所以焦点在搜索框之类的输入框里时同样生效。
+    // 面板开着时再按一次关掉；面板没开而别的对话框或确认框开着时不响应（与 ⌘⇧K 及原先 ⌘K 开清理中心同一条规矩），
+    // 免得把面板叠在弹窗上、执行的命令又在弹窗背后切走页面。
     handleCommandPaletteHotkey(event) {
       if (!event || event.isComposing || !isCommandPaletteHotkey(event)) return;
       // 已经被先注册的处理器接手（并 preventDefault）的按键不抢第二次。
       if (event.defaultPrevented) return;
       if (this.startupError) return;
-      event.preventDefault();
       if (this.commandPaletteOpen) {
+        event.preventDefault();
         this.commandPaletteOpen = false;
         return;
       }
+      if (otherDialogOpen()) return;
+      event.preventDefault();
       this.openCommandPalette();
     },
     // ⌘⇧K：打开清理中心（D-UD-03；原先是 ⌘K，D-PC59 起走待处理工作台的清理入口 library.openCleanup）。

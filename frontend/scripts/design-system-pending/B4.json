@@ -1,80 +1,80 @@
 {
   "owner": "B4 观看侧（首页、整页详情、回顾、片单三页、观看笔记、场景检索、人物与作品集、待播队列）",
   "pending": {
-    "colors": [
-      "components/PlaybackQueuePanel.vue",
-      "components/QueueActionButton.vue",
-      "components/QueueInlinePlayer.vue"
-    ],
-    "font-scale": [
-      "components/DiaryEditor.vue",
-      "components/EntityLibraryPage.vue",
-      "components/MovieChartPage.vue",
-      "components/NotesThumb.vue",
-      "components/PlaybackQueuePanel.vue",
-      "components/QuoteCardDialog.vue",
-      "components/RecapPage.vue",
-      "components/ScenesPage.vue",
-      "components/ViewingNotesPage.vue",
-      "components/WatchedMoviesPage.vue",
-      "components/WatchlistPage.vue",
-      "components/recap/RecapCalendar.vue",
-      "components/recap/RecapClock.vue",
-      "components/recap/RecapLiveFeed.vue",
-      "components/recap/RecapMediaCard.vue",
-      "components/recap/RecapMonthStrip.vue",
-      "components/viewer/HomePage.vue",
-      "components/viewer/RatingStars.vue",
-      "components/viewer/VideoDetailPage.vue"
-    ],
-    "z-index": [
-      "components/PersonMediaDeleteDialog.vue",
-      "components/recap/RecapBackdrop.vue"
-    ],
-    "vars": [],
-    "dialogs": [
-      "components/BookmarkPanel.vue",
-      "components/DiaryEditor.vue",
-      "components/PersonMediaDeleteDialog.vue",
-      "components/PlaybackQueuePanel.vue",
-      "components/QuoteCardDialog.vue"
-    ],
-    "page-header": [
-      "components/EntityLibraryPage.vue",
-      "components/MovieChartPage.vue",
-      "components/RecapPage.vue",
-      "components/ScenesPage.vue",
-      "components/ViewingNotesPage.vue",
-      "components/WatchedMoviesPage.vue",
-      "components/WatchlistPage.vue",
-      "components/viewer/HomePage.vue"
-    ],
-    "wording": [
-      "components/EntityLibraryPage.vue",
-      "components/PlaybackQueuePanel.vue",
-      "components/WatchedMoviesPage.vue"
-    ],
-    "buttons": [
-      "components/BookmarkPanel.vue",
-      "components/DiaryEditor.vue",
-      "components/EntityLibraryPage.vue",
-      "components/MovieChartPage.vue",
-      "components/NotesThumb.vue",
-      "components/PersonMediaDeleteDialog.vue",
-      "components/PlaybackQueuePanel.vue",
-      "components/QueueActionButton.vue",
-      "components/QuoteCardDialog.vue",
-      "components/RecapPage.vue",
-      "components/ScenesPage.vue",
-      "components/ViewingNotesPage.vue",
-      "components/WatchedMoviesPage.vue",
-      "components/WatchlistPage.vue",
-      "components/recap/RecapLiveFeed.vue",
-      "components/recap/RecapMediaCard.vue",
-      "components/recap/RecapMonthStrip.vue",
-      "components/viewer/HomePage.vue",
-      "components/viewer/RatingStars.vue",
-      "components/viewer/VideoDetailPage.vue"
-    ]
+    "colors": {
+      "components/PlaybackQueuePanel.vue": 1,
+      "components/QueueActionButton.vue": 1,
+      "components/QueueInlinePlayer.vue": 2
+    },
+    "font-scale": {
+      "components/DiaryEditor.vue": 1,
+      "components/EntityLibraryPage.vue": 17,
+      "components/MovieChartPage.vue": 13,
+      "components/NotesThumb.vue": 1,
+      "components/PlaybackQueuePanel.vue": 7,
+      "components/QuoteCardDialog.vue": 4,
+      "components/RecapPage.vue": 35,
+      "components/ScenesPage.vue": 15,
+      "components/ViewingNotesPage.vue": 5,
+      "components/WatchedMoviesPage.vue": 6,
+      "components/WatchlistPage.vue": 12,
+      "components/recap/RecapCalendar.vue": 2,
+      "components/recap/RecapClock.vue": 4,
+      "components/recap/RecapLiveFeed.vue": 3,
+      "components/recap/RecapMediaCard.vue": 6,
+      "components/recap/RecapMonthStrip.vue": 5,
+      "components/viewer/HomePage.vue": 1,
+      "components/viewer/RatingStars.vue": 2,
+      "components/viewer/VideoDetailPage.vue": 6
+    },
+    "z-index": {
+      "components/PersonMediaDeleteDialog.vue": 1,
+      "components/recap/RecapBackdrop.vue": 1
+    },
+    "vars": {},
+    "dialogs": {
+      "components/BookmarkPanel.vue": 1,
+      "components/DiaryEditor.vue": 1,
+      "components/PersonMediaDeleteDialog.vue": 1,
+      "components/PlaybackQueuePanel.vue": 1,
+      "components/QuoteCardDialog.vue": 1
+    },
+    "page-header": {
+      "components/EntityLibraryPage.vue": 1,
+      "components/MovieChartPage.vue": 1,
+      "components/RecapPage.vue": 1,
+      "components/ScenesPage.vue": 1,
+      "components/ViewingNotesPage.vue": 1,
+      "components/WatchedMoviesPage.vue": 1,
+      "components/WatchlistPage.vue": 1,
+      "components/viewer/HomePage.vue": 1
+    },
+    "wording": {
+      "components/EntityLibraryPage.vue": 5,
+      "components/PlaybackQueuePanel.vue": 1,
+      "components/WatchedMoviesPage.vue": 1
+    },
+    "buttons": {
+      "components/BookmarkPanel.vue": 10,
+      "components/DiaryEditor.vue": 5,
+      "components/EntityLibraryPage.vue": 22,
+      "components/MovieChartPage.vue": 8,
+      "components/NotesThumb.vue": 1,
+      "components/PersonMediaDeleteDialog.vue": 2,
+      "components/PlaybackQueuePanel.vue": 15,
+      "components/QueueActionButton.vue": 2,
+      "components/QuoteCardDialog.vue": 4,
+      "components/RecapPage.vue": 13,
+      "components/ScenesPage.vue": 13,
+      "components/ViewingNotesPage.vue": 8,
+      "components/WatchedMoviesPage.vue": 6,
+      "components/WatchlistPage.vue": 14,
+      "components/recap/RecapLiveFeed.vue": 1,
+      "components/recap/RecapMediaCard.vue": 1,
+      "components/recap/RecapMonthStrip.vue": 1,
+      "components/viewer/HomePage.vue": 6,
+      "components/viewer/RatingStars.vue": 3,
+      "components/viewer/VideoDetailPage.vue": 17
+    }
   }
 }

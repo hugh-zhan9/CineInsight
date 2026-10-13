@@ -44,7 +44,7 @@
 	  <div class="setting-item">
 		<label>键盘快捷键</label>
 		<button data-test="shortcut-help-button" type="button" class="btn-secondary" @click="showShortcutHelp = true">查看快捷键</button>
-		<p class="help-text">命令面板、清理中心、片库与列表审阅、字幕编辑的快捷键。</p>
+		<p class="help-text">命令面板、清理中心、片库与列表审阅、字幕编辑、图片查看器的快捷键。</p>
 	  </div>
   </div>
 
@@ -74,9 +74,17 @@
 		<dt>回车</dt><dd>播放视频</dd>
 	  </dl>
 	  <h3 class="shortcut-help-group">字幕编辑</h3>
-	  <dl class="shortcut-help-list">
+	  <dl class="shortcut-help-list" data-test="shortcut-help-subtitle">
 		<dt>⌘S</dt><dd>保存</dd>
 		<dt>⌘Z</dt><dd>撤销</dd>
+		<dt>⌘⇧Z</dt><dd>重做</dd>
+		<dt>⌘F</dt><dd>查找（光标移到「查找替换」的查找框）</dd>
+	  </dl>
+	  <h3 class="shortcut-help-group">图片查看器</h3>
+	  <dl class="shortcut-help-list" data-test="shortcut-help-photo-viewer">
+		<dt>← / →</dt><dd>上一张 / 下一张</dd>
+		<dt>F</dt><dd>切换收藏</dd>
+		<dt>Esc</dt><dd>关闭查看器</dd>
 	  </dl>
 	  <p class="help-text">单键（J、K、空格、F、W、T、回车）在输入框、下拉框和弹窗处于焦点时不会触发快捷键；带 ⌘ 的组合键在输入框里也能用。Windows 与 Linux 上 ⌘ 换成 Ctrl。</p>
 	  <div class="modal-actions"><button type="button" class="btn-primary" @click="showShortcutHelp = false">知道了</button></div>

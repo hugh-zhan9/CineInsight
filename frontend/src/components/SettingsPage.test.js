@@ -180,6 +180,10 @@ describe('SettingsPage library watcher', () => {
 	  await wrapper.get('[data-test="shortcut-help-button"]').trigger('click');
 	  expect(wrapper.text()).toContain('选择下一个视频');
 	  expect(wrapper.text()).toContain('输入框、下拉框和弹窗处于焦点时不会触发快捷键');
+	  // D-UD-14「快捷键帮助列全」：字幕编辑的重做与查找、图片查看器的翻页与收藏（各自处理器里真实存在的键）。
+	  const pairs = selector => wrapper.findAll(`${selector} dt`).map(dt => `${dt.text()} ${dt.element.nextElementSibling.textContent}`);
+	  expect(pairs('[data-test="shortcut-help-subtitle"]')).toEqual(expect.arrayContaining(['⌘⇧Z 重做', expect.stringMatching(/^⌘F 查找/)]));
+	  expect(pairs('[data-test="shortcut-help-photo-viewer"]')).toEqual(['← / → 上一张 / 下一张', 'F 切换收藏', 'Esc 关闭查看器']);
 	});
 
   it('shows per-root watching state', async () => {

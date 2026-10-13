@@ -68,3 +68,47 @@ describe('BaseModal', () => {
     expect(closable.emitted('close')).toHaveLength(1);
   });
 });
+
+describe('BaseModal Escape goes to the topmost dialog only', () => {
+  const pressEscape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+  it('two stacked dialogs: one Escape closes only the top one; after it goes away the next Escape reaches the lower one', () => {
+    const bottom = mount(BaseModal, { attachTo: document.body });
+    const top = mount(BaseModal, { attachTo: document.body });
+    const windowEscape = vi.fn();
+    window.addEventListener('keydown', windowEscape);
+
+    pressEscape();
+    expect(top.emitted('close')).toHaveLength(1);
+    expect(bottom.emitted('close')).toBeUndefined();
+    expect(windowEscape).not.toHaveBeenCalled();
+
+    top.unmount();
+    pressEscape();
+    expect(bottom.emitted('close')).toHaveLength(1);
+    bottom.unmount();
+    window.removeEventListener('keydown', windowEscape);
+  });
+
+  it('a dialog nested in another dialog\'s content and shown together is the top one', () => {
+    const Host = {
+      components: { BaseModal },
+      emits: ['outer', 'inner'],
+      template: '<BaseModal @close="$emit(\'outer\')"><BaseModal @close="$emit(\'inner\')" /></BaseModal>'
+    };
+    const wrapper = mount(Host, { attachTo: document.body });
+    pressEscape();
+    expect(wrapper.emitted('inner')).toHaveLength(1);
+    expect(wrapper.emitted('outer')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('closing the lower dialog first leaves the top one on top', () => {
+    const bottom = mount(BaseModal, { attachTo: document.body });
+    const top = mount(BaseModal, { attachTo: document.body });
+    bottom.unmount();
+    pressEscape();
+    expect(top.emitted('close')).toHaveLength(1);
+    top.unmount();
+  });
+});

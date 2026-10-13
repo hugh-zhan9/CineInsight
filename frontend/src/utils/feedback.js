@@ -1,5 +1,7 @@
 import { reactive } from 'vue';
 
+import * as recentOperations from './recentOperations.js';
+
 // Wails 的 macOS webview 没有实现 WKUIDelegate 的 JS 弹框代理，window.alert 静默丢弃、
 // window.confirm 恒返回 false——错误提示看不见、危险操作的确认永远等于"取消"。
 // 这里用应用内组件把这两件事接管掉：notify* 出提示条，confirmAction 返回 Promise<boolean>。
@@ -58,11 +60,22 @@ export function notifySuccess(message, options = {}) {
 }
 
 // 可撤销操作完成后的提示（D-UD-07 第 1 级）：带「撤销」，停留 8 秒。run 调用既有的恢复接口。
+// 只出提示、不进任务中心「最近操作」；要进的用下面的 notifyUndoable。
 export function notifyUndo(message, run) {
   return notify(message, { level: 'success', action: { label: '撤销', run } });
 }
 
-// 点提示里的动作：同一条提示只执行一次（先收起），失败另出错误提示。
+// 可撤销操作的标准出口（D-UD-07、D-UD-09）：先在「最近操作」里记一条（label 缺省用提示文字），再出带「撤销」的提示。
+// 提示里的「撤销」走 recentOperations.undo(id)，与任务中心里的撤销是同一条记录：哪边先撤都只执行一次，
+// 成功后记录移除，另一边再点什么也不做（提示动作照常收起、不报错）；撤销失败时记录留着，可在任务中心再试。
+// 记不进去（例如 undo 不是函数）时退回普通 notifyUndo。返回提示的 id。
+export function notifyUndoable(message, undo, { label } = {}) {
+  const operationID = recentOperations.push({ label: label || message, undo });
+  if (operationID === null) return notifyUndo(message, undo);
+  return notify(message, { level: 'success', action: { label: '撤销', run: () => recentOperations.undo(operationID) } });
+}
+
+// 点提示里的动作：同一条提示只执行一次（先收起），失败另出错误提示「<动作>失败」，有错误原文时接在冒号后面。
 export async function runToastAction(id) {
   const toast = feedbackState.toasts.find(item => item.id === id);
   if (!toast?.action) return false;
@@ -72,7 +85,9 @@ export async function runToastAction(id) {
     await run();
     return true;
   } catch (err) {
-    notifyError(`${label}失败：${err?.message || err}`);
+    const detail = typeof err === 'string' ? err : err?.message;
+    const reason = typeof detail === 'string' ? detail.trim() : '';
+    notifyError(reason ? `${label}失败：${reason}` : `${label}失败`);
     return false;
   }
 }
@@ -114,16 +129,17 @@ export function confirmAction({
       level: confirmLevel,
       impact: String(impact ?? ''),
       danger: danger ?? confirmLevel === 'irreversible',
-      // 不可逆时要原样输入的文字：就是按钮上的字，全站同一规则。
-      requiredText: confirmLevel === 'irreversible' ? String(confirmText) : ''
+      // 不可逆时要原样输入的文字：就是按钮上的字（首尾空白不算），全站同一规则。
+      requiredText: confirmLevel === 'irreversible' ? String(confirmText ?? '').trim() : ''
     };
   });
 }
 
-// 不可逆确认的输入是否已经对上（首尾空白不计）。
+// 不可逆确认的输入是否已经对上（两边的首尾空白都不计）。
 export function confirmTextMatches(confirm, typed) {
-  if (!confirm?.requiredText) return true;
-  return String(typed ?? '').trim() === confirm.requiredText;
+  const required = String(confirm?.requiredText ?? '').trim();
+  if (!required) return true;
+  return String(typed ?? '').trim() === required;
 }
 
 export function resolveConfirm(result) {

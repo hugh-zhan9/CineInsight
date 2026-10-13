@@ -1,30 +1,42 @@
-// 统一设计守卫（D-UD-15，详细设计 §5）：防止换装后回退。七条规则，每条带一份「待迁移」清单：
-//   colors       1. .vue / .css 里不许写 hex 颜色与 rgb()/rgba()/hsl() 字面量，只用 var(--…)（tokens.css 除外）
-//   font-scale   2. font-size 只用 var(--fs-*)；font-weight 只用 var(--fw-*) 或 400/500/600/700（normal、bold、inherit 同义放行）
-//   z-index      3. z-index 只用 var(--z-*)、0、1（局部叠放）或 auto
+// 统一设计守卫（D-UD-15，详细设计 §5）：防止换装后回退。
+//
+// 【待迁移清单是棘轮】清单在 scripts/design-system-pending/*.json，一个文件对应一个负责组（B1…B4 按详细设计 §6
+// 的文件归属，shared 是 App 外壳与公共层，第 0 步 C 组清零），各组只改自己的 JSON，并行换装不会互相冲突。
+// 每条规则下按文件记「还剩几处违规」，例如 "components/VideoListPage.vue": 14。守卫逐文件比对实际处数：
+//   - 有违规但不在清单里 → 失败（新代码必须直接合规，不许往清单里加）；
+//   - 实际处数比清单多 → 失败（这个文件又新增了违规，改掉新增的）；
+//   - 实际处数比清单少 → 失败，提示把数字降到实际值（换掉一处就锁住一处，不会被别处的新增抵消）；
+//   - 实际为 0 → 失败，提示把这一项删掉。
+// 换装时：改完跑 `node scripts/design-system.test.mjs`，按提示把数字改小或删行，直到通过；
+// 想看某条规则当前的全部违规明细，跑 `node scripts/design-system.test.mjs --report <规则名>`。
+// 比对与清单格式在 scripts/design-system-ratchet.mjs；同一份 JSON 里的 buttons 清单由
+// src/components/unstyledControls.test.js（vitest）按同一棘轮检查。
+// 扫描前先跑两段自检（selfCheck：各条规则查得出该查的写法、不误报放行的写法；ratchetSelfCheck：棘轮的四种失败），
+// 改规则或棘轮时一起改。
+//
+// 七条规则：
+//   colors       1. .vue / .css 里不许写颜色字面量，只用 var(--…)（tokens.css 除外，影院表面也在 tokens.css 里）：
+//                   hex；rgb()/rgba()/hsl()/hsla()/hwb()/lab()/lch()/oklab()/oklch()；颜色属性里的 CSS 颜色名
+//                   （white、black、red、gray… 全表；transparent、currentColor、inherit、initial、unset 放行）；
+//                   模板 :style 对象里 color / background 的其他字面量
+//   font-scale   2. font-size 只用 var(--fs-*)；font-weight 只用 var(--fw-*) 或 400/500/600/700（normal、bold、inherit
+//                   同义放行）；font: 简写里不许带 px 字号；:style 对象里的 fontSize 字面量同样要用 var(--fs-*)
+//   z-index      3. z-index（含 :style 对象里的 zIndex）只用 var(--z-*)、auto 或 -1 到 3 的局部叠放
 //   vars         4. 引用的 CSS 变量必须在 tokens.css 里定义（本文件自己声明的局部变量、运行期 setProperty 写的除外）
-//   dialogs      5. 不许有 class="modal-overlay" 的自制遮罩；BaseModal 只给 ui/DialogShell 内部用，页面一律用 DialogShell
+//   dialogs      5. 模板 class 绑定（静态或 :class）里不许有 modal-overlay 的自制遮罩；BaseModal（含 <base-modal>
+//                   写法与改名注册）只给 ui/DialogShell 内部用，页面一律用 DialogShell
 //   page-header  6. 顶层页面（顶栏导航列出的各页）模板里必须有 PageHeader 或 HeroHeader
 //   wording      7. 模板文本里不许出现用词表（详细设计 §4）的旧词：...、选择本页、打开所在目录 等
 // 手机端 short-feed/ 不在统一设计范围内（受保护，见概要设计「受保护的旧行为」），整个目录不查。
-//
-// 待迁移清单在 scripts/design-system-pending/ 下，一个文件对应一个负责组（B1…B4 按详细设计 §6 的文件归属，
-// shared 是 App 外壳与公共层，第 0 步 C 组清零），各组只改自己的文件，并行换装不会互相冲突。
-// 清单只减不增，守卫双向检查：
-//   - 不在清单里的文件违反了规则 → 失败（新代码必须直接合规，不许往清单里加）；
-//   - 清单里的文件已经不违反该规则 → 也失败，提示把它从清单里划掉（清单不留过期项）。
-// 各组换装一个文件后：跑 `node scripts/design-system.test.mjs`，按「已合规，请从清单删除」的提示删掉对应行，
-// 直到通过；想看某条规则当前的全部违规明细，跑 `node scripts/design-system.test.mjs --report <规则名>`。
-// 同一份 JSON 里的 buttons 清单由 src/components/unstyledControls.test.js（vitest）检查，规则见那个文件。
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { loadPendingLists, PENDING_KEYS, pendingTotal, ratchetFailures } from './design-system-ratchet.mjs';
+
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
-const PENDING_DIR = fileURLToPath(new URL('./design-system-pending', import.meta.url));
-const RULES = ['colors', 'font-scale', 'z-index', 'vars', 'dialogs', 'page-header', 'wording'];
-const LIST_KEYS = new Set([...RULES, 'buttons']);
+const RULES = PENDING_KEYS.filter(key => key !== 'buttons');
 
 function walk(dir) {
   return readdirSync(dir).sort().flatMap(name => {
@@ -46,6 +58,12 @@ function stripComments(text) {
     .replace(/(^|[\s;{}(),])\/\/[^\n]*/gm, '$1');
 }
 
+// 把 <script> 块换成等长空白（保留换行与下标），只留样式与模板给「颜色名」检查：脚本里的普通对象
+// （选项、图表配置）不是样式声明。
+function blankScripts(text) {
+  return text.replace(/<script\b[\s\S]*?<\/script>/g, match => match.replace(/[^\n]/g, ' '));
+}
+
 function templateOf(source) {
   return (source.match(/<template>([\s\S]*)<\/template>/) || [, ''])[1];
 }
@@ -64,9 +82,45 @@ const RUNTIME_VARS = new Set(ALL_FILES.filter(file => /\.(js|vue)$/.test(file) &
   .flatMap(file => [...read(file).matchAll(/setProperty\(\s*['"](--[\w-]+)['"]/g)].map(match => match[1])));
 
 const HEX = /(?<![\w&#%])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![\w-])/g;
+const COLOR_FUNCTION = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g;
+// CSS 颜色名全表（CSS Color 4）。transparent、currentColor 与全局关键字不在表里，自然放行。
+const NAMED_COLORS = `aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown
+  burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray
+  darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue
+  darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite
+  forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory
+  khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen
+  lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime
+  limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue
+  mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive
+  olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum
+  powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue
+  slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke
+  yellow yellowgreen`.split(/\s+/);
+const NAMED_COLOR = new RegExp(`(?<![\\w-])(?:${NAMED_COLORS.join('|')})(?![\\w-])`, 'gi');
+// 取值是颜色的属性（CSS 写法，同时认 :style 对象里的驼峰写法与带引号的键）。
+const COLOR_PROPERTIES = ['color', 'background', 'background-color', 'border', 'border-top', 'border-right', 'border-bottom',
+  'border-left', 'border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'border-block', 'border-inline', 'outline', 'outline-color', 'box-shadow', 'text-shadow', 'caret-color', 'accent-color',
+  'text-decoration', 'text-decoration-color', 'text-emphasis-color', 'column-rule', 'column-rule-color', 'fill', 'stroke',
+  'stop-color', 'flood-color', 'lighting-color', 'scrollbar-color', '-webkit-text-fill-color', '-webkit-text-stroke-color'];
+const camel = name => name.replace(/^-/, '').replace(/-(\w)/g, (_, letter) => letter.toUpperCase());
+const COLOR_DECLARATION = new RegExp(
+  `(?<![\\w$-])['"]?(${[...new Set([...COLOR_PROPERTIES, ...COLOR_PROPERTIES.map(camel)])].join('|')})['"]?\\s*:\\s*([^;{}"\\n]+)`, 'g');
+// SVG 展示属性直接写颜色名（fill="white"）同样算写死。
+const COLOR_ATTRIBUTE = /(?<![\w:.@-])(fill|stroke|color|stop-color|flood-color|lighting-color)="([^"]*)"/g;
+
 const FONT_SIZE_OK = /^(var\(--fs-[\w-]+\)|inherit)$/;
 const FONT_WEIGHT_OK = /^(var\(--fw-[\w-]+\)|400|500|600|700|normal|bold|inherit)$/;
-const Z_INDEX_OK = /^(var\(--z-[\w-]+\)|0|1|auto)$/;
+const FONT_SHORTHAND_PX = /(?<![\w.-])\d+(?:\.\d+)?px\b/;
+// 局部叠放（同一组件里谁压谁）用 -1 到 3 的小整数；跨组件的层级一律用 --z-* 刻度。
+const Z_INDEX_OK = /^(var\(--z-[\w-]+\)|-1|0|1|2|3|auto)$/;
+const STYLE_COLOR_OK = /^(var\(--[\w-]+\)|transparent|currentcolor|inherit|initial|unset|none)$/i;
+const COUNTED_COLOR = new RegExp(`${HEX.source}|${COLOR_FUNCTION.source}|${NAMED_COLOR.source}`, 'i');
+// 模板 :style 对象里的字面量：只看纯字符串（不含插值）与数字；变量与表达式是运行期的值，不归这里管。
+const STYLE_BINDING = /(?<![\w-])(?:v-bind:|:)style="([^"]*)"/g;
+const STYLE_LITERAL = /(?<![\w$-])['"]?(fontSize|font-size|zIndex|z-index|color|background|backgroundColor|background-color)['"]?\s*:\s*('[^'\\]*'|`[^`$\\]*`|-?\d+(?:\.\d+)?)(?=\s*[,}]|\s*$)/g;
+
 // 用词表（详细设计 §4）里能无歧义查出的旧词。「删除」「完成」「预览」「移入回收站」要看语境，靠各组人工改。
 const OLD_WORDS = ['选择本页', '全选已加载', '全选已列出的', '清除选择', '打开所在目录', '打开目录', '在文件夹里找',
   '重新读取', '重新加载', '重新载入', '重新统计', '彻底删除', '只删记录', '移除记录', '保留这份', '批量删除', '删除所选', '✕'];
@@ -108,74 +162,147 @@ function navPageKeys() {
   return keys;
 }
 
+const kebab = name => name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+const pascal = name => name.replace(/(^|-)(\w)/g, (_, __, letter) => letter.toUpperCase());
+
+// BaseModal 在本文件里的全部注册名：默认导入名与 components 里的改名注册（含 'base-modal' 这种键）。
+function baseModalNames(code) {
+  const names = new Map([['BaseModal', null]]);
+  for (const match of code.matchAll(/import\s+(\w+)\s+from\s+['"][^'"]*\/BaseModal(?:\.vue)?['"]/g)) {
+    if (!names.has(match[1])) names.set(match[1], match.index);
+  }
+  for (const match of code.matchAll(/(?<![\w$.])['"]?([\w-]+)['"]?\s*:\s*BaseModal\b/g)) {
+    const name = pascal(match[1]);
+    if (!names.has(name)) names.set(name, match.index);
+  }
+  return names;
+}
+
+// 一个 .vue / .css 文件的规则 1–5、7（规则 6 看导航清单，在 scan 里）。add(rule, detail) 记一处违规。
+function scanSource(file, source, add) {
+  const code = stripComments(source);
+  const isVue = file.endsWith('.vue');
+  const template = isVue ? stripComments(templateOf(source)) : '';
+  if (file !== 'styles/tokens.css') {
+    for (const match of code.matchAll(HEX)) {
+      // <template #slot> 的插槽简写不是颜色。
+      if (/<template\b[^>]*$/.test(code.slice(Math.max(0, match.index - 200), match.index))) continue;
+      add('colors', `${lineOf(code, match.index)}: ${match[0]}`);
+    }
+    for (const match of code.matchAll(COLOR_FUNCTION)) add('colors', `${lineOf(code, match.index)}: ${match[0]}…)`);
+    const styled = isVue ? blankScripts(code) : code;
+    for (const match of styled.matchAll(COLOR_DECLARATION)) {
+      const value = match[2].replace(/url\([^)]*\)/g, '');
+      for (const name of value.matchAll(NAMED_COLOR)) add('colors', `${lineOf(styled, match.index)}: ${match[1]}: ${name[0]}`);
+    }
+    for (const match of template.matchAll(COLOR_ATTRIBUTE)) {
+      for (const name of match[2].matchAll(NAMED_COLOR)) add('colors', `${lineOf(template, match.index)}: ${match[1]}="${name[0]}"`);
+    }
+    for (const { value, line } of declarations(code, 'font-size')) if (!FONT_SIZE_OK.test(value)) add('font-scale', `${line}: font-size ${value}`);
+    for (const { value, line } of declarations(code, 'font-weight')) if (!FONT_WEIGHT_OK.test(value)) add('font-scale', `${line}: font-weight ${value}`);
+    for (const { value, line } of declarations(code, 'font')) if (FONT_SHORTHAND_PX.test(value)) add('font-scale', `${line}: font ${value}`);
+    for (const { value, line } of declarations(code, 'z-index')) if (!Z_INDEX_OK.test(value)) add('z-index', `${line}: z-index ${value}`);
+    for (const binding of template.matchAll(STYLE_BINDING)) {
+      const line = lineOf(template, binding.index);
+      for (const literal of binding[1].matchAll(STYLE_LITERAL)) {
+        const key = camel(literal[1]);
+        const value = literal[2].replace(/^['`]|['`]$/g, '').trim();
+        if (key === 'fontSize') {
+          if (!FONT_SIZE_OK.test(value)) add('font-scale', `${line}: :style fontSize ${literal[2]}`);
+        } else if (key === 'zIndex') {
+          if (!Z_INDEX_OK.test(value)) add('z-index', `${line}: :style zIndex ${literal[2]}`);
+        } else if (!STYLE_COLOR_OK.test(value) && !COUNTED_COLOR.test(value)) {
+          // hex、颜色函数与颜色名上面已经按处数记过（COUNTED_COLOR），这里只补其他字面量，不重复计数。
+          add('colors', `${line}: :style ${key} ${literal[2]}`);
+        }
+      }
+    }
+  }
+  const local = new Set([...code.matchAll(/(--[\w-]+)\s*:/g), ...code.matchAll(/['"](--[\w-]+)['"]/g)].map(match => match[1]));
+  for (const match of code.matchAll(/var\(\s*(--[\w-]+)/g)) {
+    const name = match[1];
+    if (!TOKEN_NAMES.has(name) && !local.has(name) && !RUNTIME_VARS.has(name)) add('vars', `${lineOf(code, match.index)}: ${name}`);
+  }
+  if (!isVue) return;
+  if (file !== 'components/ui/DialogShell.vue' && file !== 'components/ui/BaseModal.vue') {
+    for (const [name, index] of baseModalNames(code)) {
+      if (index !== null) add('dialogs', `${lineOf(code, index)}: BaseModal 改名注册为 ${name}`);
+      for (const match of template.matchAll(new RegExp(`<(?:${name}|${kebab(name)})(?![\\w-])`, 'g'))) {
+        add('dialogs', `${lineOf(template, match.index)}: ${match[0]}>`);
+      }
+    }
+    for (const match of template.matchAll(/(?<![\w-])(?:v-bind:|:)?class="[^"]*\bmodal-overlay\b/g)) {
+      add('dialogs', `${lineOf(template, match.index)}: class 绑定里的 modal-overlay`);
+    }
+  }
+  for (const word of OLD_WORDS) {
+    let index = template.indexOf(word);
+    while (index !== -1) {
+      add('wording', `${lineOf(template, index)}: ${word}`);
+      index = template.indexOf(word, index + word.length);
+    }
+  }
+  for (const match of template.matchAll(ASCII_ELLIPSIS)) add('wording', `${lineOf(template, match.index)}: ...`);
+}
+
 function scan() {
   const found = new Map(RULES.map(rule => [rule, new Map()]));
-  const add = (rule, file, detail) => {
+  const record = (rule, file, detail) => {
     const files = found.get(rule);
     if (!files.has(file)) files.set(file, []);
     files.get(file).push(detail);
   };
-  for (const file of STYLE_FILES) {
-    const source = read(file);
-    const code = stripComments(source);
-    if (file !== 'styles/tokens.css') {
-      for (const match of code.matchAll(HEX)) {
-        // <template #slot> 的插槽简写不是颜色。
-        if (/<template\b[^>]*$/.test(code.slice(Math.max(0, match.index - 200), match.index))) continue;
-        add('colors', file, `${lineOf(code, match.index)}: ${match[0]}`);
-      }
-      for (const match of code.matchAll(/\b(?:rgba?|hsla?)\(/g)) add('colors', file, `${lineOf(code, match.index)}: ${match[0]}…)`);
-      for (const { value, line } of declarations(code, 'font-size')) if (!FONT_SIZE_OK.test(value)) add('font-scale', file, `${line}: font-size ${value}`);
-      for (const { value, line } of declarations(code, 'font-weight')) if (!FONT_WEIGHT_OK.test(value)) add('font-scale', file, `${line}: font-weight ${value}`);
-      for (const { value, line } of declarations(code, 'z-index')) if (!Z_INDEX_OK.test(value)) add('z-index', file, `${line}: z-index ${value}`);
-    }
-    const local = new Set([...code.matchAll(/(--[\w-]+)\s*:/g), ...code.matchAll(/['"](--[\w-]+)['"]/g)].map(match => match[1]));
-    for (const match of code.matchAll(/var\(\s*(--[\w-]+)/g)) {
-      const name = match[1];
-      if (!TOKEN_NAMES.has(name) && !local.has(name) && !RUNTIME_VARS.has(name)) add('vars', file, `${lineOf(code, match.index)}: ${name}`);
-    }
-    if (!file.endsWith('.vue')) continue;
-    const template = stripComments(templateOf(source));
-    if (file !== 'components/ui/DialogShell.vue' && file !== 'components/ui/BaseModal.vue') {
-      for (const match of template.matchAll(/<BaseModal\b/g)) add('dialogs', file, `${lineOf(template, match.index)}: <BaseModal>`);
-      for (const match of template.matchAll(/(?<![:\w-])class="[^"]*\bmodal-overlay\b/g)) add('dialogs', file, `${lineOf(template, match.index)}: class="modal-overlay"`);
-    }
-    for (const word of OLD_WORDS) {
-      let index = template.indexOf(word);
-      while (index !== -1) {
-        add('wording', file, `${lineOf(template, index)}: ${word}`);
-        index = template.indexOf(word, index + word.length);
-      }
-    }
-    for (const match of template.matchAll(ASCII_ELLIPSIS)) add('wording', file, `${lineOf(template, match.index)}: ...`);
-  }
+  for (const file of STYLE_FILES) scanSource(file, read(file), (rule, detail) => record(rule, file, detail));
   for (const file of new Set(Object.values(PAGE_FILES))) {
-    if (!/<(PageHeader|HeroHeader)\b/.test(stripComments(templateOf(read(file))))) add('page-header', file, '模板里没有 PageHeader / HeroHeader');
+    if (!/<(PageHeader|HeroHeader)\b/.test(stripComments(templateOf(read(file))))) record('page-header', file, '模板里没有 PageHeader / HeroHeader');
   }
   return found;
 }
 
-function loadPendingLists() {
-  const lists = new Map(RULES.map(rule => [rule, new Map()]));
-  const problems = [];
-  for (const name of readdirSync(PENDING_DIR).filter(entry => entry.endsWith('.json')).sort()) {
-    const data = JSON.parse(readFileSync(join(PENDING_DIR, name), 'utf8'));
-    for (const [key, files] of Object.entries(data.pending || {})) {
-      if (!LIST_KEYS.has(key)) problems.push(`${name}: 未知的清单 ${key}`);
-      if (!Array.isArray(files)) continue;
-      const sorted = [...files].sort();
-      if (files.some((file, index) => file !== sorted[index]) || new Set(files).size !== files.length) problems.push(`${name}: ${key} 要按字母序排列且不重复`);
-      if (!lists.has(key)) continue;
-      for (const file of files) {
-        if (!existsSync(join(SRC, file))) problems.push(`${name}: ${key} 里的 ${file} 不存在（已删除的文件请从清单划掉）`);
-        if (lists.get(key).has(file)) problems.push(`${name}: ${key} 里的 ${file} 同时出现在 ${lists.get(key).get(file)}`);
-        lists.get(key).set(file, name);
-      }
-    }
-  }
-  return { lists, problems };
+// 规则自检：树里暂时没有、但最容易绕过的写法（M-10 列出的那些）逐条喂给 scanSource，确认都能查出来，
+// 放行的写法（-1 到 3 的叠放、currentColor、var()、脚本里的普通对象）不误报。改规则时这里跟着改。
+function selfCheck() {
+  const fixture = `<template>
+  <div :class="['modal-overlay', extra]" :style="{ fontSize: '13px', zIndex: 9, color: 'white', background: 'url(a.png)', backgroundColor: 'var(--panel-bg)' }">
+    <base-modal />
+    <Dlg />
+    <svg><path fill="black" stroke="currentColor" /></svg>
+    <span style="z-index: 2" :style="{ zIndex: 3, fontSize: 'var(--fs-body)' }">ok</span>
+  </div>
+</template>
+<script>
+import Dlg from './ui/BaseModal.vue';
+export default { components: { Dlg }, data: () => ({ color: 'red' }) };
+</script>
+<style scoped>
+.a { color: white; border: 1px solid var(--panel-bg, grey); font: 600 13px/1.4 sans-serif; background: hsl(0 0% 0%); z-index: -1; }
+.b { z-index: 4; background: oklch(0.5 0.1 200); box-shadow: 0 0 0 1px transparent; color: currentColor; font: inherit; }
+</style>
+`;
+  const counts = {};
+  scanSource('components/SelfCheck.vue', fixture, rule => { counts[rule] = (counts[rule] || 0) + 1; });
+  assert.deepEqual(counts, { colors: 7, 'font-scale': 2, 'z-index': 2, dialogs: 4 }, '守卫规则自检没过：某条检查查不出它该查的写法，或误报了放行的写法');
 }
 
+// 棘轮自检：四种失败各一条（没登记、比清单多、比清单少、已清零），处数相等的不报。buttons 用的是同一个函数。
+function ratchetSelfCheck() {
+  const recorded = new Map([
+    ['same.vue', { count: 2, owner: 'B1.json' }],
+    ['more.vue', { count: 1, owner: 'B1.json' }],
+    ['fewer.vue', { count: 3, owner: 'B2.json' }],
+    ['fixed.vue', { count: 1, owner: 'B3.json' }]
+  ]);
+  const actual = new Map([['same.vue', ['1: a', '2: b']], ['more.vue', ['1: a', '2: b']], ['fewer.vue', ['1: a']], ['new.vue', ['1: a']]]);
+  assert.deepEqual(ratchetFailures('colors', actual, recorded).map(failure => failure.split('\n')[0]), [
+    '[colors] more.vue 现有 2 处不合规，比 design-system-pending/B1.json 记的 1 处多，请改掉新增的（清单只减不增）：',
+    '[colors] fewer.vue 只剩 1 处了，请把 design-system-pending/B2.json 里 colors 的这一项从 3 改成 1',
+    '[colors] new.vue 有 1 处不合规（新代码不能进待迁移清单，请直接改）：',
+    '[colors] fixed.vue 已合规，请从 design-system-pending/B3.json 的 colors 清单删除'
+  ], '棘轮自检没过：ratchetFailures 的比对规则被改坏了');
+}
+
+selfCheck();
+ratchetSelfCheck();
 const found = scan();
 
 // --report [规则名]：打印当前违规明细（按文件），不做断言，给换装时对照用。
@@ -191,6 +318,18 @@ if (reportIndex !== -1) {
   process.exit(0);
 }
 
+// 影院表面（D-UD-02）不随系统主题变：深色主题改过的每个变量，.surface-cinema 都要跟着重映射，
+// 否则浅色主题下观看侧页面会漏出浅色值（审阅、置信度、回顾这些变量就曾经漏过）。
+function tokenBlock(selector) {
+  const start = TOKENS.indexOf(selector);
+  assert.ok(start !== -1, `tokens.css 里找不到 ${selector}`);
+  const open = TOKENS.indexOf('{', start);
+  return TOKENS.slice(open + 1, TOKENS.indexOf('\n}', open));
+}
+const darkOnly = [...tokenBlock("[data-theme='dark'] {").matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1])
+  .filter(name => !new RegExp(`(^|[\\s;{])${name}\\s*:`).test(tokenBlock('.surface-cinema {')));
+assert.deepEqual(darkOnly, [], `.surface-cinema 漏了深色主题改过的变量：${darkOnly.join(' ')}`);
+
 const navKeys = navPageKeys();
 assert.deepEqual(
   [...new Set(navKeys)].sort(),
@@ -198,19 +337,12 @@ assert.deepEqual(
   '顶栏导航的页面与守卫 6 的 PAGE_FILES 对不上：新增或改名的页面要在 PAGE_FILES 里登记它的组件文件'
 );
 
-const { lists, problems } = loadPendingLists();
+const { lists, problems } = loadPendingLists(SRC);
 const failures = [...problems];
 const summary = [];
 for (const rule of RULES) {
-  const violating = found.get(rule);
-  const pending = lists.get(rule);
-  for (const [file, details] of violating) {
-    if (!pending.has(file)) failures.push(`[${rule}] ${file} 不合规（新代码不能进待迁移清单，请直接改）：\n    ${details.slice(0, 8).join('\n    ')}`);
-  }
-  for (const [file, owner] of pending) {
-    if (!violating.has(file)) failures.push(`[${rule}] ${file} 已合规，请从 design-system-pending/${owner} 的 ${rule} 清单删除`);
-  }
-  summary.push(`${rule} ${pending.size}`);
+  failures.push(...ratchetFailures(rule, found.get(rule), lists.get(rule)));
+  summary.push(`${rule} ${lists.get(rule).size} files/${pendingTotal(lists.get(rule))}`);
 }
 
 assert.deepEqual(failures, [], `统一设计守卫未通过（${failures.length} 项）：\n${failures.join('\n')}`);

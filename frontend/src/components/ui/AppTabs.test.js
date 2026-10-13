@@ -45,18 +45,49 @@ describe('AppTabs', () => {
   });
 
   it('← / → skip disabled tabs and wrap; Home / End go to the first / last enabled tab', async () => {
-    const wrapper = mountTabs();
-    const list = wrapper.get('[role="tablist"]');
-    await list.trigger('keydown', { key: 'ArrowRight' });
-    await wrapper.setProps({ modelValue: 'health' });
-    await list.trigger('keydown', { key: 'ArrowRight' });
-    await list.trigger('keydown', { key: 'ArrowLeft' });
-    await list.trigger('keydown', { key: 'Home' });
-    await list.trigger('keydown', { key: 'End' });
-    await list.trigger('keydown', { key: 'ArrowDown' });
-    expect(wrapper.emitted('update:modelValue')).toEqual([['health'], ['lost'], ['complete'], ['lost']]);
-    await wrapper.vm.$nextTick();
-    expect(document.activeElement).toBe(wrapper.findAll('[role="tab"]')[3].element);
+    // 宿主照常接住 update:modelValue（v-model）。
+    const wrapper = mountTabs({ 'onUpdate:modelValue': value => wrapper.setProps({ modelValue: value }) });
+    const press = async key => {
+      await wrapper.get('[role="tablist"]').trigger('keydown', { key });
+      return document.activeElement?.dataset.tab;
+    };
+    expect(await press('ArrowRight')).toBe('health');
+    expect(await press('ArrowRight')).toBe('lost');
+    expect(await press('ArrowLeft')).toBe('health');
+    expect(await press('ArrowLeft')).toBe('complete');
+    expect(await press('End')).toBe('health');
+    expect(await press('Home')).toBe('lost');
+    expect(await press('ArrowDown')).toBe('lost');
+    expect(wrapper.emitted('update:modelValue')).toEqual([['health'], ['lost'], ['health'], ['complete'], ['health'], ['lost']]);
+    expect(wrapper.props('modelValue')).toBe('lost');
+    wrapper.unmount();
+  });
+
+  it('arrows move from the focused tab, so a host that ignores the emitted value still walks a → b → c', async () => {
+    const wrapper = mount(AppTabs, {
+      props: { tabs: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }, { key: 'c', label: 'C' }], modelValue: 'a' },
+      attachTo: document.body
+    });
+    const tabs = wrapper.findAll('[role="tab"]');
+    tabs[0].element.focus();
+    await tabs[0].trigger('keydown', { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(tabs[1].element);
+    await tabs[1].trigger('keydown', { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(tabs[2].element);
+    expect(wrapper.emitted('update:modelValue')).toEqual([['b'], ['c']]);
+    expect(tabs.map(tab => tab.attributes('aria-selected'))).toEqual(['true', 'false', 'false']);
+    wrapper.unmount();
+  });
+
+  it('a disabled selected tab hands the tab stop to the first enabled one; arrows go on from there', async () => {
+    const wrapper = mountTabs({ modelValue: 'rules' });
+    const tabs = wrapper.findAll('[role="tab"]');
+    expect(tabs.map(tab => tab.attributes('tabindex'))).toEqual(['0', '-1', '-1', '-1']);
+    tabs[0].element.focus();
+    await tabs[0].trigger('keydown', { key: 'ArrowRight' });
+    await tabs[1].trigger('keydown', { key: 'ArrowRight' });
+    expect(wrapper.emitted('update:modelValue')).toEqual([['complete'], ['health']]);
+    expect(document.activeElement).toBe(tabs[3].element);
     wrapper.unmount();
   });
 

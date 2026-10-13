@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import AppFeedback from './AppFeedback.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { confirmAction, feedbackState, notify, notifyError, notifyUndo, resetFeedback } from '../utils/feedback.js';
 
 const SRC = join(process.cwd(), 'src');
@@ -112,6 +113,56 @@ describe('应用内提示', () => {
     wrapper.unmount();
   });
 
+  it('确认框叠在对话框上时，Esc 只关确认框（按「取消」结掉），下面的对话框不动', async () => {
+    const page = mount(DialogShell, { props: { title: '回收站' }, attachTo: document.body });
+    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const answer = confirmAction({ title: '从片库移除', message: '移除 1 部视频的记录。' });
+    await flushPromises();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(await answer).toBe(false);
+    expect(page.emitted('close')).toBeUndefined();
+
+    await flushPromises();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(page.emitted('close')).toHaveLength(1);
+    wrapper.unmount();
+    page.unmount();
+  });
+
+  it('D-UD-07 不可逆确认：输入法组字中的回车不算确认', async () => {
+    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const answer = confirmAction({ title: '永久删除', confirmText: '永久删除', level: 'irreversible' });
+    await flushPromises();
+    const input = wrapper.get('[data-test="app-confirm-input"]');
+    await input.setValue('永久删除');
+
+    await input.trigger('keydown', { key: 'Enter', isComposing: true });
+    await input.trigger('keydown', { key: 'Enter', keyCode: 229 });
+    expect(feedbackState.confirm).not.toBe(null);
+
+    await input.trigger('keydown', { key: 'Enter' });
+    expect(await answer).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('D-UD-13 不含表单的普通确认点遮罩等于取消；不可逆确认有输入框，点遮罩不关', async () => {
+    const wrapper = mount(AppFeedback, { attachTo: document.body });
+    const plain = confirmAction({ title: '从片库移除', message: '移除 3 部视频的记录。' });
+    await flushPromises();
+    await wrapper.get('.modal-overlay').trigger('click');
+    expect(await plain).toBe(false);
+    expect(feedbackState.confirm).toBe(null);
+
+    const typed = confirmAction({ title: '永久删除', confirmText: '永久删除', level: 'irreversible' });
+    await flushPromises();
+    await wrapper.get('.modal-overlay').trigger('click');
+    expect(feedbackState.confirm).not.toBe(null);
+    resetFeedback();
+    void typed;
+    wrapper.unmount();
+  });
+
   it('换一个确认框时输入清空', async () => {
     const wrapper = mount(AppFeedback, { attachTo: document.body });
     const first = confirmAction({ confirmText: '清空', level: 'irreversible' });
@@ -157,7 +208,7 @@ describe('提示 API 必须显式导入', () => {
       const source = readFileSync(file, 'utf8');
       const importLine = source.match(/import \{([^}]*)\} from '[^']*utils\/feedback\.js';/);
       const imported = new Set((importLine?.[1] || '').split(',').map(name => name.trim()).filter(Boolean));
-      for (const api of ['notify', 'notifyError', 'notifySuccess', 'notifyUndo', 'confirmAction']) {
+      for (const api of ['notify', 'notifyError', 'notifySuccess', 'notifyUndo', 'notifyUndoable', 'confirmAction']) {
         const used = new RegExp(`(?<![\\w.])${api}\\(`).test(source);
         if (used && !imported.has(api)) missing.push(`${relative(SRC, file)} 用了 ${api}() 但没导入`);
       }

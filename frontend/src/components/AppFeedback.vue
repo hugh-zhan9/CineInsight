@@ -45,7 +45,7 @@
           autocomplete="off"
           spellcheck="false"
           data-test="app-confirm-input"
-          @keydown.enter.prevent="confirmOk"
+          @keydown.enter="handleTypedEnter"
         >
       </label>
       <template #footer>
@@ -98,6 +98,12 @@ export default {
     runToastAction,
     confirmOk() {
       if (this.canConfirm) resolveConfirm(true);
+    },
+    // 输入法组字时的回车是选字上屏，不是确认（WKWebView 里组字结束那一下 keyCode 是 229）。
+    handleTypedEnter(event) {
+      if (event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      this.confirmOk();
     }
   }
 };
@@ -166,8 +172,9 @@ export default {
   text-underline-offset: 2px;
 }
 
-.app-toast__close { width: 22px; height: 22px; margin: -1px 0; color: inherit; opacity: 0.7; }
-.app-toast__close:hover:not(:disabled) { background: transparent; color: inherit; opacity: 1; }
+/* 比全局 .btn-icon.btn--sm（28×28，components.css 在构建产物里排在组件样式后面）多一层选择器，22×22 才生效。 */
+.app-toast .app-toast__close { width: 22px; height: 22px; margin: -1px 0; color: inherit; opacity: 0.7; }
+.app-toast .app-toast__close:hover:not(:disabled) { background: transparent; color: inherit; opacity: 1; }
 
 .app-confirm__message {
   margin: 0;

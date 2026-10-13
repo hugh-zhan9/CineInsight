@@ -77,6 +77,24 @@ describe('DialogShell', () => {
     expect(blocked.emitted('close')).toBeUndefined();
   });
 
+  it('keeps focus on a child that focused its own input in mounted(), and still returns focus to the opener', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const NameField = {
+      template: '<input ref="input" type="text" class="text-input" data-test="name-input">',
+      mounted() { this.$refs.input.focus(); }
+    };
+    const wrapper = mount({
+      components: { DialogShell, NameField },
+      template: '<DialogShell title="重命名"><NameField /></DialogShell>'
+    }, { attachTo: document.body });
+    expect(document.activeElement).toBe(wrapper.get('[data-test="name-input"]').element);
+    wrapper.unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it('moves focus into the dialog and gives it back on close', () => {
     const opener = document.createElement('button');
     document.body.appendChild(opener);
