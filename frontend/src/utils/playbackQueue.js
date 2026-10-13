@@ -19,3 +19,45 @@ export async function addToPlaybackQueue({ videoIDs = [], collectionID = 0, star
   }
   return true;
 }
+
+const QUEUE_PAGE_LIMIT = 200;
+const QUEUE_READ_ATTEMPTS = 3;
+const isQueueChanged = error => String(error?.message || error).includes('queue_changed');
+
+// 某部视频在待播队列里的条目（同一部可能被加过多次）。按同一个 revision 分页读完整个队列，
+// 读到一半队列变了（后端报 queue_changed）就从头再读，最多 3 次。
+export async function findQueueEntriesForVideo(videoID) {
+  const target = Number(videoID);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      let page = await GetPlaybackQueue({ limit: QUEUE_PAGE_LIMIT });
+      const revision = page.state.revision;
+      const entryIDs = [];
+      for (;;) {
+        for (const item of page.items || []) if (Number(item.video_id) === target) entryIDs.push(item.id);
+        if (!page.has_more) return { revision, entryIDs };
+        page = await GetPlaybackQueue({ revision, cursor_position: page.cursor_position, cursor_id: page.cursor_id, limit: QUEUE_PAGE_LIMIT });
+      }
+    } catch (error) {
+      if (!isQueueChanged(error) || attempt >= QUEUE_READ_ATTEMPTS) throw error;
+    }
+  }
+}
+
+// 把一部视频从待播队列里拿掉（它在队列里的每一条都删）。每删一条 revision 加一；
+// 中途队列被别处改了，就按最新的队列重来一次。返回删掉的条数。
+export async function removeVideoFromPlaybackQueue(videoID) {
+  for (let attempt = 1; ; attempt += 1) {
+    const { revision, entryIDs } = await findQueueEntriesForVideo(videoID);
+    let current = revision;
+    try {
+      for (const entryID of entryIDs) {
+        await EditPlaybackQueue({ expected_revision: current, action: 'remove', entry_id: entryID });
+        current += 1;
+      }
+      return entryIDs.length;
+    } catch (error) {
+      if (!isQueueChanged(error) || attempt >= QUEUE_READ_ATTEMPTS) throw error;
+    }
+  }
+}
