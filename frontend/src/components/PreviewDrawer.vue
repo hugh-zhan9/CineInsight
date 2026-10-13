@@ -268,7 +268,7 @@
               @open="openVideo(related.id)"
               @action="removeRelatedVideo(related)"
             >
-              <template #actions><button type="button" class="btn btn--danger btn--sm" :disabled="isRelatedVideoUpdating(related.id)" :data-test="`drawer-person-video-delete-${related.id}`" @click="requestPersonMediaDelete('video', related)">删除</button></template>
+              <template #actions><button type="button" class="btn btn--danger btn--sm" :disabled="isRelatedVideoUpdating(related.id)" :data-test="`drawer-person-video-delete-${related.id}`" @click="requestPersonMediaDelete('video', related)">从片库移除…</button></template>
             </RelatedVideoItem>
           </div>
           <p v-if="!(personDetail.videos || []).length" class="detail-empty">当前没有活跃关联视频。软删除视频的关系仍会保留。</p>
@@ -291,7 +291,7 @@
                 :data-test="`person-image-remove-${image.id}`"
                 @click="removePersonImageRelation(image)"
               >{{ isPersonImageUpdating(image.id) ? '处理中…' : '解除关联' }}</button>
-              <button type="button" class="btn btn--danger btn--sm" :disabled="isPersonImageUpdating(image.id)" :data-test="`drawer-person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">删除图片</button>
+              <button type="button" class="btn btn--danger btn--sm" :disabled="isPersonImageUpdating(image.id)" :data-test="`drawer-person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">从图片库移除…</button>
             </figure>
           </div>
           <p v-else class="detail-empty">当前没有活跃关联图片。软删除图片的关系仍会保留。</p>

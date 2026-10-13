@@ -145,6 +145,9 @@ describe('PreviewDrawer', () => {
     const okResult = ids => Promise.resolve({ batch_id: 'b1', items: ids.map(id => ({ id, code: 'ok' })) });
     api.DeleteVideosWithResult.mockImplementation(okResult); api.DeleteImagesWithResult.mockImplementation(okResult);
     const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } }, global: { stubs: { teleport: true } } }); await flushPromises();
+    // 按钮写明效果（D-UD-08）：人物页上「移除」容易被理解成解绑，所以说清是从哪个库移除；总会先弹确认。
+    expect(w.get('[data-test="drawer-person-video-delete-1"]').text()).toBe('从片库移除…');
+    expect(w.get('[data-test="drawer-person-image-delete-11"]').text()).toBe('从图片库移除…');
     await w.get('[data-test="drawer-person-video-delete-1"]').trigger('click');
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
     expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([1], false, expect.any(String));
