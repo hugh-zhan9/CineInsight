@@ -7,6 +7,8 @@ const photoLibrarySource = readFileSync(new URL('../src/components/PhotoLibraryP
 // 撤销提示条（video-list/TrashUndoBanner.vue）改为按批次撤销，片库页与图片页共用。
 const trashDialogSource = readFileSync(new URL('../src/components/TrashCenterDialog.vue', import.meta.url), 'utf8');
 const trashUndoSource = readFileSync(new URL('../src/components/video-list/TrashUndoBanner.vue', import.meta.url), 'utf8');
+// 视频清理的删除三期起由清理中心页执行（D-P3-02，原来在片库页里）。
+const cleanupCenterSource = readFileSync(new URL('../src/components/manage/CleanupCenterPage.vue', import.meta.url), 'utf8');
 
 // 回收站入口 2026-09-01 起在「管理」菜单的「维护」组里。
 assert.match(videoListSource, /case 'trash': this\.openTrashDialog\(\)/, 'manage menu should expose the trash center');
@@ -20,8 +22,9 @@ assert.match(trashUndoSource, /notifyUndoable\(text, \(\) => this\.undoFromToast
 assert.doesNotMatch(trashUndoSource, /undo-delete-banner/, 'the in-page undo strip is gone');
 assert.match(trashUndoSource, /throw new Error\(trashErrorText\(err\)\)/, 'a failed undo should surface the reason and keep the record for retry');
 assert.match(videoListSource, /runDelete\(\{ ids, deleteFile/, 'library deletion should go through the result-coded delete flow');
-assert.match(videoListSource, /runDelete\(\{ ids: selectedIDs, deleteFile: true/, 'cleanup deletion should use the result-coded delete flow');
-assert.match(videoListSource, /showDeleteNotice\(outcome, \{ reportFailures: false \}\)/, 'cleanup deletion should report every successfully recoverable result');
+assert.match(cleanupCenterSource, /runDelete\(\{ ids: selectedIDs, deleteFile: true/, 'cleanup deletion should use the result-coded delete flow');
+assert.match(cleanupCenterSource, /showDeleteNotice\(outcome, \{ reportFailures: false \}\)/, 'cleanup deletion should report every successfully recoverable result');
+assert.match(cleanupCenterSource, /<TrashUndoBanner ref="trashUndo" kind="video"/, 'the cleanup center hosts the video delete flow (D-P3-02)');
 assert.match(photoLibrarySource, /<TrashUndoBanner\b/, 'photo deletion should show the same undo banner (IMG-09)');
 assert.match(videoListSource, /await this\.waitForLoadIdle\(\)/, 'consecutive restores should serialize list refreshes');
 assert.match(trashDialogSource, /const token = \+\+state\.token/, 'trash dialog should identify each list request');

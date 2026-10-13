@@ -480,18 +480,6 @@
       @open-cleanup="openCleanupFromReview"
     />
 
-    <CleanupReviewPanel
-      ref="cleanupPanel"
-      :perceptual-hash-running="perceptualHash.running"
-      :frame-hash-running="frameHash.running"
-      :trash-videos="trashCleanupVideos"
-      :after-trash-videos="afterTrashCleanupVideos"
-      @start-perceptual-hash="startPerceptualHashBackfill"
-      @start-frame-hash="startFrameHashBackfill"
-      @trash-settled="handleCleanupTrashSettled"
-      @consolidation-moved="handleConsolidationMoved"
-    />
-
     <SubtitlePreviewModal
       ref="subtitlePreview"
       :search-keyword="searchKeyword"
@@ -571,7 +559,6 @@ import BatchActionBar, { selectedSizeText } from './video-list/BatchActionBar.vu
 import { wheelForwardingMixin } from './video-list/wheelForwarding.js';
 import SaveViewDialog, { parseSavedViewIDs } from './video-list/SaveViewDialog.vue';
 import SubtitlePreviewModal from './video-list/SubtitlePreviewModal.vue';
-import CleanupReviewPanel from './video-list/CleanupReviewPanel.vue';
 import SubtitleGenerateDialog from './video-list/SubtitleGenerateDialog.vue';
 import SubtitleTranslateDialog from './video-list/SubtitleTranslateDialog.vue';
 import EnhanceDialog from './video-list/EnhanceDialog.vue';
@@ -650,18 +637,19 @@ export default {
   // 随机播放一部（主键、今晚看什么里的「随机播放一部」、结果条「换一个」）与随机条件、最近排除表在 randomPlaybackMixin，
   // 与视频海报墙共用（D-P2-01）；本页提供 randomPlayFilter / randomPlayBlockedReason / applyPlaybackAttemptResult。
   mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin, randomPlaybackMixin],
-  components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
+  components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     pageActive: { type: Boolean, default: true },
-    // ⌘⇧K 由本页直接开清理中心（D-UD-03；⌘K 归命令面板）。观看侧「视频」与管理侧「片库管理」共用本页：
-    // 在「视频」上 App 传 false，让 App 的全局 ⌘⇧K 先切到片库管理再开，与其他页面一致（D-UI-03）。
-    cleanupHotkey: { type: Boolean, default: true },
-    consolidationRoute: { type: Object, default: null }
+    // 历史名：原先控制本页接不接 ⌘⇧K。清理中心三期起是 App 的页面（D-P3-02），⌘⇧K 只由 App 接；
+    // 这个开关只剩页头标题一个用处（App 在「片库管理」上传 true）。
+    cleanupHotkey: { type: Boolean, default: true }
   },
-  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened', 'search-scenes', 'find-similar-scenes', 'open-video-edit'],
+  // open-cleanup({ relationId? })：进清理中心的视频标签（AI 审阅「去清理」带上要定位的同源对）；
+  // trash-restored({ videoIDs, fromTrashDialog })：本页回收站恢复了视频，清理中心的审阅放掉对应的「已移到废纸篓」标记。
+  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'search-scenes', 'find-similar-scenes', 'open-video-edit', 'open-cleanup', 'trash-restored'],
   data() {
     return {
       videos: [],
@@ -760,8 +748,6 @@ export default {
 	  keyboardFocusVideoID: 0,
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
-      // 清理面板删除的结果：删除与撤销条分两步，中间留给面板收窄勾选。
-      pendingCleanupDeleteOutcome: null,
       tagDeleteDialog: { show: false, tag: null },
       aiTagReviewDialog: { show: false, dirty: false },
       // 播放失败后就地标成失效的那一行（D-PC11）：{ videoID, staleReason, text }。
@@ -840,14 +826,7 @@ export default {
         run: () => this.openTonightPicker()
       },
       // 待处理工作台按固定 ID 跳到本页的既有面板（详细设计 §6.1）。run() 只负责打开面板，
-      // 切到片库页由调用方先做（本页常挂载、以 v-show 切换）。
-      {
-        id: 'library.openCleanup',
-        group: 'action',
-        label: '打开清理审阅',
-        keywords: ['cleanup', '清理', '重复'],
-        run: () => this.openCleanupDialog()
-      },
+      // 切到片库页由调用方先做（本页常挂载、以 v-show 切换）。library.openCleanup 三期起由清理中心页注册（D-P3-02）。
       {
         id: 'library.openAIReview',
         group: 'action',
@@ -906,16 +885,6 @@ export default {
     }
   },
   watch: {
-    consolidationRoute: {
-      immediate: true,
-      async handler(route) {
-        if (!route?.taskID) return;
-        await this.$nextTick();
-        if (this.consolidationRoute !== route) return;
-        const opened = await this.$refs.cleanupPanel?.openConsolidation(route.taskID);
-        if (opened !== false && this.consolidationRoute === route) this.$emit('consolidation-opened');
-      }
-    },
     subtitleIndexNoticeVisible: {
       immediate: true,
       handler(visible) {
@@ -1137,7 +1106,7 @@ export default {
     }
   },
   methods: {
-	// 管理菜单里印了 ⇧⌘N / ⌘R / ⌘T，清理中心是 ⌘⇧K，搜索框上印了 ⌘F —— 印了就得真的能按，
+	// 管理菜单里印了 ⇧⌘N / ⌘R / ⌘T，搜索框上印了 ⌘F —— 印了就得真的能按（清理中心的 ⌘⇧K 由 App 接，D-P3-02），
 	// 否则那些提示是在骗人。这些走独立处理器，不受列表焦点限制。
 	handleToolbarShortcut(event) {
 	  if (!this.pageActive || !(event.metaKey || event.ctrlKey)) return;
@@ -1157,9 +1126,6 @@ export default {
 	  } else if (key === 't' && !event.shiftKey) {
 	    event.preventDefault();
 	    this.openAITagReviewDialog();
-	  } else if (key === 'k' && event.shiftKey && this.cleanupHotkey) {
-	    event.preventDefault();
-	    this.openCleanupDialog();
 	  }
 	},
 	handleLibraryShortcut(event) {
@@ -1438,47 +1404,8 @@ export default {
       this.consolidationRefreshVersions.set(summary.id, Number(summary.version));
       // 有界去重；终态重复事件及当前弹窗回读只刷新一次。
       if (this.consolidationRefreshVersions.size > 100) this.consolidationRefreshVersions.delete(this.consolidationRefreshVersions.keys().next().value);
-      this.$refs.cleanupPanel?.markConsolidationStale?.();
       await this.reloadCurrentView();
       this.$emit('reload-directories');
-    },
-    openCleanupDialog() {
-      return this.$refs.cleanupPanel?.open();
-    },
-    refreshCleanupStatus() {
-      return this.$refs.cleanupPanel?.refreshStatus();
-    },
-    forgetCleanupTrashed(videoID) {
-      this.$refs.cleanupPanel?.forgetTrashed(videoID);
-    },
-    // 清理面板勾中的候选仍由片库页删除：删除、撤销提示条与列表重载的先后顺序不变。
-    // 删除经撤销条执行（进度、取消、不支持废纸篓时的二选一）；返回给面板的 result 保持
-    // 面板认识的 { succeeded, failed, errors[{video_id, error}] } 形状。
-    // 面板传来 { names: {[videoId]: 文件名} }（P-032 约定）：候选多半不在当前已加载的列表里，
-    // 「不支持废纸篓」的二选一弹窗要靠它列出文件名；已加载的行只作补充。
-    async trashCleanupVideos(selectedIDs, { names = {} } = {}) {
-      this.deletingIds = [...new Set([...this.deletingIds, ...selectedIDs])];
-      const outcome = await this.$refs.trashUndo.runDelete({ ids: selectedIDs, deleteFile: true, names: { ...this.videoNames(selectedIDs), ...(names || {}) } });
-      const succeededIDs = outcome.removedIDs;
-      const failedIDs = new Set(outcome.remainingIDs);
-      this.videos = this.videos.filter(item => !succeededIDs.includes(item.id));
-      this.pendingCleanupDeleteOutcome = outcome;
-      return { result: this.cleanupBatchResult(selectedIDs, outcome), failedIDs, succeededIDs };
-    },
-    cleanupBatchResult(requestedIDs, outcome) {
-      const errors = [
-        ...outcome.failures.map(item => ({ video_id: item.id, error: item.text })),
-        ...outcome.kept.map(id => ({ video_id: id, error: '所在磁盘不支持废纸篓，已保留' })),
-        ...outcome.cancelled.map(id => ({ video_id: id, error: '已取消，未处理' }))
-      ];
-      return { requested: requestedIDs.length, succeeded: outcome.removedIDs.length, failed: errors.length, errors };
-    },
-    // 面板收窄完勾选之后才走这一步，顺序与拆分前一致。失败项由清理面板自己报告。
-    async afterTrashCleanupVideos() {
-      const outcome = this.pendingCleanupDeleteOutcome;
-      this.pendingCleanupDeleteOutcome = null;
-      if (outcome) this.$refs.trashUndo?.showDeleteNotice(outcome, { reportFailures: false });
-      await this.reloadCurrentView();
     },
     videoNames(ids) {
       const wanted = new Set(ids);
@@ -1495,9 +1422,6 @@ export default {
       this.frameHash = state.frameHash;
       this.localMetadataBackfill = state.localMetadataBackfill;
       this.localMetadataExport = state.localMetadataExport;
-    },
-    handleCleanupTrashSettled(selectedIDs) {
-      this.deletingIds = this.deletingIds.filter(id => !selectedIDs.includes(id));
     },
     openSubtitlePreview(video) {
       return this.$refs.subtitlePreview?.open(video);
@@ -1847,7 +1771,6 @@ export default {
         case 'backfill-local-metadata': this.startLocalMetadataBackfill(); break;
         case 'ai-tags': this.openAITagReviewDialog(); break;
         case 'tag-manager': this.showTagManagerDialog = true; break;
-        case 'cleanup': this.openCleanupDialog(); break;
         case 'trash': this.openTrashDialog(); break;
         case 'version-groups': this.versionPanelOpen = true; break;
         default: break;
@@ -3021,12 +2944,11 @@ export default {
     openTrashDialog(tab = 'video') {
       this.$refs.trashUndo?.openTrashDialog(tab);
     },
-    // 从回收站恢复之后：清理面板的已删标记要跟着放掉，再重载列表；从回收站对话框
-    // 恢复的（或整批撤销只回来一部分的）还要再拉一次清理分析状态。
+    // 从回收站恢复之后：重载列表；清理中心（另一页）视频审阅里的已删标记经 App 跟着放掉，从回收站对话框
+    // 恢复的（或整批撤销只回来一部分的）它还会再拉一次清理分析状态（D-P3-02）。
     async afterTrashRestore(videoIDs, fromTrashDialog) {
-      for (const videoID of videoIDs || []) this.forgetCleanupTrashed(videoID);
+      this.$emit('trash-restored', { videoIDs: [...(videoIDs || [])], fromTrashDialog: Boolean(fromTrashDialog) });
       await this.reloadCurrentView();
-      if (fromTrashDialog) await this.refreshCleanupStatus();
     },
     // 审阅开着时只记下来，关掉时一起重载；已经关了（例如关掉审阅后从提示或「最近操作」撤销了同源删除）
     // 就没有「关闭时重载」可等，立即重载，不然恢复回来的视频要等下次刷新才出现。
@@ -3035,12 +2957,12 @@ export default {
       this.$emit('reload-tags');
       if (!this.aiTagReviewDialog.show) await this.reloadCurrentView();
     },
-    // 审阅里确认同源后点「去清理」（D-PC27）：关掉审阅、打开清理中心，按 relationId 定位这一对
-    // （P-032 约定：面板自己定位；这一对不在结果里时由面板说明）。
+    // 审阅里确认同源后点「去清理」（D-PC27）：关掉审阅、进清理中心的视频标签，按 relationId 定位这一对
+    // （P-032 约定：面板自己定位；这一对不在结果里时由面板说明）。清理中心三期起是 App 的页面（D-P3-02）。
     async openCleanupFromReview(payload) {
       await this.closeAITagReviewDialog();
       const relationId = Number(payload?.relationId || 0);
-      return this.$refs.cleanupPanel?.open(relationId ? { relationId } : undefined);
+      this.$emit('open-cleanup', relationId ? { relationId } : {});
     },
     runIncrementalScan() {
       return this.$refs.incrementalScanBar?.runIncrementalScan();

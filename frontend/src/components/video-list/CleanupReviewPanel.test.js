@@ -313,15 +313,19 @@ describe('清理弹窗重排', () => {
     wrapper.unmount();
   });
 
-  it('类别筛选只收窄看到的候选，不改分析结果', async () => {
+  // D-P3-02：分类改成统计卡，一次看一类；没点过时看第一类有候选的（这里是精确重复）。
+  it('分类只收窄看到的候选，不改分析结果；没点过时先看第一类有候选的', async () => {
     const wrapper = await openCleanup();
-    expect(wrapper.vm.cleanupFilteredSections).toHaveLength(2);
-    wrapper.vm.cleanupCategory = 'low-duration';
+    expect(wrapper.vm.activeCleanupCategory).toBe('exact');
+    expect(wrapper.vm.cleanupFilteredSections.map(section => section.directory)).toEqual(['/lib/a']);
+    wrapper.vm.cleanupCategory = 'low';
     await wrapper.vm.$nextTick();
     expect(wrapper.vm.cleanupFilteredSections).toHaveLength(1);
     expect(wrapper.vm.cleanupFilteredSections[0].directory).toBe('/lib/b');
+    expect(wrapper.vm.cleanupFilteredSections[0].videoCount).toBe(1);
     // 分析结果本身没有被改动。
     expect(wrapper.vm.cleanupDialog.analysis.duplicate_groups).toHaveLength(1);
+    expect(wrapper.vm.cleanupDirectorySections).toHaveLength(2);
     wrapper.unmount();
   });
 
@@ -535,7 +539,7 @@ describe('截取片段类别', () => {
     await flushPromises();
 
     expect(wrapper.find('[data-test="cleanup-clip-pair"]').exists()).toBe(false);
-    expect(wrapper.vm.cleanupCategoryOptions.find(option => option.key === 'clip').count).toBe(0);
+    expect(wrapper.vm.cleanupCategoryOptions.find(option => option.key === 'same-source').count).toBe(0);
     expect(wrapper.text()).toContain('当前没有命中轻量清理规则的候选项');
     wrapper.unmount();
   });
@@ -621,6 +625,23 @@ async function clickTrash(wrapper) {
   await wrapper.vm.$nextTick();
   await wrapper.get('[data-test="cleanup-trash-selected"]').trigger('click');
   await flushPromises();
+}
+
+// D-P3-02：统计卡一次只显示一类候选。逐张点过去，把每一类的控件都数一遍（点完回到原来那一类）。
+async function controlsAcrossTiles(wrapper, query) {
+  const original = wrapper.vm.cleanupCategory;
+  let total = 0;
+  let enabled = 0;
+  for (const tile of wrapper.findAll('[data-test="cleanup-category"]')) {
+    await tile.trigger('click');
+    await flushPromises();
+    const nodes = query(wrapper);
+    total += nodes.length;
+    enabled += nodes.filter(node => !node.element.disabled).length;
+  }
+  wrapper.vm.cleanupCategory = original;
+  await flushPromises();
+  return { total, enabled };
 }
 
 describe('精确重复跨组集中保留目录', () => {
@@ -915,8 +936,10 @@ describe('IMG-05 统一的勾选与锁定规则', () => {
       '[data-test="cleanup-dismiss-near-group"]', '[data-test="cleanup-reject-same-source"]',
       '[data-test="cleanup-dismiss-clip"]', '[data-test="cleanup-dismiss-video"]'
     ].join(', '));
-    expect(controls().length).toBeGreaterThanOrEqual(12);
-    expect(controls().every(node => node.element.disabled)).toBe(true);
+    // 统计卡一次只显示一类：删除进行中也能逐类切过去看，每一类的控件都禁用。
+    const seen = await controlsAcrossTiles(wrapper, controls);
+    expect(seen.total).toBeGreaterThanOrEqual(12);
+    expect(seen.enabled).toBe(0);
 
     // 界面之外直接调用也不生效。
     const entry = wrapper.vm.cleanupDirectorySections[0].entries.find(item => item.kind === 'near');
@@ -1007,7 +1030,7 @@ describe('IMG-05 统一的勾选与锁定规则', () => {
       duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }],
       low_resolution: [video(1)]
     }));
-    wrapper.vm.cleanupCategory = 'low-resolution';
+    wrapper.vm.cleanupCategory = 'low';
     await flushPromises();
     expect(wrapper.get('[data-test="cleanup-member-locked"]').text()).toBe('另一组要保留它');
     wrapper.vm.toggleCleanupSelection(1);
@@ -1135,18 +1158,17 @@ describe('APP-11 极短片段 / 极低分辨率也可以忽略', () => {
   it('APP-11 忽略极短片段：确认后写 short 类忽略，候选与徽标随之消退', async () => {
     const { wrapper } = await openWith(baseAnalysis({ low_duration: [video(7)], low_resolution: [video(8)] }));
     expect(wrapper.emitted('badge-change').at(-1)).toEqual([2]);
-    wrapper.vm.cleanupCategory = 'low-duration';
-    await flushPromises();
-    await wrapper.get('[data-test="cleanup-dismiss-video"]').trigger('click');
+    // 两类都在「极短 / 低清」这张卡下面，各自的候选卡按原类别标注。
+    expect(wrapper.vm.activeCleanupCategory).toBe('low');
+    const cardOf = kind => wrapper.findAll('[data-test="cleanup-group-card"]').find(card => card.attributes('data-kind') === kind);
+    await cardOf('low-duration').get('[data-test="cleanup-dismiss-video"]').trigger('click');
     await flushPromises();
     expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '忽略极短片段候选' }));
     expect(api.DismissCleanupVideo).toHaveBeenCalledWith(7, 'short');
     expect(wrapper.vm.cleanupDialog.analysis.low_duration).toEqual([]);
     expect(wrapper.emitted('badge-change').at(-1)).toEqual([1]);
 
-    wrapper.vm.cleanupCategory = 'low-resolution';
-    await flushPromises();
-    await wrapper.get('[data-test="cleanup-dismiss-video"]').trigger('click');
+    await cardOf('low-resolution').get('[data-test="cleanup-dismiss-video"]').trigger('click');
     await flushPromises();
     expect(api.DismissCleanupVideo).toHaveBeenCalledWith(8, 'low');
     wrapper.unmount();
@@ -1162,57 +1184,94 @@ describe('IMG-11 覆盖率与空态', () => {
 
   it('IMG-11 只算了一部分时类别上标「已算 X / Y」，完全没算时标「尚未计算」', async () => {
     const { wrapper } = await openWith(baseAnalysis({ coverage: coverage([3, 10], [0, 10], [10, 10]) }));
-    const chip = key => wrapper.vm.cleanupCategoryOptions.find(option => option.key === key);
-    expect(chip('near').coverage).toBe('已算 3 / 10');
-    expect(chip('clip').coverage).toBe('尚未计算');
-    expect(chip('same-source').coverage).toBe('');
-    expect(wrapper.findAll('[data-test="cleanup-coverage-chip"]').map(node => node.text())).toEqual(['已算 3 / 10', '尚未计算']);
-    // 类别是一排 FilterChip（D-UD-06）：「全部类别」不带条数，其余名字后面是条数（覆盖度跟在条数后面）；点一下只看这一类。
-    const chips = wrapper.findAll('[data-test="cleanup-category"]');
-    expect(chips.map(node => node.text())).toEqual(wrapper.vm.cleanupCategoryOptions.map(option =>
-      option.key === 'all' ? option.label : `${option.label}${option.count}${option.coverage || ''}`));
-    expect(chips[0].attributes('aria-pressed')).toBe('true');
-    const nearIndex = wrapper.vm.cleanupCategoryOptions.findIndex(option => option.key === 'near');
-    await chips[nearIndex].trigger('click');
+    const tile = key => wrapper.vm.cleanupCategoryOptions.find(option => option.key === key);
+    expect(tile('near').coverage).toBe('已算 3 / 10');
+    // 同源与截取合在「同源片段」一张卡上：只标没算完的那一类。
+    expect(tile('same-source').coverage).toBe('截取片段尚未计算');
+    expect(tile('exact').coverage).toBe('');
+    expect(tile('low').coverage).toBe('');
+    expect(wrapper.findAll('[data-test="cleanup-coverage-chip"]').map(node => node.text())).toEqual(['已算 3 / 10', '截取片段尚未计算']);
+    // D-P3-02：分类是一排统计卡（与图片标签一致），顺序固定：精确重复 · 疑似重复 · 同源片段 · 极短 / 低清，然后是「已忽略」；
+    // 卡上是条数、单位与名称，悬停说明是完整的判定规则；点一下只看这一类。
+    const tiles = wrapper.findAll('[data-test="cleanup-category"]');
+    expect(tiles.map(node => node.get('[data-test="stat-tile-label"]').text())).toEqual(['精确重复', '疑似重复', '同源片段', '极短 / 低清']);
+    expect(tiles.map(node => node.get('[data-test="stat-tile-value"]').text())).toEqual(['0组', '0组', '0组', '0个']);
+    expect(tiles[1].attributes('title')).toBe('多帧感知哈希接近；默认不勾选');
+    expect(tiles[0].attributes('aria-selected')).toBe('true');
+    expect(tiles[0].attributes('role')).toBe('tab');
+    await tiles[1].trigger('click');
     expect(wrapper.vm.cleanupCategory).toBe('near');
-    expect(wrapper.findAll('[data-test="cleanup-category"]')[nearIndex].attributes('aria-pressed')).toBe('true');
-    expect(wrapper.get('[data-test="cleanup-dismissed-tab"]').attributes('aria-pressed')).toBe('false');
+    expect(wrapper.findAll('[data-test="cleanup-category"]')[1].attributes('aria-selected')).toBe('true');
+    expect(wrapper.findAll('[data-test="cleanup-category"]')[0].attributes('aria-selected')).toBe('false');
+    expect(wrapper.get('[data-test="cleanup-dismissed-tab"]').attributes('aria-selected')).toBe('false');
+    wrapper.unmount();
+  });
+
+  it('D-P3-02 统计卡上写出组数、涉及的视频数与已勾数，勾选变了跟着变', async () => {
+    const { wrapper } = await openWith(baseAnalysis({
+      duplicate_groups: [{ original: video(1), candidates: [video(2), video(3)], reason: '一致' }],
+      near_duplicate_groups: [{ original: video(4), candidates: [video(5)], reason: '接近' }],
+      clip_groups: [{ full: video(6), clip: video(7), offset_seconds: 0, match_rate: 0.9, estimated_savings: 700 }],
+      same_source_groups: [{ relation_id: 9, preferred: video(8), alternative: video(9), reason: 'AI 判断同源', estimated_savings: 900 }],
+      low_resolution: [video(10)], low_duration: [video(11)]
+    }));
+    const tile = key => wrapper.findAll('[data-test="cleanup-category"]').find(node => node.attributes('data-category') === key);
+    const note = key => tile(key).get('[data-test="stat-tile-note"]').text();
+    expect(tile('exact').get('[data-test="stat-tile-value"]').text()).toBe('1组');
+    expect(note('exact')).toBe('3 个视频 · 已勾 2 个');
+    expect(tile('same-source').get('[data-test="stat-tile-value"]').text()).toBe('2组');
+    expect(note('same-source')).toBe('4 个视频 · 已勾 0 个');
+    expect(tile('low').get('[data-test="stat-tile-value"]').text()).toBe('2个');
+    wrapper.vm.toggleCleanupSelection(5);
+    await flushPromises();
+    expect(note('near')).toBe('2 个视频 · 已勾 1 个');
+    // 点「同源片段」：同源与截取两类的候选卡都在这一页，原类别标注不变。
+    await tile('same-source').trigger('click');
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]').map(card => card.attributes('data-kind'))).toEqual(['same-source', 'clip']);
+    expect(wrapper.get('.cleanup-area__title').text()).toBe('同源片段');
     wrapper.unmount();
   });
 
   it('IMG-11 某类别一个都没算时空态写「尚未计算」并给出补全入口，同源说明来自 AI 打标', async () => {
     const { wrapper } = await openWith(baseAnalysis({ coverage: coverage([0, 10], [0, 10], [0, 10]) }));
+    const empty = () => wrapper.get('[data-test="cleanup-empty-state"]');
+    // 整轮都没有候选、也没点过哪一类：说整轮的，下一步是先补全感知哈希。
+    expect(empty().text()).toContain('当前没有命中轻量清理规则的候选项');
+    expect(empty().text()).toContain('近似重复尚未计算');
+    expect(empty().find('[data-test="cleanup-empty-start-perceptual-hash"]').exists()).toBe(true);
+
     wrapper.vm.cleanupCategory = 'near';
     await flushPromises();
-    const empty = () => wrapper.get('[data-test="cleanup-empty-state"]');
-    expect(empty().text()).toContain('尚未计算');
+    expect(empty().get('.ui-empty__title').text()).toBe('尚未计算');
     await empty().get('[data-test="cleanup-empty-start-perceptual-hash"]').trigger('click');
     expect(wrapper.emitted('start-perceptual-hash')).toHaveLength(1);
 
-    wrapper.vm.cleanupCategory = 'clip';
-    await flushPromises();
-    await empty().get('[data-test="cleanup-empty-start-frame-hash"]').trigger('click');
-    expect(wrapper.emitted('start-frame-hash')).toHaveLength(1);
-
+    // 「同源片段」合了同源与截取：两类都没算，两条说明都在，下一步是补全帧哈希。
     wrapper.vm.cleanupCategory = 'same-source';
     await flushPromises();
+    expect(empty().get('.ui-empty__title').text()).toBe('尚未计算');
     expect(empty().text()).toContain('AI 打标的「查找同源」');
-
-    wrapper.vm.cleanupCategory = 'all';
-    await flushPromises();
-    expect(empty().text()).toContain('当前没有命中轻量清理规则的候选项');
-    expect(empty().text()).toContain('近似重复尚未计算');
+    expect(empty().text()).toContain('还没有视频算过帧哈希');
+    await empty().get('[data-test="cleanup-empty-start-frame-hash"]').trigger('click');
+    expect(wrapper.emitted('start-frame-hash')).toHaveLength(1);
     wrapper.unmount();
   });
 
-  it('IMG-11 全部算完仍为空时才说「没有发现」，部分覆盖时附上已算比例', async () => {
+  it('IMG-11 全部算完仍为空时才说「没有发现」，部分覆盖时附上已算比例；不用补全时下一步是重新分析', async () => {
+    api.StartCleanupAnalysisFromSettings.mockResolvedValue({ running: true, progress: { stage: 'load' } });
     const { wrapper } = await openWith(baseAnalysis({ coverage: coverage([10, 10], [4, 10], [10, 10]) }));
     wrapper.vm.cleanupCategory = 'near';
     await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-empty-state"]').text()).toBe('没有发现近似重复候选。');
-    wrapper.vm.cleanupCategory = 'clip';
+    const empty = () => wrapper.get('[data-test="cleanup-empty-state"]');
+    expect(empty().get('.ui-empty__title').text()).toBe('没有发现疑似重复候选。');
+    expect(empty().find('.ui-empty__message').exists()).toBe(false);
+    wrapper.vm.cleanupCategory = 'same-source';
     await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-empty-state"]').text()).toContain('帧哈希已算 4 / 10');
+    expect(empty().get('.ui-empty__title').text()).toBe('没有发现同源片段候选。');
+    expect(empty().text()).toContain('帧哈希已算 4 / 10');
+    await empty().get('[data-test="cleanup-empty-reanalyze"]').trigger('click');
+    await flushPromises();
+    expect(api.StartCleanupAnalysisFromSettings).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
 });
@@ -1223,10 +1282,14 @@ describe('META-10 类别改名并标出设置里的阈值', () => {
       low_resolution: [video(7)], low_duration: [video(8)],
       thresholds: { short_seconds: 12, low_width: 640, low_height: 360 }
     }));
+    // 两类合在「极短 / 低清」一张卡上：卡上的短说明与悬停说明都按本轮阈值写，候选卡按原类别标注。
     const option = key => wrapper.vm.cleanupCategoryOptions.find(item => item.key === key);
-    expect(option('low-resolution').label).toBe('极低分辨率（< 640×360）');
-    expect(option('low-duration').label).toBe('极短片段（< 12 秒）');
-    expect(option('low-resolution').hint).toContain('分辨率低于 640×360');
+    expect(option('low').label).toBe('极短 / 低清');
+    expect(option('low').tip).toBe('低于 640×360 或短于 12 秒');
+    expect(option('low').hint).toContain('极低分辨率：分辨率低于 640×360');
+    expect(option('low').hint).toContain('极短片段：时长 < 12 秒');
+    expect(wrapper.vm.cleanupKindLabel('low-resolution')).toBe('极低分辨率（< 640×360）');
+    expect(wrapper.vm.cleanupKindLabel('low-duration')).toBe('极短片段（< 12 秒）');
     expect(wrapper.findAll('.cleanup-card-kind').map(node => node.text())).toEqual(['极低分辨率（< 640×360）', '极短片段（< 12 秒）']);
     wrapper.unmount();
   });
@@ -1323,7 +1386,8 @@ describe('「去清理」定位同源对与 D-PC01 文案', () => {
     const { wrapper } = await openWith(sameSourceAnalysis());
     const text = wrapper.text();
     expect(text).toContain('移到废纸篓后，在访达清空废纸篓即可释放约');
-    expect(wrapper.get('[data-test="cleanup-trash-selected"]').text()).toBe('移到废纸篓');
+    // 与图片标签一致：按钮上带勾选数。
+    expect(wrapper.get('[data-test="cleanup-trash-selected"]').text()).toBe(`移到废纸篓 (${wrapper.vm.cleanupSelection.length})`);
     expect(text).not.toContain('移入回收站');
     wrapper.unmount();
   });
@@ -1356,10 +1420,12 @@ describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审
     await clickTrash(wrapper);
     expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(true);
 
-    expect(selectionControls(wrapper).length).toBeGreaterThanOrEqual(12);
-    expect(selectionControls(wrapper).every(node => node.element.disabled)).toBe(true);
-    // 确认框打开时底栏按钮仍写「移到废纸篓」，还没有开始处理。
-    expect(wrapper.get('[data-test="cleanup-trash-selected"]').text()).toBe('移到废纸篓');
+    // 统计卡一次只显示一类：逐类切过去看（确认框开着也能切过去看），每一类的控件都禁用。
+    const controls = await controlsAcrossTiles(wrapper, selectionControls);
+    expect(controls.total).toBeGreaterThanOrEqual(12);
+    expect(controls.enabled).toBe(0);
+    // 确认框打开时操作条按钮仍写「移到废纸篓」，还没有开始处理。
+    expect(wrapper.get('[data-test="cleanup-trash-selected"]').text()).toBe('移到废纸篓 (1)');
 
     // 界面之外直接调用同样被拦下：「设为保留」、勾选、按建议勾选、移出本组、各类忽略。
     const entry = nearEntryOf(wrapper);
@@ -1676,6 +1742,8 @@ describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', 
     const entry = nearEntryOf(wrapper);
     expect(entry.members.map(member => member.id)).toEqual([2, 3]);
     expect(wrapper.vm.isEntryExhausted(entry)).toBe(true);
+    wrapper.vm.selectCleanupCategory('near');
+    await flushPromises();
     const card = wrapper.findAll('[data-test="cleanup-group-card"]').find(node => node.find('[data-test="cleanup-group-exhausted"]').exists());
     expect(card.get('[data-test="cleanup-group-exhausted"]').text()).toContain('本组剩下的都已移到废纸篓');
     expect(card.findAll('[data-test="cleanup-member-select"]').every(node => node.element.disabled)).toBe(true);
@@ -1694,81 +1762,76 @@ describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', 
   });
 });
 
-// ===== P-032 复审（修复 R）Minor：确认框打开或删除进行中不能关掉外层面板 =====
-describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', () => {
-  const LOCKED = '正在移到废纸篓，完成后再关闭';
+// ===== P-032 复审（修复 R）Minor：确认框打开或删除进行中不能离开 =====
+// D-P3-02 起审阅是清理中心页的内容，不再有外层弹窗可关：离开保护改由宿主按 state-change 的 locked 执行
+// （App 不让离开清理中心、清理中心不让切标签），这里钉住 locked 的口径与 Esc 的行为。
+describe('D-PC49 删除流程中的离开保护（P-032 复审 Minor）', () => {
   const pressEscape = async () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     await flushPromises();
   };
-  const lockNotices = () => feedback.notify.mock.calls.filter(call => String(call[0]).includes(LOCKED));
+  const lastState = wrapper => wrapper.emitted('state-change').at(-1)[0];
 
-  it('D-PC49 确认框打开或删除进行中：× 与「取消」禁用，Esc 关不掉面板，关闭方法被拦下并提示；结束后恢复', async () => {
+  it('D-PC49 确认框打开或删除进行中报 locked；Esc 只取消确认框，删除进行中 Esc 什么也不做；结束后解除', async () => {
     feedback.confirmAction.mockResolvedValue(false);
     const { wrapper } = await openWith(baseAnalysis({
       duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
     }));
-    // 面板的 × 是 DialogShell 的（第一个，确认框开着时它下面还有确认框自己的 ×）。
-    const close = () => wrapper.findAll('[data-test="dialog-shell-close"]')[0];
-    const cancel = () => wrapper.get('[data-test="cleanup-cancel"]');
-    expect(close().element.disabled).toBe(false);
+    expect(lastState(wrapper)).toMatchObject({ locked: false, processing: false, hasAnalysis: true, startedAt: 'run-a' });
 
-    // 确认框打开：按钮禁用；直接调用关闭方法被拦下并提示。
+    // 确认框打开：locked（删除流程从确认框打开起算）。
     await clickTrash(wrapper);
-    expect(close().element.disabled).toBe(true);
-    expect(cancel().element.disabled).toBe(true);
-    expect(cancel().attributes('title')).toBe(LOCKED);
-    // busy 的对话框在标题旁转圈（D-UD-13）。
-    expect(wrapper.find('.ui-dialog__busy').exists()).toBe(true);
-    expect(wrapper.vm.closeCleanupDialog()).toBe(false);
-    expect(wrapper.vm.cleanupDialog.show).toBe(true);
-    expect(lockNotices()).toHaveLength(1);
+    expect(lastState(wrapper).locked).toBe(true);
 
-    // Esc 只取消确认框，面板留着，也不再提示。
-    feedback.notify.mockClear();
+    // Esc 只取消确认框，审阅留着，locked 解除。
     await pressEscape();
     expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(false);
-    expect(wrapper.vm.cleanupDialog.show).toBe(true);
     expect(wrapper.vm.cleanupDialog.processing).toBe(false);
-    expect(lockNotices()).toHaveLength(0);
+    expect(lastState(wrapper).locked).toBe(false);
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
 
-    // 删除进行中（合并还没返回）：Esc 被拦下并提示，按钮禁用。
+    // 删除进行中（合并还没返回）：locked、processing；Esc 不取消任何东西。
     let finishMerge;
     api.MergeMediaMetadata.mockImplementationOnce(() => new Promise(resolve => { finishMerge = resolve; }));
     await clickTrash(wrapper);
     await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
     await flushPromises();
-    expect(wrapper.vm.cleanupDialog.processing).toBe(true);
-    // busy 时 Esc 不响应（DialogShell 统一行为）：面板留着。
+    expect(lastState(wrapper)).toMatchObject({ locked: true, processing: true });
     await pressEscape();
-    expect(wrapper.vm.cleanupDialog.show).toBe(true);
-    expect(close().element.disabled).toBe(true);
-    expect(cancel().element.disabled).toBe(true);
+    expect(wrapper.vm.cleanupDialog.processing).toBe(true);
+    expect(wrapper.get('[data-test="cleanup-trash-selected"]').text()).toBe('处理中…');
 
     finishMerge({ warnings: [] });
     await flushPromises();
-    expect(wrapper.vm.cleanupDialog.processing).toBe(false);
-    expect(close().element.disabled).toBe(false);
-    await close().trigger('click');
-    expect(wrapper.vm.cleanupDialog.show).toBe(false);
+    expect(lastState(wrapper)).toMatchObject({ locked: false, processing: false });
     wrapper.unmount();
   });
 
-  // M-6：审阅勾选是审阅结果、不是临时选择——Esc 只关面板，勾选原样留着（再打开同一批结果还在）。
-  it('D-PC49 没有删除流程时 Esc 关闭面板；应用确认框开着时 Esc 只关确认框；Esc 不清空审阅勾选', async () => {
+  // M-6：审阅勾选是审阅结果、不是临时选择——Esc 不清空（应用确认框开着时也一样），「取消选择」才清空。
+  it('D-UD-10 有勾选才出选择操作条；Esc 不清空审阅勾选，「取消选择」清空，删除进行中不清', async () => {
     const { wrapper } = await openWith(baseAnalysis({
       duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
     }));
-    const picks = [...wrapper.vm.cleanupSelection];
-    expect(picks).toEqual([2]);
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
+    expect(wrapper.get('[data-test="cleanup-selection-bar"]').text()).toContain('已选 1 项');
     feedbackState.confirm = { title: '移出本组' };
     await pressEscape();
-    expect(wrapper.vm.cleanupDialog.show).toBe(true);
     feedbackState.confirm = null;
     await pressEscape();
-    expect(wrapper.vm.cleanupDialog.show).toBe(false);
-    expect(wrapper.vm.cleanupSelection).toEqual(picks);
-    expect(lockNotices()).toHaveLength(0);
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
+
+    wrapper.vm.cleanupDialog.processing = true;
+    wrapper.vm.clearCleanupSelection();
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
+    wrapper.vm.cleanupDialog.processing = false;
+    await flushPromises();
+
+    await wrapper.get('[data-test="selection-bar-clear"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.cleanupSelection).toEqual([]);
+    // 没有勾选：操作条收起，页面上没有删除动作（D-UD-10）。
+    expect(wrapper.find('[data-test="cleanup-selection-bar"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-trash-selected"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });
@@ -1798,7 +1861,7 @@ describe('集中整理后的独立清理审阅', () => {
     wrapper.vm.toggleSkippedGroup(entry);
     expect(wrapper.vm.cleanupSelection).toEqual([]); expect(wrapper.vm.consolidationScope).toEqual([]);
     expect(wrapper.vm.consolidationRequestData.protections[0].skipped).toBe(true);
-    wrapper.vm.closeCleanupDialog(); await wrapper.vm.open();
+    await wrapper.vm.open();
     expect(wrapper.vm.cleanupSkippedGroups).toEqual([entry.key]); expect([...wrapper.vm.cleanupLockedIDs]).toEqual([1, 2, 3]); wrapper.unmount();
   });
   it('确认前及确认后都新鲜回读，保留手选意向，已有合并/废纸篓顺序不变', async () => {
@@ -1892,4 +1955,91 @@ it('目录分页在结果收缩及清空后归位，不改变删除勾选或集�
   wrapper.vm.cleanupDirectoryPage = 1;
   wrapper.vm.cleanupDialog.analysis = {}; await flushPromises();
   expect(wrapper.vm.cleanupDirectoryPage).toBe(0); expect(wrapper.vm.cleanupGroupPage).toBe(0); wrapper.unmount();
+});
+
+// ===== D-P3-02 清理中心的视频标签：页面内容的几种状态与给宿主的 state-change =====
+describe('D-P3-02 视频标签的页面状态', () => {
+  it('state-change 报出分析中、上次分析时间、已取消；宿主据此写页头', async () => {
+    api.GetCleanupStatus.mockResolvedValue({ running: true, completed: false, progress: { stage: 'hash', current: 1, total: 4 } });
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper.vm.open();
+    await flushPromises();
+    expect(wrapper.emitted('state-change').at(-1)[0]).toMatchObject({ analyzing: true, hasAnalysis: false, startedAt: '' });
+
+    wrapper.vm.applyCleanupStatus({ running: false, completed: true, started_at: '2026-10-13T06:30:00Z', analysis: baseAnalysis() });
+    await flushPromises();
+    expect(wrapper.emitted('state-change').at(-1)[0]).toMatchObject({ analyzing: false, hasAnalysis: true, startedAt: '2026-10-13T06:30:00Z', cancelled: false });
+
+    wrapper.vm.applyCleanupStatus({ running: false, completed: false, cancelled: true });
+    await flushPromises();
+    expect(wrapper.emitted('state-change').at(-1)[0]).toMatchObject({ cancelled: true, hasAnalysis: false, startedAt: '' });
+    wrapper.unmount();
+  });
+
+  it('还没分析过：空态给「开始分析」；读状态之前是骨架', async () => {
+    let resolveStatus;
+    api.GetCleanupStatus.mockImplementation(() => new Promise(resolve => { resolveStatus = resolve; }));
+    const wrapper = mountPanel({ deep: true, attachTo: document.body });
+    await flushPromises();
+    expect(wrapper.find('[data-test="cleanup-status-loading"]').exists()).toBe(true);
+    resolveStatus({ running: false, completed: false, cancelled: false });
+    await flushPromises();
+    expect(wrapper.find('[data-test="cleanup-status-loading"]').exists()).toBe(false);
+    const idle = wrapper.get('[data-test="cleanup-video-idle"]');
+    expect(idle.text()).toContain('还没有分析过视频库');
+    api.StartCleanupAnalysisFromSettings.mockResolvedValue({ running: true, progress: { stage: 'load' } });
+    await idle.get('[data-test="cleanup-video-start"]').trigger('click');
+    await flushPromises();
+    expect(api.StartCleanupAnalysisFromSettings).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="cleanup-analyzing"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('可以离开这一页，分析会在后台继续');
+    wrapper.unmount();
+  });
+
+  it('没点过分类时看第一类有候选的；点过的分类跨新一轮分析保留，空了也停在那一类', async () => {
+    const { wrapper } = await openWith(baseAnalysis({
+      clip_groups: [{ full: video(6), clip: video(7), offset_seconds: 0, match_rate: 0.9, estimated_savings: 700 }],
+      low_duration: [video(8)]
+    }));
+    expect(wrapper.vm.activeCleanupCategory).toBe('same-source');
+    await wrapper.findAll('[data-test="cleanup-category"]').find(node => node.attributes('data-category') === 'low').trigger('click');
+    expect(wrapper.vm.activeCleanupCategory).toBe('low');
+    wrapper.vm.applyCleanupStatus({ completed: true, started_at: 'run-b', analysis: baseAnalysis({ duplicate_groups: [{ original: video(1), candidates: [video(2)] }] }) });
+    await flushPromises();
+    expect(wrapper.vm.activeCleanupCategory).toBe('low');
+    expect(wrapper.get('[data-test="cleanup-empty-state"] .ui-empty__title').text()).toBe('没有发现极短 / 低清候选。');
+    wrapper.unmount();
+  });
+
+  it('「已忽略」：空态给「回到候选」，读失败给「重试」；卡片上的数字读过才有', async () => {
+    const { wrapper } = await openWith(baseAnalysis({ duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }] }));
+    const dismissedTile = () => wrapper.get('[data-test="cleanup-dismissed-tab"]');
+    expect(dismissedTile().get('[data-test="stat-tile-value"]').text()).toBe('—');
+    api.ListCleanupDismissals.mockRejectedValueOnce(new Error('数据库繁忙'));
+    await dismissedTile().trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="cleanup-dismissed-error"]').text()).toContain('读取忽略记录失败');
+    api.ListCleanupDismissals.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
+    await wrapper.get('[data-test="cleanup-dismissed-retry"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="cleanup-dismissed-error"]').exists()).toBe(false);
+    expect(dismissedTile().get('[data-test="stat-tile-value"]').text()).toBe('0');
+    await wrapper.get('[data-test="cleanup-dismissed-empty"] [data-test="cleanup-dismissed-back"]').trigger('click');
+    expect(wrapper.vm.activeCleanupCategory).toBe('exact');
+    expect(wrapper.find('[data-test="cleanup-dismissed"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('集中整理在后台结束且移动过文件：结果标为可能过期；还在跑或没移动的不标', async () => {
+    const handlers = {}; const previousRuntime = window.runtime;
+    window.runtime = { EventsOn: (event, handler) => { handlers[event] = handler; return vi.fn(); } };
+    const { wrapper } = await openWith(baseAnalysis({ duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }] }));
+    handlers['cleanup-consolidation-progress']({ id: 1, version: 1, status: 'running', completed: 3 });
+    handlers['cleanup-consolidation-progress']({ id: 1, version: 2, status: 'failed', completed: 0 });
+    expect(wrapper.vm.cleanupResultStale).toBe(false);
+    handlers['cleanup-consolidation-progress']({ id: 1, version: 3, status: 'cancelled', completed: 2 });
+    expect(wrapper.vm.cleanupResultStale).toBe(true);
+    wrapper.unmount(); window.runtime = previousRuntime;
+  });
 });

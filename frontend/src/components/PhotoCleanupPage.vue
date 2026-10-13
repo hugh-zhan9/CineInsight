@@ -1,44 +1,26 @@
 <template>
+  <!-- 清理中心的图片标签（D-P3-02）：页头、「重新分析」与离开都在清理中心页上，这里只有审阅内容。 -->
   <section class="cleanup-page" data-test="photo-cleanup-page">
-    <div class="cleanup-page__nav">
-      <!-- 删除进行中不能离开（P-032 评审 Minor 5）：「不支持废纸篓」二选一挂在本页上。 -->
+    <!-- 勾选规则与视频标签同一套（D-PC49，utils/cleanupSelection.js）。 -->
+    <div class="cleanup-page__intro">
+      <p class="cleanup-page__muted">精确重复默认勾选保留项以外的副本；疑似重复是画面近似，默认不勾，看过之后按组或按页「按建议勾选」。保留项锁定，要换就点另一张的「设为保留」。勾选的图片移到废纸篓，可在回收站撤销；不勾任何一张的组不会有任何改动。</p>
       <button
         type="button"
-        class="btn btn--ghost btn--sm"
-        data-test="cleanup-back"
-        :disabled="processing"
-        :title="processing ? '正在移到废纸篓，完成后再返回' : ''"
-        @click="$emit('close')"
-      ><AppIcon name="chevron-left" :size="16" />返回图片库</button>
+        class="btn btn--secondary btn--sm"
+        data-test="cleanup-dismissed-toggle"
+        @click="toggleDismissed"
+      >{{ showDismissed ? '返回审阅' : '已忽略' }}</button>
     </div>
-
-    <!-- 勾选规则与视频清理面板同一套（D-PC49，utils/cleanupSelection.js）。 -->
-    <PageHeader
-      class="cleanup-page__header"
-      title="清理审阅"
-      subtitle="精确重复默认勾选保留项以外的副本；疑似重复是画面近似，默认不勾，看过之后按组或按页「按建议勾选」。保留项锁定，要换就点另一张的「设为保留」。勾选的图片移到废纸篓，可在回收站撤销；不勾任何一张的组不会有任何改动。"
-    >
-      <template #actions>
-        <button
-          type="button"
-          class="btn btn--secondary"
-          data-test="cleanup-dismissed-toggle"
-          @click="toggleDismissed"
-        >{{ showDismissed ? '返回审阅' : '已忽略' }}</button>
-        <button
-          type="button"
-          :class="['btn', analysis ? 'btn--secondary' : 'btn--primary']"
-          :disabled="running || editLocked"
-          data-test="cleanup-start"
-          @click="startAnalysis"
-        >{{ running ? '分析中…' : (analysis ? '重新分析' : '开始分析') }}</button>
-      </template>
-    </PageHeader>
 
     <!-- 删除走 P-030 的删除宿主：进度与取消、磁盘不支持废纸篓时的二选一、按批次撤销。 -->
     <TrashUndoBanner ref="trashUndo" kind="image" :after-restore="afterTrashRestore" />
 
-    <AppBanner v-if="displayError" tone="danger" role="alert" data-test="cleanup-error" :title="displayError" />
+    <!-- 分析本身失败（后端报错）时给「重新分析」；本页操作的失败（在访达中显示、删除部分失败）只说明原因。 -->
+    <AppBanner v-if="displayError" tone="danger" role="alert" data-test="cleanup-error" :title="displayError">
+      <template v-if="analysisFailed" #actions>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-error-retry" :disabled="running || editLocked" @click="startAnalysis">重新分析</button>
+      </template>
+    </AppBanner>
     <AppBanner
       v-if="resultStale"
       tone="warning"
@@ -125,7 +107,7 @@
       />
       <p v-if="progress.message" class="cleanup-page__muted">{{ progress.message }}</p>
       <p v-if="progress.path" class="cleanup-page__path">当前文件：{{ progress.path }}</p>
-      <p class="cleanup-page__muted">分析会逐个读取图片文件，外置硬盘或大库场景耗时较长。可以直接返回图片库，分析会在后台继续。</p>
+      <p class="cleanup-page__muted">分析会逐个读取图片文件，外置硬盘或大库场景耗时较长。可以离开这一页，分析会在后台继续。</p>
       <p>
         <button
           type="button"
@@ -447,6 +429,12 @@
       </nav>
     </template>
 
+    <!-- 第一次读清理分析状态（之前没有任何一页读过）。 -->
+    <div v-else-if="!statusLoaded" class="cleanup-page__loading cleanup-page__loading--status" role="status" data-test="cleanup-status-loading">
+      <SkeletonBlock :lines="4" />
+      <span class="cleanup-page__muted">正在读取清理分析…</span>
+    </div>
+
     <EmptyState
       v-else
       data-test="cleanup-idle"
@@ -540,7 +528,6 @@ import AppBanner from './ui/AppBanner.vue';
 import AppIcon from './ui/AppIcon.vue';
 import DialogShell from './ui/DialogShell.vue';
 import EmptyState from './ui/EmptyState.vue';
-import PageHeader from './ui/PageHeader.vue';
 import ProgressBar from './ui/ProgressBar.vue';
 import SelectionBar from './ui/SelectionBar.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
@@ -591,16 +578,19 @@ function emptyDeleteConfirm() {
 
 export default {
   name: 'PhotoCleanupPage',
-  components: { AppBanner, AppIcon, DialogShell, EmptyState, PageHeader, ProgressBar, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
+  components: { AppBanner, AppIcon, DialogShell, EmptyState, ProgressBar, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
   props: {
     // 宿主的 @deleted：清理页改动了图片库（删除，或在撤销提示 / 「最近操作」/ 回收站里撤销了删除），图片库据此重载。
     // 声明成 prop 而不是放进 emits：离开清理页之后再从「最近操作」撤销时本页已经卸下，Vue 会丢掉它的 $emit，
     // 拿着宿主传进来的这个监听才能照样让图片库重载。宿主写法不变，仍是 @deleted。
     onDeleted: { type: Function, default: null }
   },
-  emits: ['close'],
+  // state-change：给宿主（清理中心页）的状态——页头的「上次分析」与「重新分析」、删除进行中不能离开这一页。
+  emits: ['state-change'],
   data() {
     return {
+      // 状态已经读过（别的页面读过也算）：之前显示骨架，不把「尚未分析」误报出来。
+      statusLoaded: Boolean(photoCleanupStore.status),
       UNKNOWN_DIRECTORY,
       KIND_LABELS,
       TILE_ICONS,
@@ -644,6 +634,18 @@ export default {
     progress() { return this.status?.progress || {}; },
     stageLabel() { return STAGE_LABELS[this.progress.stage] || '准备中'; },
     displayError() { return this.localError || this.status?.error || ''; },
+    // 横幅上的错误是分析本身失败（后端报的），不是本页操作的失败：这时才给「重新分析」。
+    analysisFailed() { return !this.localError && Boolean(this.status?.error); },
+    cleanupState() {
+      return {
+        running: this.running,
+        processing: this.processing,
+        locked: this.editLocked,
+        cancelled: Boolean(!this.running && this.status?.cancelled),
+        hasAnalysis: Boolean(this.analysis),
+        startedAt: this.analysis ? String(this.status?.started_at || '') : ''
+      };
+    },
     analysisKey() {
       if (!this.analysis) return '';
       return String(this.status?.started_at || '') || 'unkeyed-analysis';
@@ -889,13 +891,15 @@ export default {
     },
     running(value) {
       if (!value) this.cancelling = false;
-    }
+    },
+    cleanupState: { immediate: true, handler(state) { this.$emit('state-change', state); } }
   },
   async mounted() {
     startPhotoCleanupPolling();
     window.addEventListener('keydown', this.handleKeydown);
     this.subscribePerceptualHash();
     await refreshPhotoCleanupStatus();
+    this.statusLoaded = true;
     // 与视频侧的清理审阅同构：进来时后端既没在跑、也没有可用结果，就直接发起一次分析，
     // 不用再多点一次"开始分析"。已有结果（哪怕已标记过期）保留下来，要不要重跑由用户决定；
     // 上一轮是用户自己取消的，也不替他重跑。
@@ -1488,10 +1492,11 @@ export default {
 </script>
 
 <style scoped>
-.cleanup-page { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4) var(--space-5) var(--space-6); }
-.cleanup-page > .cleanup-page__header { margin-bottom: 0; }
-.cleanup-page__nav { display: flex; margin-bottom: calc(-1 * var(--space-1)); }
-.cleanup-page__nav .btn { margin-left: calc(-1 * var(--space-2)); }
+/* 嵌在清理中心的图片标签里：外边距与页头由清理中心页给。 */
+.cleanup-page { display: flex; flex-direction: column; gap: var(--space-3); }
+.cleanup-page__intro { display: flex; align-items: flex-start; gap: var(--space-3); }
+.cleanup-page__intro .cleanup-page__muted { flex: 1; min-width: 0; line-height: 1.6; }
+.cleanup-page__intro .btn { flex: none; }
 .cleanup-page__pagination { display: flex; align-items: center; justify-content: center; gap: var(--space-3); padding: var(--space-3); flex-wrap: wrap; color: var(--text-secondary); font-size: var(--fs-caption); }
 .cleanup-page__summary { color: var(--text-secondary); font-size: var(--fs-caption); }
 
@@ -1503,6 +1508,9 @@ export default {
 .cleanup-page__muted { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 .cleanup-page__path { color: var(--text-muted); font-size: var(--fs-caption); word-break: break-all; }
 .cleanup-page__loading { display: grid; gap: var(--space-2); }
+/* 首屏读状态：与视频标签同一个样子（居中的一段骨架）。 */
+.cleanup-page__loading--status { justify-items: center; padding: var(--space-7) var(--space-2); text-align: center; }
+.cleanup-page__loading--status > .ui-skeleton { width: min(520px, 100%); }
 
 .cleanup-page__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding: 0 2px; color: var(--text-muted); font-size: var(--fs-caption); }
 .cleanup-page__switch { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer; }

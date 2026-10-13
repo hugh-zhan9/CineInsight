@@ -500,7 +500,7 @@ describe('离开清理页之后的撤销', () => {
     await flushPromises();
     expect(onDeleted).toHaveBeenCalledTimes(1);
     expect(photoCleanupStore.review.deletedIDs).toEqual([12]);
-    // 返回图片库：清理页卸下。
+    // 离开清理中心的图片标签（切到视频标签或离开这一页）：本页卸下。
     wrapper.unmount();
 
     api.GetImageCleanupStatus.mockClear();
@@ -548,7 +548,9 @@ describe('D-PC49 锁定与删除进行中（P-032 评审 I-1、Minor 5 / 7 / 8�
     wrapper.unmount();
   });
 
-  it('D-PC49 删除进行中禁用勾选、「保留这份」「本组不删」「移出本组」「不是重复」与返回，结束后恢复', async () => {
+  // D-P3-02：「返回图片库」（cleanup-back）随页头移到清理中心页上，删除进行中禁用的断言见 CleanupCenterPage.test.js；
+  // 本页报 state-change 的 processing，清理中心据此不让离开、不让切标签。
+  it('D-PC49 删除进行中禁用勾选、「保留这份」「本组不删」「移出本组」「不是重复」，并报 processing，结束后恢复', async () => {
     feedback.confirmAction.mockResolvedValue(false);
     let finishDelete;
     api.DeleteImagesWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okResult(ids)); }));
@@ -562,13 +564,14 @@ describe('D-PC49 锁定与删除进行中（P-032 评审 I-1、Minor 5 / 7 / 8�
     const controls = () => wrapper.findAll([
       '[data-test="cleanup-candidate-toggle"]', '[data-test="cleanup-keep-toggle"]', '[data-test="cleanup-skip-group"]',
       '[data-test="cleanup-suggest-group"]', '[data-test="cleanup-remove-member"]', '[data-test="cleanup-dismiss-group"]',
-      '[data-test="cleanup-suggest-page"]', '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-back"]'
+      '[data-test="cleanup-suggest-page"]', '[data-test="cleanup-samedir-switch"] input'
     ].join(', '));
+    expect(wrapper.emitted('state-change').at(-1)[0]).toMatchObject({ processing: true, locked: true });
     // 两个区域分开渲染，切换区域不改勾选，删除进行中也能切过去看。
-    expect(controls().length).toBeGreaterThanOrEqual(9);
+    expect(controls().length).toBeGreaterThanOrEqual(8);
     expect(controls().every(node => node.element.disabled)).toBe(true);
     await showKind(wrapper, 'near');
-    expect(controls().length).toBeGreaterThanOrEqual(15);
+    expect(controls().length).toBeGreaterThanOrEqual(14);
     expect(controls().every(node => node.element.disabled)).toBe(true);
 
     // 界面之外直接调用也不生效。
@@ -585,7 +588,7 @@ describe('D-PC49 锁定与删除进行中（P-032 评审 I-1、Minor 5 / 7 / 8�
     finishDelete();
     await flushPromises();
     expect(wrapper.vm.processing).toBe(false);
-    expect(wrapper.get('[data-test="cleanup-back"]').element.disabled).toBe(false);
+    expect(wrapper.emitted('state-change').at(-1)[0]).toMatchObject({ processing: false, locked: false });
     wrapper.unmount();
   });
 
@@ -841,12 +844,14 @@ describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审
     const controls = () => wrapper.findAll([
       '[data-test="cleanup-candidate-toggle"]', '[data-test="cleanup-keep-toggle"]', '[data-test="cleanup-skip-group"]',
       '[data-test="cleanup-suggest-group"]', '[data-test="cleanup-remove-member"]', '[data-test="cleanup-dismiss-group"]',
-      '[data-test="cleanup-suggest-page"]', '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-start"]'
+      '[data-test="cleanup-suggest-page"]', '[data-test="cleanup-samedir-switch"] input'
     ].join(', '));
-    expect(controls().length).toBeGreaterThanOrEqual(9);
+    // 「重新分析」（cleanup-start）随页头移到清理中心页上：它按本页报的 locked 禁用（见 CleanupCenterPage.test.js）。
+    expect(wrapper.emitted('state-change').at(-1)[0]).toMatchObject({ processing: false, locked: true });
+    expect(controls().length).toBeGreaterThanOrEqual(8);
     expect(controls().every(node => node.element.disabled)).toBe(true);
     await showKind(wrapper, 'near');
-    expect(controls().length).toBeGreaterThanOrEqual(18);
+    expect(controls().length).toBeGreaterThanOrEqual(17);
     expect(controls().every(node => node.element.disabled)).toBe(true);
     wrapper.vm.togglePageSuggestion();
 
@@ -1290,9 +1295,14 @@ describe('统一设计：选择操作条与用词（D-UD-10 / D-UD-14）', () =>
     wrapper.unmount();
   });
 
-  it('用词：「设为保留」「在访达中显示」，页头是统一的 PageHeader', async () => {
+  // D-P3-02：本页嵌在清理中心的图片标签里，页头（「清理中心」）、「重新分析」与离开都在清理中心页上。
+  it('用词：「设为保留」「在访达中显示」；本页没有自己的页头与「返回图片库」', async () => {
     const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
-    expect(wrapper.get('h1').text()).toBe('清理审阅');
+    expect(wrapper.find('h1').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'PageHeader' }).exists()).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-back"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-start"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="cleanup-dismissed-toggle"]').text()).toBe('已忽略');
     expect(wrapper.text()).toContain('设为保留');
     expect(wrapper.text()).not.toContain('保留这份');
     expect(wrapper.get('[data-test="cleanup-open-dir"]').text()).toBe('在访达中显示');

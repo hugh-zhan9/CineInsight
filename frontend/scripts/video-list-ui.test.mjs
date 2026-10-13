@@ -136,9 +136,12 @@ assert.match(
   'tag filter chips should have a tighter max width'
 );
 
-assert.match(cleanupPanelSource, /cleanup-modal-header/, 'cleanup modal should have a fixed header area');
-assert.match(cleanupPanelSource, /cleanup-modal-body/, 'cleanup modal should have a dedicated scroll body');
-assert.match(cleanupPanelSource, /cleanup-modal-footer/, 'cleanup modal should keep actions visible at the bottom');
+// 2026-10-13 P3-C（D-P3-02）：清理弹窗改成清理中心视频标签的页面内容，结构与图片标签一致：
+// 顶部分类统计卡、当前类别的标题行、有勾选才浮出的选择操作条（「移到废纸篓」一直在手边）。
+assert.doesNotMatch(cleanupPanelSource, /<DialogShell[^>]*class="cleanup-modal"/, 'the video cleanup review is page content, not a dialog');
+assert.match(cleanupPanelSource, /<StatTile[\s\S]*?data-test="cleanup-category"/, 'categories are stat tiles, aligned with the image tab');
+assert.match(cleanupPanelSource, /class="cleanup-area__bar"/, 'the active category has a header row with the candidate count');
+assert.match(cleanupPanelSource, /<SelectionBar :count="cleanupSelection\.length" :clear-on-escape="false"/, 'the trash action sits on the shared selection bar; Esc keeps review picks');
 // 顶层改成按目录分组：目录标题可折叠，组内类别用 cleanup-card-kind 标注。
 // 2026-09-01 起目录分组从内联折叠改成左侧栏 + 右侧候选流（原型 A5），
 // 折叠开关随之消失，但"按目录分组"这件事本身保留。
@@ -170,7 +173,7 @@ assert.match(videoListSource, /GetPreviewSession/, 'cleanup preview should valid
 assert.match(cleanupPanelSource, /StartCleanupAnalysis/, 'cleanup analysis should start as a background task');
 assert.match(cleanupPanelSource, /GetCleanupStatus/, 'cleanup dialog should reopen from background status');
 assert.match(cleanupPanelSource, /@click="reanalyzeCleanupCandidates"/, 'cleanup reanalysis should bypass completed background status');
-assert.match(cleanupPanelSource, /后台继续分析/, 'cleanup dialog should allow closing while analysis continues');
+assert.match(cleanupPanelSource, /可以离开这一页，分析会在后台继续/, 'the analysis keeps running in the background when the user leaves the page');
 
 // 批量操作条必须一直看得见：选中项后向下滚动时若按钮被滚走，用户就得滚回去才能操作。
 // 统一设计 D-UD-10 起它是全站同一个 SelectionBar，浮在内容区底部（position: sticky; bottom），
