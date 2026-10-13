@@ -124,6 +124,40 @@ func TestLocalMetadataExportBatchUsesCurrentFilterAndCanCancel(t *testing.T) {
 	}
 }
 
+// D-P3-05：NFO 写出登记为 local_metadata_export，不再占用补全的 local_metadata；结束后从登记表消失。
+func TestLocalMetadataExportRegistersItsOwnBackgroundTaskKey(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	createShortFeedVideo(t, t.TempDir(), "export.mp4", 60, false)
+
+	service := NewLocalMetadataService(t.TempDir(), NewPersonService(t.TempDir()), NewCollectionService(t.TempDir()))
+	registry := NewBackgroundTaskRegistry()
+	service.SetBackgroundTaskRegistry(registry)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service.exportProcess = func(context.Context, uint) (*LocalMetadataNFOExportResult, error) {
+		close(started)
+		<-release
+		return &LocalMetadataNFOExportResult{}, nil
+	}
+	if _, err := service.StartExport(context.Background(), LocalMetadataExportRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if got := registry.Snapshot(); len(got) != 1 || got[0] != string(BackgroundTaskLocalMetadataExport) {
+		close(release)
+		t.Fatalf("写出进行中登记表应只有 local_metadata_export: %v", got)
+	}
+	close(release)
+	waitForLocalMetadataExport(t, service)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(registry.Snapshot()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("写出结束后登记表应清空: %v", registry.Snapshot())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestLocalMetadataExportReportsTruncatedFailuresBeyondLimit(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()

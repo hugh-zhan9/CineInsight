@@ -21,9 +21,9 @@ function backendTaskKeyOrder() {
 }
 
 describe('后台任务标签与后端登记表对齐（APP-03）', () => {
-  it('APP-03 登记表的 30 个 key 在前端都有中文标签，顺序与任务中心面板一致', () => {
+  it('APP-03 登记表的 31 个 key 在前端都有中文标签，顺序与任务中心面板一致', () => {
     const keys = backendTaskKeyOrder();
-    expect(keys).toHaveLength(30);
+    expect(keys).toHaveLength(31);
     expect(Object.keys(BACKGROUND_TASK_LABELS)).toEqual(keys);
     for (const key of keys) {
       const label = BACKGROUND_TASK_LABELS[key];
@@ -36,6 +36,11 @@ describe('后台任务标签与后端登记表对齐（APP-03）', () => {
     expect(backgroundTaskLabel('image_cleanup')).toBe('图片清理分析');
     expect(backgroundTaskLabel('watchlist_enrich')).toBe('片单补全');
     expect(backgroundTaskLabel('movie_chart')).toBe('榜单抓取');
+  });
+
+  it('D-P3-05 NFO 写出单独成项，与片库页状态条同一说法', () => {
+    expect(backgroundTaskLabel('local_metadata_export')).toBe('NFO 写出');
+    expect(backgroundTaskLabel('local_metadata')).toBe('本地资料');
   });
 
   it('P-007 场景画面索引有中文标签', () => {

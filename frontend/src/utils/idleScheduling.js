@@ -12,6 +12,7 @@ export const BACKGROUND_TASK_LABELS = {
   phash: '近重复指纹',
   technical: '技术信息',
   local_metadata: '本地资料',
+  local_metadata_export: 'NFO 写出',
   semantic: '语义索引',
   image_semantic: '图片语义索引',
   ai_tagging: 'AI 打标',

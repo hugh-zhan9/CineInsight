@@ -20,17 +20,17 @@ func TestBackgroundTaskRegistrySnapshotOrderIsStable(t *testing.T) {
 	}
 }
 
-// 同一个 key 被两条 worker 同时登记（本地元数据的补全与写出）：任一在跑就算在跑，
+// 同一个 key 被两条 worker 同时登记（例如两个插件下载）：任一在跑就算在跑，
 // 两次 End 之后才清空。
 func TestBackgroundTaskRegistryCountsRepeatedKey(t *testing.T) {
 	registry := NewBackgroundTaskRegistry()
-	registry.Begin(BackgroundTaskLocalMetadata)
-	registry.Begin(BackgroundTaskLocalMetadata)
-	registry.End(BackgroundTaskLocalMetadata)
-	if got := registry.Snapshot(); !reflect.DeepEqual(got, []string{"local_metadata"}) {
+	registry.Begin(BackgroundTaskBrowserDownload)
+	registry.Begin(BackgroundTaskBrowserDownload)
+	registry.End(BackgroundTaskBrowserDownload)
+	if got := registry.Snapshot(); !reflect.DeepEqual(got, []string{"browser_download"}) {
 		t.Fatalf("还有一条在跑时不该从快照消失: %v", got)
 	}
-	registry.End(BackgroundTaskLocalMetadata)
+	registry.End(BackgroundTaskBrowserDownload)
 	if got := registry.Snapshot(); len(got) != 0 {
 		t.Fatalf("全部结束后快照应为空: %v", got)
 	}
@@ -102,8 +102,8 @@ func TestBackgroundTaskRegistryRejectsUnknownKey(t *testing.T) {
 	if IsBackgroundTaskKey("not_a_task") {
 		t.Fatal("未知 key 不该被认作合法")
 	}
-	if len(BackgroundTaskKeys()) != 30 {
-		t.Fatalf("固定 key 集合应有 30 项，实际 %d", len(BackgroundTaskKeys()))
+	if len(BackgroundTaskKeys()) != 31 {
+		t.Fatalf("固定 key 集合应有 31 项，实际 %d", len(BackgroundTaskKeys()))
 	}
 	if !IsBackgroundTaskKey(string(BackgroundTaskSceneIndex)) || BackgroundTaskSceneIndex != "scene_index" {
 		t.Fatal("场景画面索引的 key scene_index 没有进合法集合")
@@ -144,4 +144,21 @@ func TestBackgroundTaskRegistryNilIsNoop(t *testing.T) {
 	if got := registry.Snapshot(); len(got) != 0 {
 		t.Fatalf("nil 登记表的快照应为空: %v", got)
 	}
+}
+
+// D-P3-05：NFO 写出单独登记为 local_metadata_export，紧跟本地资料补全（任务中心与设置页按这个顺序列）。
+func TestBackgroundTaskRegistryListsLocalMetadataExportAfterBackfill(t *testing.T) {
+	if BackgroundTaskLocalMetadataExport != "local_metadata_export" || !IsBackgroundTaskKey(string(BackgroundTaskLocalMetadataExport)) {
+		t.Fatalf("NFO 写出的 key 应为 local_metadata_export 且在合法集合里")
+	}
+	keys := BackgroundTaskKeys()
+	for index, key := range keys {
+		if key == string(BackgroundTaskLocalMetadata) {
+			if index+1 >= len(keys) || keys[index+1] != string(BackgroundTaskLocalMetadataExport) {
+				t.Fatalf("local_metadata_export 应紧跟 local_metadata: %v", keys)
+			}
+			return
+		}
+	}
+	t.Fatalf("登记表里没有 local_metadata: %v", keys)
 }

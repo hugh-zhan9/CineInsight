@@ -66,12 +66,17 @@ func (a *App) taskCenterAutomationRules(src *taskCenterSources) taskCenterKeySta
 	if status.Running || !status.Completed {
 		return state
 	}
+	state.lastRun = automationRuleLastRun(status)
+	return state
+}
+
+// automationRuleLastRun 是一次手动运行的结果；被取消的那一轮单独标出（D-P3-05，服务按 Completed + Cancelled 记）。
+func automationRuleLastRun(status services.AutomationRuleRunStatus) *TaskLastRun {
 	failures := []string{}
 	if status.Error != "" {
 		failures = append(failures, status.Error)
 	}
-	state.lastRun = &TaskLastRun{FinishedAt: status.FinishedAt, Succeeded: status.Matched, Failed: len(failures), Failures: boundTaskFailures(failures)}
-	return state
+	return &TaskLastRun{FinishedAt: status.FinishedAt, Succeeded: status.Matched, Failed: len(failures), Failures: boundTaskFailures(failures), Cancelled: status.Cancelled}
 }
 
 // ===== App 接口（需求设计文档 §3.5）=====

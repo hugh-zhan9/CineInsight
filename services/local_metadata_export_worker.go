@@ -195,7 +195,7 @@ func (s *LocalMetadataService) StartExport(parent context.Context, request Local
 	registry := state.registry
 	state.worker.Add(1)
 	state.mu.Unlock()
-	registry.Begin(BackgroundTaskLocalMetadata)
+	registry.Begin(BackgroundTaskLocalMetadataExport)
 	emitLocalMetadataExport(emitter, status)
 	go s.runExport(ctx, videoIDs, registry)
 	return status, nil
@@ -261,7 +261,7 @@ func (s *LocalMetadataService) StopExport() {
 // 只做观察、不回写数据库，因此不会形成数据回环。
 func (s *LocalMetadataService) runExport(ctx context.Context, videoIDs []uint, registry *BackgroundTaskRegistry) {
 	defer s.exportState().worker.Done()
-	defer registry.End(BackgroundTaskLocalMetadata)
+	defer registry.End(BackgroundTaskLocalMetadataExport)
 	for _, videoID := range videoIDs {
 		if ctx.Err() != nil {
 			break

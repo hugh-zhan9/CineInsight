@@ -17,7 +17,7 @@ import * as recentOperations from '../utils/recentOperations.js';
 
 const KEYS = Object.keys(BACKGROUND_TASK_LABELS);
 
-// 30 个 key 的快照：默认空闲，按用例覆盖其中几项。
+// 全部 key（31 个）的快照：默认空闲，按用例覆盖其中几项。
 function snapshot({ overrides = {}, recent = [], warnings = [] } = {}) {
   return {
     items: KEYS.map(key => ({
@@ -80,7 +80,7 @@ describe('任务中心快照展示（APP-03）', () => {
     expect(wrapper.find('[data-test="task-center-recent"]').exists()).toBe(true);
   });
 
-  it('APP-03 30 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
+  it('APP-03 31 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
     api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({
       overrides: {
         phash: { state: 'running', progress: { done: 3, total: 10 }, actions: ['cancel'] },
@@ -90,10 +90,10 @@ describe('任务中心快照展示（APP-03）', () => {
     const wrapper = mountDrawer();
     await flushPromises();
 
-    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(30);
+    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(31);
     expect(wrapper.get('[data-test="task-center-section-running"]').text()).toContain('近重复指纹');
     expect(wrapper.get('[data-test="task-center-section-waiting_idle"]').text()).toContain('图片 EXIF');
-    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(28);
+    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(29);
     const names = wrapper.findAll('.task-item .task-item__name').map(name => name.text());
     expect(names).toEqual(expect.arrayContaining(Object.values(BACKGROUND_TASK_LABELS)));
     for (const key of ['image_cleanup', 'watchlist_enrich', 'movie_chart', 'browser_download']) {
@@ -148,6 +148,114 @@ describe('任务中心快照展示（APP-03）', () => {
     await wrapper.vm.refresh();
     await flushPromises();
     expect(wrapper.get('[data-test="task-center-error"]').text()).toContain('读取任务状态失败');
+  });
+});
+
+// D-P3-05：片库页后台任务状态条上的几项收进任务中心，文案沿用状态条。
+describe('状态条收进任务中心（D-P3-05）', () => {
+  const FINISHED = '2026-10-13T08:05:00Z';
+
+  async function mountWith(overrides) {
+    api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({ overrides }));
+    const wrapper = mountDrawer();
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('准备中：运行中的项写「正在统计待处理项…」，没有进度条', async () => {
+    const wrapper = await mountWith({
+      technical: { state: 'running', preparing: true, actions: ['cancel'] },
+      frame_hash: { state: 'running', preparing: false, progress: { done: 2, total: 8 } }
+    });
+    expect(wrapper.get('[data-test="task-item-state-technical"]').text()).toBe('运行中 · 正在统计待处理项…');
+    expect(wrapper.find('[data-test="task-item-progress-technical"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="task-action-technical-cancel"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="task-item-state-frame_hash"]').text()).toBe('运行中');
+    expect(wrapper.get('[data-test="task-item-progress-frame_hash"]').text()).toContain('2/8');
+  });
+
+  it('跳过数：有跳过就列出，没有跳过不写「跳过 0」', async () => {
+    const wrapper = await mountWith({
+      technical: { last_run: { finished_at: FINISHED, succeeded: 3, skipped: 2, failed: 0, failures: [] } },
+      local_metadata: { last_run: { finished_at: FINISHED, succeeded: 4, skipped: 0, failed: 0, failures: [] } }
+    });
+    expect(wrapper.get('[data-test="task-item-last-technical"]').text()).toMatch(/^上一轮（.+）：成功 3 · 失败 0 · 跳过 2（已完成）$/);
+    expect(wrapper.get('[data-test="task-item-last-local_metadata"]').text()).not.toContain('跳过');
+  });
+
+  it('已取消与已完成分开写；有失败的一轮写「本轮结束，有失败项」', async () => {
+    const wrapper = await mountWith({
+      frame_hash: { last_run: { finished_at: FINISHED, succeeded: 1, skipped: 1, failed: 0, cancelled: true, failures: [] } },
+      exif: { last_run: { finished_at: FINISHED, succeeded: 5, failed: 0, cancelled: false, failures: [] } },
+      image_phash: { last_run: { finished_at: FINISHED, succeeded: 5, failed: 2, cancelled: false, failures: ['a.jpg：读不出'] } }
+    });
+    const cancelled = wrapper.get('[data-test="task-item-last-frame_hash"]').text();
+    expect(cancelled).toContain('成功 1 · 失败 0 · 跳过 1（已取消）');
+    expect(cancelled).not.toContain('已完成');
+    expect(wrapper.get('[data-test="task-item-last-exif"]').text()).toContain('成功 5 · 失败 0（已完成）');
+    expect(wrapper.get('[data-test="task-item-last-image_phash"]').text()).toContain('成功 5 · 失败 2（本轮结束，有失败项）');
+  });
+
+  it('没有结束时间的累计数（视频 AI 打标）不写完成与否', async () => {
+    const wrapper = await mountWith({ ai_tagging: { last_run: { succeeded: 120, failed: 3, failures: [] } } });
+    expect(wrapper.get('[data-test="task-item-last-ai_tagging"]').text()).toBe('上一轮：成功 120 · 失败 3');
+  });
+
+  it('近重复指纹：复用与移出范围照状态条的说法列出，并带指纹用途与失败含义两句说明', async () => {
+    const wrapper = await mountWith({
+      phash: { last_run: { finished_at: FINISHED, succeeded: 4, failed: 1, skipped: 0, reused: 3, out_of_scope: 2, failures: ['a.mp4：解码失败'] } }
+    });
+    expect(wrapper.get('[data-test="task-item-last-phash"]').text()).toContain('成功 4 · 失败 1 · 已有指纹复用 3 · 已移出处理范围 2（本轮结束，有失败项）');
+    const notes = wrapper.findAll('[data-test="task-item-note-phash"]').map(note => note.text());
+    expect(notes).toEqual([
+      '指纹用于后续查找近重复视频，候选结果请在清理中心查看。',
+      '处理失败表示未能生成指纹，部分视频仍可播放；具体原因见下方。'
+    ]);
+    expect(wrapper.get('[data-test="task-item-failures-phash"]').text()).toContain('a.mp4：解码失败');
+  });
+
+  it('近重复指纹的说明只在跑过、在跑或在等空闲时出现；没失败不说失败含义', async () => {
+    let wrapper = await mountWith({});
+    expect(wrapper.find('[data-test="task-item-note-phash"]').exists()).toBe(false);
+    wrapper = await mountWith({ phash: { state: 'waiting_idle', gate_reason: 'user_active', actions: ['run_now'] } });
+    expect(wrapper.findAll('[data-test="task-item-note-phash"]').map(note => note.text())).toEqual(['指纹用于后续查找近重复视频，候选结果请在清理中心查看。']);
+    wrapper = await mountWith({ phash: { last_run: { finished_at: FINISHED, succeeded: 2, failed: 0, reused: 0, out_of_scope: 0, failures: [] } } });
+    expect(wrapper.findAll('[data-test="task-item-note-phash"]')).toHaveLength(1);
+    expect(wrapper.get('[data-test="task-item-last-phash"]').text()).not.toContain('复用');
+  });
+
+  it('总数为 0 的一轮：补全类写「无需补全（已是最新状态）」，其余写「无需处理（已是最新状态）」，不列计数', async () => {
+    const wrapper = await mountWith({
+      technical: { last_run: { finished_at: FINISHED, succeeded: 0, failed: 0, nothing_to_do: true, failures: [] } },
+      scene_index: { last_run: { finished_at: FINISHED, succeeded: 0, failed: 0, nothing_to_do: true, failures: [] } }
+    });
+    const technical = wrapper.get('[data-test="task-item-last-technical"]').text();
+    expect(technical).toMatch(/^上一轮（.+）：无需补全（已是最新状态）$/);
+    expect(technical).not.toContain('成功');
+    expect(wrapper.get('[data-test="task-item-last-scene_index"]').text()).toMatch(/：无需处理（已是最新状态）$/);
+  });
+
+  it('NFO 写出单独一项：运行中显示进度，「取消」调用 CancelLocalMetadataExport，不动本地资料补全', async () => {
+    const wrapper = await mountWith({
+      local_metadata_export: { state: 'running', progress: { done: 2, total: 5 }, actions: ['cancel'] },
+      local_metadata: { actions: ['start'] }
+    });
+    const item = wrapper.get('[data-test="task-item-local_metadata_export"]');
+    expect(item.get('.task-item__name').text()).toBe('NFO 写出');
+    expect(wrapper.get('[data-test="task-item-progress-local_metadata_export"]').text()).toContain('2/5');
+    await wrapper.get('[data-test="task-action-local_metadata_export-cancel"]').trigger('click');
+    await flushPromises();
+    expect(api.CancelLocalMetadataExport).toHaveBeenCalledTimes(1);
+    expect(api.CancelLocalMetadataBackfill).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="task-item-state-local_metadata"]').text()).toBe('空闲');
+  });
+
+  it('NFO 写出取消失败给中文提示', async () => {
+    api.CancelLocalMetadataExport.mockRejectedValueOnce('本地资料写出任务未运行');
+    const wrapper = await mountWith({ local_metadata_export: { state: 'running', actions: ['cancel'] } });
+    await wrapper.get('[data-test="task-action-local_metadata_export-cancel"]').trigger('click');
+    await flushPromises();
+    expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('取消「NFO 写出」失败：本地资料写出任务未运行');
   });
 });
 
