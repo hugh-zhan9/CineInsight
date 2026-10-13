@@ -61,10 +61,21 @@ export function advanceProxyTracking(tracking, status, videoID, { fromEvent = tr
 // 自动代理请求被拒（同时在等自动代理的视频已有 2 部，后端报 auto_proxy_limit）时的提示。
 export const AUTO_PROXY_LIMIT_TEXT = '已有 2 部视频在等自动生成的播放代理，这一部可稍后重新打开，或点「生成播放代理」手动排队。';
 
-// proxyRequestErrorText 把入队失败翻成一句话：被上限拒绝是提示（notice），其余是失败（error）。
+// 本机没有 ffmpeg（后端报 auto_proxy_unavailable）时的提示：与旧的外部预览一样，只能用系统播放器。
+export const AUTO_PROXY_UNAVAILABLE_TEXT = '本机没有可用的 ffmpeg，生成不了播放代理，可以用系统播放器预览。';
+
+// proxyRequestErrorText 把入队失败翻成一句话。自动请求被后端拒绝的三种是提示（notice），其余是失败（error）：
+//   auto_proxy_limit（同时在等的已有 2 部）；auto_proxy_too_large（预计产物太大，冒号后是「文件较大（约 X GB）…」，
+//   blocked='too_large'，按 proxy-manual 处理：只给手动生成）；auto_proxy_unavailable（没有 ffmpeg，blocked='unavailable'，
+//   只给系统播放器）。
 export function proxyRequestErrorText(err) {
   const text = String(err ?? '');
-  return text.includes('auto_proxy_limit') ? { notice: AUTO_PROXY_LIMIT_TEXT, error: '' } : { notice: '', error: `生成播放代理失败：${text}` };
+  if (text.includes('auto_proxy_limit')) return { notice: AUTO_PROXY_LIMIT_TEXT, error: '', blocked: '' };
+  if (text.includes('auto_proxy_too_large')) {
+    return { notice: text.replace(/^[\s\S]*?auto_proxy_too_large:\s*/, ''), error: '', blocked: 'too_large' };
+  }
+  if (text.includes('auto_proxy_unavailable')) return { notice: AUTO_PROXY_UNAVAILABLE_TEXT, error: '', blocked: 'unavailable' };
+  return { notice: '', error: `生成播放代理失败：${text}`, blocked: '' };
 }
 
 // playbackProxyItemStateText 是抽屉里显示的那一句：「排队中（第 N 个）」「生成中」。

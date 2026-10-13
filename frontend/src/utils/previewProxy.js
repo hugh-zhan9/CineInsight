@@ -74,11 +74,14 @@ export function createPreviewProxyFollower({ kind, onState, onReady }) {
   const owner = newPreviewProxyOwner(kind);
   let handle = null;
   let videoID = 0;
+  let sequence = 0;
   const start = (id, manual) => {
     handle?.stop();
     videoID = id;
+    sequence += 1;
+    // 每次请求一个新令牌：上一次迟到的撤销碰不到这次的登记（与内嵌播放器同一做法）。
     handle = trackPreviewProxy(id, {
-      owner,
+      owner: `${owner}#${sequence}`,
       manual,
       onChange: change => {
         onState(change);

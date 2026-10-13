@@ -483,6 +483,8 @@ export default {
     this.loadWorkbench();
   },
   beforeUnmount() {
+    // 关闭之后才回来的会话不再处理：否则会在关闭后发出没人撤销的自动代理请求（与版本对比的 released 同一做法）。
+    this._released = true;
     this._proxyFollower.stop();
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
     window.removeEventListener('keydown', this.handleShortcut);
@@ -516,8 +518,10 @@ export default {
       }
       this.loadBackups();
       try {
-        this.previewSession = await previewPromise;
-        this._proxyFollower.follow(this.previewSession);
+        const session = await previewPromise;
+        if (this._released) return;
+        this.previewSession = session;
+        this._proxyFollower.follow(session);
       } catch (error) {
         this.previewError = subtitleExceptionText(error);
       } finally {
@@ -710,9 +714,10 @@ export default {
     // 代理就绪（或整轮结束、以会话为准）：重取会话，是内嵌就切过去。不再自动请求，免得同一部反复排队。
     async reloadPreviewSession() {
       try {
-        this.previewSession = await GetPreviewSession(this.video.id);
+        const session = await GetPreviewSession(this.video.id);
+        if (!this._released) this.previewSession = session;
       } catch (error) {
-        this.previewError = subtitleExceptionText(error);
+        if (!this._released) this.previewError = subtitleExceptionText(error);
       }
     },
     generatePreviewProxy() { this._proxyFollower.generate(this.video.id); },

@@ -1031,7 +1031,8 @@ export default {
         { heading: '增强' },
         { id: 'enhance', label: enhanceReady ? '视频超分…' : '视频超分（未就绪）' },
         { id: 'hd-replace', label: '高清替换…' },
-        { id: 'playback-proxy', label: '生成播放代理', disabled: this.playbackProxy.running },
+        // 只有预览自动代理在跑（auto_only）时不置灰：手动请求照常加入或接管（2026-10-13）。
+        { id: 'playback-proxy', label: '生成播放代理', disabled: !!this.playbackProxy.running && !this.playbackProxy.auto_only },
         { divider: true },
         { id: 'delete', label: '删除', danger: true, disabled: this.deletingIds.includes(video.id) }
       ];

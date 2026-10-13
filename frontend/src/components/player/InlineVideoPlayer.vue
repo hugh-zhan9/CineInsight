@@ -96,7 +96,7 @@
       <p>无法内嵌播放此文件</p>
       <div class="detail-action-row">
         <button type="button" class="btn-primary" data-test="preview-inline-error-external" @click="$emit('preview-externally', Number(videoId))">用系统播放器预览</button>
-        <button v-if="!playingThroughProxy" type="button" class="btn-secondary" data-test="preview-inline-error-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
+        <button v-if="!playingThroughProxy && proxyBlocked !== 'unavailable'" type="button" class="btn-secondary" data-test="preview-inline-error-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
       </div>
       <p v-if="proxyStatusLine" class="preview-drawer__proxy-progress" role="status" data-test="preview-inline-error-progress">{{ proxyStatusLine }}</p>
       <p v-if="proxyAlertLine" class="preview-drawer__proxy-progress" role="alert" data-test="preview-inline-error-alert">{{ proxyAlertLine }}</p>
@@ -107,7 +107,7 @@
       <p>{{ activeSession.reason_message || '这个文件需要先生成播放代理才能在应用内播放。' }}</p>
       <div class="detail-action-row">
         <button type="button" class="btn-primary" data-test="preview-proxy-preparing-external" @click="$emit('preview-externally', Number(videoId))">用系统播放器预览</button>
-        <button type="button" class="btn-secondary" data-test="preview-proxy-preparing-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
+        <button v-if="proxyBlocked !== 'unavailable'" type="button" class="btn-secondary" data-test="preview-proxy-preparing-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
       </div>
       <p v-if="proxyStatusLine" class="preview-drawer__proxy-progress" role="status" data-test="preview-proxy-preparing-status">{{ proxyStatusLine }}</p>
       <p v-if="proxyAlertLine" class="preview-drawer__proxy-progress" role="alert" data-test="preview-proxy-preparing-alert">{{ proxyAlertLine }}</p>
@@ -158,6 +158,8 @@ export default {
       seekPreview: null, seekSpriteUnavailable: false, seekSpriteRetryCount: 0, seekSpriteRetryTimer: null,
       inlinePlaybackFailed: false,
       playbackProxy: null, proxyBusy: false, proxyError: '', proxyNotice: '',
+      // 自动请求被后端挡下的原因：too_large（只给手动生成）、unavailable（没有 ffmpeg，只给系统播放器）。
+      proxyBlocked: '',
       // 正在等的那一项代理（D-PC26）：{ videoID, state }，state 为 playbackProxyItemState 的结果，
       // 入队请求还没返回时 phase 为 submitting。只有它完成时才自动切换，旧结果不会触发。
       proxyTracking: null
@@ -260,6 +262,8 @@ export default {
     this._activeHandle = { pause: () => this.pause() };
     // 自动代理按宿主实例记账（后端 owner）：抽屉与整页详情看同一部时互不取消。
     this._proxyOwner = newPreviewProxyOwner('player');
+    this._proxyOwnerSeq = 0;
+    this._autoProxy = null;
   },
   mounted() {
     // 代理队列的排位与完成（D-PC26）：本项完成后自动重取预览会话。
@@ -293,7 +297,7 @@ export default {
       this._autoProxySuppressedFor = 0;
       const token = Symbol('inline-player-video');
       this._loadToken = token;
-      this.playbackProxy = null; this.proxyError = ''; this.proxyNotice = ''; this.proxyBusy = false; this.proxyTracking = null;
+      this.playbackProxy = null; this.proxyError = ''; this.proxyNotice = ''; this.proxyBlocked = ''; this.proxyBusy = false; this.proxyTracking = null;
       if (!videoID) return;
       this.loadPlaybackProxy(videoID, token);
       this.loadProxyQueueState(videoID, token);
@@ -343,26 +347,46 @@ export default {
       }
     },
     createPlaybackProxy() { return this.submitPlaybackProxy(CreatePlaybackProxy); },
-    // 自动代理（2026-10-13「直接播 + 自动代理」）：会话为 proxy-preparing、或直放的源解码失败时排一项。
-    // 后端一次只留一项、跟着打开的预览走：换片或卸载时 cancelAutoProxy 取消它；手动生成的从不被取消。
+    // 自动代理（2026-10-13「直接播 + 自动代理」）：会话为 proxy-preparing、或直放的源解码失败时请求。
     maybeRequestAutoProxy() {
       const session = this.activeSession;
       if (session?.mode === 'proxy-preparing' && Number(session.video_id) === Number(this.videoId)) this.requestAutoProxy();
     },
+    // 每次请求带一个新的 owner 令牌（实例 id + 序号）。别的宿主已经排进去的一部，这里也照样登记自己的令牌（后端去重）：
+    // 不登记的话别人一关就把它取消了。撤销只撤自己这一次的令牌，快速 A→B→A 时迟到的撤销碰不到新的登记。
     requestAutoProxy() {
       const videoID = Number(this.videoId);
       // 用户刚在这次预览里删掉了这一部的代理：不当场又生成一份（换片或重新打开后照常自动）。
-      if (!videoID || this.proxyBusy || this.proxyPending || this._autoProxySuppressedFor === videoID) return;
-      this._autoProxyVideoID = videoID;
-      this._autoProxyRequest = this.submitPlaybackProxy(id => RequestPreviewProxy(id, this._proxyOwner));
+      if (!videoID || this._autoProxySuppressedFor === videoID || this._autoProxy?.videoID === videoID) return;
+      this._proxyOwnerSeq += 1;
+      const owner = `${this._proxyOwner}#${this._proxyOwnerSeq}`;
+      const token = this._loadToken;
+      this.proxyError = ''; this.proxyNotice = ''; this.proxyBlocked = '';
+      if (!this.proxyPending) this.proxyTracking = { videoID, state: { phase: 'submitting' } };
+      const request = Promise.resolve()
+        .then(() => RequestPreviewProxy(videoID, owner))
+        .then(status => {
+          if (this.isCurrentRequest(videoID, token)) this.applyProxyStatus(status || { running: false }, { fromEvent: false });
+          return true;
+        }, err => {
+          if (this._autoProxy?.owner === owner) this._autoProxy = null;
+          if (this.isCurrentRequest(videoID, token)) {
+            // 后端拒绝（同时在等的已满、预计太大、没有 ffmpeg）是提示，不是失败；太大的可手动生成。
+            const { notice, error, blocked } = proxyRequestErrorText(err);
+            this.proxyNotice = notice; this.proxyError = error; this.proxyBlocked = blocked;
+            if (this.proxyTracking?.state?.phase === 'submitting') this.proxyTracking = null;
+          }
+          return false;
+        });
+      this._autoProxy = { videoID, owner, request };
     },
-    // 等这次入队请求回来再取消，免得取消先于入队到达后端。
+    // 换片或卸载：等这次请求回来再撤销自己的令牌（请求没登记成功就不撤）。
     cancelAutoProxy() {
-      const videoID = this._autoProxyVideoID;
-      if (!videoID) return;
-      this._autoProxyVideoID = 0;
-      Promise.resolve(this._autoProxyRequest)
-        .then(() => CancelPreviewProxy(videoID, this._proxyOwner))
+      const auto = this._autoProxy;
+      if (!auto) return;
+      this._autoProxy = null;
+      auto.request
+        .then(registered => (registered ? CancelPreviewProxy(auto.videoID, auto.owner) : null))
         .catch(err => console.warn('取消自动播放代理失败:', err));
     },
     // 入队（手动 CreatePlaybackProxy 或自动 RequestPreviewProxy）只负责排进队列、立即返回，进度跟着事件走。
@@ -383,7 +407,6 @@ export default {
           this.proxyNotice = notice; this.proxyError = error;
         }
         if (this.proxyTracking?.videoID === videoID) this.proxyTracking = null;
-        if (this._autoProxyVideoID === videoID) this._autoProxyVideoID = 0;
       } finally {
         if (this.isCurrentRequest(videoID, token)) this.proxyBusy = false;
       }
@@ -403,7 +426,7 @@ export default {
     },
     async finishProxyTask(videoID, token, state) {
       // 这一项有了结果：自动代理已经不在队列里，关预览时不必再取消。
-      if (this._autoProxyVideoID === videoID) this._autoProxyVideoID = 0;
+      if (this._autoProxy?.videoID === videoID) this._autoProxy = null;
       const outcome = state.phase === 'done' ? state.outcome : '';
       if (outcome === 'failed') {
         this.proxyError = `生成播放代理失败：${PLAYBACK_PROXY_CODE_LABELS[state.result.code] || state.result.code}`;

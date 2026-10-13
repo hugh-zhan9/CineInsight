@@ -116,6 +116,7 @@ func proxyVideosWithSnapshots(t *testing.T, codec string, names ...string) []mod
 func TestPlaybackProxyAutoTwoOwnersSameVideo(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, _ := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	videos := proxyVideosWithSnapshots(t, "h264", "holder.mkv", "shared.mkv")
 	holder, shared := videos[0], videos[1]
 	slot := holdProxyWorker(t, service, holder.ID)
@@ -151,6 +152,7 @@ func TestPlaybackProxyAutoTwoOwnersSameVideo(t *testing.T) {
 func TestPlaybackProxyAutoDifferentVideosAndLimit(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, _ := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	videos := proxyVideosWithSnapshots(t, "h264", "holder.mkv", "a.mkv", "b.mkv", "c.mkv")
 	holder, a, b, c := videos[0], videos[1], videos[2], videos[3]
 	slot := holdProxyWorker(t, service, holder.ID)
@@ -184,6 +186,7 @@ func TestPlaybackProxyAutoDifferentVideosAndLimit(t *testing.T) {
 func TestPlaybackProxyAutoOutOfOrderRequestCancel(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, _ := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	videos := proxyVideosWithSnapshots(t, "h264", "holder.mkv", "a.mkv")
 	holder, a := videos[0], videos[1]
 	slot := holdProxyWorker(t, service, holder.ID)
@@ -231,6 +234,7 @@ func mustLoadProxyPath(t *testing.T, service *PlaybackProxyService, video models
 func TestPlaybackProxyAutoQuickSwitchBackRequeues(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, stub := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	videos := proxyVideosWithSnapshots(t, "mpeg4", "a.avi", "b.avi")
 	a, b := videos[0], videos[1]
 	gate := installGateFFmpeg(service, stub, a.Path)
@@ -269,6 +273,7 @@ func TestPlaybackProxyAutoQuickSwitchBackRequeues(t *testing.T) {
 func TestPlaybackProxyAutoCancelStopsRunningItemOnly(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, stub := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	auto := proxyVideosWithSnapshots(t, "mpeg4", "auto.avi")[0]
 	manual := proxyVideosWithSnapshots(t, "h264", "after.mkv")[0]
 	gate := installGateFFmpeg(service, stub, auto.Path)
@@ -300,6 +305,7 @@ func TestPlaybackProxyAutoCancelStopsRunningItemOnly(t *testing.T) {
 func TestPlaybackProxyAutoNeverCancelsManualRequests(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, stub := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	videos := proxyVideosWithSnapshots(t, "h264", "running.mkv", "queued.mkv", "promoted.mkv")
 	running, queuedManual, promoted := videos[0], videos[1], videos[2]
 	gate := installGateFFmpeg(service, stub, running.Path)
@@ -352,6 +358,7 @@ func TestPlaybackProxyAutoNeverCancelsManualRequests(t *testing.T) {
 func TestPlaybackProxyAutoOnlyRoundDoesNotNotify(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, _ := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	notifier := &stubDesktopNotifier{}
 	service.SetDesktopNotifier(notifier)
 	videos := proxyVideosWithSnapshots(t, "h264", "auto.mkv", "manual.mkv")
@@ -383,6 +390,7 @@ func TestPlaybackProxyAutoOnlyRoundDoesNotNotify(t *testing.T) {
 func TestPlaybackProxyMixedRoundIsNotAutoOnly(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, _ := newProxyTestService(t)
+	stubPreviewFFmpeg(t, true)
 	videos := proxyVideosWithSnapshots(t, "h264", "holder.mkv", "auto.mkv")
 	slot := NewMediaWorkSlot()
 	service.SetMediaWorkSlot(slot)

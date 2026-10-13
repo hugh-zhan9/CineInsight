@@ -434,6 +434,22 @@ describe('SubtitleWorkbench 不能直放时的播放代理（2026-10-13）', () 
     delete window.runtime;
   });
 
+  // 评审复现（移植自 workbench.test.js）：会话还没回来（补探最长 5 秒）就关了工作台，不能留下没人撤销的请求。
+  it('会话回来之前就关闭：不再发自动代理请求', async () => {
+    installRuntime();
+    let resolveSession;
+    api.GetSubtitleEditDocument.mockResolvedValue(documentFixture());
+    api.GetPreviewSession.mockImplementationOnce(() => new Promise(resolve => { resolveSession = resolve; }));
+    const wrapper = mount(SubtitleWorkbench, { props: { video: { id: 7, name: 'movie.mkv', duration: 30 } } });
+    await flushPromises();
+    wrapper.unmount();
+    resolveSession({ video_id: 7, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。' });
+    await flushPromises();
+    expect(api.RequestPreviewProxy).not.toHaveBeenCalled();
+    expect(api.CancelPreviewProxy).not.toHaveBeenCalled();
+    delete window.runtime;
+  });
+
   it('proxy-manual：不自动请求，手动「生成播放代理」走 CreatePlaybackProxy', async () => {
     installRuntime();
     api.CreatePlaybackProxy.mockResolvedValueOnce(queued(7));

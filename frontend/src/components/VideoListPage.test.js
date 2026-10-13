@@ -1250,6 +1250,19 @@ describe('播放代理入口（D-006）', () => {
     wrapper.unmount();
   });
 
+  it('只有预览自动代理在跑（auto_only）时行菜单不置灰，手动生成照常可点（2026-10-13）', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: { id: 7, name: 'seven.mkv' }, anchor: null, position: null };
+    wrapper.vm.playbackProxy = { ...wrapper.vm.playbackProxy, running: true, auto_only: true, processed: 0, total: 1 };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.rowMenuItems.find(entry => entry.id === 'playback-proxy').disabled).toBe(false);
+    api.CreatePlaybackProxy.mockResolvedValue({ results: [] });
+    wrapper.vm.onRowMenuSelect({ id: 'playback-proxy' });
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(7);
+    wrapper.unmount();
+  });
+
   it('行菜单选中后为该视频入队', async () => {
     api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 7, code: 'created' }] });
     const wrapper = await mountPage();

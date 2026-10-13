@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"mime"
 	"os"
@@ -123,7 +124,7 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 	if decision.Route == desktopPreviewDirect {
 		return inlineSourceSession(video, sourceVersion, decision.MIME), nil
 	}
-	if proxies := s.playbackProxies(); decision.Route == desktopPreviewProxy && proxies != nil && previewFFmpegAvailable() {
+	if proxies := s.playbackProxies(); decision.Route == desktopPreviewProxy && proxies != nil {
 		session := &PreviewSession{
 			VideoID:        video.ID,
 			Mode:           "proxy-preparing",
@@ -133,12 +134,17 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 			ReasonCode:     "proxy_required",
 			ReasonMessage:  "这个文件的格式或编码不能在应用内直接播放，需要先生成播放代理。",
 		}
-		if estimate := estimatePlaybackProxyBytes(decision.Snapshot, info.Size(), video.Duration); estimate > autoProxySizeLimit(proxies.cacheLimitBytes()) {
+		// 与 EnqueueAuto 同一个判定（autoProxyGuard）：太大只给手动；没有 ffmpeg 按旧行为。
+		var tooLarge *AutoProxyTooLargeError
+		switch err := proxies.autoProxyGuard(decision.Snapshot, true, info.Size(), video.Duration); {
+		case err == nil:
+			return session, nil
+		case errors.As(err, &tooLarge):
 			session.Mode = "proxy-manual"
 			session.ReasonCode = "proxy_too_large"
-			session.ReasonMessage = autoProxyTooLargeMessage(estimate)
+			session.ReasonMessage = autoProxyTooLargeMessage(tooLarge.Estimate)
+			return session, nil
 		}
-		return session, nil
 	}
 
 	if mimeType, ok := inlinePreviewMIME(video.Path); ok {

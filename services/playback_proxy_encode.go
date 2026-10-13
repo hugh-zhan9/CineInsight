@@ -95,8 +95,8 @@ func planPlaybackProxy(snapshot playbackProxySnapshot, sourcePath, outputPath st
 		args = append(args, playbackProxyStreamMaps(snapshot)...)
 		args = append(args, "-c", "copy")
 		if snapshot.VideoCodec == "hevc" {
-			// WKWebView 只认 hvc1 标签；ffprobe 不给我们 codec_tag_string，
-			// 所以对 HEVC 一律显式打 hvc1——源本来就是 hvc1 时这是个空操作。
+			// WKWebView 只认 hvc1 标签：对 HEVC 一律显式打 hvc1（hev1 源由此变得可播），
+			// 源本来就是 hvc1 时这是个空操作。快照里的 codec_tag 只用于桌面直放判定。
 			args = append(args, "-tag:v", "hvc1")
 		}
 		args = append(args, "-movflags", "+faststart", outputPath)
