@@ -12,9 +12,9 @@
         <strong data-test="face-runtime-state">{{ runtimeStateText }}</strong>
         <span data-test="face-runtime-reason">{{ runtimeReasonText }}</span>
       </div>
-      <button type="button" class="btn-secondary" data-test="face-prepare-runtime" :disabled="checking" @click="prepareRuntime">{{ checking ? '正在检查…' : '重新检查系统能力' }}</button>
+      <button type="button" class="btn btn--secondary" data-test="face-prepare-runtime" :disabled="checking" @click="prepareRuntime">{{ checking ? '正在检查…' : '重新检查系统能力' }}</button>
     </div>
-    <p class="help-text">首次分析会用已有裁剪图迁移旧特征，保留命名、忽略和人工关联；缺失或无法识别的裁剪会保留原记录并提示。</p>
+    <p class="help-text face-migration-note">首次分析会用已有裁剪图迁移旧特征，保留命名、忽略和人工关联；缺失或无法识别的裁剪会保留原记录并提示。</p>
     <p v-if="analysisStatus?.migration_pending" class="help-text face-error" data-test="face-migration-pending">{{ analysisStatus.migration_pending }} 条旧观测未能迁移，原审阅记录仍保留，暂不参与新识别；重新分析会再尝试。</p>
 
     <div class="setting-item">
@@ -28,14 +28,14 @@
         <button
           v-if="analysisStatus && analysisStatus.running"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="face-analysis-cancel"
           @click="cancelAnalysis"
         >取消分析</button>
         <button
           v-else
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           data-test="face-analysis-start"
           :disabled="!runtimeAvailable"
           :title="runtimeAvailable ? '' : runtimeReasonText"
@@ -55,7 +55,7 @@
       <button
         v-if="analysisWaitingIdle"
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         data-test="face-run-now"
         @click="runNow"
       >忽略空闲立即运行</button>
@@ -77,7 +77,7 @@
     <div class="setting-item">
       <label>数据占用</label>
       <p class="help-text" data-test="face-usage">{{ usageText }}</p>
-      <button type="button" class="btn-secondary" data-test="face-clear-data" @click="clearData">清除全部人脸数据</button>
+      <button type="button" class="btn btn--danger" data-test="face-clear-data" @click="clearData">清除全部人脸数据</button>
       <p class="help-text">
         清除会删掉全部人脸观测、簇与裁剪小图，但不会动人物本身与你已经确认过的人物关联。
         清除之后重新分析可以完全重建。
@@ -268,12 +268,10 @@ export default {
 
 <style scoped>
 .face-privacy { margin-bottom: 12px; }
+.face-migration-note { margin-bottom: var(--space-4); }
 /* 报错要看得出是报错：直接用危险色令牌（公共的 .settings-error 同义）。 */
 .face-error { color: var(--danger-color); }
 .face-source { word-break: break-all; }
-.face-progress { display: grid; gap: 6px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
-.face-progress__bar { height: 6px; border-radius: 3px; background: var(--control-bg); overflow: hidden; }
-.face-progress__bar i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
 .face-analysis-row { display: flex; align-items: center; gap: 8px; }
 .face-scope-select { width: 160px; }
 .face-analysis-status {
@@ -287,7 +285,6 @@ export default {
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
-.btn-compact { height: 28px; padding: 0 10px; font-size: 12px; }
 </style>

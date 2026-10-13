@@ -16,16 +16,19 @@
         <span data-test="scene-runtime-reason">{{ runtimeReasonText }}</span>
       </div>
       <div class="short-feed-actions">
-        <button v-if="runtimeStatus && runtimeStatus.preparing" type="button" class="btn-secondary" data-test="scene-cancel-prepare" @click="cancelPrepare">取消准备</button>
-        <button v-else-if="runtimeCanPrepare" type="button" class="btn-primary" data-test="scene-prepare-runtime" @click="prepareRuntime">
+        <button v-if="runtimeStatus && runtimeStatus.preparing" type="button" class="btn btn--secondary" data-test="scene-cancel-prepare" @click="cancelPrepare">取消准备</button>
+        <button v-else-if="runtimeCanPrepare" type="button" class="btn btn--primary" data-test="scene-prepare-runtime" @click="prepareRuntime">
           准备模型（约 {{ runtimeStatus?.model_size || '182 MB' }}）
         </button>
       </div>
     </div>
-    <div v-if="runtimeStatus && runtimeStatus.preparing" class="scene-progress" data-test="scene-runtime-progress">
-      <div class="scene-progress__bar"><i :style="{ width: `${preparePercent}%` }"></i></div>
-      <span>{{ runtimeStatus.message }} {{ preparePercent }}%</span>
-    </div>
+    <ProgressBar
+      v-if="runtimeStatus && runtimeStatus.preparing"
+      class="scene-progress"
+      :value="prepareRatio"
+      :label="runtimeStatus.message || '正在准备模型'"
+      data-test="scene-runtime-progress"
+    />
     <p v-if="runtimeStatus && runtimeStatus.error" class="help-text scene-error" data-test="scene-runtime-error">{{ runtimeStatus.error }}</p>
 
     <div class="setting-item">
@@ -64,6 +67,7 @@
 import { CancelSceneRuntimePrepare, GetSceneRuntimeStatus, PrepareSceneRuntime } from '../../../wailsjs/go/main/App';
 import { confirmAction, notifyError } from '../../utils/feedback.js';
 import { sceneErrorText } from '../../utils/sceneSearch.js';
+import ProgressBar from '../ui/ProgressBar.vue';
 
 const RUNTIME_STATE_TEXT = {
   available: '已就绪',
@@ -78,6 +82,7 @@ const RUNTIME_STATE_TEXT = {
 // 切到外部描述前必须先确认披露；不确认就保持本地，表单里不会出现一个没被确认过的 external。
 export default {
   name: 'SceneSection',
+  components: { ProgressBar },
   props: {
     form: { type: Object, required: true },
     ensureSaved: { type: Function, default: null }
@@ -99,10 +104,11 @@ export default {
       if (this.runtimeStatus.state === 'available') return `本地模型 ${this.runtimeStatus.model_id} 已就绪。`;
       return this.runtimeStatus.reason || '';
     },
-    preparePercent() {
+    // 0–1 的下载比例；装依赖等还不知道总大小的阶段给 null，进度条显示为不确定。
+    prepareRatio() {
       const total = Number(this.runtimeStatus?.total_bytes || 0);
-      if (total <= 0) return 0;
-      return Math.min(100, Math.round((Number(this.runtimeStatus?.downloaded_bytes || 0) / total) * 100));
+      if (total <= 0) return null;
+      return Math.min(1, Number(this.runtimeStatus?.downloaded_bytes || 0) / total);
     }
   },
   mounted() {
@@ -168,11 +174,9 @@ export default {
 <style scoped>
 .scene-privacy { margin-bottom: 12px; }
 .scene-error { color: var(--danger-color); }
-.scene-progress { display: grid; gap: 6px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
-.scene-progress__bar { height: 6px; border-radius: 3px; background: var(--control-bg); overflow: hidden; }
-.scene-progress__bar i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
+.scene-progress { margin: 10px 0 var(--space-4); }
 .scene-interval { width: 120px; }
 .scene-provider { display: grid; gap: 6px; }
-.scene-provider__option { display: flex; align-items: center; gap: 6px; font-weight: normal; }
+.scene-provider__option { display: flex; align-items: center; gap: 6px; font-weight: var(--fw-regular); }
 .scene-external-note { color: var(--text-primary); }
 </style>

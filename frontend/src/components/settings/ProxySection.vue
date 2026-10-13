@@ -30,7 +30,7 @@
           代理目录里还有 {{ usage.foreign_files }} 个不是代理的文件，清空时会跳过它们。
         </span>
       </template>
-      <button type="button" class="btn-secondary btn-compact" data-test="proxy-usage-refresh" @click="loadUsage">刷新</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="proxy-usage-refresh" @click="loadUsage">刷新</button>
     </div>
 
     <div class="setting-item">
@@ -55,14 +55,14 @@
       <div class="proxy-actions">
         <button
           type="button"
-          class="btn-secondary btn-compact"
+          class="btn btn--secondary btn--sm"
           data-test="proxy-enforce-limit"
           :disabled="busy"
           @click="enforceLimit"
         >立即按上限整理</button>
         <button
           type="button"
-          class="btn-secondary btn-compact btn-danger-outline"
+          class="btn btn--danger btn--sm"
           data-test="proxy-clear-all"
           :disabled="busy || !usage || (usage.count === 0 && !usage.orphan_count)"
           @click="clearAll"
@@ -76,7 +76,7 @@
       <button
         v-if="status && status.running"
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         data-test="proxy-task-cancel"
         @click="cancelTask"
       >取消</button>
@@ -251,8 +251,8 @@ export default {
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
+.proxy-usage { margin-bottom: var(--space-4); }
 .proxy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.btn-compact { height: 28px; padding: 0 10px; font-size: 12px; }
 </style>

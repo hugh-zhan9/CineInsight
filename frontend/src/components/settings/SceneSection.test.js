@@ -83,6 +83,23 @@ describe('设置页「场景检索」分区（D-MW-SCENES）', () => {
     expect(api.CancelSceneRuntimePrepare).toHaveBeenCalledTimes(1);
   });
 
+  it('准备进度用统一进度条：知道总大小时给百分比，装依赖等不知道总大小的阶段显示为不确定', async () => {
+    const form = reactive({ scene_visual_provider: 'local', scene_visual_interval_seconds: 5, scene_model_mirror_url: '' });
+    api.GetSceneRuntimeStatus.mockResolvedValue({ state: 'missing_python', preparing: true, message: '正在安装 Python 依赖', total_bytes: 0, downloaded_bytes: 0 });
+    const wrapper = mountSection(form);
+    await flushPromises();
+    const bar = () => wrapper.get('[data-test="scene-runtime-progress"] [role="progressbar"]');
+    expect(wrapper.get('[data-test="scene-runtime-progress"]').text()).toContain('正在安装 Python 依赖');
+    expect(wrapper.get('[data-test="scene-runtime-progress"]').text()).not.toContain('%');
+    expect(bar().attributes('aria-busy')).toBe('true');
+    expect(bar().attributes('aria-valuenow')).toBeUndefined();
+
+    wrapper.vm.runtimeStatus = { state: 'missing_model', preparing: true, message: '正在下载模型', total_bytes: 400, downloaded_bytes: 100 };
+    await flushPromises();
+    expect(bar().attributes('aria-valuenow')).toBe('25');
+    expect(bar().attributes('aria-busy')).toBeUndefined();
+  });
+
   it('镜像与间隔直接绑定到表单（随设置页保存）', async () => {
     const form = reactive({ scene_visual_provider: 'local', scene_visual_interval_seconds: 5, scene_model_mirror_url: '' });
     const wrapper = mountSection(form);

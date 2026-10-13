@@ -159,12 +159,12 @@
     <div class="setting-item scan-blacklist-setting">
       <div class="settings-section-heading">
         <label>扫描目录黑名单</label>
-        <button type="button" class="btn-secondary btn-compact" @click="addScanExcludeDirectory">选择目录</button>
+        <button type="button" class="btn btn--secondary btn--sm" @click="addScanExcludeDirectory">选择目录</button>
       </div>
       <div v-if="scanExcludePaths.length" class="scan-blacklist-list">
         <div v-for="path in scanExcludePaths" :key="path" class="scan-blacklist-item">
           <span :title="path">{{ path }}</span>
-          <button type="button" class="btn-secondary btn-compact btn-danger-outline" @click="removeScanExcludeDirectory(path)">移除</button>
+          <button type="button" class="btn btn--danger btn--sm" @click="removeScanExcludeDirectory(path)">移除</button>
         </div>
       </div>
       <p v-else class="help-text">尚未设置黑名单目录。</p>
@@ -173,12 +173,12 @@
     <div class="setting-item scan-blacklist-setting">
       <div class="settings-section-heading">
         <label>图片扫描黑名单</label>
-        <button type="button" class="btn-secondary btn-compact" @click="addImageScanExcludeDirectory">选择目录</button>
+        <button type="button" class="btn btn--secondary btn--sm" @click="addImageScanExcludeDirectory">选择目录</button>
       </div>
       <div v-if="imageScanExcludePaths.length" class="scan-blacklist-list">
         <div v-for="path in imageScanExcludePaths" :key="path" class="scan-blacklist-item">
           <span :title="path">{{ path }}</span>
-          <button type="button" class="btn-secondary btn-compact btn-danger-outline" @click="removeImageScanExcludeDirectory(path)">移除</button>
+          <button type="button" class="btn btn--danger btn--sm" @click="removeImageScanExcludeDirectory(path)">移除</button>
         </div>
       </div>
       <p v-else class="help-text">未单独设置，沿用上方扫描目录黑名单。</p>
@@ -237,8 +237,10 @@ export default {
 
 <style scoped>
 .cleanup-threshold-row { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 6px; }
-.cleanup-threshold-field { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; }
+.cleanup-threshold-field { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-secondary); }
 .cleanup-threshold-field .number-input { width: 84px; }
-.scan-blacklist-setting { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color); }.scan-blacklist-list { display: grid; gap: 7px; margin-top: 10px; }.scan-blacklist-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--control-bg); }.scan-blacklist-item span { min-width: 0; flex: 1; overflow: hidden; color: var(--text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-
+.scan-blacklist-setting { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color); }
+.scan-blacklist-list { display: grid; gap: 7px; margin-top: 10px; }
+.scan-blacklist-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
+.scan-blacklist-item span { min-width: 0; flex: 1; overflow: hidden; color: var(--text-secondary); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
 </style>

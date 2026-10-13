@@ -8,7 +8,8 @@ const api = vi.hoisted(() => Object.fromEntries([
 ].map(name => [name, vi.fn()])));
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn() }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
-vi.mock('../../utils/feedback.js', () => feedback);
+// 只替换 confirmAction；不可逆确认的输入比对（confirmTextMatches）用真实实现，与全局确认框同一条规则。
+vi.mock('../../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
 
 import DatabaseSection, { databaseErrorReason, restoreErrorKind } from './DatabaseSection.vue';
 
@@ -270,7 +271,7 @@ describe('后端切换（D-PC55）', () => {
     expect(exists(wrapper, 'db-clear-target')).toBe(false);
   });
 
-  it('APP-02 迁移失败显示目标库位置；清空目标库必须手输「清空」才放行', async () => {
+  it('APP-02 迁移失败显示目标库位置；清空目标库必须手输按钮上的「清空目标库」才放行（D-UD-07 不可逆）', async () => {
     const wrapper = await mountSection();
     switchHandler({ running: false, failed: true, target: 'sqlite', location: '/data/library.db', message: '复制 videos 失败' });
     await flushPromises();
@@ -281,10 +282,16 @@ describe('后端切换（D-PC55）', () => {
     await flushPromises();
     expect(find(wrapper, 'db-clear-dialog').text()).toContain('/data/library.db');
     const confirm = () => find(wrapper, 'db-clear-confirm');
-    expect(confirm().attributes('disabled')).toBeDefined();
-    await find(wrapper, 'db-clear-confirm-input').setValue('清 空');
+    // 输入的就是按钮上的字：按钮写「清空目标库」，说明里要求输入的也是它；旧确认词「清空」不再放行。
+    expect(confirm().text()).toBe('清空目标库');
+    expect(find(wrapper, 'db-clear-dialog').text()).toContain('输入「清空目标库」以确认');
+    expect(document.activeElement).toBe(find(wrapper, 'db-clear-confirm-input').element);
     expect(confirm().attributes('disabled')).toBeDefined();
     await find(wrapper, 'db-clear-confirm-input').setValue('清空');
+    expect(confirm().attributes('disabled')).toBeDefined();
+    await find(wrapper, 'db-clear-confirm-input').setValue('清空 目标库');
+    expect(confirm().attributes('disabled')).toBeDefined();
+    await find(wrapper, 'db-clear-confirm-input').setValue(' 清空目标库 ');
     expect(confirm().attributes('disabled')).toBeUndefined();
 
     api.ClearMigrationTarget.mockResolvedValue({ target: 'sqlite', cleared: true, removed: ['library.db'], message: '已删除目标库文件，可以重新迁移' });
@@ -300,10 +307,12 @@ describe('后端切换（D-PC55）', () => {
     const wrapper = await mountSection();
     await preflightNonEmpty(wrapper);
     await find(wrapper, 'db-clear-target').trigger('click');
-    await find(wrapper, 'db-clear-confirm-input').setValue('清空');
+    await find(wrapper, 'db-clear-confirm-input').setValue('清空目标库');
     api.ClearMigrationTarget.mockResolvedValue({ target: 'sqlite', cleared: false, removed: [], reason_code: 'outside_data_dir', message: '目标库文件不在应用数据目录内，不会自动删除；请手动处理' });
     await find(wrapper, 'db-clear-confirm').trigger('click');
     await flushPromises();
+    expect(api.ClearMigrationTarget).toHaveBeenCalledWith('sqlite', '清空');
+    expect(exists(wrapper, 'db-clear-dialog')).toBe(true);
     expect(find(wrapper, 'db-clear-error').text()).toContain('不在应用数据目录内');
   });
 
@@ -431,7 +440,7 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
     expect(find(wrapper, 'db-clear-dialog').text()).toContain('/data/library.db');
     // 本次迁移失败时照常确认，不给「完整片库」的警告。
     expect(exists(wrapper, 'db-clear-complete-warning')).toBe(false);
-    await find(wrapper, 'db-clear-confirm-input').setValue('清空');
+    await find(wrapper, 'db-clear-confirm-input').setValue('清空目标库');
     api.ClearMigrationTarget.mockResolvedValue({ target: 'sqlite', cleared: true, removed: ['library.db'], message: '已删除目标库文件，可以重新迁移' });
     await find(wrapper, 'db-clear-confirm').trigger('click');
     await flushPromises();
@@ -468,7 +477,7 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
     expect(find(wrapper, 'db-clear-confirm').attributes('disabled')).toBeDefined();
   });
 
-  it('APP-02 目标是完整的非空库：清空给更重的警告，仍需输入「清空」', async () => {
+  it('APP-02 目标是完整的非空库：清空给更重的警告，仍需输入「清空目标库」', async () => {
     const wrapper = await mountSection();
     await preflightNonEmpty(wrapper);
     expect(exists(wrapper, 'db-switch-config-only')).toBe(true);
@@ -483,6 +492,8 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
     await find(wrapper, 'db-clear-confirm-input').setValue('清除');
     expect(find(wrapper, 'db-clear-confirm').attributes('disabled')).toBeDefined();
     await find(wrapper, 'db-clear-confirm-input').setValue('清空');
+    expect(find(wrapper, 'db-clear-confirm').attributes('disabled')).toBeDefined();
+    await find(wrapper, 'db-clear-confirm-input').setValue('清空目标库');
     expect(find(wrapper, 'db-clear-confirm').attributes('disabled')).toBeUndefined();
     api.ClearMigrationTarget.mockResolvedValue({ target: 'sqlite', cleared: true, removed: ['library.db'], message: '' });
     await find(wrapper, 'db-clear-confirm').trigger('click');
@@ -542,7 +553,7 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
     const wrapper = await mountSection();
     await preflightNonEmpty(wrapper);
     await find(wrapper, 'db-clear-target').trigger('click');
-    await find(wrapper, 'db-clear-confirm-input').setValue('清空');
+    await find(wrapper, 'db-clear-confirm-input').setValue('清空目标库');
     api.ClearMigrationTarget.mockResolvedValue({ target: 'sqlite', cleared: false, removed: [], reason_code: 'relaunch_pending', message: '后端已切换完成，目标库就是重启后使用的库，不能清空；请先重启应用' });
     await find(wrapper, 'db-clear-confirm').trigger('click');
     await flushPromises();

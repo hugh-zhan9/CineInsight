@@ -12,23 +12,26 @@
         <button
           v-if="enhanceModelStatus && enhanceModelStatus.running"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="enhance-model-cancel"
           @click="cancelEnhanceModels"
         >取消下载</button>
         <button
           v-else-if="enhanceCapability && enhanceCapability.models_installable"
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           data-test="enhance-model-download"
           @click="downloadEnhanceModels"
         >{{ enhanceCapability.reason_code === 'models_corrupt' ? '重新下载模型' : '下载模型（约 52 MB）' }}</button>
       </div>
     </div>
-    <div v-if="enhanceModelStatus && enhanceModelStatus.running" class="enhance-progress" data-test="enhance-model-progress">
-      <div class="enhance-progress__bar"><i :style="{ width: `${enhanceDownloadPercent}%` }"></i></div>
-      <span>{{ enhanceModelStatus.message }} {{ enhanceDownloadPercent }}%</span>
-    </div>
+    <ProgressBar
+      v-if="enhanceModelStatus && enhanceModelStatus.running"
+      class="enhance-progress"
+      :value="enhanceDownloadRatio"
+      :label="enhanceModelStatus.message || '正在下载超分模型'"
+      data-test="enhance-model-progress"
+    />
     <p v-if="enhanceModelStatus && enhanceModelStatus.error" class="help-text settings-error" data-test="enhance-model-error">
       {{ enhanceModelStatus.error }}
     </p>
@@ -39,10 +42,12 @@
 <script>
 import { GetEnhancementCapability, GetEnhancementModelStatus, StartEnhancementModelDownload, CancelEnhancementModelDownload } from '../../../wailsjs/go/main/App';
 import { notifyError } from '../../utils/feedback.js';
+import ProgressBar from '../ui/ProgressBar.vue';
 
 // 视频超分分区：能力探测、模型按需下载与下载进度。状态与两条运行时事件都归本组件。
 export default {
   name: 'EnhanceSection',
+  components: { ProgressBar },
   data() {
     return {
       enhanceCapability: null,
@@ -84,11 +89,12 @@ export default {
       // hint 是面向用户的原因与下一步（MEDIA-11）；message 偏排障，只在没有 hint 时兜底。
       return this.enhanceCapability.hint || this.enhanceCapability.message || '超分不可用';
     },
-    enhanceDownloadPercent() {
+    // 0–1 的下载比例；总大小还不知道时给 null，进度条显示为不确定。
+    enhanceDownloadRatio() {
       const total = Number(this.enhanceModelStatus?.total_bytes || 0);
       const done = Number(this.enhanceModelStatus?.downloaded_bytes || 0);
-      if (total <= 0) return 0;
-      return Math.min(100, Math.round((done / total) * 100));
+      if (total <= 0) return null;
+      return Math.min(1, done / total);
     },
     // 手机要输的地址：后端已经把默认路由那块网卡排在 lan_urls 首位。
   },
@@ -120,7 +126,5 @@ export default {
 </script>
 
 <style scoped>
-.enhance-progress { display: grid; gap: 6px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
-.enhance-progress__bar { height: 6px; border-radius: 3px; background: var(--control-bg); overflow: hidden; }
-.enhance-progress__bar i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
+.enhance-progress { margin-top: 10px; }
 </style>

@@ -31,7 +31,7 @@
       <h4>豆瓣<span class="online-source__scope">电影 · 首选</span></h4>
       <p class="help-text">无需 API Key。补全中文简介、评分、导演、演员与海报。豆瓣未找到电影时再查 TMDB；访问验证、限流和网络错误会单独提示。测试连接同时检查搜索与详情。</p>
       <div class="online-source__test">
-        <button data-test="online-source-test-douban" type="button" class="btn-secondary"
+        <button data-test="online-source-test-douban" type="button" class="btn btn--secondary"
           :disabled="testing.douban" @click="testConnection('douban')"
         >{{ testing.douban ? '测试中…' : '测试连接' }}</button>
         <span v-if="results.douban" data-test="online-source-result-douban"
@@ -58,7 +58,7 @@
         <button
           data-test="online-source-test-tmdb"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="testing.tmdb"
           @click="testConnection('tmdb')"
         >{{ testing.tmdb ? '测试中…' : '测试连接' }}</button>
@@ -89,7 +89,7 @@
         <button
           data-test="online-source-test-bangumi"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="testing.bangumi"
           @click="testConnection('bangumi')"
         >{{ testing.bangumi ? '测试中…' : '测试连接' }}</button>
@@ -109,7 +109,7 @@
         <button
           data-test="online-source-test-javbus"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="testing.javbus"
           @click="testConnection('javbus')"
         >{{ testing.javbus ? '测试中…' : '测试连接' }}</button>
@@ -129,7 +129,7 @@
         <button
           data-test="online-source-test-jav321"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="testing.jav321"
           @click="testConnection('jav321')"
         >{{ testing.jav321 ? '测试中…' : '测试连接' }}</button>
@@ -149,7 +149,7 @@
         <button
           data-test="online-source-test-fc2"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="testing.fc2"
           @click="testConnection('fc2')"
         >{{ testing.fc2 ? '测试中…' : '测试连接' }}</button>
@@ -239,8 +239,8 @@ export default {
 }
 
 .online-source__scope {
-  font-size: 12px;
-  font-weight: normal;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-regular);
   color: var(--text-secondary);
 }
 
@@ -253,7 +253,7 @@ export default {
 
 .online-source__result {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   overflow-wrap: anywhere;
 }
 

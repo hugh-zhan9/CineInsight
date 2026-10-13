@@ -17,7 +17,7 @@
         <span data-test="iina-sync-last">{{ lastSyncText }}</span>
         <span v-if="status.last_error" class="iina-sync-error" data-test="iina-sync-error">最近一次同步失败：{{ status.last_error }}</span>
       </template>
-      <button type="button" class="btn-secondary btn-compact" data-test="iina-sync-refresh" @click="load">刷新</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="iina-sync-refresh" @click="load">刷新</button>
     </div>
   </div>
 </template>
@@ -80,9 +80,9 @@ export default {
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   overflow-wrap: anywhere;
 }
-.iina-sync-status code { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+.iina-sync-status code { font-family: var(--font-mono); font-size: var(--fs-caption); word-break: break-all; }
 .iina-sync-error { color: var(--danger-color); }
 </style>

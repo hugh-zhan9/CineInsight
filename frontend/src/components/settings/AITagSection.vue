@@ -31,7 +31,7 @@
     </div>
     <div class="setting-item ai-connection-test">
       <div class="ai-connection-test__row">
-        <button type="button" class="btn-secondary" :disabled="connectionTesting" data-test="ai-connection-test" @click="testConnection">{{ connectionTesting ? '测试中…' : '测试连接' }}</button>
+        <button type="button" class="btn btn--secondary" :disabled="connectionTesting" data-test="ai-connection-test" @click="testConnection">{{ connectionTesting ? '测试中…' : '测试连接' }}</button>
         <span
           v-if="connectionResult"
           :class="['ai-connection-test__result', connectionResult.ok ? 'ai-connection-test__result--ok' : 'ai-connection-test__result--error']"
@@ -102,9 +102,9 @@
         <span v-if="semanticIndexStatus?.unavailable">{{ semanticIndexStatus.unavailable }}</span>
       </div>
       <div class="backup-actions">
-        <button type="button" class="btn-primary" :disabled="semanticIndexStatus?.running || !semanticIndexStatus?.available" @click="startSemanticIndex(false)">开始/继续构建</button>
-        <button type="button" class="btn-secondary" :disabled="semanticIndexStatus?.running || !semanticIndexStatus?.available" @click="startSemanticIndex(true)">重建索引</button>
-        <button v-if="semanticIndexStatus?.running" type="button" class="btn-secondary" @click="cancelSemanticIndex">取消</button>
+        <button type="button" class="btn btn--primary" :disabled="semanticIndexStatus?.running || !semanticIndexStatus?.available" @click="startSemanticIndex(false)">开始/继续构建</button>
+        <button type="button" class="btn btn--secondary" :disabled="semanticIndexStatus?.running || !semanticIndexStatus?.available" @click="startSemanticIndex(true)">重建索引</button>
+        <button v-if="semanticIndexStatus?.running" type="button" class="btn btn--secondary" @click="cancelSemanticIndex">取消</button>
       </div>
     </div>
     <PhotoAITaskPanel />
@@ -152,7 +152,7 @@ export default {
   computed: {
     semanticIndexStatusText() {
       const status = this.semanticIndexStatus;
-      if (!status) return '正在读取语义索引状态...';
+      if (!status) return '正在读取语义索引状态…';
       if (!status.available) return '语义索引不可用';
       if (status.running) return '语义索引构建中';
       if (status.needs_rebuild) return '模型或维度已变化，需要重建';
@@ -218,7 +218,7 @@ export default {
 
 .ai-connection-test__result {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   overflow-wrap: anywhere;
 }
 

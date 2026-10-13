@@ -19,15 +19,21 @@
           </div>
         </div>
         <div class="directory-actions">
-          <button @click="editDirectory(dir)" class="btn-secondary">编辑</button>
-          <button @click="deleteDirectoryItem(dir.id)" class="btn-secondary btn-danger-outline">删除</button>
+          <button @click="editDirectory(dir)" class="btn btn--secondary">编辑</button>
+          <button @click="deleteDirectoryItem(dir.id)" class="btn btn--danger">删除</button>
         </div>
       </div>
-      <div v-if="localDirectories.length === 0" class="empty-hint">暂无扫描目录配置</div>
+      <EmptyState
+        v-if="localDirectories.length === 0"
+        icon="folder"
+        title="还没有扫描目录"
+        message="点下面的「添加扫描目录」，选一个放视频的文件夹，里面的视频会扫描入库。"
+        data-test="scan-dirs-empty"
+      />
     </div>
     <!-- 增删目录失败不再吞掉（LIB-14）：错误留在分区里，直到下一次操作。 -->
     <p v-if="sectionError" class="directory-error" role="alert" data-test="scan-dirs-error">{{ sectionError }}</p>
-    <button @click="openAddDirectoryDialog" class="btn-primary settings-section-action" data-test="add-scan-directory">添加扫描目录</button>
+    <button @click="openAddDirectoryDialog" class="btn btn--primary settings-section-action" data-test="add-scan-directory">添加扫描目录</button>
   </div>
 
   <!-- 图片扫描目录管理 -->
@@ -40,24 +46,35 @@
           <span>{{ dir.path }}</span>
         </div>
         <div class="directory-actions">
-          <button @click="editImageDirectory(dir)" class="btn-secondary">编辑</button>
-          <button @click="deleteImageDirectoryItem(dir.id)" class="btn-secondary btn-danger-outline">删除</button>
+          <button @click="editImageDirectory(dir)" class="btn btn--secondary">编辑</button>
+          <button @click="deleteImageDirectoryItem(dir.id)" class="btn btn--danger">删除</button>
         </div>
       </div>
-      <div v-if="localImageDirectories.length === 0" class="empty-hint">暂无图片扫描目录配置</div>
+      <EmptyState
+        v-if="localImageDirectories.length === 0"
+        icon="image"
+        title="还没有图片扫描目录"
+        message="点下面的「添加图片目录」，选一个放照片的文件夹，里面的图片会扫描进图片库。"
+        data-test="image-dirs-empty"
+      />
     </div>
     <p v-if="imageSectionError" class="directory-error" role="alert" data-test="image-dirs-error">{{ imageSectionError }}</p>
-    <button @click="showAddImageDirectoryDialog = true" class="btn-primary settings-section-action" data-test="add-image-directory">添加图片目录</button>
+    <button @click="showAddImageDirectoryDialog = true" class="btn btn--primary settings-section-action" data-test="add-image-directory">添加图片目录</button>
   </div>
 
-  <!-- Add/Edit Directory Dialog -->
-  <BaseModal v-if="showAddDirectoryDialog || editingDirectory" close-on-overlay stop-modal-clicks @close="closeDirectoryDialog">
-      <h2>{{ editingDirectory ? '编辑' : '添加' }}扫描目录</h2>
+  <!-- 添加 / 编辑扫描目录。对话框里有表单，点遮罩不关（D-UD-13），Esc 与右上角 × 照常关。 -->
+  <DialogShell
+    v-if="showAddDirectoryDialog || editingDirectory"
+    :title="`${editingDirectory ? '编辑' : '添加'}扫描目录`"
+    stop-modal-clicks
+    data-test="scan-directory-dialog"
+    @close="closeDirectoryDialog"
+  >
       <div class="setting-item">
         <label>目录路径</label>
         <div class="directory-dialog-row">
           <input type="text" v-model="directoryForm.path" placeholder="选择目录" class="text-input" readonly data-test="scan-directory-path" />
-          <button @click="selectDirectoryForConfig" class="btn-secondary" data-test="select-scan-directory">选择</button>
+          <button @click="selectDirectoryForConfig" class="btn btn--secondary" data-test="select-scan-directory">选择</button>
         </div>
         <!-- 去重与嵌套提示（D-PC09、LIB-14）：重复与不存在的挡住保存，嵌套只提示。 -->
         <p v-for="hint in pathHints" :key="hint.text" :class="['directory-hint', { 'directory-hint--blocking': hint.blocking }]" data-test="scan-directory-hint">{{ hint.text }}</p>
@@ -85,20 +102,25 @@
         <p v-if="oldPathMissing" class="directory-hint">原来的位置现在找不到，已默认选「搬到了新位置」。</p>
       </div>
       <p v-if="dialogError" class="directory-error" role="alert" data-test="scan-directory-dialog-error">{{ dialogError }}</p>
-      <div class="modal-actions">
-        <button @click="saveDirectoryConfig" class="btn-primary" :disabled="directorySaving || validatingPath" data-test="save-scan-directory">{{ directorySaving ? '保存中…' : '保存' }}</button>
-        <button @click="closeDirectoryDialog" class="btn-secondary">取消</button>
-      </div>
-  </BaseModal>
+      <template #footer>
+        <button @click="closeDirectoryDialog" class="btn btn--secondary">取消</button>
+        <button @click="saveDirectoryConfig" class="btn btn--primary" :disabled="directorySaving || validatingPath" data-test="save-scan-directory">{{ directorySaving ? '保存中…' : '保存' }}</button>
+      </template>
+  </DialogShell>
 
-  <!-- Add/Edit Image Directory Dialog -->
-  <BaseModal v-if="showAddImageDirectoryDialog || editingImageDirectory" close-on-overlay stop-modal-clicks @close="closeImageDirectoryDialog">
-      <h2>{{ editingImageDirectory ? '编辑' : '添加' }}图片扫描目录</h2>
+  <!-- 添加 / 编辑图片扫描目录：同上，有表单，点遮罩不关。 -->
+  <DialogShell
+    v-if="showAddImageDirectoryDialog || editingImageDirectory"
+    :title="`${editingImageDirectory ? '编辑' : '添加'}图片扫描目录`"
+    stop-modal-clicks
+    data-test="image-directory-dialog"
+    @close="closeImageDirectoryDialog"
+  >
       <div class="setting-item">
         <label>目录路径</label>
         <div class="directory-dialog-row">
           <input type="text" v-model="imageDirectoryForm.path" placeholder="选择目录" class="text-input" readonly data-test="image-directory-path" />
-          <button @click="selectDirectoryForImageConfig" class="btn-secondary">选择</button>
+          <button @click="selectDirectoryForImageConfig" class="btn btn--secondary">选择</button>
         </div>
       </div>
       <div class="setting-item">
@@ -106,16 +128,17 @@
         <input type="text" v-model="imageDirectoryForm.alias" placeholder="给这个目录起个名字" class="text-input directory-alias-input" data-test="image-directory-alias" />
       </div>
       <p v-if="imageDialogError" class="directory-error" role="alert" data-test="image-directory-dialog-error">{{ imageDialogError }}</p>
-      <div class="modal-actions">
-        <button @click="saveImageDirectoryConfig" class="btn-primary" data-test="save-image-directory">保存</button>
-        <button @click="closeImageDirectoryDialog" class="btn-secondary">取消</button>
-      </div>
-  </BaseModal>
+      <template #footer>
+        <button @click="closeImageDirectoryDialog" class="btn btn--secondary">取消</button>
+        <button @click="saveImageDirectoryConfig" class="btn btn--primary" data-test="save-image-directory">保存</button>
+      </template>
+  </DialogShell>
 </template>
 
 <script>
 import { SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectoryWithMode, ValidateScanDirectory, DeleteDirectory, RetryLibraryWatcherRoot, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import EmptyState from '../ui/EmptyState.vue';
 import { confirmAction, notify, translateBackendError } from '../../utils/feedback.js';
 
 // 界面上只显示目录名（G-3）。
@@ -131,7 +154,7 @@ function errorText(prefix, err) {
 // 所以往上发 directories-changed；实时监听状态由设置页统一拉取后传进来。
 export default {
   name: 'ScanDirectoriesSection',
-  components: { BaseModal },
+  components: { DialogShell, EmptyState },
   props: {
     form: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
@@ -435,12 +458,12 @@ export default {
 
 .directory-main strong {
   margin-bottom: 4px;
-  font-size: 14px;
+  font-size: var(--fs-body);
 }
 
 .directory-main span {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .directory-watch-status {
@@ -469,12 +492,7 @@ export default {
 }
 
 .directory-watch-status .btn-link {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-color);
-  cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .directory-actions {
@@ -493,14 +511,14 @@ export default {
 .directory-error {
   margin: 8px 0 0;
   color: var(--danger-color);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   overflow-wrap: anywhere;
 }
 
 .directory-hint {
   margin: 6px 0 0;
-  color: var(--warning-color);
-  font-size: 12px;
+  color: var(--warning-text);
+  font-size: var(--fs-caption);
 }
 
 .directory-hint--blocking {
@@ -527,14 +545,14 @@ export default {
 
 .directory-edit-mode__option strong {
   display: block;
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .directory-edit-mode__option small {
   display: block;
   margin-top: 2px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.5;
 }
 
