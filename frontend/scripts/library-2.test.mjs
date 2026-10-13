@@ -9,6 +9,9 @@ const inlinePlayer = readFileSync(new URL('../src/components/player/InlineVideoP
 // P-002 把清理审阅面板抽成了独立组件，下面属于面板的断言跟着搬到新文件上。
 const cleanupPanel = readFileSync(new URL('../src/components/video-list/CleanupReviewPanel.vue', import.meta.url), 'utf8');
 const saveViewDialog = readFileSync(new URL('../src/components/video-list/SaveViewDialog.vue', import.meta.url), 'utf8');
+// UI 二期（D-P2-01）把「随机播放一部」抽到 utils/randomPlayback.js 的 randomPlaybackMixin（片库页与视频海报墙共用），
+// 随机播放请求的断言跟着搬到新文件上，并断言片库页确实用了它、筛选来自 currentLibraryFilter。
+const randomPlayback = readFileSync(new URL('../src/utils/randomPlayback.js', import.meta.url), 'utf8');
 
 assert.match(page, /SearchLibraryVideoPage/, 'main library should use the stable shared smart-view query');
 assert.match(page, /ListRecentlyPlayedWithFilter/, 'recently played should be filtered and paginated by the backend');
@@ -24,8 +27,10 @@ assert.match(saveViewDialog, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibra
 assert.match(page, /FilterActiveTagIDs\(storedTagIDs\)/, 'saved views should ignore deleted tag IDs when restored');
 assert.match(page, /FilterActivePersonIDs\(storedPersonIDs\)/, 'saved views should ignore deleted people when restored');
 assert.match(page, /个条件已失效/, 'saved views should tell how many conditions were dropped');
-assert.match(page, /PlayRandomVideoWithFilter/, 'random play should use the current filter contract');
-assert.match(page, /exclude_ids: this\.recentRandomVideoIDs\.slice\(-12\)/, 'random play should avoid recent repeats');
+assert.match(page, /mixins: \[[^\]]*randomPlaybackMixin/, 'the library page should play random through the shared random playback mixin');
+assert.match(page, /randomPlayFilter\(\) \{\s+return this\.currentLibraryFilter\(\);/, 'random play should use the current filter contract');
+assert.match(randomPlayback, /PlayRandomVideoWithFilter\(randomPlayRequest\(this\.randomPlayFilter\(\), this\.randomConditions, this\.recentRandomVideoIDs\)\)/, 'random play should send the host filter, conditions and recent picks');
+assert.match(randomPlayback, /exclude_ids: normalizeRecentRandomIDs\(recentIDs\)/, 'random play should avoid recent repeats');
 assert.match(page, /@watch-progress="handlePreviewWatchProgress"/, 'preview progress should be persisted by the page');
 // P-034（D-PC41/42）：看完与续播的判定只在 utils/watchState.js 一处，样例与 Go 测试对齐（watchState.test.js）。
 assert.match(page, /from '\.\.\/utils\/watchState\.js'/, 'resume and completion checks should come from the shared watchState helper');

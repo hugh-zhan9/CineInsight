@@ -10,8 +10,9 @@ const detail = (videoId, scrollTop = 0) => ({ page: 'video-detail', params: { vi
 const page = (key, scrollTop = 0) => ({ page: key, params: null, scrollTop });
 
 describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
+  // videos：二期的视频海报墙（D-P2-01）发 open-video(id)，来源记 'videos'。
   it.each([
-    'home', 'recap', 'viewing-notes', 'scenes', 'watchlist', 'movie-chart', 'watched-movies', 'people', 'collections',
+    'home', 'videos', 'recap', 'viewing-notes', 'scenes', 'watchlist', 'movie-chart', 'watched-movies', 'people', 'collections',
     'playback-queue', 'video-detail'
   ])('观看区调用方 %s 进整页详情', from => {
     expect(opensVideoDetail(from, 'settings')).toBe(true);

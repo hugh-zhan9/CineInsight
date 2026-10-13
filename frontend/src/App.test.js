@@ -1132,7 +1132,8 @@ it('P-008 任务中心「在工作台中打开」切到视频工作台并关闭�
   expect(wrapper.findComponent({ name: 'VideoWorkbenchPage' }).props('openRequest').projectID).toBe(31);
 });
 
-it('回顾页首次进入才挂载；点标签回片库按该标签筛选，点图片去图片页定位，点人物打开人物页', async () => {
+// 二期（D-P2-01）：「视频」是海报墙，点标签把 { tagId } 作为一次性参数交给它（只按这一个标签筛选），片库管理页不动。
+it('回顾页首次进入才挂载；点标签去「视频」海报墙按该标签筛选，点图片去图片页定位，点人物打开人物页', async () => {
   const wrapper = await mountApp();
   expect(wrapper.findComponent({ name: 'RecapPage' }).exists()).toBe(false);
   await wrapper.get('[data-test="nav-recap"]').trigger('click');
@@ -1144,8 +1145,15 @@ it('回顾页首次进入才挂载；点标签回片库按该标签筛选，点�
   recap.vm.$emit('open-tag', { id: 5, name: '科幻' });
   await flushPromises();
   expect(wrapper.vm.currentPage).toBe('videos');
-  expect(applyTag).toHaveBeenCalledWith(5);
+  const browse = wrapper.findComponent({ name: 'VideoBrowsePage' });
+  expect(browse.props('navigationRequest')).toEqual({ tagId: 5, token: 1 });
+  expect(browse.props('pageActive')).toBe(true);
+  expect(applyTag).not.toHaveBeenCalled();
   expect(wrapper.findComponent({ name: 'RecapPage' }).props('pageActive')).toBe(false);
+  // 已在「视频」上再点一个标签：参数照样交过去，token 换新的，页面据此再套一次。
+  recap.vm.$emit('open-tag', 6);
+  await flushPromises();
+  expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).props('navigationRequest')).toEqual({ tagId: 6, token: 2 });
 
   await wrapper.setData({ photosMounted: true });
   const locate = vi.fn();
@@ -1233,11 +1241,17 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
     expect(wrapper.find(`[data-test="nav-area-${area}"]`).exists()).toBe(true);
   });
 
-  it('「视频」与「片库管理」共用同一个片库页实例，「图片」与「图片管理」同理', async () => {
+  // 二期（D-P2-01）：「视频」是独立的海报墙（首次进入才挂载、之后只隐藏）；片库页常挂载，只在「片库管理」上显示。
+  it('「视频」是海报墙、「片库管理」是常挂载的片库页，各自一个实例；「图片」与「图片管理」共用同一实例', async () => {
     const wrapper = await mountApp();
-    await wrapper.get('[data-test="nav-videos"]').trigger('click');
     const library = wrapper.findComponent({ name: 'VideoListPage' }).vm;
-    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(true);
+    expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).exists()).toBe(false);
+    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    const browse = wrapper.findComponent({ name: 'VideoBrowsePage' });
+    expect(browse.props('pageActive')).toBe(true);
+    expect(browse.isVisible()).toBe(true);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(false);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).isVisible()).toBe(false);
 
     await enterManage(wrapper);
     await wrapper.get('[data-test="nav-library-manage"]').trigger('click');
@@ -1245,6 +1259,10 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
     expect(wrapper.findComponent({ name: 'VideoListPage' }).vm).toBe(library);
     expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(true);
     expect(wrapper.findComponent({ name: 'VideoListPage' }).isVisible()).toBe(true);
+    // 海报墙切走后只隐藏、不卸载（筛选与滚动位置留着）。
+    expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).vm).toBe(browse.vm);
+    expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).props('pageActive')).toBe(false);
+    expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).isVisible()).toBe(false);
 
     await wrapper.get('[data-test="nav-photos-manage"]').trigger('click');
     const photos = wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm;
@@ -1311,6 +1329,8 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
   // 观看区每个调用方：组件名、需要先切到的页面、发出的事件与载荷。
   const viewerCallers = [
     ['HomePage', 'home', 'open-video', 7],
+    // D-P2-01：「视频」海报墙的卡片、「追到哪了」与今晚看什么的候选都发 open-video(id)。
+    ['VideoBrowsePage', 'videos', 'open-video', 7],
     ['RecapPage', 'recap', 'open-video-id', 7],
     // 片单（D-P2-04）：想看「播放」、观看笔记、观影记录的事件经 ListsPage 转出来。
     ['ListsPage', 'lists', 'open-video-id', 7],
@@ -2012,5 +2032,71 @@ describe('观看区用影院表面（D-UD-02）', () => {
     api.GetStartupError.mockResolvedValue('数据库未初始化');
     await mountApp();
     expect(cinema()).toBe(false);
+  });
+});
+
+describe('「视频」海报墙的接线（D-P2-01）', () => {
+  it('navigateTo(\'videos\', params) 把一次性参数交给海报墙；不带参数的切页不改它，已在本页时照样交过去', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.vm.navigateTo('videos', { keyword: '星际' })).toBe(true);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('videos');
+    const browse = () => wrapper.findComponent({ name: 'VideoBrowsePage' });
+    expect(browse().props('navigationRequest')).toEqual({ keyword: '星际', token: 1 });
+
+    wrapper.vm.navigateTo('home');
+    wrapper.vm.navigateTo('videos');
+    await flushPromises();
+    expect(browse().props('navigationRequest')).toEqual({ keyword: '星际', token: 1 });
+
+    expect(wrapper.vm.navigateTo('videos', { watch: 'favorites' })).toBe(true);
+    await flushPromises();
+    expect(browse().props('navigationRequest')).toEqual({ watch: 'favorites', token: 2 });
+  });
+
+  it('设置页有未保存修改时参数等确认后才交过去；选「继续编辑」什么也不交', async () => {
+    const wrapper = await mountApp();
+    await enterManage(wrapper);
+    await wrapper.get('[data-test="nav-settings"]').trigger('click');
+    wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', true);
+    await flushPromises();
+
+    const kept = wrapper.vm.navigateTo('videos', { keyword: '甲' });
+    resolveConfirm(false);
+    expect(await kept).toBe(false);
+    expect(wrapper.vm.currentPage).toBe('settings');
+    expect(wrapper.vm.pageRequests).toEqual({});
+
+    const left = wrapper.vm.navigateTo('videos', { keyword: '乙' });
+    resolveConfirm(true);
+    expect(await left).toBe(true);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).props('navigationRequest')).toEqual({ keyword: '乙', token: 1 });
+  });
+
+  it('整页详情改了状态，海报墙上那张卡与片库管理那一行都跟上（M-5）', async () => {
+    const wrapper = await mountApp();
+    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    const applyBrowse = vi.fn();
+    const applyLibrary = vi.fn();
+    wrapper.findComponent({ name: 'VideoBrowsePage' }).vm.applyExternalVideoStateChange = applyBrowse;
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.applyExternalVideoStateChange = applyLibrary;
+    api.GetVideosByIDs.mockResolvedValue([{ id: 7, name: '7.mp4' }]);
+    wrapper.findComponent({ name: 'VideoBrowsePage' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['videos']);
+    const payload = { id: 7, changes: { is_watched: true } };
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('video-state-changed', payload);
+    expect(applyBrowse).toHaveBeenCalledWith(payload);
+    expect(applyLibrary).toHaveBeenCalledWith(payload);
+  });
+
+  it('海报墙的 navigate（空片库「去添加扫描目录」）走 App 的切页', async () => {
+    const wrapper = await mountApp();
+    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    wrapper.findComponent({ name: 'VideoBrowsePage' }).vm.$emit('navigate', 'settings');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('settings');
   });
 });

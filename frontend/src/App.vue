@@ -104,7 +104,19 @@
         @open-pending-work="openPendingWork"
         @open-task-center="openTaskCenter"
       />
-      <!-- 片库页常挂载（命令面板与宿主命令依赖它）：观看侧「视频」与管理侧「片库管理」共用这一个实例。 -->
+      <!-- 视频海报墙（D-P2-01）：观看侧「视频」，只做浏览，筛选状态与片库管理各自独立。首次进入才挂载，之后只隐藏，
+           切走再回来筛选、已加载的卡片与滚动位置都在。navigateTo('videos', { keyword | watch | tagId }) 带来的参数经 pageRequests 交给它。 -->
+      <VideoBrowsePage
+        v-if="videosMounted"
+        ref="videoBrowsePage"
+        v-show="currentPage === 'videos'"
+        :page-active="currentPage === 'videos'"
+        :tags="tags"
+        :navigation-request="pageRequests.videos || null"
+        @open-video="openVideoByID($event, { from: 'videos' })"
+        @navigate="navigateTo"
+      />
+      <!-- 片库页常挂载（命令面板与宿主命令依赖它），只在管理侧「片库管理」上显示（二期起「视频」是上面的海报墙）。 -->
       <VideoListPage
         ref="videoListPage"
         v-show="libraryPageVisible"
@@ -332,6 +344,7 @@ import RecapPage from './components/RecapPage.vue';
 import ScenesPage from './components/ScenesPage.vue';
 import VideoWorkbenchPage from './components/VideoWorkbenchPage.vue';
 import HomePage from './components/viewer/HomePage.vue';
+import VideoBrowsePage from './components/viewer/VideoBrowsePage.vue';
 import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
 import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
@@ -384,7 +397,7 @@ export default {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
-    HomePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs
+    HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs
   },
   data() {
     return {
@@ -395,6 +408,10 @@ export default {
       // 片单（D-P2-04）：首次进入才挂载；当前标签是这一页的参数（navigateTo('lists', { tab })），默认「想看」。
       listsMounted: false,
       listsTab: DEFAULT_LIST_TAB,
+      videosMounted: false,
+      // 带参数切页（navigateTo(page, params)）：{ [page]: { ...params, token } }，token 每次都换，页面据此套用一次。
+      // 二期只有「视频」用（{ keyword } / { watch } / { tagId }）。
+      pageRequests: {},
       // 整页详情的参数（D-UI-05）：token 每次打开或返回都换，让详情页重新挂载。
       detailRoute: { videoId: 0, startAtMs: null, bookmark: null, token: 0 },
       // 整页详情的返回栈（D-UI-10）：[{ page, params, scrollTop }]，规则见 utils/viewerNavigation.js。
@@ -553,6 +570,7 @@ export default {
           this.entityBrowseEpoch += 1;
         }
         if (page === 'home') this.homeMounted = true;
+        if (page === 'videos') this.videosMounted = true;
         if (page === 'photos' || page === 'photos-manage') this.photosMounted = true;
         if (page === LISTS_PAGE) this.listsMounted = true;
         if (page === 'people') this.peopleMounted = true;
@@ -592,9 +610,10 @@ export default {
         .map(group => ({ ...group, pages: group.pages.filter(page => isNavPageVisible(page, this.settings)) }))
         .filter(group => group.pages.length > 0);
     },
-    // 「视频」与「片库管理」、「图片」与「图片管理」各是同一个常挂载实例的两个入口。
+    // 片库页（VideoListPage）常挂载，只在「片库管理」上显示；「视频」是海报墙（D-P2-01）。
+    // 「图片」与「图片管理」仍是同一个常挂载实例的两个入口。
     libraryPageVisible() {
-      return this.currentPage === 'videos' || this.currentPage === 'library-manage';
+      return this.currentPage === 'library-manage';
     },
     photoPageVisible() {
       return this.currentPage === 'photos' || this.currentPage === 'photos-manage';
@@ -655,8 +674,8 @@ export default {
     // 所有切页都走这里（顶栏、命令面板、待处理工作台、图片页的「去设置」）。设置页有未保存修改时
     // 先确认「放弃未保存的设置修改？」（D-PC57、APP-08）：SettingsPage 是 v-if，切走即销毁表单。
     // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
-    // params 是页面参数（目前只有片单的 { tab }）；片单的四个别名 key 先换成 `lists` + 标签（D-P2-04），
-    // 已在片单上时只换标签。
+    // params 是交给目标页的一次性参数（见 applyPageParams）；片单的四个别名 key 先换成 `lists` + 标签（D-P2-04），
+    // 已在目标页时也照样交过去（片单只换标签）。
     navigateTo(target, targetParams = null) {
       const { page, params } = resolvePageRoute(target, targetParams);
       if (!page) return true;
@@ -698,10 +717,12 @@ export default {
       this.currentPage = page;
     },
     // 页面参数落到页面状态上：
+    // - 「视频」的 { keyword } / { watch } / { tagId }：经 pageRequests 交给海报墙，每次换 token，页面据此套用一次；
     // - 片单的标签（认不出的标签忽略，留在原来的标签上）；
     // - 人物 / 作品集的 { keyword }：页面回到列表并按它搜（每次交接换 token，同一个词再交一次也会重搜）；
     // - 场景检索的 { query, mode } 或 { image: { dataURL, name } }：范围是全部视频，页面直接检索（ScenesPage 的 scopeRequest）。
     applyPageParams(page, params) {
+      if (page === 'videos') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       const entityKind = { people: 'person', collections: 'collection' }[page];
       if (entityKind && typeof params?.keyword === 'string') this.requestEntityKeyword(entityKind, params.keyword);
@@ -721,6 +742,12 @@ export default {
       if (this.currentPage === VIDEO_DETAIL_PAGE) return { videoId: this.detailRoute.videoId };
       if (this.currentPage === LISTS_PAGE) return { tab: this.listsTab };
       return null;
+    },
+    // 带参数切页的「一次性请求」（二期 D-P2-01，目前只有「视频」用）：{ [page]: { ...params, token } }。
+    setPageRequest(page, params) {
+      if (!params || typeof params !== 'object') return;
+      const token = (this.pageRequests[page]?.token || 0) + 1;
+      this.pageRequests = { ...this.pageRequests, [page]: { ...params, token } };
     },
     // 「打开一部片」的代次：每次新的打开、每次切页都换代，取完视频还是这一代才继续。
     supersedeVideoOpen() {
@@ -826,14 +853,11 @@ export default {
     openVideoAt({ videoID, startMs } = {}, { from } = {}) {
       return this.openVideoResolved(videoID, '这个视频已不在片库中，可能不在扫描目录内或已被删除。', { from, startAtMs: startMs });
     },
-    // 观看回顾里点标签：回片库，只按这一个标签筛选（VideoListPage.applyTagFilterCommand）。
-    async openLibraryTag(tag) {
+    // 观看回顾、整页详情里点标签：去「视频」海报墙，只按这一个标签筛选（VideoBrowsePage 的 navigationRequest）。
+    openLibraryTag(tag) {
       const id = Number(tag?.id || tag);
-      if (!Number.isInteger(id) || id <= 0) return;
-      const navigated = await this.navigateTo('videos');
-      if (navigated === false) return;
-      await this.$nextTick();
-      await this.$refs.videoListPage?.applyTagFilterCommand(id);
+      if (!Number.isInteger(id) || id <= 0) return false;
+      return this.navigateTo('videos', { tagId: id });
     },
     // 观看回顾里点图片：切到图片页并定位到这一张，打开查看器（PhotoLibraryPage.locateImage）。
     async openPhotoImage(image) {
@@ -941,9 +965,10 @@ export default {
       if (this.$refs.mainView) this._cancelScrollRestore = restoreScrollWhenReachable(this.$refs.mainView, entry.scrollTop);
       return true;
     },
-    // 整页详情里收藏、标记已看、评分、播放进度或失效标记变了（{ id, changes }）：交给常挂载的片库页，
-    // 「视频」「片库管理」里那一行不用重载就跟上（M-5）。
+    // 整页详情里收藏、标记已看、评分、播放进度或失效标记变了（{ id, changes }）：交给常挂载的片库页与海报墙，
+    // 「片库管理」里那一行、「视频」上那张卡不用重载就跟上（M-5）。
     handleDetailVideoStateChange(payload) {
+      this.$refs.videoBrowsePage?.applyExternalVideoStateChange(payload);
       return this.$refs.videoListPage?.applyExternalVideoStateChange(payload);
     },
     // 整页详情「编辑资料」：切到片库管理，在抽屉里打开这部片（详细设计「整页详情」）。

@@ -15,7 +15,6 @@ assert.ok(exported.size > 0, 'App.d.ts should export bindings');
 // 白名单只放「已裁决保留、界面随后接入」的绑定，每项写明原因（2026-09-30：「取消关联」已接入）。
 // 2026-10-13 UI 二期 P2-A 先合入后端接口，由 P2-B..E 接入界面；接入的那一组把对应项从这里删掉（守卫会提醒）。
 const allowedUnused = new Map([
-  ['ListWatchlistInLibrary', 'UI 二期 D-P2-07 首页「想看的片片库里已有」：P2-B 首页接入'],
 ]);
 // 待裁决：前端已不用、去留还没定的绑定；目前为空（SearchSubtitleMatchesWithFilters、ListMovieVideoLinks 已由主代理裁决删除 App 绑定）。
 const pendingRuling = new Map([]);

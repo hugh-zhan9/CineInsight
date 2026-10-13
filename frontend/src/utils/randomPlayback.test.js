@@ -1,7 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { flushPromises, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const api = vi.hoisted(() => ({ PlayRandomVideoWithFilter: vi.fn(), RerollRandom: vi.fn() }));
+vi.mock('../../wailsjs/go/main/App', () => api);
+vi.mock('./feedback.js', () => ({ notify: vi.fn(), notifyError: vi.fn() }));
+
+import * as feedback from './feedback.js';
 import {
-  LEGACY_RANDOM_MODE_STORAGE_KEY, loadRandomConditions, loadRecentRandomIDs, normalizeRecentRandomIDs, RANDOM_CONDITIONS_STORAGE_KEY,
-  RANDOM_RECENT_STORAGE_KEY, randomConditionFields, randomConditionTags, rerollWindowOpen, saveRandomConditions, saveRecentRandomIDs
+  applyRandomConditionItem, LEGACY_RANDOM_MODE_STORAGE_KEY, loadRandomConditions, loadRecentRandomIDs, normalizeRecentRandomIDs,
+  RANDOM_CONDITIONS_STORAGE_KEY, RANDOM_RECENT_STORAGE_KEY, RANDOM_REROLL_WINDOW_MS, randomConditionFields, randomConditionMenuItems,
+  randomConditionTags, randomPlaybackMixin, randomPlayRequest, readStoredRandomState, rerollWindowOpen, saveRandomConditions, saveRecentRandomIDs
 } from './randomPlayback.js';
 
 function installStorage(initial = {}, { throwOnAccess = false } = {}) {
@@ -80,5 +88,120 @@ describe('PLAY-08 随机模式与排除表持久化', () => {
     expect(rerollWindowOpen(startedAt, startedAt + 29_999)).toBe(true);
     expect(rerollWindowOpen(startedAt, startedAt + 30_000)).toBe(false);
     expect(rerollWindowOpen(0, startedAt)).toBe(false);
+  });
+});
+
+describe('随机播放的共用部分（D-P2-01：片库管理与视频海报墙共用）', () => {
+  it('请求带上宿主的筛选、随机条件与去重后的最近 12 次', () => {
+    const filter = { keyword: '甲', collapse_versions: true };
+    const recent = [1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    expect(randomPlayRequest(filter, { watchState: 'watched', favoritesOnly: true, maxMinutes: 30 }, recent)).toEqual({
+      filter, watch_state: 'watched', favorites_only: true, max_duration_seconds: 1800, exclude_ids: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    });
+    expect(randomPlayRequest({}, {}, undefined).exclude_ids).toEqual([]);
+  });
+
+  it('▾ 菜单的条件开关：勾选态跟着条件走，有时长上限才出现「取消时长上限」', () => {
+    const ids = items => items.map(item => item.id || item.heading || (item.divider ? '—' : ''));
+    expect(ids(randomConditionMenuItems({}))).toEqual(['观看状态', 'watch:unwatched', 'watch:any', 'watch:watched', '—', 'favorites']);
+    const items = randomConditionMenuItems({ watchState: 'unwatched', favoritesOnly: true, maxMinutes: 45 });
+    expect(items.filter(item => item.checked).map(item => item.id)).toEqual(['watch:unwatched', 'favorites']);
+    expect(items.at(-1)).toEqual({ id: 'duration:clear', label: '取消时长上限（≤45 分钟）' });
+  });
+
+  it('条件开关换成新条件；不认识的项返回 null', () => {
+    const base = { watchState: 'any', favoritesOnly: false, maxMinutes: 45 };
+    expect(applyRandomConditionItem(base, 'watch:unwatched')).toEqual({ ...base, watchState: 'unwatched' });
+    expect(applyRandomConditionItem(base, 'favorites')).toEqual({ ...base, favoritesOnly: true });
+    expect(applyRandomConditionItem({ ...base, favoritesOnly: true }, 'favorites')).toEqual(base);
+    expect(applyRandomConditionItem(base, 'duration:clear')).toEqual({ ...base, maxMinutes: 0 });
+    expect(applyRandomConditionItem(base, 'watch:weird')).toBeNull();
+    expect(applyRandomConditionItem(base, 'tonight')).toBeNull();
+    expect(applyRandomConditionItem(base, 'pick-ten')).toBeNull();
+  });
+
+  it('从存储读回两页共用的状态；存储不可用时返回 null（保留页面内存里那份）', () => {
+    installStorage({ [RANDOM_CONDITIONS_STORAGE_KEY]: '{"watchState":"watched"}', [RANDOM_RECENT_STORAGE_KEY]: '[4,5]' });
+    expect(readStoredRandomState()).toEqual({ conditions: { watchState: 'watched', favoritesOnly: false, maxMinutes: 0 }, recentIDs: [4, 5] });
+    installStorage({}, { throwOnAccess: true });
+    expect(readStoredRandomState()).toBeNull();
+  });
+});
+
+describe('randomPlaybackMixin 的宿主契约', () => {
+  const Host = {
+    mixins: [randomPlaybackMixin],
+    props: { pageActive: { type: Boolean, default: true }, blocked: { type: String, default: '' } },
+    data() { return { applied: [] }; },
+    methods: {
+      randomPlayFilter() { return { keyword: '宿主' }; },
+      randomPlayBlockedReason() { return this.blocked; },
+      applyPlaybackAttemptResult(result) { this.applied.push(result); }
+    },
+    template: '<div />'
+  };
+  const played = (id, token = `tok-${id}`) => ({ dispatch_succeeded: true, video: { id, name: `v${id}.mp4` }, reroll_token: token });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installStorage();
+  });
+
+  it('宿主说不能随机时只提示、不请求', async () => {
+    const wrapper = mount(Host, { props: { blocked: '语义搜索结果不支持随机' } });
+    await wrapper.vm.playRandom();
+    expect(feedback.notify).toHaveBeenCalledWith('语义搜索结果不支持随机');
+    expect(api.PlayRandomVideoWithFilter).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('抽中后记进排除表、出结果条，播放结果交给宿主；30 秒到点结果条改成「已计入」', async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = mount(Host);
+      api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5));
+      await wrapper.vm.playRandom();
+      expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledWith({ filter: { keyword: '宿主' }, watch_state: 'any', favorites_only: false, max_duration_seconds: 0, exclude_ids: [] });
+      expect(wrapper.vm.randomPlayBanner).toEqual({ active: true, videoName: 'v5.mp4', reason: '按当前筛选条件选择', rerollable: true, loading: false });
+      expect(wrapper.vm.recentRandomVideoIDs).toEqual([5]);
+      expect(wrapper.vm.applied).toHaveLength(1);
+      vi.advanceTimersByTime(RANDOM_REROLL_WINDOW_MS);
+      expect(wrapper.vm.randomPlayBanner.rerollable).toBe(false);
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('没抽到时收起结果条，失败结果仍交给宿主；请求抛错给出提示', async () => {
+    const wrapper = mount(Host);
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5));
+    await wrapper.vm.playRandom();
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce({ dispatch_succeeded: false, reason_code: 'no_filtered_videos' });
+    await wrapper.vm.playRandom();
+    expect(wrapper.vm.randomPlayBanner).toBeNull();
+    expect(wrapper.vm.applied.at(-1)).toEqual({ dispatch_succeeded: false, reason_code: 'no_filtered_videos' });
+    api.PlayRandomVideoWithFilter.mockRejectedValueOnce('超时');
+    await wrapper.vm.playRandom();
+    expect(feedback.notifyError).toHaveBeenCalledWith('随机播放失败: 超时');
+    expect(wrapper.vm.randomPlay.loading).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('条件开关回写存储；页面切回来时读回另一页存下的条件与排除表', async () => {
+    const wrapper = mount(Host);
+    expect(wrapper.vm.applyRandomConditionItem('favorites')).toBe(true);
+    expect(wrapper.vm.applyRandomConditionItem('tonight')).toBe(false);
+    await flushPromises();
+    expect(loadRandomConditions()).toEqual({ watchState: 'any', favoritesOnly: true, maxMinutes: 0 });
+
+    saveRandomConditions({ watchState: 'unwatched', favoritesOnly: false, maxMinutes: 0 });
+    saveRecentRandomIDs([8, 9]);
+    await wrapper.setProps({ pageActive: false });
+    expect(wrapper.vm.randomConditions.watchState).toBe('any');
+    await wrapper.setProps({ pageActive: true });
+    expect(wrapper.vm.randomConditions).toEqual({ watchState: 'unwatched', favoritesOnly: false, maxMinutes: 0 });
+    expect(wrapper.vm.recentRandomVideoIDs).toEqual([8, 9]);
+    wrapper.unmount();
   });
 });

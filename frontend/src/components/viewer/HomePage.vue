@@ -45,6 +45,31 @@
       </div>
     </section>
 
+    <!-- 追到哪了（D-P2-02、D-P2-07）：作品集看到第几部，卡片与「视频」页同一套（collectionProgressCard），点开进下一部的整页详情。 -->
+    <section v-if="blockVisible(progressBlock, progressCards)" class="recap-section" data-test="home-progress">
+      <header class="recap-section__head"><h3><RecapIcon name="collection" /> 追到哪了</h3><small>作品集看到第几部，点开接着看下一部</small></header>
+      <AppBanner v-if="progressBlock.error" tone="danger" :title="progressBlock.error" data-test="home-progress-error">
+        <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="home-progress-retry" @click="loadProgress">重试</button></template>
+      </AppBanner>
+      <div v-else-if="progressBlock.loading && !progressCards.length" class="viewer-home__posters" aria-busy="true" data-test="home-progress-loading">
+        <SkeletonBlock v-for="n in 6" :key="n" shape="poster" :lines="2" />
+      </div>
+      <div v-if="progressCards.length" class="viewer-home__posters">
+        <RecapMediaCard
+          v-for="card in progressCards"
+          :key="card.key"
+          variant="poster"
+          :id="card.videoID"
+          :cover="card.cover"
+          :title="card.title"
+          :subtitle="card.subtitle"
+          :badge="card.badge"
+          data-test="home-progress-item"
+          @open="openVideo({ id: card.videoID })"
+        />
+      </div>
+    </section>
+
     <section v-if="blockVisible(tonightBlock)" class="recap-section" data-test="home-tonight">
       <header class="recap-section__head">
         <h3><RecapIcon name="spark" /> 今晚看什么</h3>
@@ -89,6 +114,30 @@
       </div>
     </section>
 
+    <!-- 想看的片片库里已有（D-P2-03、D-P2-07）：想看条目已关联到片库、代表视频还没看过；「播放」进那部片的整页详情。 -->
+    <section v-if="blockVisible(watchlistBlock)" class="recap-section" data-test="home-watchlist">
+      <header class="recap-section__head"><h3><RecapIcon name="star" /> 想看的片片库里已有</h3><small>想看片单里已经在片库的，还没看过</small></header>
+      <AppBanner v-if="watchlistBlock.error" tone="danger" :title="watchlistBlock.error" data-test="home-watchlist-error">
+        <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="home-watchlist-retry" @click="loadWatchlist">重试</button></template>
+      </AppBanner>
+      <div v-else-if="watchlistBlock.loading && !watchlistBlock.items.length" class="viewer-home__posters" aria-busy="true" data-test="home-watchlist-loading">
+        <SkeletonBlock v-for="n in 6" :key="n" shape="poster" :lines="2" />
+      </div>
+      <div v-if="watchlistBlock.items.length" class="viewer-home__posters">
+        <div v-for="item in watchlistBlock.items" :key="item.entry_id" class="viewer-home__wish" data-test="home-watchlist-item">
+          <RecapMediaCard
+            variant="poster"
+            :id="Number(item.video_id)"
+            :cover="watchlistPoster(item)"
+            :title="item.entry_title || item.video_title || '未命名'"
+            :subtitle="watchlistSubtitle(item)"
+            @open="openVideo({ id: item.video_id })"
+          />
+          <button type="button" class="btn btn--secondary btn--sm" data-test="home-watchlist-play" @click="openVideo({ id: item.video_id })"><AppIcon name="play" /> 播放</button>
+        </div>
+      </div>
+    </section>
+
     <section v-if="blockVisible(recapBlock, topPeople)" class="recap-section" data-test="home-people">
       <header class="recap-section__head"><h3><RecapIcon name="person" /> 本月常看的人物</h3><small>按本月播放次数</small></header>
       <p v-if="recapBlock.error" class="viewer-home__error" role="alert" data-test="home-people-error">{{ recapBlock.error }}</p>
@@ -117,7 +166,7 @@
       </header>
       <p v-if="recapBlock.error" class="viewer-home__error" role="alert" data-test="home-highlight-error">{{ recapBlock.error }}</p>
       <SkeletonBlock v-else-if="recapBlock.loading && !highlight" class="viewer-home__skeleton-lines" :lines="3" data-test="home-highlight-loading" />
-      <div v-if="highlight" class="viewer-home__highlight">
+      <div v-if="highlight" :class="['viewer-home__highlight', { 'viewer-home__highlight--solo': !highlight.favorite }]">
         <RecapMediaCard
           v-if="highlight.favorite"
           class="viewer-home__favorite"
@@ -147,12 +196,14 @@
 // 每块各自的代次，晚到的旧响应丢掉；一块失败只在那一块写一行。卡片点开发 open-video（宿主进整页详情）。
 // 大图的背景：有背景图（详情里的 has_fanart）用背景图，否则用画面帧；减少动态效果由 RecapBackdrop 处理。
 import {
-  GetRecap, GetVideoDetails, ListContinueWatchingWithFilter, SearchLibraryVideoPage, SuggestTonightVideos
+  GetRecap, GetVideoDetails, ListCollectionProgress, ListContinueWatchingWithFilter, ListWatchlistInLibrary, SearchLibraryVideoPage,
+  SuggestTonightVideos
 } from '../../../wailsjs/go/main/App';
 import RecapBackdrop from '../recap/RecapBackdrop.vue';
 import RecapCountUp from '../recap/RecapCountUp.vue';
 import RecapIcon from '../recap/RecapIcon.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
+import AppBanner from '../ui/AppBanner.vue';
 import AppIcon from '../ui/AppIcon.vue';
 import HeroHeader from '../ui/HeroHeader.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
@@ -161,11 +212,15 @@ import { translateBackendError } from '../../utils/feedback.js';
 import { formatDuration } from '../../utils/mediaDetails.js';
 import { DEFAULT_RANDOM_CONDITIONS, randomConditionFields } from '../../utils/randomPlayback.js';
 import { currentCursor, heroFrameURLs, recapRequest, videoArtwork, videoThumbnail } from '../../utils/recap.js';
+import { collectionProgressCard } from './VideoBrowsePage.vue';
 
 export const HOME_CONTINUE_LIMIT = 10;
 export const HOME_TONIGHT_LIMIT = 3;
 export const HOME_RECENT_LIMIT = 14;
 export const HOME_PEOPLE_LIMIT = 8;
+// 二期两栏（D-P2-07）：追到哪了 ListCollectionProgress({ continue_only, limit })；想看已在库 ListWatchlistInLibrary(limit)。
+export const HOME_PROGRESS_LIMIT = 12;
+export const HOME_WATCHLIST_LIMIT = 12;
 
 // 大图选哪一部：继续观看的第一条优先（它还在读时先等它），没有再取今晚看什么的第一条。
 // 两块都读成功又都为空时给一句引导；有一块失败又挑不出时不出大图，失败写在各自区块里。
@@ -193,8 +248,8 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
-  components: { AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile },
-  // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、最近添加、本月回顾；期间可能看过片），
+  components: { AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile },
+  // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、追到哪了、最近添加、想看已在库、本月回顾；期间可能看过片），
   // 取回之前保留现有内容。今晚看什么只在「换一批」时重抽，大图定下后不再换。
   props: { pageActive: { type: Boolean, default: true } },
   // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey)：回顾页、片库、设置。
@@ -202,6 +257,8 @@ export default {
   data() {
     return {
       continueBlock: { loading: true, error: '', items: [] },
+      progressBlock: { loading: true, error: '', items: [] },
+      watchlistBlock: { loading: true, error: '', items: [] },
       tonightBlock: { loading: true, error: '', items: [], first: null, notice: '' },
       recentBlock: { loading: true, error: '', items: [] },
       recapBlock: { loading: true, error: '', result: null },
@@ -240,6 +297,7 @@ export default {
         fallback: settled ? videoThumbnail(id) : ''
       };
     },
+    progressCards() { return (this.progressBlock.items || []).map(collectionProgressCard).filter(Boolean); },
     topPeople() { return (this.recapBlock.result?.top_people || []).slice(0, HOME_PEOPLE_LIMIT); },
     // 本月没有任何记录（empty）时整块不显示。
     highlight() {
@@ -277,18 +335,36 @@ export default {
     blockVisible(block, items = block.items) {
       return Boolean(block.loading || block.error || items?.length);
     },
-    // 挂载时四个请求同时发出，互不等待。
+    // 挂载时各块的请求同时发出，互不等待。
     load() {
-      return Promise.all([this.loadContinue(), this.loadTonight(), this.loadRecent(), this.loadRecap()]);
+      return Promise.all([this.loadContinue(), this.loadProgress(), this.loadTonight(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
     },
-    // 回到首页：只重取会变的三块，今晚看什么这一批留着（换一批才重抽）。
+    // 回到首页：只重取会变的几块，今晚看什么这一批留着（换一批才重抽）。
     refresh() {
-      return Promise.all([this.loadContinue(), this.loadRecent(), this.loadRecap()]);
+      return Promise.all([this.loadContinue(), this.loadProgress(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
     },
     loadContinue() {
       return this.runBlock('continueBlock', '继续观看', async () => ({
         items: (await ListContinueWatchingWithFilter({}, '', 0, HOME_CONTINUE_LIMIT))?.videos || []
       }));
+    },
+    loadProgress() {
+      return this.runBlock('progressBlock', '追到哪了', async () => ({
+        items: (await ListCollectionProgress({ collection_ids: [], continue_only: true, limit: HOME_PROGRESS_LIMIT })) || []
+      }));
+    },
+    loadWatchlist() {
+      return this.runBlock('watchlistBlock', '想看片单', async () => ({
+        items: ((await ListWatchlistInLibrary(HOME_WATCHLIST_LIMIT)) || []).filter(item => Number(item?.video_id) > 0)
+      }));
+    },
+    // 想看条目自己有海报就用它，否则用片库那部片的海报（服务端没有海报时回落缩略图）。
+    watchlistPoster(item) {
+      return item?.has_poster ? `/preview/watchlist-poster/${Number(item.entry_id)}` : videoArtwork(Number(item?.video_id), 'poster');
+    },
+    watchlistSubtitle(item) {
+      const year = Number(item?.year || 0);
+      return [year > 0 ? String(year) : '', item?.origin === 'auto' ? '自动匹配' : ''].filter(Boolean).join(' · ');
     },
     loadRecent() {
       return this.runBlock('recentBlock', '最近添加', async () => ({
@@ -369,7 +445,11 @@ export default {
 .viewer-home__reroll { margin-left: auto; align-self: center; }
 .viewer-home__tonight { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .viewer-home__posters { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 16px 14px; }
+/* 想看已在库：海报卡下面一个「播放」。 */
+.viewer-home__wish { display: grid; gap: var(--space-2); align-content: start; justify-items: start; min-width: 0; }
 .viewer-home__highlight { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+/* 本月没有「最爱」那张卡时统计卡占满一行，不挤在左边那一栏里竖着排。 */
+.viewer-home__highlight--solo { grid-template-columns: minmax(0, 1fr); }
 .viewer-home__stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; align-content: start; }
 @media (max-width: 900px) {
   .viewer-home__highlight { grid-template-columns: minmax(0, 1fr); }
