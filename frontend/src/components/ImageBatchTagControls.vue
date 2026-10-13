@@ -1,18 +1,18 @@
 <template>
   <div class="image-batch-tags" data-test="image-batch-tags">
-    <span>已选 {{ selectedIDs.length }} 张</span>
-    <button type="button" class="btn-secondary btn-compact" :disabled="busy" data-test="image-batch-select-all" @click="$emit('update:selectedIDs', allSelected ? [] : imageIDs)">{{ allSelected ? '取消全选' : '全选已加载' }}</button>
-    <button type="button" class="btn-secondary btn-compact" :disabled="!selectedIDs.length || busy" data-test="image-batch-tag-open" @click="open">批量添加标签</button>
+    <span class="image-batch-tags__count">已选 {{ selectedIDs.length }} 张</span>
+    <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="image-batch-select-all" @click="$emit('update:selectedIDs', allSelected ? [] : imageIDs)">{{ allSelected ? '取消选择' : '全选已加载' }}</button>
+    <button type="button" class="btn btn--secondary btn--sm" :disabled="!selectedIDs.length || busy" data-test="image-batch-tag-open" @click="open">批量添加标签</button>
     <div v-if="opened" class="image-batch-tags__picker">
-      <input v-model="keyword" placeholder="搜索标签" aria-label="搜索批量添加的标签" :disabled="busy" />
+      <input v-model="keyword" class="search-input" placeholder="搜索标签" aria-label="搜索批量添加的标签" :disabled="busy" />
       <div class="image-batch-tags__options">
-        <button v-for="tag in filteredTags" :key="tag.id" type="button" class="btn-secondary btn-compact" :disabled="busy || !selectedIDs.length" @click="add(tag)">{{ tag.name }}</button>
-        <span v-if="!loading && !filteredTags.length">没有匹配标签</span>
+        <button v-for="tag in filteredTags" :key="tag.id" type="button" class="btn btn--secondary btn--sm" :disabled="busy || !selectedIDs.length" @click="add(tag)">{{ tag.name }}</button>
+        <span v-if="!loading && !filteredTags.length" class="image-batch-tags__muted">没有匹配标签</span>
       </div>
     </div>
-    <p v-if="loading || busy" role="status">{{ busy ? '正在添加标签…' : '正在加载标签…' }}</p>
-    <p v-if="notice" role="status">{{ notice }}</p>
-    <p v-if="error" role="alert">{{ error }}</p>
+    <p v-if="loading || busy" class="image-batch-tags__muted" role="status">{{ busy ? '正在添加标签…' : '正在加载标签…' }}</p>
+    <p v-if="notice" class="image-batch-tags__notice" role="status">{{ notice }}</p>
+    <p v-if="error" class="image-batch-tags__error" role="alert">{{ error }}</p>
   </div>
 </template>
 <script>
@@ -55,9 +55,12 @@ export default {
 };
 </script>
 <style scoped>
-.image-batch-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.image-batch-tags__picker { flex-basis: 100%; display: grid; gap: 8px; }
-.image-batch-tags__picker input { border: 1px solid var(--hairline); border-radius: 6px; background: var(--control-bg); color: var(--text-primary); padding: 8px; }
+.image-batch-tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.image-batch-tags__count { color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.image-batch-tags__picker { flex-basis: 100%; display: grid; gap: var(--space-2); }
 .image-batch-tags__options { display: flex; flex-wrap: wrap; gap: 6px; max-height: 150px; overflow-y: auto; }
-.image-batch-tags p { flex-basis: 100%; margin: 0; }
+.image-batch-tags p { flex-basis: 100%; margin: 0; font-size: var(--fs-caption); }
+.image-batch-tags__muted { color: var(--text-muted); font-size: var(--fs-caption); }
+.image-batch-tags__notice { color: var(--text-secondary); }
+.image-batch-tags__error { color: var(--danger-text); }
 </style>

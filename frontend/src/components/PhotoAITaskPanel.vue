@@ -15,9 +15,7 @@
           · 失败 {{ taggingStatus.failed || 0 }}
           · 产出候选 {{ taggingStatus.candidates || 0 }}
         </span>
-        <div v-if="taggingProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="taggingStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="taggingStatus.total || 0">
-          <i :style="{ width: taggingProgressRatio + '%' }"></i>
-        </div>
+        <ProgressBar v-if="taggingProgressRatio !== null" class="image-task-bar" :value="taggingProgressRatio" />
         <span v-if="taggingWaitingText" class="image-task-waiting-idle" data-test="image-ai-tagging-waiting-idle">{{ taggingWaitingText }}</span>
         <span v-if="taggingError" data-test="image-ai-tagging-error">{{ taggingError }}</span>
         <ul v-if="taggingFailures.length" class="image-task-failures" data-test="image-ai-tagging-failures">
@@ -29,7 +27,7 @@
       <div class="image-task-actions">
         <button
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           :disabled="taggingStatus?.running"
           data-test="image-ai-tagging-start"
           @click="startTagging"
@@ -37,14 +35,14 @@
         <button
           v-if="taggingWaitingText"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-ai-tagging-run-now"
           @click="runGatedTaskNow('image_ai_tagging')"
         >忽略空闲立即运行</button>
         <button
           v-if="taggingStatus?.running"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-ai-tagging-cancel"
           @click="cancelTagging"
         >取消</button>
@@ -64,9 +62,7 @@
           · 无 EXIF {{ exifStatus.skipped || 0 }}
           · 失败 {{ exifStatus.failed || 0 }}
         </span>
-        <div v-if="exifProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="exifStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="exifStatus.total || 0">
-          <i :style="{ width: exifProgressRatio + '%' }"></i>
-        </div>
+        <ProgressBar v-if="exifProgressRatio !== null" class="image-task-bar" :value="exifProgressRatio" />
         <span v-if="exifWaitingText" class="image-task-waiting-idle" data-test="image-exif-backfill-waiting-idle">{{ exifWaitingText }}</span>
         <span v-if="exifError" data-test="image-exif-backfill-error">{{ exifError }}</span>
         <ul v-if="exifFailures.length" class="image-task-failures" data-test="image-exif-backfill-failures">
@@ -78,7 +74,7 @@
       <div class="image-task-actions">
         <button
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           :disabled="exifStatus?.running"
           data-test="image-exif-backfill-start"
           @click="startEXIFBackfill"
@@ -86,14 +82,14 @@
         <button
           v-if="exifWaitingText"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-exif-backfill-run-now"
           @click="runGatedTaskNow('exif')"
         >忽略空闲立即运行</button>
         <button
           v-if="exifStatus?.running"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-exif-backfill-cancel"
           @click="cancelEXIFBackfill"
         >取消</button>
@@ -113,9 +109,7 @@
           · 已是最新 {{ phashStatus.skipped || 0 }}
           · 失败 {{ phashStatus.failed || 0 }}
         </span>
-        <div v-if="phashProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="phashStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="phashStatus.total || 0">
-          <i :style="{ width: phashProgressRatio + '%' }"></i>
-        </div>
+        <ProgressBar v-if="phashProgressRatio !== null" class="image-task-bar" :value="phashProgressRatio" />
         <span v-if="phashWaitingText" class="image-task-waiting-idle" data-test="image-phash-backfill-waiting-idle">{{ phashWaitingText }}</span>
         <span v-if="phashError" data-test="image-phash-backfill-error">{{ phashError }}</span>
         <ul v-if="phashFailures.length" class="image-task-failures" data-test="image-phash-backfill-failures">
@@ -127,7 +121,7 @@
       <div class="image-task-actions">
         <button
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           :disabled="phashStatus?.running"
           data-test="image-phash-backfill-start"
           @click="startPHashBackfill"
@@ -135,14 +129,14 @@
         <button
           v-if="phashWaitingText"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-phash-backfill-run-now"
           @click="runGatedTaskNow('image_phash')"
         >忽略空闲立即运行</button>
         <button
           v-if="phashStatus?.running"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-phash-backfill-cancel"
           @click="cancelPHashBackfill"
         >取消</button>
@@ -165,9 +159,7 @@
           · 跳过 {{ semanticStatus.skipped || 0 }}
           · 失败 {{ semanticStatus.failed || 0 }}
         </span>
-        <div v-if="semanticProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="semanticStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="semanticStatus.total || 0">
-          <i :style="{ width: semanticProgressRatio + '%' }"></i>
-        </div>
+        <ProgressBar v-if="semanticProgressRatio !== null" class="image-task-bar" :value="semanticProgressRatio" />
         <span v-if="semanticStatus?.needs_rebuild" data-test="image-semantic-rebuild-hint">
           共享的 embedding 模型或维度已变化，图片索引已过期，需要重新运行本任务。
         </span>
@@ -182,7 +174,7 @@
       <div class="image-task-actions">
         <button
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           :disabled="semanticStatus?.running || !semanticStatus?.available"
           data-test="image-semantic-index-start"
           @click="startSemanticIndex"
@@ -190,7 +182,7 @@
         <button
           v-if="semanticStatus?.running"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           data-test="image-semantic-index-cancel"
           @click="cancelSemanticIndex"
         >取消</button>
@@ -207,20 +199,23 @@ import {
   RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill,
   StartImagePerceptualHashBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
+import ProgressBar from './ui/ProgressBar.vue';
 import { idleGateWaitingText, isIdleGateNotWaitingError } from '../utils/idleScheduling.js';
 
 // 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPage）。
 const POLL_INTERVAL_MS = 1000;
 const MAX_FAILURES_SHOWN = 5;
 
+// 页内只显示本页正在做的这件事（D-UD-11）：进度用统一的 ProgressBar，比例 0–1。
 function progressRatio(status) {
   if (!status || !status.total) return null;
   if (!status.running && !status.completed && !status.cancelled) return null;
-  return Math.min(100, Math.round(((status.processed || 0) / status.total) * 100));
+  return Math.min(1, Math.max(0, (status.processed || 0) / status.total));
 }
 
 export default {
   name: 'PhotoAITaskPanel',
+  components: { ProgressBar },
   data() {
     return {
       taggingStatus: null,
@@ -244,7 +239,7 @@ export default {
   computed: {
     taggingStatusText() {
       const status = this.taggingStatus;
-      if (!status) return '正在读取图片打标任务状态...';
+      if (!status) return '正在读取图片打标任务状态…';
       if (status.running) return '图片打标进行中';
       if (status.cancelled) return '图片打标任务已取消，可继续';
       if (status.completed) return '图片打标任务已完成';
@@ -252,7 +247,7 @@ export default {
     },
     semanticStatusText() {
       const status = this.semanticStatus;
-      if (!status) return '正在读取图片语义索引状态...';
+      if (!status) return '正在读取图片语义索引状态…';
       if (!status.available) return '图片语义索引不可用';
       if (status.running) return '图片语义索引构建中';
       if (status.needs_rebuild) return '模型或维度已变化，需要重新构建';
@@ -262,7 +257,7 @@ export default {
     },
     exifStatusText() {
       const status = this.exifStatus;
-      if (!status) return '正在读取 EXIF 补全任务状态...';
+      if (!status) return '正在读取 EXIF 补全任务状态…';
       if (status.running) return 'EXIF 补全中';
       if (status.cancelled) return 'EXIF 补全任务已取消，可继续';
       if (status.completed) return 'EXIF 补全任务已完成';
@@ -270,7 +265,7 @@ export default {
     },
     phashStatusText() {
       const status = this.phashStatus;
-      if (!status) return '正在读取指纹补全任务状态...';
+      if (!status) return '正在读取指纹补全任务状态…';
       if (status.running) return '指纹补全中';
       if (status.cancelled) return '指纹补全任务已取消，可继续';
       if (status.completed) return '指纹补全任务已完成';
@@ -509,18 +504,16 @@ export default {
 .image-ai-tasks { display: block; }
 .image-task-status {
   display: grid;
-  gap: 5px;
-  margin-bottom: 16px;
-  padding: 12px;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius);
   background: var(--accent-soft);
 }
 .image-task-status--error { border-color: var(--danger-border); background: var(--danger-soft); }
-.image-task-status span { color: var(--text-secondary); font-size: 12px; }
-.image-task-bar { height: 6px; border-radius: 999px; background: var(--control-bg); overflow: hidden; }
-.image-task-bar i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
-.image-task-failures { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 12px; }
-.image-task-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.image-task-status span.image-task-waiting-idle { color: var(--warning-color); }
+.image-task-status span { color: var(--text-secondary); font-size: var(--fs-caption); }
+.image-task-failures { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: var(--fs-caption); }
+.image-task-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.image-task-status span.image-task-waiting-idle { color: var(--warning-text); }
 </style>

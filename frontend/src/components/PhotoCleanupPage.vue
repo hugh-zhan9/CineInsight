@@ -1,89 +1,105 @@
 <template>
   <section class="cleanup-page" data-test="photo-cleanup-page">
-    <header class="cleanup-page__bar glass-surface">
-      <!-- 删除进行中不能离开（P-032 评审 Minor 5）：撤销条与「不支持废纸篓」二选一都挂在本页上。 -->
+    <div class="cleanup-page__nav">
+      <!-- 删除进行中不能离开（P-032 评审 Minor 5）：「不支持废纸篓」二选一挂在本页上。 -->
       <button
         type="button"
-        class="btn-secondary"
+        class="btn btn--ghost btn--sm"
         data-test="cleanup-back"
         :disabled="processing"
         :title="processing ? '正在移到废纸篓，完成后再返回' : ''"
         @click="$emit('close')"
-      >← 返回图片库</button>
-      <div class="cleanup-page__title">
-        <h2>清理审阅</h2>
-        <!-- 勾选规则与视频清理面板同一套（D-PC49，utils/cleanupSelection.js）。 -->
-        <p class="cleanup-page__subtitle">
-          精确重复默认勾选保留项以外的副本；疑似重复是画面近似，默认不勾，看过之后按组或按页「按建议勾选」。
-          保留项锁定，要换就点另一张的「保留这份」。勾选的图片移到废纸篓，可在回收站撤销；不勾任何一张的组不会有任何改动。
-        </p>
-      </div>
-      <div class="cleanup-page__summary" data-test="cleanup-summary">
-        <strong>{{ selection.length }}</strong> 项待删 · 移到废纸篓后，在访达清空废纸篓即可释放 {{ formatBytes(reclaimableBytes) }}
-      </div>
-      <button
-        type="button"
-        class="btn-secondary"
-        data-test="cleanup-dismissed-toggle"
-        @click="toggleDismissed"
-      >{{ showDismissed ? '返回审阅' : '已忽略' }}</button>
-      <button
-        type="button"
-        class="btn-secondary"
-        :disabled="running || editLocked"
-        data-test="cleanup-start"
-        @click="startAnalysis"
-      >{{ running ? '分析中…' : (analysis ? '重新分析' : '开始分析') }}</button>
-      <!-- 「移出本组」「不是重复」的请求还没返回时不能删除（P-032 复审 I-1）：它们落地时会改组和勾选。 -->
-      <button
-        type="button"
-        class="btn-danger"
-        :disabled="selection.length === 0 || running || processing || showDismissed || dismissing"
-        :title="dismissing ? '正在更新分组，完成后再删除' : ''"
-        data-test="cleanup-delete-selected"
-        @click="deleteSelected"
-      >{{ processing ? '处理中…' : `移到废纸篓 (${selection.length})` }}</button>
-    </header>
+      ><AppIcon name="chevron-left" :size="16" />返回图片库</button>
+    </div>
+
+    <!-- 勾选规则与视频清理面板同一套（D-PC49，utils/cleanupSelection.js）。 -->
+    <PageHeader
+      class="cleanup-page__header"
+      title="清理审阅"
+      subtitle="精确重复默认勾选保留项以外的副本；疑似重复是画面近似，默认不勾，看过之后按组或按页「按建议勾选」。保留项锁定，要换就点另一张的「设为保留」。勾选的图片移到废纸篓，可在回收站撤销；不勾任何一张的组不会有任何改动。"
+    >
+      <template #actions>
+        <button
+          type="button"
+          class="btn btn--secondary"
+          data-test="cleanup-dismissed-toggle"
+          @click="toggleDismissed"
+        >{{ showDismissed ? '返回审阅' : '已忽略' }}</button>
+        <button
+          type="button"
+          :class="['btn', analysis ? 'btn--secondary' : 'btn--primary']"
+          :disabled="running || editLocked"
+          data-test="cleanup-start"
+          @click="startAnalysis"
+        >{{ running ? '分析中…' : (analysis ? '重新分析' : '开始分析') }}</button>
+      </template>
+    </PageHeader>
 
     <!-- 删除走 P-030 的删除宿主：进度与取消、磁盘不支持废纸篓时的二选一、按批次撤销。 -->
     <TrashUndoBanner ref="trashUndo" kind="image" :after-restore="afterTrashRestore" />
 
-    <p v-if="displayError" class="cleanup-page__notice cleanup-page__notice--error" role="alert" data-test="cleanup-error">{{ displayError }}</p>
-    <p v-if="resultStale" class="cleanup-page__notice cleanup-page__notice--warn" data-test="cleanup-outdated-hint">
-      图片库在本次分析之后发生过变化，下面的结果可能已过期。可以继续审阅，也可以点「重新分析」刷新候选。
-    </p>
-    <p v-if="analysis && analysis.stale_hash_count > 0" class="cleanup-page__notice" data-test="cleanup-stale-hint">
-      有 {{ analysis.stale_hash_count }} 张图片还没有可用的指纹（未回填或源文件已变更），暂未参与近似重复检测。
-      <button
-        type="button"
-        class="btn-secondary btn-compact"
-        data-test="cleanup-start-image-phash"
-        :disabled="perceptualHashRunning"
-        @click="startPerceptualHashBackfill"
-      >{{ perceptualHashRunning ? '补全中…' : '补全指纹' }}</button>
-    </p>
-    <p v-if="analysis && analysis.skipped_unavailable > 0" class="cleanup-page__notice" data-test="image-cleanup-skipped-hint">
-      本轮跳过 {{ analysis.skipped_unavailable }} 张图片（文件不可访问，如外置盘未挂载）。
-    </p>
-    <p v-if="analysis?.skipped_verification > 0" class="cleanup-page__notice" data-test="image-cleanup-verification-hint">
-      {{ analysis.skipped_verification }} 张图片的画面未能复核（读取失败或文件已变化），未据此判定近似重复。检查文件后可重新分析。
-    </p>
+    <AppBanner v-if="displayError" tone="danger" role="alert" data-test="cleanup-error" :title="displayError" />
+    <AppBanner
+      v-if="resultStale"
+      tone="warning"
+      data-test="cleanup-outdated-hint"
+      title="图片库在本次分析之后发生过变化，下面的结果可能已过期。"
+      message="可以继续审阅，也可以点「重新分析」刷新候选。"
+    />
+    <AppBanner
+      v-if="analysis && analysis.stale_hash_count > 0"
+      data-test="cleanup-stale-hint"
+      :title="`有 ${analysis.stale_hash_count} 张图片还没有可用的指纹（未回填或源文件已变更），暂未参与近似重复检测。`"
+    >
+      <template #actions>
+        <button
+          type="button"
+          class="btn btn--secondary btn--sm"
+          data-test="cleanup-start-image-phash"
+          :disabled="perceptualHashRunning"
+          @click="startPerceptualHashBackfill"
+        >{{ perceptualHashRunning ? '补全中…' : '补全指纹' }}</button>
+      </template>
+    </AppBanner>
+    <AppBanner
+      v-if="analysis && analysis.skipped_unavailable > 0"
+      data-test="image-cleanup-skipped-hint"
+      :title="`本轮跳过 ${analysis.skipped_unavailable} 张图片（文件不可访问，如外置盘未挂载）。`"
+    />
+    <AppBanner
+      v-if="analysis?.skipped_verification > 0"
+      data-test="image-cleanup-verification-hint"
+      :title="`${analysis.skipped_verification} 张图片的画面未能复核（读取失败或文件已变化），未据此判定近似重复。`"
+      message="检查文件后可重新分析。"
+    />
 
     <!-- 「已忽略」（D-PC31）：「不是重复」「移出本组」留下的记录，可以撤销。 -->
     <section v-if="showDismissed" class="cleanup-page__dismissed" data-test="cleanup-dismissed">
       <p class="cleanup-page__muted">
         「不是重复」和「移出本组」留下的记录。撤销后这些图片在下次分析时重新参与近似重复检测；任一文件变化后忽略本来就会自动失效。
       </p>
-      <p v-if="dismissals.error" class="cleanup-page__notice cleanup-page__notice--error" data-test="cleanup-dismissed-error">{{ dismissals.error }}</p>
-      <p v-if="dismissals.loading && dismissals.items.length === 0" class="cleanup-page__muted">正在读取忽略记录…</p>
-      <p v-else-if="dismissals.items.length === 0 && dismissals.loaded" class="cleanup-page__muted" data-test="cleanup-dismissed-empty">还没有忽略记录。</p>
+      <AppBanner v-if="dismissals.error" tone="danger" role="alert" data-test="cleanup-dismissed-error" :title="dismissals.error" />
+      <div v-if="dismissals.loading && dismissals.items.length === 0" class="cleanup-page__loading" role="status">
+        <SkeletonBlock :lines="3" />
+        <span class="cleanup-page__muted">正在读取忽略记录…</span>
+      </div>
+      <EmptyState
+        v-else-if="dismissals.items.length === 0 && dismissals.loaded"
+        data-test="cleanup-dismissed-empty"
+        title="还没有忽略记录。"
+        message="在疑似重复里点「不是重复」或「移出本组」，记录会出现在这里，可以随时撤销。"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" @click="toggleDismissed">返回审阅</button>
+        </template>
+      </EmptyState>
       <ul v-else-if="dismissals.items.length > 0" class="cleanup-page__dismissed-list">
         <li v-for="item in dismissals.items" :key="item.id" class="cleanup-page__dismissed-item" data-test="cleanup-dismissal-item">
           <span class="cleanup-page__dismissed-media">{{ describeDismissal(item) }}</span>
           <span class="cleanup-page__muted">{{ formatDismissalTime(item.created_at) }}</span>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="cleanup-dismissal-undo"
             :disabled="dismissals.undoing"
             @click="undoDismissal(item)"
@@ -93,23 +109,27 @@
       <button
         v-if="dismissals.hasMore"
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm cleanup-page__more"
         data-test="cleanup-dismissed-more"
         :disabled="dismissals.loading"
         @click="loadDismissals(false)"
       >{{ dismissals.loading ? '读取中…' : '加载更多' }}</button>
     </section>
 
-    <div v-else-if="running" class="cleanup-page__state" data-test="cleanup-progress">
+    <!-- 分析是本页正在做的那件事：页内只放这一条进度（D-UD-11）。 -->
+    <div v-else-if="running" class="cleanup-page__state cleanup-page__progress" data-test="cleanup-progress">
       <p class="cleanup-page__state-title">正在分析 · {{ stageLabel }}</p>
-      <p v-if="progress.total > 0">已处理 {{ progress.current }} / {{ progress.total }}</p>
+      <ProgressBar
+        :value="progress.total > 0 ? progress.current / progress.total : null"
+        :label="progress.total > 0 ? `已处理 ${progress.current} / ${progress.total}` : '准备中'"
+      />
       <p v-if="progress.message" class="cleanup-page__muted">{{ progress.message }}</p>
       <p v-if="progress.path" class="cleanup-page__path">当前文件：{{ progress.path }}</p>
       <p class="cleanup-page__muted">分析会逐个读取图片文件，外置硬盘或大库场景耗时较长。可以直接返回图片库，分析会在后台继续。</p>
       <p>
         <button
           type="button"
-          class="btn-secondary btn-compact"
+          class="btn btn--secondary btn--sm"
           data-test="cleanup-cancel-analysis"
           :disabled="cancelling"
           @click="cancelAnalysis"
@@ -159,57 +179,65 @@
       </div>
 
       <!-- 空态要分得清「没有重复」与「还没算」（D-PC50）。 -->
-      <div v-if="!hasGroups" class="cleanup-page__state" data-test="cleanup-empty">
-        <p class="cleanup-page__state-title">{{ emptyState.title }}</p>
-        <p v-if="emptyState.detail" class="cleanup-page__muted" data-test="cleanup-empty-detail">{{ emptyState.detail }}</p>
-        <p v-if="emptyState.action">
+      <EmptyState
+        v-if="!hasGroups"
+        data-test="cleanup-empty"
+        icon="check"
+        :title="emptyState.title"
+        :message="emptyState.detail"
+      >
+        <template v-if="emptyState.action" #actions>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="cleanup-empty-start-phash"
             :disabled="perceptualHashRunning"
             @click="startPerceptualHashBackfill"
           >{{ perceptualHashRunning ? '补全中…' : '补全指纹' }}</button>
-        </p>
-      </div>
+        </template>
+      </EmptyState>
 
       <div v-if="hasGroups" ref="areaTop" class="cleanup-area__bar" data-test="cleanup-area-bar">
         <h3 class="cleanup-area__title">{{ KIND_LABELS[activeKind] }}</h3>
         <span class="cleanup-area__stat">{{ activeEntries.length }} 组 · {{ directorySections.length }} 个目录</span>
         <nav v-if="pageCount > 1" class="cleanup-area__pager" aria-label="重复组分页">
-          <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-prev" :disabled="currentPage <= 1" @click="setPage(currentPage - 1)">上一页</button>
+          <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-page-prev" :disabled="currentPage <= 1" @click="setPage(currentPage - 1)">上一页</button>
           <span>第 {{ currentPage }} / {{ pageCount }} 页（勾选跨页保留）</span>
-          <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-next" :disabled="currentPage >= pageCount" @click="setPage(currentPage + 1)">下一页</button>
+          <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-page-next" :disabled="currentPage >= pageCount" @click="setPage(currentPage + 1)">下一页</button>
         </nav>
         <span class="cleanup-group__spacer"></span>
         <!-- 只作用于本页展开着的组：看得到的才勾，疑似重复默认仍然不勾（D-PC49）。 -->
         <button
           v-if="activeEntries.length"
           type="button"
-          class="btn-secondary btn-compact"
+          class="btn btn--secondary btn--sm"
           :disabled="editLocked || (!pageFullySuggested && pageSuggestableEntries.length === 0)"
           title="只作用于本页展开着的组；「本组不删」的组和被别的组锁定的图片不会勾上"
           data-test="cleanup-suggest-page"
           @click="togglePageSuggestion"
         >{{ pageFullySuggested ? '取消本页勾选' : '本页按建议勾选' }}</button>
-        <button v-if="activeEntries.length" type="button" class="btn-secondary btn-compact" data-test="cleanup-toggle-all" @click="toggleAllDirectories">
+        <button v-if="activeEntries.length" type="button" class="btn btn--ghost btn--sm" data-test="cleanup-toggle-all" @click="toggleAllDirectories">
           {{ allCollapsed ? '全部展开' : '全部折叠' }}
         </button>
       </div>
 
-      <div v-if="hasGroups && !activeEntries.length" class="cleanup-page__state" data-test="cleanup-area-empty">
-        <p class="cleanup-page__state-title">{{ areaEmptyState.title }}</p>
-        <p v-if="areaEmptyState.detail" class="cleanup-page__muted">{{ areaEmptyState.detail }}</p>
-        <p v-if="areaEmptyState.action">
+      <EmptyState
+        v-if="hasGroups && !activeEntries.length"
+        data-test="cleanup-area-empty"
+        icon="check"
+        :title="areaEmptyState.title"
+        :message="areaEmptyState.detail"
+      >
+        <template v-if="areaEmptyState.action" #actions>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="cleanup-area-start-phash"
             :disabled="perceptualHashRunning"
             @click="startPerceptualHashBackfill"
           >{{ perceptualHashRunning ? '补全中…' : '补全指纹' }}</button>
-        </p>
-      </div>
+        </template>
+      </EmptyState>
 
       <section
         v-for="section in pagedDirectorySections"
@@ -220,23 +248,23 @@
         <div class="cleanup-dir__head">
           <button
             type="button"
-            class="cleanup-dir__toggle"
+            class="btn-link cleanup-dir__toggle"
             :title="section.directory"
             :aria-expanded="!isDirCollapsed(section.directory)"
             data-test="cleanup-dir-toggle"
             @click="toggleDir(section.directory)"
           >
-            <span class="cleanup-dir__chevron">{{ isDirCollapsed(section.directory) ? '▸' : '▾' }}</span>
+            <AppIcon class="cleanup-dir__chevron" :name="isDirCollapsed(section.directory) ? 'chevron-right' : 'chevron-down'" :size="16" />
             <span class="cleanup-dir__path">{{ section.directory }}</span>
             <span class="cleanup-dir__count">{{ section.groupCount }} 组 · 共 {{ section.imageCount }} 张</span>
           </button>
           <button
             v-if="section.directory !== UNKNOWN_DIRECTORY"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="cleanup-open-dir"
             @click="openDirectory(section.directory)"
-          >打开目录</button>
+          >在访达中显示</button>
         </div>
 
         <template v-if="!isDirCollapsed(section.directory)">
@@ -257,21 +285,22 @@
                 {{ similarityLabel(entry) }}
               </span>
               <span v-if="entry.spansDirectories" class="cleanup-group__warn" data-test="cleanup-cross-dir">跨 {{ entry.directoryCount }} 个目录</span>
-              <!-- "保留这份"只是对比基准，不会连带删除别的；真正决定生死的是"删除"复选框。
+              <!-- "设为保留"只是对比基准，不会连带删除别的；真正决定生死的是"删除"复选框。
                    一个都没勾时明说本组不会有任何改动，免得用户以为没勾的会被自动清掉。 -->
               <span class="cleanup-group__outcome" data-test="cleanup-group-outcome">{{ groupOutcomeLabel(entry) }}</span>
               <span class="cleanup-group__spacer"></span>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :disabled="editLocked || isSkipped(entry) || (!isGroupFullySuggested(entry) && suggestedIDsFor(entry).length === 0)"
                 data-test="cleanup-suggest-group"
                 @click="toggleGroupSuggestion(entry)"
               >{{ isGroupFullySuggested(entry) ? '取消本组勾选' : '按建议勾选（保留推荐项）' }}</button>
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :class="{ 'cleanup-group__skip--active': isSkipped(entry) }"
+                :aria-pressed="isSkipped(entry) ? 'true' : 'false'"
                 :disabled="editLocked"
                 data-test="cleanup-skip-group"
                 @click="toggleSkipGroup(entry)"
@@ -279,7 +308,7 @@
               <button
                 v-if="entry.kind === 'near'"
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :disabled="dismissing || editLocked"
                 data-test="cleanup-dismiss-group"
                 @click="dismissGroup(entry)"
@@ -302,7 +331,7 @@
               >
                 <button
                   type="button"
-                  class="cleanup-member__thumb"
+                  class="btn-link cleanup-member__thumb"
                   :title="`查看原图 · ${member.name}`"
                   data-test="cleanup-member-open"
                   @click="openViewer(entry, member)"
@@ -322,7 +351,7 @@
                       data-test="cleanup-keep-toggle"
                       @change="setKeep(entry, member)"
                     />
-                    保留这份
+                    设为保留
                   </label>
                   <label class="cleanup-member__check">
                     <input
@@ -360,7 +389,7 @@
                   <dd>
                     <span v-if="directoryOf(member) === section.directory" class="cleanup-member__samedir">本目录</span>
                     <span v-else class="cleanup-member__otherdir" :title="directoryOf(member)" data-test="cleanup-member-otherdir">
-                      ⚠ {{ directoryOf(member) }}
+                      <AppIcon name="warning" :size="16" />{{ directoryOf(member) }}
                     </span>
                   </dd>
                 </dl>
@@ -369,7 +398,7 @@
 
                 <!-- 整理成果（D-PC48）：保留建议优先留收藏、评分、人物、标签多的那张。 -->
                 <div class="cleanup-member__meta">
-                  <span v-if="member.is_favorite" class="cleanup-member__badge cleanup-member__badge--keepish" data-test="cleanup-member-favorite">★ 已收藏</span>
+                  <span v-if="member.is_favorite" class="cleanup-member__badge cleanup-member__badge--keepish" data-test="cleanup-member-favorite"><AppIcon name="star" :size="16" />已收藏</span>
                   <span v-if="member.personal_rating != null" class="cleanup-member__badge cleanup-member__badge--keepish">评分 {{ member.personal_rating }}</span>
                   <span v-if="member.curation?.people" class="cleanup-member__badge cleanup-member__badge--keepish" data-test="cleanup-member-people">人物</span>
                   <span
@@ -382,19 +411,18 @@
                   <span v-if="!hasMetadata(member)" class="cleanup-member__badge cleanup-member__badge--empty">无收藏 / 评分 / 人物 / 标签</span>
                 </div>
 
-
                 <div class="cleanup-member__actions">
                   <button
                     type="button"
-                    class="btn-secondary btn-compact"
+                    class="btn btn--secondary btn--sm"
                     :disabled="isDeleted(member)"
                     data-test="cleanup-reveal"
                     @click="revealMember(member)"
-                  >在文件管理器中定位</button>
+                  >在访达中显示</button>
                   <button
                     v-if="entry.kind === 'near' && entry.members.length > 2 && !isDeleted(member)"
                     type="button"
-                    class="btn-secondary btn-compact"
+                    class="btn btn--secondary btn--sm"
                     :disabled="dismissing || editLocked"
                     data-test="cleanup-remove-member"
                     @click="removeMember(entry, member)"
@@ -403,9 +431,9 @@
               </div>
             </div>
             <nav v-if="entry.members.length > MEMBER_PAGE_SIZE" class="cleanup-page__pagination" aria-label="组内图片分页">
-              <button type="button" class="btn-secondary btn-compact" data-test="cleanup-members-prev" :disabled="memberPage(entry) <= 1" @click="review.memberPages[entry.key] = memberPage(entry) - 1">上一批图片</button>
+              <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-members-prev" :disabled="memberPage(entry) <= 1" @click="review.memberPages[entry.key] = memberPage(entry) - 1">上一批图片</button>
               <span>第 {{ memberPage(entry) }} / {{ memberPageCount(entry) }} 页 · 本组共 {{ entry.members.length }} 张</span>
-              <button type="button" class="btn-secondary btn-compact" data-test="cleanup-members-next" :disabled="memberPage(entry) >= memberPageCount(entry)" @click="review.memberPages[entry.key] = memberPage(entry) + 1">下一批图片</button>
+              <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-members-next" :disabled="memberPage(entry) >= memberPageCount(entry)" @click="review.memberPages[entry.key] = memberPage(entry) + 1">下一批图片</button>
             </nav>
           </article>
         </template>
@@ -413,37 +441,62 @@
 
       <!-- 一页 20 组，翻到底不用再滚回顶上翻页；翻页后回到本区顶部。 -->
       <nav v-if="hasGroups && pageCount > 1" class="cleanup-page__pagination" aria-label="重复组分页（底部）" data-test="cleanup-pagination-bottom">
-        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-prev-bottom" :disabled="currentPage <= 1" @click="setPage(currentPage - 1, true)">上一页</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-page-prev-bottom" :disabled="currentPage <= 1" @click="setPage(currentPage - 1, true)">上一页</button>
         <span>第 {{ currentPage }} / {{ pageCount }} 页 · {{ KIND_LABELS[activeKind] }}共 {{ activeEntries.length }} 组</span>
-        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-next-bottom" :disabled="currentPage >= pageCount" @click="setPage(currentPage + 1, true)">下一页</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="cleanup-page-next-bottom" :disabled="currentPage >= pageCount" @click="setPage(currentPage + 1, true)">下一页</button>
       </nav>
     </template>
 
-    <div v-else class="cleanup-page__state" data-test="cleanup-idle">
-      <p class="cleanup-page__state-title">{{ status?.cancelled ? '上一轮分析已取消，没有产生结果。' : '尚未分析。' }}</p>
-      <p class="cleanup-page__muted">点「开始分析」扫描库内的精确重复与近似重复图片。</p>
-    </div>
+    <EmptyState
+      v-else
+      data-test="cleanup-idle"
+      icon="copy"
+      :title="status?.cancelled ? '上一轮分析已取消，没有产生结果。' : '尚未分析。'"
+      message="点「开始分析」扫描库内的精确重复与近似重复图片。"
+    >
+      <template #actions>
+        <button type="button" class="btn btn--primary btn--sm" data-test="cleanup-idle-start" :disabled="running || editLocked" @click="startAnalysis">开始分析</button>
+      </template>
+    </EmptyState>
 
-    <div v-if="viewer.member" class="cleanup-viewer" role="dialog" aria-modal="true" data-test="cleanup-viewer" @click.self="closeViewer">
-      <button type="button" class="cleanup-viewer__close" title="关闭 (Esc)" @click="closeViewer">×</button>
-      <button type="button" class="cleanup-viewer__nav cleanup-viewer__nav--prev" :disabled="viewer.index <= 0" @click="stepViewer(-1)">‹</button>
+    <!-- 有勾选时才在底部浮出（D-UD-10）：「移到废纸篓」只作用于勾选的图片；不勾就没有删除。
+         这里不给「全选当前结果」：疑似重复要逐组看过才能勾（D-PC49），没有「整批全勾」这回事。 -->
+    <SelectionBar :count="selection.length" data-test="cleanup-selection-bar" @clear="clearSelection">
+      <template #actions>
+        <span class="cleanup-page__summary" data-test="cleanup-summary">移到废纸篓后，在访达清空废纸篓即可释放 {{ formatBytes(reclaimableBytes) }}</span>
+        <!-- 「移出本组」「不是重复」的请求还没返回时不能删除（P-032 复审 I-1）：它们落地时会改组和勾选。 -->
+        <button
+          type="button"
+          class="btn btn--danger"
+          :disabled="selection.length === 0 || running || processing || showDismissed || dismissing"
+          :title="dismissing ? '正在更新分组，完成后再删除' : ''"
+          data-test="cleanup-delete-selected"
+          @click="deleteSelected"
+        >{{ processing ? '处理中…' : `移到废纸篓 (${selection.length})` }}</button>
+      </template>
+    </SelectionBar>
+
+    <!-- 全屏查看器（D-UD-13）：关闭固定在右上角，← → 切换，Esc 退出。 -->
+    <div v-if="viewer.member" class="cleanup-viewer" role="dialog" aria-modal="true" :aria-label="`查看 ${viewer.member.name}`" data-test="cleanup-viewer" @click.self="closeViewer">
+      <button type="button" class="btn-icon cleanup-viewer__close" aria-label="关闭" title="关闭 (Esc)" @click="closeViewer"><AppIcon name="close" :size="20" /></button>
+      <button type="button" class="btn-icon cleanup-viewer__nav cleanup-viewer__nav--prev" aria-label="上一张" title="上一张 (←)" :disabled="viewer.index <= 0" @click="stepViewer(-1)"><AppIcon name="chevron-left" :size="24" /></button>
       <img class="cleanup-viewer__img" :src="`/preview/image/${viewer.member.id}`" :alt="viewer.member.name" />
-      <button type="button" class="cleanup-viewer__nav cleanup-viewer__nav--next" :disabled="viewer.index >= viewer.members.length - 1" @click="stepViewer(1)">›</button>
+      <button type="button" class="btn-icon cleanup-viewer__nav cleanup-viewer__nav--next" aria-label="下一张" title="下一张 (→)" :disabled="viewer.index >= viewer.members.length - 1" @click="stepViewer(1)"><AppIcon name="chevron-right" :size="24" /></button>
       <p class="cleanup-viewer__caption">
         {{ viewer.member.name }} · {{ viewer.member.width }}×{{ viewer.member.height }} · {{ formatBytes(memberBytes(viewer.member)) }}
         <span class="cleanup-viewer__caption-path">{{ viewer.member.path }}</span>
       </p>
     </div>
 
-    <!-- 删除前的汇总确认（D-PC49）与「把元数据合并到保留项」（D-PC48，默认勾选）。 -->
-    <BaseModal
+    <!-- 删除前的汇总确认（D-PC49）与「把元数据合并到保留项」（D-PC48，默认勾选）：合并不随撤销回退，所以先确认。 -->
+    <DialogShell
       v-if="deleteConfirm.show"
       class="cleanup-delete-confirm"
-      aria-labelledby="photo-cleanup-delete-confirm-title"
+      size="sm"
+      title="移到废纸篓"
       data-test="cleanup-delete-confirm-dialog"
       @close="answerDeleteConfirm(false)"
     >
-      <h2 id="photo-cleanup-delete-confirm-title">移到废纸篓</h2>
       <p data-test="cleanup-delete-summary">
         将把 {{ deleteConfirm.summary.count }} 张图片移到废纸篓<template v-if="deleteConfirm.summary.bytes > 0">，共 {{ formatBytes(deleteConfirm.summary.bytes) }}</template>。
       </p>
@@ -460,11 +513,11 @@
         <p class="cleanup-delete-confirm__help" data-test="cleanup-merge-note">标签只合并手动标签（自动标签不合并）。撤销删除不会撤回合并。合并失败时不会删除任何图片。</p>
       </template>
       <p class="cleanup-delete-confirm__help">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间。所在磁盘不支持废纸篓时，会先问你怎么处理。</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" data-test="cleanup-delete-cancel" @click="answerDeleteConfirm(false)">取消</button>
-        <button type="button" class="btn-danger" data-test="cleanup-delete-confirm" @click="answerDeleteConfirm(true)">移到废纸篓</button>
-      </div>
-    </BaseModal>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="cleanup-delete-cancel" @click="answerDeleteConfirm(false)">取消</button>
+        <button type="button" class="btn btn--danger" data-test="cleanup-delete-confirm" @click="answerDeleteConfirm(true)">移到废纸篓</button>
+      </template>
+    </DialogShell>
   </section>
 </template>
 
@@ -482,7 +535,14 @@ import {
   StartImagePerceptualHashBackfill,
   GetImagePerceptualHashBackfillStatus
 } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppBanner from './ui/AppBanner.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import ProgressBar from './ui/ProgressBar.vue';
+import SelectionBar from './ui/SelectionBar.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import StatTile from './ui/StatTile.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
@@ -514,12 +574,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const UNKNOWN_DIRECTORY = '未知目录';
 const GROUP_PAGE_SIZE = 20;
 const KIND_LABELS = { exact: '精确重复', near: '疑似重复' };
-// 统计卡的线性图标，颜色跟随 currentColor。
-const TILE_ICONS = {
-  exact: ['M8 8h11v11H8z', 'M5 16V5h11'],
-  near: ['M4 6h16v12H4z', 'M4 15l4-4 3 3 3-3 6 6', 'M15 9.5h.01'],
-  pending: ['M4 7h16', 'M9.5 7V4.5h5V7', 'M6.5 7l1 13h9l1-13', 'M10.5 11v5.5', 'M13.5 11v5.5']
-};
+// 统计卡的线性图标（ui/icons.js 里的名字），颜色跟随 currentColor。
+const TILE_ICONS = { exact: 'copy', near: 'image', pending: 'trash' };
 const TILE_HINTS = { exact: '内容逐字节一致，默认已勾副本', near: '画面近似，默认不勾，需逐组确认' };
 const DISMISSAL_KIND = 'image_near_duplicate';
 const DISMISSAL_PAGE_SIZE = 50;
@@ -534,7 +590,7 @@ function emptyDeleteConfirm() {
 
 export default {
   name: 'PhotoCleanupPage',
-  components: { BaseModal, StatTile, TrashUndoBanner },
+  components: { AppBanner, AppIcon, DialogShell, EmptyState, PageHeader, ProgressBar, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
   // deleted：清理页改动了图片库（删除，或在撤销条 / 回收站里撤销了删除），图片库据此重载。
   emits: ['close', 'deleted'],
   data() {
@@ -1116,7 +1172,7 @@ export default {
       try {
         await OpenImageDirectory(directory);
       } catch (err) {
-        this.localError = `打开目录失败：${err}`;
+        this.localError = `在访达中显示失败：${err}`;
       }
     },
     async revealMember(member) {
@@ -1124,7 +1180,7 @@ export default {
       try {
         await RevealImage(Number(member.id));
       } catch (err) {
-        this.localError = `定位文件失败：${err}`;
+        this.localError = `在访达中显示失败：${err}`;
       }
     },
     async copyPath(member) {
@@ -1178,6 +1234,11 @@ export default {
         this.cancelling = false;
         this.localError = `取消分析失败：${err}`;
       }
+    },
+    // 选择操作条的「取消选择」与 Esc（D-UD-10）：清空两个区域的全部勾选。确认框打开着或删除进行中不动勾选。
+    clearSelection() {
+      if (this.editLocked) return;
+      this.review.selection = [];
     },
     toggleSelection(imageID) {
       const id = Number(imageID);
@@ -1414,105 +1475,110 @@ export default {
 </script>
 
 <style scoped>
-.cleanup-page__pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px; flex-wrap: wrap; }
-.cleanup-page { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px 32px; }
+.cleanup-page { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4) var(--space-5) var(--space-6); }
+.cleanup-page > .cleanup-page__header { margin-bottom: 0; }
+.cleanup-page__nav { display: flex; margin-bottom: calc(-1 * var(--space-1)); }
+.cleanup-page__nav .btn { margin-left: calc(-1 * var(--space-2)); }
+.cleanup-page__pagination { display: flex; align-items: center; justify-content: center; gap: var(--space-3); padding: var(--space-3); flex-wrap: wrap; color: var(--text-secondary); font-size: var(--fs-caption); }
+.cleanup-page__summary { color: var(--text-secondary); font-size: var(--fs-caption); }
 
-.cleanup-page__bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 12px; }
-.cleanup-page__title { min-width: 0; }
-.cleanup-page__title h2 { margin: 0; font-size: 17px; }
-.cleanup-page__subtitle { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
-.cleanup-page__summary { margin-left: auto; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
-.cleanup-page__summary strong { color: var(--text-primary); font-size: 16px; }
-
-.cleanup-page__notice { margin: 0; padding: 9px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--control-bg); color: var(--text-secondary); font-size: 12px; }
-.cleanup-page__notice--warn { border-color: var(--accent-color); color: var(--text-primary); }
-.cleanup-page__notice--error { border-color: var(--danger-color); color: var(--danger-color); }
-
-.cleanup-page__state { display: grid; gap: 6px; padding: 48px 8px; color: var(--text-secondary); font-size: 13px; text-align: center; }
-.cleanup-page__state-title { margin: 0; color: var(--text-primary); font-size: 15px; }
+.cleanup-page__state { display: grid; gap: 6px; padding: var(--space-7) var(--space-2); color: var(--text-secondary); font-size: var(--fs-secondary); text-align: center; }
+.cleanup-page__state-title { margin: 0; color: var(--text-primary); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .cleanup-page__state p { margin: 0; }
-.cleanup-page__muted { color: var(--text-muted); font-size: 12px; }
-.cleanup-page__path { color: var(--text-muted); font-size: 11px; word-break: break-all; }
+.cleanup-page__progress { justify-items: center; }
+.cleanup-page__progress > .ui-progress { width: min(420px, 100%); text-align: left; }
+.cleanup-page__muted { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
+.cleanup-page__path { color: var(--text-muted); font-size: var(--fs-caption); word-break: break-all; }
+.cleanup-page__loading { display: grid; gap: var(--space-2); }
 
-.cleanup-page__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 0 2px; color: var(--text-muted); font-size: 12px; }
-.cleanup-page__stat { color: var(--text-secondary); }
+.cleanup-page__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding: 0 2px; color: var(--text-muted); font-size: var(--fs-caption); }
 .cleanup-page__switch { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer; }
 .cleanup-page__hint { flex: 1; min-width: 200px; }
+.cleanup-page__coverage { color: var(--warning-text); }
 
 /* 统计卡是共用的 StatTile（D-UI-08）；前两张兼作区域切换。 */
-.cleanup-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.cleanup-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-3); }
 
 /* 当前区域的标题行：标题、计数、翻页与本页操作。 */
-.cleanup-area__bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 4px 2px 0; scroll-margin-top: 110px; }
-.cleanup-area__title { margin: 0; font-size: 17px; font-weight: 750; }
-.cleanup-area__stat { color: var(--text-muted); font-size: 12px; }
-.cleanup-area__pager { display: inline-flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; }
+.cleanup-area__bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: var(--space-1) 2px 0; scroll-margin-top: var(--space-4); }
+.cleanup-area__title { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.cleanup-area__stat { color: var(--text-muted); font-size: var(--fs-caption); }
+.cleanup-area__pager { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: var(--fs-caption); }
 
 .cleanup-dir { display: grid; gap: 10px; }
-.cleanup-dir__head { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--control-bg); }
-.cleanup-dir__toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text-primary); font-size: 13px; font-family: var(--font-mono, monospace); text-align: left; cursor: pointer; }
-.cleanup-dir__chevron { flex: none; width: 12px; color: var(--text-muted); }
+.cleanup-dir__head { display: flex; align-items: center; gap: 10px; padding: 6px var(--space-2); border-radius: var(--radius-sm); background: var(--panel-muted-bg); }
+/* 整行是折叠开关：用文字链接的无边框按钮，排版按目录行改。 */
+.cleanup-dir__toggle { display: flex; flex: 1; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-primary); font-family: var(--font-mono); font-size: var(--fs-secondary); font-weight: var(--fw-regular); text-align: left; }
+.cleanup-dir__toggle:hover:not(:disabled) { text-decoration: none; color: var(--accent-text); }
+.cleanup-dir__chevron { color: var(--text-muted); }
 .cleanup-dir__path { flex: 1; min-width: 0; word-break: break-all; }
-.cleanup-dir__count { flex: none; color: var(--text-muted); font-size: 11px; font-family: initial; white-space: nowrap; }
+.cleanup-dir__count { flex: none; color: var(--text-muted); font-family: inherit; font-size: var(--fs-caption); white-space: nowrap; }
 
-.cleanup-group { display: grid; gap: 10px; padding: 14px 16px; border-radius: 12px; }
+.cleanup-group { display: grid; gap: 10px; padding: 14px var(--space-4); border-radius: var(--radius-lg); }
 .cleanup-group--skipped { opacity: 0.55; }
-.cleanup-group__head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cleanup-group__head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
 .cleanup-group__spacer { flex: 1; }
-.cleanup-group__kind { padding: 2px 8px; border-radius: 4px; background: var(--control-bg); color: var(--text-secondary); font-size: 11px; }
-.cleanup-group__kind--near { color: var(--accent-color); }
-.cleanup-group__reason { color: var(--text-muted); font-size: 12px; }
-.cleanup-group__similarity { color: var(--text-secondary); font-size: 11px; }
-.cleanup-group__warn { padding: 2px 8px; border: 1px solid var(--danger-color); border-radius: 999px; color: var(--danger-color); font-size: 11px; }
-.cleanup-group__outcome { padding: 2px 8px; border: 1px dashed var(--hairline); border-radius: 999px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
-.cleanup-group__skip--active { border-color: var(--accent-color); color: var(--accent-color); }
-.cleanup-group__exhausted { margin: 0; color: var(--danger-color); font-size: 12px; }
+.cleanup-group__kind { padding: 2px var(--space-2); border-radius: var(--radius-sm); background: var(--panel-muted-bg); color: var(--text-secondary); font-size: var(--fs-caption); }
+.cleanup-group__kind--near { color: var(--accent-text); }
+.cleanup-group__reason { color: var(--text-muted); font-size: var(--fs-caption); }
+.cleanup-group__similarity { color: var(--text-secondary); font-size: var(--fs-caption); }
+.cleanup-group__warn { padding: 2px var(--space-2); border: 1px solid var(--danger-border); border-radius: var(--radius-pill); color: var(--danger-text); font-size: var(--fs-caption); }
+.cleanup-group__outcome { padding: 2px var(--space-2); border: 1px dashed var(--hairline); border-radius: var(--radius-pill); color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
+.cleanup-group__skip--active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); }
+.cleanup-group__exhausted { margin: 0; color: var(--danger-text); font-size: var(--fs-caption); }
 
-.cleanup-group__members { display: flex; flex-wrap: wrap; gap: 12px; }
-.cleanup-member { display: flex; flex-direction: column; gap: 8px; width: 260px; padding: 10px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--panel-bg); }
+.cleanup-group__members { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.cleanup-member { display: flex; flex-direction: column; gap: var(--space-2); width: 260px; padding: 10px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--panel-bg); }
 .cleanup-member--keep { border-color: var(--accent-color); }
 .cleanup-member--marked { border-color: var(--danger-color); }
 .cleanup-member--deleted { opacity: 0.45; }
-.cleanup-member__thumb { position: relative; display: block; width: 100%; height: 200px; padding: 0; border: 0; border-radius: 8px; background: var(--thumb-bg); cursor: zoom-in; overflow: hidden; }
+/* 缩略图整块可点（打开查看器）：用无边框的文字链接按钮，尺寸按缩略图改。 */
+.cleanup-member__thumb { position: relative; display: block; width: 100%; height: 200px; border-radius: var(--radius-sm); background: var(--thumb-bg); cursor: zoom-in; overflow: hidden; }
 .cleanup-member__thumb img { width: 100%; height: 100%; object-fit: contain; }
-.cleanup-member__deleted-flag { position: absolute; inset: auto 6px 6px auto; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 11px; }
-.cleanup-member__choice { display: flex; align-items: center; gap: 14px; font-size: 12px; }
+.cleanup-member__deleted-flag { position: absolute; inset: auto 6px 6px auto; padding: 2px var(--space-2); border-radius: var(--radius-pill); background: var(--media-badge-bg); color: var(--media-badge-fg); font-size: var(--fs-caption); }
+.cleanup-member__choice { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; font-size: var(--fs-caption); }
 .cleanup-member__radio, .cleanup-member__check { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); cursor: pointer; }
-.cleanup-member__name { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; }
-.cleanup-member__facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 8px; margin: 0; font-size: 11px; }
+.cleanup-member__name { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: var(--fs-secondary); }
+.cleanup-member__facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px var(--space-2); margin: 0; font-size: var(--fs-caption); }
 .cleanup-member__facts dt { color: var(--text-muted); }
 .cleanup-member__facts dd { margin: 0; min-width: 0; color: var(--text-secondary); }
-.cleanup-member__diff { margin-left: 5px; color: var(--danger-color); font-style: normal; }
+.cleanup-member__diff { margin-left: 5px; color: var(--danger-text); font-style: normal; }
 .cleanup-member__samedir { color: var(--text-muted); }
-.cleanup-member__otherdir { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--danger-color); vertical-align: bottom; }
-.cleanup-member__path { margin: 0; color: var(--text-muted); font-size: 10px; font-family: var(--font-mono, monospace); word-break: break-all; cursor: copy; }
-.cleanup-member__meta { display: flex; flex-wrap: wrap; gap: 4px; }
-.cleanup-member__badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; }
-.cleanup-member__badge--keepish { border: 1px solid var(--accent-color); color: var(--accent-color); }
+.cleanup-member__otherdir { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--danger-text); vertical-align: bottom; }
+.cleanup-member__path { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); font-family: var(--font-mono); word-break: break-all; cursor: copy; }
+.cleanup-member__meta { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.cleanup-member__badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border: 1px solid transparent; border-radius: var(--radius-pill); background: var(--panel-muted-bg); color: var(--text-secondary); font-size: var(--fs-caption); }
+.cleanup-member__badge .ui-icon { width: 12px; height: 12px; }
+.cleanup-member__badge--keepish { border-color: var(--accent-border); color: var(--accent-text); }
 /* 与片库行的标签徽标同一做法：标签色只做 35% 底色，文字用正文色，浅色标签也读得清。 */
 .cleanup-member__badge--tag { background: color-mix(in srgb, var(--tag-color, var(--control-bg)) 35%, transparent); color: var(--text-primary); }
-.cleanup-member__locked { color: var(--warning-text); font-size: 12px; font-weight: 400; }
+.cleanup-member__locked { color: var(--warning-text); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .cleanup-member__badge--empty { color: var(--text-muted); }
-.cleanup-member__actions { margin-top: auto; }
+.cleanup-member__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 
-.cleanup-viewer { position: fixed; inset: 0; z-index: 300; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); align-items: center; gap: 12px; padding: 48px 24px 72px; background: rgba(8, 12, 20, 0.9); }
-.cleanup-viewer__img { max-width: 100%; max-height: 100%; object-fit: contain; justify-self: center; border-radius: 6px; }
-.cleanup-viewer__close { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.16); color: #fff; font-size: 18px; cursor: pointer; }
-.cleanup-viewer__nav { width: 40px; height: 40px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.16); color: #fff; font-size: 22px; cursor: pointer; }
+/* 全屏查看器：压暗层上的控件两主题都用白字（--recap-hero-*，同观看回顾的大图层）。 */
+.cleanup-viewer { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); align-items: center; gap: var(--space-3); padding: var(--space-7) var(--space-5) 72px; background: var(--overlay-strong); }
+.cleanup-viewer__img { max-width: 100%; max-height: 100%; object-fit: contain; justify-self: center; border-radius: var(--radius-sm); }
+.cleanup-viewer__close,
+.cleanup-viewer__nav { border-radius: var(--radius-pill); background: var(--recap-hero-chip); color: var(--recap-hero-fg); }
+.cleanup-viewer__close:hover:not(:disabled),
+.cleanup-viewer__nav:hover:not(:disabled) { background: var(--recap-hero-chip-border); color: var(--recap-hero-fg); }
+.cleanup-viewer__close { position: absolute; top: 14px; right: 14px; }
+.cleanup-viewer__nav { width: 40px; height: 40px; }
 .cleanup-viewer__nav:disabled { opacity: 0.3; cursor: default; }
-.cleanup-viewer__caption { position: absolute; left: 0; right: 0; bottom: 18px; margin: 0; color: rgba(255, 255, 255, 0.85); font-size: 12px; text-align: center; }
-.cleanup-viewer__caption-path { display: block; color: rgba(255, 255, 255, 0.5); font-size: 11px; word-break: break-all; }
-.cleanup-page__coverage { color: var(--warning-text); }
+.cleanup-viewer__caption { position: absolute; left: 0; right: 0; bottom: 18px; margin: 0; padding: 0 var(--space-5); color: var(--recap-hero-fg); font-size: var(--fs-caption); text-align: center; }
+.cleanup-viewer__caption-path { display: block; color: var(--recap-hero-muted); font-size: var(--fs-caption); word-break: break-all; }
 
 /* 「已忽略」列表 */
-.cleanup-page__dismissed { display: grid; gap: 10px; padding: 4px 2px; }
+.cleanup-page__dismissed { display: grid; gap: 10px; padding: var(--space-1) 2px; }
 .cleanup-page__dismissed-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.cleanup-page__dismissed-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--panel-bg); }
-.cleanup-page__dismissed-media { flex: 1; min-width: 0; color: var(--text-primary); font-size: 13px; overflow-wrap: anywhere; }
+.cleanup-page__dismissed-item { display: flex; align-items: center; gap: 10px; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--panel-bg); }
+.cleanup-page__dismissed-media { flex: 1; min-width: 0; color: var(--text-primary); font-size: var(--fs-secondary); overflow-wrap: anywhere; }
+.cleanup-page__more { justify-self: center; }
 
 /* 删除前的汇总确认 */
-:deep(.cleanup-delete-confirm) { max-width: 520px; }
+.cleanup-delete-confirm p { margin: 0 0 var(--space-2); }
 .cleanup-delete-confirm__warn { color: var(--warning-text); }
-.cleanup-delete-confirm__merge { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 600; cursor: pointer; }
-.cleanup-delete-confirm__help { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; }
+.cleanup-delete-confirm__merge { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); font-weight: var(--fw-semibold); cursor: pointer; }
+.cleanup-delete-confirm__help { margin: 6px 0 0; color: var(--text-muted); font-size: var(--fs-caption); }
 </style>

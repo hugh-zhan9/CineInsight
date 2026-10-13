@@ -108,3 +108,23 @@ describe('IMG-06 图片语义索引的说明', () => {
     wrapper.unmount();
   });
 });
+
+describe('任务进度用统一的进度条（D-UD-11）', () => {
+  it('运行中按已处理 / 总数显示比例；没在跑也没跑过时不显示', async () => {
+    api.GetImageAITaggingStatus.mockResolvedValue({ running: true, processed: 3, total: 12, failures: [] });
+    api.GetImageEXIFBackfillStatus.mockResolvedValue({ running: false, completed: false, processed: 0, total: 40, failures: [] });
+    const wrapper = await mountPanel();
+    const bar = wrapper.get('[data-test="image-ai-tagging-status"] [role="progressbar"]');
+    expect(bar.attributes('aria-valuenow')).toBe('25');
+    expect(wrapper.find('[data-test="image-exif-backfill-status"] [role="progressbar"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="image-ai-tagging-start"]').classes()).toEqual(expect.arrayContaining(['btn', 'btn--primary']));
+    wrapper.unmount();
+  });
+
+  it('读取状态前的提示用省略号「…」', async () => {
+    api.GetImageAITaggingStatus.mockReturnValue(new Promise(() => {}));
+    const wrapper = mount(PhotoAITaskPanel);
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('正在读取图片打标任务状态…');
+    wrapper.unmount();
+  });
+});

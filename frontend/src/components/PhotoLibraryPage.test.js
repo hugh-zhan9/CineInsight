@@ -788,7 +788,7 @@ describe('PhotoLibraryPage AI retag and candidate review', () => {
 
     const button = wrapper.get('[data-test="photo-ai-retag"]');
     expect(button.attributes('disabled')).toBeDefined();
-    expect(button.text()).toBe('分析中...');
+    expect(button.text()).toBe('分析中…');
 
     resolveCall([{ id: 21, image_id: 3, suggested_name: '日落', confidence: 'medium' }]);
     await flushPromises();
@@ -900,7 +900,7 @@ describe('PhotoLibraryPage semantic search', () => {
 
     await wrapper.get('[data-test="photo-favorite-only"]').setValue(true);
     await flushPromises();
-    await wrapper.findAll('.tag-chip')[0].trigger('click');
+    await wrapper.findAll('[data-test="photo-tag-filter"] .ui-filter-chip__toggle')[0].trigger('click');
     await flushPromises();
     await openPhotoFilter(wrapper);
     await wrapper.get('[data-test="photo-min-rating"]').setValue('6');
@@ -1325,7 +1325,9 @@ describe('PhotoLibraryPage cleanup review', () => {
 
     keepRadios = wrapper.findAll('[data-test="cleanup-keep-toggle"]');
     expect(keepRadios[1].element.checked).toBe(true); // id=2
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(0)');
+    // 一张都没勾：待删计数归零，选择操作条收起，页面上没有删除动作（D-UD-10）。
+    expect(wrapper.get('[data-test="cleanup-tile-pending"] [data-test="stat-tile-value"]').text()).toBe('0张');
+    expect(wrapper.find('[data-test="cleanup-delete-selected"]').exists()).toBe(false);
     const previousKeeper = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
       .find(toggle => toggle.attributes('aria-label').includes('keep.jpg'));
     expect(previousKeeper.element.disabled).toBe(false);
@@ -1407,7 +1409,9 @@ describe('PhotoLibraryPage cleanup review', () => {
     // 跳过本组：勾选清空、删除计数归零、勾选框禁用。
     await wrapper.get('[data-test="cleanup-skip-group"]').trigger('click');
     await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(0)');
+    // 一张都没勾：待删计数归零，选择操作条收起，页面上没有删除动作（D-UD-10）。
+    expect(wrapper.get('[data-test="cleanup-tile-pending"] [data-test="stat-tile-value"]').text()).toBe('0张');
+    expect(wrapper.find('[data-test="cleanup-delete-selected"]').exists()).toBe(false);
     expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]').every(t => t.element.disabled)).toBe(true);
 
     // 恢复本组：按当前保留项重算默认勾选，id=2 重新进入待删。
@@ -1523,7 +1527,8 @@ describe('PhotoLibraryPage cleanup review', () => {
     // 尺寸、体积、时间、元数据、AI 描述都要在卡片上直接看得到。
     expect(text).toContain('4000×3000');
     expect(text).toContain('7.6 MB');
-    expect(text).toContain('★ 已收藏');
+    expect(wrapper.get('[data-test="cleanup-member-favorite"]').text()).toBe('已收藏');
+    expect(wrapper.find('[data-test="cleanup-member-favorite"] [data-icon="star"]').exists()).toBe(true);
     expect(text).toContain('旅行');
     // 清理审阅刻意不展示 AI 内容：近似重复的两张图标签几乎一定相同，在这里帮不上判断。
     expect(wrapper.find('[data-test="cleanup-member-description"]').exists()).toBe(false);
@@ -2479,5 +2484,114 @@ describe('PhotoLibraryPage 缩略图墙', () => {
     expect(host.scrollTop).toBe(anchorRow.top);
     expect(wrapper.vm.windowState.startRow).toBe(Math.max(0, wrapper.vm.layout.rows.indexOf(anchorRow) - 3));
     cleanup();
+  });
+});
+
+// 统一设计第 0 步（B2）：页头、用词、删除按钮写明去向、查看器关闭位置。
+describe('PhotoLibraryPage 统一设计（D-UD-06 / D-UD-08 / D-UD-13 / D-UD-14）', () => {
+  it('页面根部有统一页头，标签筛选是筛选芯片', async () => {
+    api.GetImageTags.mockResolvedValue([{ id: 5, name: '风景' }]);
+    const wrapper = await mountPage();
+    expect(wrapper.get('h1').text()).toBe('图片');
+    const chip = wrapper.get('[data-test="photo-tag-filter"] .ui-filter-chip__toggle');
+    expect(chip.attributes('aria-pressed')).toBe('false');
+    await chip.trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.filters.tagIDs).toEqual([5]);
+    expect(wrapper.get('[data-test="photo-tag-filter"] .ui-filter-chip__toggle').attributes('aria-pressed')).toBe('true');
+    wrapper.unmount();
+  });
+
+  it('删除按钮按设置写明「移到废纸篓」或「从图片库移除」，开着删除前确认时带「…」', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const trash = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: true } });
+    expect(trash.get('[data-test="photo-card-delete"]').attributes('aria-label')).toBe('移到废纸篓 photo-1.jpg');
+    trash.vm.openViewer(0); await flushPromises();
+    expect(trash.get('[data-test="photo-viewer-delete"]').text()).toBe('移到废纸篓');
+    await trash.get('[data-test="photo-select-1"]').setValue(true);
+    expect(trash.get('[data-test="photo-batch-delete"]').text()).toBe('移到废纸篓');
+    trash.unmount();
+
+    const remove = await mountPage({ settings: { confirm_before_delete: true, delete_original_file: false } });
+    expect(remove.get('[data-test="photo-card-delete"]').attributes('aria-label')).toBe('从图片库移除 photo-1.jpg');
+    remove.vm.openViewer(0); await flushPromises();
+    expect(remove.get('[data-test="photo-viewer-delete"]').text()).toBe('从图片库移除…');
+    remove.unmount();
+  });
+
+  it('删除确认框用 DialogShell：标题与确认按钮跟着勾选在两种去向之间切换，取消在左', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(4)]));
+    const wrapper = await mountPage({ settings: { confirm_before_delete: true, delete_original_file: false } });
+    await wrapper.get('[data-test="photo-card-delete"]').trigger('click');
+    const dialog = () => wrapper.get('[data-test="photo-delete-dialog"]');
+    expect(dialog().get('h2').text()).toBe('从图片库移除');
+    expect(wrapper.get('[data-test="photo-delete-confirm"]').text()).toBe('从图片库移除');
+    await wrapper.get('[data-test="photo-delete-file"]').setValue(true);
+    expect(dialog().get('h2').text()).toBe('移到废纸篓');
+    expect(wrapper.get('[data-test="photo-delete-confirm"]').text()).toBe('移到废纸篓');
+    const footer = dialog().findAll('.ui-dialog__footer button');
+    expect(footer.map(button => button.text())).toEqual(['取消', '移到废纸篓']);
+    await dialog().get('[data-test="dialog-shell-close"]').trigger('click');
+    expect(wrapper.find('[data-test="photo-delete-dialog"]').exists()).toBe(false);
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('批量删除确认框同样写明去向与张数', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage({ settings: { confirm_before_delete: true, delete_original_file: true } });
+    wrapper.vm.selectedImageIDs = [1, 2];
+    await flushPromises();
+    await wrapper.get('[data-test="photo-batch-delete"]').trigger('click');
+    const dialog = wrapper.get('[data-test="photo-batch-delete-dialog"]');
+    expect(dialog.get('h2').text()).toBe('移到废纸篓');
+    expect(dialog.text()).toContain('将已选的 2 张图片移到废纸篓。');
+    expect(wrapper.get('[data-test="photo-batch-delete-file"]').element.checked).toBe(true);
+    await wrapper.get('[data-test="photo-batch-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([1, 2], true, expect.any(String));
+    wrapper.unmount();
+  });
+
+  it('「在访达中显示」取代「打开目录 / 打开所在目录」，失败时也这么说', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    api.ListImageFolderGroups.mockResolvedValue([{ directory: '/photos', name: 'photos', count: 1, covers: [] }]);
+    const wrapper = await mountPage();
+    wrapper.vm.openViewer(0); await flushPromises();
+    expect(wrapper.get('[data-test="photo-viewer-directory"]').text()).toBe('在访达中显示');
+    api.RevealImage.mockRejectedValueOnce('offline');
+    await wrapper.get('[data-test="photo-viewer-directory"]').trigger('click'); await flushPromises();
+    expect(wrapper.get('.photo-viewer').text()).toContain('在访达中显示失败：offline');
+    wrapper.vm.closeViewer();
+    await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="photo-folder-system-open"]').text()).toBe('在访达中显示');
+    expect(wrapper.text()).not.toContain('打开目录');
+    wrapper.unmount();
+  });
+
+  it('查看器的关闭按钮带「关闭」读屏名，上一张 / 下一张是图标按钮', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    wrapper.vm.openViewer(0); await flushPromises();
+    expect(wrapper.get('[data-test="photo-viewer-close"]').attributes('aria-label')).toBe('关闭');
+    expect(wrapper.get('.photo-viewer__nav--prev').attributes('aria-label')).toBe('上一张');
+    expect(wrapper.get('.photo-viewer__nav--next').attributes('aria-label')).toBe('下一张');
+    expect(wrapper.get('[data-test="photo-viewer-favorite"]').attributes('aria-pressed')).toBe('false');
+    wrapper.unmount();
+  });
+
+  it('没选中时不出批量动作；「取消选择」清空选择', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    for (const hook of ['photo-clear-selection', 'photo-batch-tag-open', 'photo-batch-metadata-edit', 'photo-batch-delete']) {
+      expect(wrapper.find(`[data-test="${hook}"]`).exists()).toBe(false);
+    }
+    await wrapper.get('[data-test="photo-select-2"]').setValue(true);
+    expect(wrapper.get('[data-test="photo-clear-selection"]').text()).toBe('取消选择');
+    await wrapper.get('[data-test="photo-clear-selection"]').trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([]);
+    expect(wrapper.find('[data-test="photo-batch-delete"]').exists()).toBe(false);
+    wrapper.unmount();
   });
 });

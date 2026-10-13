@@ -257,7 +257,9 @@ describe('图片清理审阅', () => {
     }] }));
     const members = wrapper.findAll('[data-test="cleanup-member"]');
     expect(members[0].find('[data-test="cleanup-member-people"]').exists()).toBe(true);
-    expect(members[0].text()).toContain('★ 已收藏');
+    // 收藏标记用图标集里的星形（不再用字符 ★）加文字。
+    expect(members[0].get('[data-test="cleanup-member-favorite"]').text()).toBe('已收藏');
+    expect(members[0].find('[data-test="cleanup-member-favorite"] [data-icon="star"]').exists()).toBe(true);
     expect(members[1].text()).toContain('无收藏 / 评分 / 人物 / 标签');
     wrapper.unmount();
   });
@@ -657,7 +659,8 @@ describe('IMG-11 覆盖率与空态', () => {
 
   it('IMG-11 只算了一部分时标出已算比例；全部算完才说「没有发现」', async () => {
     const partial = await mountWith(statusWith({ coverage: { perceptual_hash: { done: 10, total: 40 } } }));
-    expect(partial.get('[data-test="cleanup-empty-detail"]').text()).toContain('指纹只算了 10 / 40 张');
+    // 空态换成统一的 EmptyState：说明文字在它的 message 里。
+    expect(partial.get('[data-test="cleanup-empty"] .ui-empty__message').text()).toContain('指纹只算了 10 / 40 张');
     expect(partial.get('[data-test="cleanup-coverage"]').text()).toBe('近似重复指纹已算 10 / 40');
     partial.unmount();
 
@@ -1159,6 +1162,105 @@ describe('精确重复与疑似重复分区', () => {
     await flushPromises();
     expect(wrapper.vm.review.key).toBe('2026-10-12T00:00:00Z');
     expect(wrapper.vm.activeKind).toBe('near');
+    wrapper.unmount();
+  });
+});
+
+// 统一设计第 0 步（B2）：选择操作条、用词与空态。
+describe('统一设计：选择操作条与用词（D-UD-10 / D-UD-14）', () => {
+  it('有勾选才浮出选择操作条与「移到废纸篓」；「取消选择」清空两区勾选后，页面上没有删除动作', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] }));
+    const bar = () => wrapper.find('[data-test="cleanup-selection-bar"]');
+    expect(bar().exists()).toBe(true);
+    expect(bar().get('[data-test="selection-bar-count"]').text()).toBe('已选 1 项');
+    // 疑似重复要逐组看过才能勾（D-PC49）：条上不给「全选当前结果」。
+    expect(bar().find('[data-test="selection-bar-select-all-matching"]').exists()).toBe(false);
+    expect(bar().get('[data-test="cleanup-delete-selected"]').text()).toBe('移到废纸篓 (1)');
+
+    await bar().get('[data-test="selection-bar-clear"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.review.selection).toEqual([]);
+    expect(bar().exists()).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-delete-selected"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('Esc 取消选择；确认框开着时 Esc 只关确认框，勾选不动', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    await clickDelete(wrapper);
+    expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(true);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(wrapper.vm.review.selection).toEqual([12]);
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+    expect(wrapper.vm.review.selection).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('删除确认框打开或删除进行中时「取消选择」不改勾选', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    wrapper.vm.processing = true;
+    wrapper.vm.clearSelection();
+    expect(wrapper.vm.review.selection).toEqual([12]);
+    wrapper.vm.processing = false;
+    wrapper.vm.confirming = true;
+    wrapper.vm.clearSelection();
+    expect(wrapper.vm.review.selection).toEqual([12]);
+    wrapper.vm.confirming = false;
+    wrapper.vm.clearSelection();
+    expect(wrapper.vm.review.selection).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('用词：「设为保留」「在访达中显示」，页头是统一的 PageHeader', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    expect(wrapper.get('h1').text()).toBe('清理审阅');
+    expect(wrapper.text()).toContain('设为保留');
+    expect(wrapper.text()).not.toContain('保留这份');
+    expect(wrapper.get('[data-test="cleanup-open-dir"]').text()).toBe('在访达中显示');
+    expect(wrapper.findAll('[data-test="cleanup-reveal"]').every(button => button.text() === '在访达中显示')).toBe(true);
+    api.OpenImageDirectory.mockRejectedValueOnce('offline');
+    await wrapper.get('[data-test="cleanup-open-dir"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="cleanup-error"]').text()).toBe('在访达中显示失败：offline');
+    wrapper.unmount();
+  });
+
+  it('还没分析时的空态给出「开始分析」', async () => {
+    const wrapper = await mountWith({ running: false, completed: false, cancelled: true, progress: { stage: 'done' } });
+    api.StartImageCleanupAnalysis.mockResolvedValueOnce({ running: true, completed: false, analysis: null });
+    await wrapper.get('[data-test="cleanup-idle-start"]').trigger('click');
+    await flushPromises();
+    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+    stopPhotoCleanupPolling();
+  });
+
+  it('分析中用统一的进度条报进度', async () => {
+    const wrapper = await mountWith({ running: true, completed: false, progress: { stage: 'near', current: 3, total: 12 } });
+    const bar = wrapper.get('[data-test="cleanup-progress"] [role="progressbar"]');
+    expect(bar.attributes('aria-valuenow')).toBe('25');
+    expect(wrapper.get('[data-test="cleanup-progress"]').text()).toContain('已处理 3 / 12');
+    wrapper.unmount();
+    stopPhotoCleanupPolling();
+  });
+
+  it('查看器关闭按钮在右上角、带「关闭」读屏名，← → 切换，Esc 退出', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    await wrapper.findAll('[data-test="cleanup-member-open"]')[0].trigger('click');
+    const viewer = () => wrapper.find('[data-test="cleanup-viewer"]');
+    expect(viewer().get('.cleanup-viewer__close').attributes('aria-label')).toBe('关闭');
+    expect(viewer().get('.cleanup-viewer__img').attributes('src')).toBe('/preview/image/11');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    await flushPromises();
+    expect(viewer().get('.cleanup-viewer__img').attributes('src')).toBe('/preview/image/12');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(viewer().exists()).toBe(false);
     wrapper.unmount();
   });
 });

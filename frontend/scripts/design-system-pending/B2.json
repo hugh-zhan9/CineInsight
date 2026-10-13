@@ -1,46 +1,18 @@
 {
   "owner": "B2 图片（PhotoLibraryPage、PhotoCleanupPage、图片查看器与图片相关对话框）",
   "pending": {
-    "colors": {
-      "components/PhotoCleanupPage.vue": 9,
-      "components/PhotoLibraryPage.vue": 10,
-      "components/WallpaperButton.vue": 1
-    },
-    "font-scale": {
-      "components/PhotoAITaskPanel.vue": 2,
-      "components/PhotoCleanupPage.vue": 35,
-      "components/PhotoLibraryPage.vue": 41
-    },
-    "z-index": {
-      "components/ImageLibraryPicker.vue": 1,
-      "components/ImageSourceDialog.vue": 1,
-      "components/PhotoCleanupPage.vue": 2,
-      "components/PhotoLibraryPage.vue": 3
-    },
+    "colors": {},
+    "font-scale": {},
+    "z-index": {},
     "vars": {},
-    "dialogs": {
-      "components/ImageLibraryPicker.vue": 1,
-      "components/ImageSourceDialog.vue": 1,
-      "components/PhotoCleanupPage.vue": 1,
-      "components/PhotoLibraryPage.vue": 2
-    },
-    "page-header": {
-      "components/PhotoLibraryPage.vue": 1
-    },
+    "dialogs": {},
+    "page-header": {},
     "wording": {
       "components/ImageBatchTagControls.vue": 1,
-      "components/ImageSourceDialog.vue": 1,
-      "components/PhotoCleanupPage.vue": 3,
-      "components/PhotoLibraryPage.vue": 13
+      "components/PhotoLibraryPage.vue": 1
     },
     "buttons": {
-      "components/ImageBatchTagControls.vue": 3,
-      "components/ImageLibraryPicker.vue": 4,
-      "components/ImageSourceDialog.vue": 4,
-      "components/PhotoAITaskPanel.vue": 11,
-      "components/PhotoCleanupPage.vue": 31,
-      "components/PhotoLibraryPage.vue": 51,
-      "components/WallpaperButton.vue": 2
+      "components/PhotoLibraryPage.vue": 5
     }
   }
 }
