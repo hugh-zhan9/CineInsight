@@ -3,10 +3,7 @@
   "pending": {
     "colors": {},
     "font-scale": {},
-    "z-index": {
-      "components/TrashUnsupportedDialog.vue": 1,
-      "components/video-list/TrashUndoBanner.vue": 1
-    },
+    "z-index": {},
     "vars": {},
     "dialogs": {},
     "page-header": {},

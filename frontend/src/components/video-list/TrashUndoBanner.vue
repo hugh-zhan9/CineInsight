@@ -341,12 +341,12 @@ export default {
 </script>
 
 <style scoped>
-/* 压在弹窗之上：弹窗遮罩现在还是 components.css 的 1000（第 0 步 C 组改成 --z-modal 之后这里换 var(--z-toast)）。 */
+/* 和全局提示同在 --z-toast：删除常从对话框或查看器里发起，进度与「取消」要压在它们（--z-modal）之上。 */
 .delete-progress-float {
   position: fixed;
   bottom: var(--space-5);
   left: 50%;
-  z-index: 1100;
+  z-index: var(--z-toast);
   transform: translateX(-50%);
   display: flex;
   align-items: flex-end;

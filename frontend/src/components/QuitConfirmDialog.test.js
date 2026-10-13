@@ -10,8 +10,9 @@ import { feedbackState, resetFeedback } from '../utils/feedback.js';
 let handlers;
 const wrappers = [];
 
+// 退出确认打开时 teleport 到 body 末尾（层级按打开先后，见 tokens.css「层级」与 layering.test.js）：用 teleport 桩留在子树里查。
 function mountDialog() {
-  const wrapper = mount(QuitConfirmDialog);
+  const wrapper = mount(QuitConfirmDialog, { global: { stubs: { teleport: true } } });
   wrappers.push(wrapper);
   return wrapper;
 }

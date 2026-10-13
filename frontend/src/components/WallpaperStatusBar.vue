@@ -1,7 +1,7 @@
 <template>
   <div v-if="status && status.state !== 'idle'" class="wallpaper-status" role="status" data-test="wallpaper-status">
     <span>动态壁纸：{{ status.display_name }} · {{ status.message }}</span>
-    <button type="button" class="btn-secondary btn-compact" data-test="wallpaper-stop" :disabled="busy" @click="stop">
+    <button type="button" class="btn btn--secondary btn--sm" data-test="wallpaper-stop" :disabled="busy" @click="stop">
       {{ busy ? '正在停止…' : status.state === 'failed' ? '关闭提示' : '停止动态壁纸' }}
     </button>
     <small v-if="error" role="alert">{{ error }}</small>
@@ -42,6 +42,6 @@ export default {
 };
 </script>
 <style scoped>
-.wallpaper-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--hairline); background: var(--panel-bg); font-size: 12px; }
+.wallpaper-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--hairline); background: var(--panel-bg); font-size: var(--fs-caption); }
 .wallpaper-status span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 </style>

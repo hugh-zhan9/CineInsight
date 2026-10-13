@@ -1,27 +1,28 @@
 <template>
-  <BaseModal v-if="request" class="quit-confirm-modal" data-test="quit-confirm" @close="cancel">
-    <h2>还有任务在进行</h2>
-    <p class="quit-confirm__lead">退出会中断下面这些任务：</p>
-    <ul class="quit-confirm__tasks">
-      <li v-for="task in tasks" :key="task.key" :data-test="`quit-task-${task.key}`">
-        <strong>{{ taskLabel(task.key) }}</strong>
-        <span class="quit-confirm__counts">{{ countText(task) }}</span>
-        <span v-if="task.names.length" class="quit-confirm__names">{{ namesText(task) }}</span>
-      </li>
-    </ul>
-    <p v-for="hint in hints" :key="hint" class="quit-confirm__hint">{{ hint }}</p>
-    <div class="modal-actions">
-      <button type="button" class="btn-secondary" :disabled="quitting" data-test="quit-cancel" @click="cancel">继续运行</button>
-      <button type="button" class="btn-danger" :disabled="quitting" data-test="quit-confirm-button" @click="confirmQuit">
-        {{ quitting ? '正在退出…' : '仍然退出' }}
-      </button>
-    </div>
-  </BaseModal>
+  <Teleport v-if="request" to="body">
+    <DialogShell title="还有任务在进行" size="sm" :busy="quitting" class="quit-confirm-modal" data-test="quit-confirm" @close="cancel">
+      <p class="quit-confirm__lead">退出会中断下面这些任务：</p>
+      <ul class="quit-confirm__tasks">
+        <li v-for="task in tasks" :key="task.key" :data-test="`quit-task-${task.key}`">
+          <strong>{{ taskLabel(task.key) }}</strong>
+          <span class="quit-confirm__counts">{{ countText(task) }}</span>
+          <span v-if="task.names.length" class="quit-confirm__names">{{ namesText(task) }}</span>
+        </li>
+      </ul>
+      <p v-for="hint in hints" :key="hint" class="quit-confirm__hint">{{ hint }}</p>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" :disabled="quitting" data-test="quit-cancel" @click="cancel">继续运行</button>
+        <button type="button" class="btn btn--danger" :disabled="quitting" data-test="quit-confirm-button" @click="confirmQuit">
+          {{ quitting ? '正在退出…' : '仍然退出' }}
+        </button>
+      </template>
+    </DialogShell>
+  </Teleport>
 </template>
 
 <script>
 import { ConfirmQuit } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 import { backgroundTaskLabel } from '../utils/idleScheduling.js';
 import { notifyError } from '../utils/feedback.js';
@@ -30,9 +31,11 @@ import { notifyError } from '../utils/feedback.js';
 // 还在跑（或排着队），会拦下关闭并发 quit-confirm-required {tasks:[{key, running, queued, names}]}；
 // 这里列出这些任务，确认后调 ConfirmQuit 放行退出。应用自己发起的退出（恢复完成、立即重启）
 // 后端直接放行，不会走到这里。
+// 关窗口随时可能发生，那时最上面可能是 teleport 到 body 末尾的对话框（原图、人脸来源…）：对话框打开时才
+// teleport 到 body 末尾，排在它们后面，同在 --z-modal 也压得住（层级规则见 tokens.css「层级」）。
 export default {
   name: 'QuitConfirmDialog',
-  components: { BaseModal },
+  components: { DialogShell },
   mixins: [runtimeEventsMixin],
   data() {
     return { request: null, quitting: false };
@@ -98,15 +101,15 @@ export default {
 </script>
 
 <style scoped>
-:deep(.quit-confirm-modal) { width: 460px; max-width: 100%; }
-.quit-confirm__lead { font-size: 13.5px; color: var(--text-secondary); }
-.quit-confirm__tasks { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
-.quit-confirm__counts { margin-left: 8px; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; }
+/* 尺寸由 DialogShell 的 sm（420）给出。 */
+.quit-confirm__lead { font-size: var(--fs-secondary); color: var(--text-secondary); }
+.quit-confirm__tasks { margin: var(--space-2) 0 0; padding-left: 18px; display: grid; gap: 6px; font-size: var(--fs-secondary); }
+.quit-confirm__counts { margin-left: var(--space-2); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-caption); }
 .quit-confirm__names {
   display: block;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   overflow-wrap: anywhere;
 }
-.quit-confirm__hint { margin-top: 8px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.quit-confirm__hint { margin-top: var(--space-2); color: var(--text-muted); font-size: var(--fs-caption); line-height: 1.6; }
 </style>

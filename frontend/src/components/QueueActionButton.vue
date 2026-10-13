@@ -1,15 +1,17 @@
 <template>
   <span class="queue-action">
-    <button type="button" class="btn btn--secondary btn--sm" data-test="queue-add" :disabled="disabled || busy" @click.stop="apply">{{ busy ? '处理中…' : label }}</button>
+    <button type="button" :class="['btn', 'btn--secondary', { 'btn--sm': size === 'sm' }]" data-test="queue-add" :disabled="disabled || busy" @click.stop="apply">{{ busy ? '处理中…' : label }}</button>
     <small v-if="error" role="alert">{{ error }}</small>
-    <button v-if="added" type="button" class="btn btn--secondary btn--sm" data-test="queue-show-added" @click.stop="openPlaybackQueue">已加入 · 查看队列</button>
+    <button v-if="added" type="button" :class="['btn', 'btn--secondary', { 'btn--sm': size === 'sm' }]" data-test="queue-show-added" @click.stop="openPlaybackQueue">已加入 · 查看队列</button>
   </span>
 </template>
 <script>
 import { addToPlaybackQueue, openPlaybackQueue } from '../utils/playbackQueue.js';
+// size：按钮尺寸跟着所在的那一行走——抽屉与列表里是紧凑的 sm（默认），整页详情的动作行是常规的 md，
+// 和旁边的「播放」「收藏」一样高。
 export default {
   name: 'QueueActionButton',
-  props: { videoIds: { type: Array, default: () => [] }, collectionId: { type: Number, default: 0 }, startVideoId: { type: Number, default: 0 }, replace: Boolean, startAfter: Boolean, disabled: Boolean, label: { type: String, default: '加入待播队列' } },
+  props: { videoIds: { type: Array, default: () => [] }, collectionId: { type: Number, default: 0 }, startVideoId: { type: Number, default: 0 }, replace: Boolean, startAfter: Boolean, disabled: Boolean, label: { type: String, default: '加入待播队列' }, size: { type: String, default: 'sm', validator: size => size === 'sm' || size === 'md' } },
   emits: ['started'],
   data: () => ({ busy: false, error: '', added: false }),
   methods: {

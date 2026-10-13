@@ -64,8 +64,8 @@ export const VIEWER_NAV_GROUPS = [
 
 export const SETTINGS_NAV_PAGE = { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] };
 
-// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的三项（待处理、清理中心、任务与诊断）
-// 是动作不是页面：点了执行命令面板里同 ID 的既有命令，打开现有弹窗或面板。
+// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的三项（待处理、清理中心、任务中心）
+// 是动作不是页面：点了执行命令面板里同 ID 的既有命令，打开现有弹窗或面板。顶栏与命令面板都叫「任务中心」（用词表 D-UD-14）。
 export const MANAGE_NAV_GROUPS = [
   {
     key: 'manage-library',
@@ -99,7 +99,7 @@ export const MANAGE_NAV_GROUPS = [
     key: 'manage-system',
     label: '系统',
     pages: [
-      { key: 'task-center', label: '任务与诊断', command: 'action:task-center' },
+      { key: 'task-center', label: '任务中心', command: 'action:task-center' },
       SETTINGS_NAV_PAGE
     ]
   }

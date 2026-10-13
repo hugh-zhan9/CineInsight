@@ -25,42 +25,45 @@
       </div>
     </div>
 
-    <DialogShell
-      v-if="confirm"
-      :title="confirm.title"
-      size="sm"
-      class="app-confirm"
-      data-test="app-confirm"
-      @close="resolveConfirm(false)"
-    >
-      <p class="app-confirm__message">{{ confirm.message }}</p>
-      <p v-if="confirm.impact" class="app-confirm__impact" data-test="app-confirm-impact">{{ confirm.impact }}</p>
-      <label v-if="confirm.requiredText" class="app-confirm__typed">
-        <span>输入「{{ confirm.requiredText }}」以确认，此操作无法撤销</span>
-        <input
-          ref="typedInput"
-          v-model="typed"
-          type="text"
-          class="text-input"
-          autocomplete="off"
-          spellcheck="false"
-          data-test="app-confirm-input"
-          @keydown.enter="handleTypedEnter"
-        >
-      </label>
-      <template #footer>
-        <button type="button" class="btn btn--secondary" data-test="app-confirm-cancel" @click="resolveConfirm(false)">
-          {{ confirm.cancelText }}
-        </button>
-        <button
-          type="button"
-          :class="['btn', confirm.danger ? 'btn--danger' : 'btn--primary']"
-          :disabled="!canConfirm"
-          data-test="app-confirm-ok"
-          @click="confirmOk"
-        >{{ confirm.confirmText }}</button>
-      </template>
-    </DialogShell>
+    <!-- 确认框常从别的对话框里发起，那一层可能 teleport 到了 body 末尾（原图、人脸来源、台词卡…）。
+         打开时才 teleport 到 body 末尾，DOM 顺序就是打开顺序，同在 --z-modal 也压得住当时最上面那层。 -->
+    <Teleport v-if="confirm" to="body">
+      <DialogShell
+        :title="confirm.title"
+        size="sm"
+        class="app-confirm"
+        data-test="app-confirm"
+        @close="resolveConfirm(false)"
+      >
+        <p class="app-confirm__message">{{ confirm.message }}</p>
+        <p v-if="confirm.impact" class="app-confirm__impact" data-test="app-confirm-impact">{{ confirm.impact }}</p>
+        <label v-if="confirm.requiredText" class="app-confirm__typed">
+          <span>输入「{{ confirm.requiredText }}」以确认，此操作无法撤销</span>
+          <input
+            ref="typedInput"
+            v-model="typed"
+            type="text"
+            class="text-input"
+            autocomplete="off"
+            spellcheck="false"
+            data-test="app-confirm-input"
+            @keydown.enter="handleTypedEnter"
+          >
+        </label>
+        <template #footer>
+          <button type="button" class="btn btn--secondary" data-test="app-confirm-cancel" @click="resolveConfirm(false)">
+            {{ confirm.cancelText }}
+          </button>
+          <button
+            type="button"
+            :class="['btn', confirm.danger ? 'btn--danger' : 'btn--primary']"
+            :disabled="!canConfirm"
+            data-test="app-confirm-ok"
+            @click="confirmOk"
+          >{{ confirm.confirmText }}</button>
+        </template>
+      </DialogShell>
+    </Teleport>
   </div>
 </template>
 
@@ -110,13 +113,12 @@ export default {
 </script>
 
 <style scoped>
-/* 层级：确认框要盖在图片查看器、人脸预览等 teleport 浮层（最高 1300）之上，提示条要盖在弹窗（1000）
-   和浮层（1200）之上，弹窗里触发的错误也必须能看见。这两个值等各页浮层统一换成 --z-* 刻度后
-   （统一设计第 0 步 C 组）再改成 var(--z-critical) / var(--z-toast)。 */
-.app-feedback :deep(.modal-overlay) { z-index: 1500; }
+/* 层级（tokens.css「层级」）：确认框与其他对话框同在 --z-modal，靠打开时 teleport 排到最上面；提示条在
+   --z-toast，压在所有对话框与确认框之上——删除后「撤销」提示和随后弹出的确认框同时在时，提示也点得到，
+   点它不会落到确认框的遮罩上把确认框关掉。 */
 .app-toasts {
   position: fixed;
-  z-index: 1400;
+  z-index: var(--z-toast);
   right: var(--space-4);
   bottom: var(--space-4);
   display: flex;

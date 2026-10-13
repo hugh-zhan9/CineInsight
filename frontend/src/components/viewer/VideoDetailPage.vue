@@ -75,7 +75,7 @@
             <div class="recap-hero__actions" data-test="detail-actions">
               <button type="button" class="btn btn--primary" data-test="detail-play" :disabled="actionBusy === 'play'" @click="playExternally"><AppIcon name="play" /> {{ actionBusy === 'play' ? '启动中…' : '播放' }}</button>
               <button type="button" class="btn btn--secondary" data-test="detail-inline-play" @click="toggleInlinePlayer">{{ playerOpen ? '收起播放器' : '在应用内播放' }}</button>
-              <QueueActionButton :video-ids="[Number(video.id)]" label="加入待播" />
+              <QueueActionButton :video-ids="[Number(video.id)]" label="加入待播" size="md" />
               <button type="button" :class="['btn', 'btn--secondary', { 'viewer-detail__toggle--on': video.is_favorite }]" :aria-pressed="!!video.is_favorite" data-test="detail-favorite" :disabled="!!actionBusy" @click="toggleState('favorite')">{{ video.is_favorite ? '已收藏' : '收藏' }}</button>
               <button type="button" :class="['btn', 'btn--secondary', { 'viewer-detail__toggle--on': video.is_watched }]" :aria-pressed="!!video.is_watched" data-test="detail-watched" :disabled="!!actionBusy" @click="toggleState('watched')">{{ video.is_watched ? '已看过' : '标记已看' }}</button>
             </div>

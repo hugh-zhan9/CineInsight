@@ -276,6 +276,14 @@ describe('VideoDetailPage actions', () => {
     expect(api.EditPlaybackQueue).toHaveBeenCalledWith(expect.objectContaining({ action: 'append_videos', video_ids: [5], expected_revision: 4 }));
   });
 
+  // 「加入待播」和同一行的「播放」「在应用内播放」「收藏」一样高：常规尺寸，不是抽屉里的紧凑 sm。
+  it('sizes 加入待播 like the rest of the action row', async () => {
+    const wrapper = await mountPage();
+    const row = wrapper.get('[data-test="detail-actions"]');
+    expect(row.get('[data-test="queue-add"]').classes()).not.toContain('btn--sm');
+    expect(row.get('[data-test="detail-play"]').classes()).not.toContain('btn--sm');
+  });
+
   it('opens the quote card at the resume position with the subtitle of that moment', async () => {
     api.GetVideoDetails.mockResolvedValue(detailsFor(5, { video: { watch_position_seconds: 120 } }));
     api.GetSubtitleSegments.mockResolvedValue([{ start_time_ms: 119000, end_time_ms: 121000, text: '你好' }]);

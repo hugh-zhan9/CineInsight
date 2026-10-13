@@ -136,7 +136,8 @@ it('片库详情「找相似画面」：切到场景检索页并带上这一刻'
 
 it('启动失败时仍可打开只读诊断，不挂载片库或任务中心', async () => {
   api.GetStartupError.mockResolvedValue('数据库未初始化');
-  const wrapper = shallowMount(App, { global: { renderStubDefaultSlot: true } });
+  // 诊断框是 DialogShell，「关闭」在 footer 插槽里：渲染真的 DialogShell，它里面的 BaseModal 等仍是桩。
+  const wrapper = shallowMount(App, { global: { renderStubDefaultSlot: true, stubs: { DialogShell: false } } });
   mountedWrappers.push(wrapper);
   await flushPromises();
   expect(wrapper.findComponent({ name: 'SystemHealthPanel' }).exists()).toBe(false);
@@ -515,7 +516,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(wrapper.findComponent({ name: 'BaseMenu' }).exists()).toBe(false);
   });
 
-  it('D-UI-02 管理区：返回观看 · 管理首页 · 片库管理 · 图片管理 · 待处理 · 清理中心 · 下载 · 视频工作台 · 洞察 · 数据维护 · 任务与诊断 · 设置', async () => {
+  it('D-UI-02 管理区：返回观看 · 管理首页 · 片库管理 · 图片管理 · 待处理 · 清理中心 · 下载 · 视频工作台 · 洞察 · 数据维护 · 任务中心 · 设置', async () => {
     api.GetSettings.mockResolvedValue({ auto_scan_on_startup: false, theme: 'system', browser_bridge_enabled: true });
     const wrapper = await mountApp();
     await enterManage(wrapper);
@@ -527,7 +528,7 @@ describe('顶栏信息架构（APP-14）', () => {
       { key: 'manage-library', label: '片库', pages: ['管理首页', '片库管理', '图片管理'] },
       { key: 'manage-review', label: '待处理与清理', pages: ['待处理', '清理中心'] },
       { key: 'manage-tools', label: '工具', pages: ['下载', '视频工作台', '洞察', '数据维护'] },
-      { key: 'manage-system', label: '系统', pages: ['任务与诊断', '设置'] }
+      { key: 'manage-system', label: '系统', pages: ['任务中心', '设置'] }
     ]);
     expect(wrapper.findAll('.header-nav__divider')).toHaveLength(4);
     expect(wrapper.find('[data-test="nav-videos"]').exists()).toBe(false);
@@ -675,8 +676,8 @@ describe('启动扫描与扫描摘要', () => {
 });
 
 describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => {
-  // D-UI-02：任务入口在管理导航里，叫「任务与诊断」，走既有命令 action:task-center。
-  it('APP-03 管理导航「任务与诊断」打开任务中心抽屉，角标显示运行中数量，有失败时标红点', async () => {
+  // D-UI-02：任务入口在管理导航里，叫「任务中心」（用词表 D-UD-14，原「任务与诊断」），走既有命令 action:task-center。
+  it('APP-03 管理导航「任务中心」打开任务中心抽屉，角标显示运行中数量，有失败时标红点', async () => {
     const wrapper = await mountApp();
     await enterManage(wrapper);
     const drawer = wrapper.findComponent({ name: 'TaskCenterDrawer' });
@@ -689,7 +690,7 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.getComponent('[data-test="task-center-badge"]').props('count')).toBe(3);
     expect(wrapper.find('[data-test="task-center-spinner"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="task-center-failed-dot"]').exists()).toBe(true);
-    expect(wrapper.get('[data-test="open-task-center"]').attributes('aria-label')).toBe('任务与诊断，3 个任务运行中，有任务上一轮失败');
+    expect(wrapper.get('[data-test="open-task-center"]').attributes('aria-label')).toBe('任务中心，3 个任务运行中，有任务上一轮失败');
 
     await wrapper.get('[data-test="open-task-center"]').trigger('click');
     await flushPromises();
@@ -1669,5 +1670,40 @@ describe('「视频」上按 ⌘⇧K 与其他页面一致（M-6、D-UD-03）', 
     expect(wrapper.vm.currentPage).toBe('library-manage');
     expect(run).toHaveBeenCalledTimes(1);
     expect(wrapper.findComponent({ name: 'VideoListPage' }).props('cleanupHotkey')).toBe(true);
+  });
+});
+
+describe('观看区用影院表面（D-UD-02）', () => {
+  const cinema = () => document.body.classList.contains('surface-cinema');
+
+  // 打在 <body> 上：顶栏、页面、App 里的浮层，以及 teleport 到 body 的对话框与确认框都在它下面。
+  it('观看区各页（含「视频」「图片」与整页详情）打开影院表面，管理区各页跟随系统主题', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(cinema()).toBe(true);
+
+    const expected = {
+      videos: true, photos: true, people: true, recap: true, 'video-detail': true,
+      'manage-home': false, 'library-manage': false, 'photos-manage': false, settings: false, 'data-care': false
+    };
+    for (const [page, on] of Object.entries(expected)) {
+      await wrapper.setData({ currentPage: page });
+      expect(cinema(), page).toBe(on);
+    }
+
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(cinema()).toBe(true);
+  });
+
+  it('卸载时摘掉；启动失败页不属于哪个区，跟随系统主题', async () => {
+    const wrapper = await mountApp();
+    expect(cinema()).toBe(true);
+    wrapper.unmount();
+    expect(cinema()).toBe(false);
+
+    api.GetStartupError.mockResolvedValue('数据库未初始化');
+    await mountApp();
+    expect(cinema()).toBe(false);
   });
 });

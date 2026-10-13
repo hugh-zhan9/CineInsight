@@ -3,9 +3,7 @@
   "pending": {
     "colors": {},
     "font-scale": {},
-    "z-index": {
-      "components/PersonMediaDeleteDialog.vue": 1
-    },
+    "z-index": {},
     "vars": {},
     "dialogs": {},
     "page-header": {

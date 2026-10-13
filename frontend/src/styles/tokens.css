@@ -61,6 +61,8 @@
   --surface-faint: #fafbfb;
   --media-badge-bg: rgba(0, 0, 0, 0.55);
   --media-badge-fg: #ffffff;
+  /* 缩略图上的观看进度条底槽：压在画面上，两主题同值。 */
+  --media-progress-track: rgba(8, 20, 22, 0.25);
   --thumb-bg: #e9eeee;
   --thumb-fg: #9aa9ac;
   --thumb-fallback-bg: repeating-linear-gradient(135deg, #dfe5e6 0 6px, #e9eeee 6px 12px);
@@ -127,7 +129,10 @@
   --h-unit: 34px;
   --h-compact: 28px;
   --h-touch: 44px;
-  /* 层级：0 内容、10 吸顶、100 菜单、200 抽屉、300 对话框与全屏查看器、400 全局提示、500 关键遮罩。 */
+  /* 层级：0 内容、10 吸顶（含顶栏）、100 菜单、200 抽屉、300 对话框与全屏查看器、400 全局提示、500 关键遮罩。
+     对话框、确认框与全屏查看器同在 300，谁在上面看打开先后，靠 DOM 顺序：对话框挂载时进 DOM，后开的排在后面；
+     宿主挂在别处、却要盖住当时最上面那层的（应用内确认框、退出确认、磁盘不支持废纸篓）打开时才 teleport 到 body 末尾。
+     全局提示与删除进度在 400：确认框开着时也看得见、点得到（点它不会关掉下面的对话框）。500 只给关不掉的「待重启」遮罩。 */
   --z-sticky: 10;
   --z-menu: 100;
   --z-drawer: 200;
@@ -158,7 +163,8 @@
   --panel-bg: #1a2122;
   --panel-solid-bg: #1a2122;
   --panel-subtle-bg: #171d1e;
-  --panel-muted-bg: #171d1e;
+  /* 比面板（#1a2122）和淡底（--surface-faint #171d1e）都亮一档：两者同值时空状态的图标圆、轨道、悬停底色都看不出来。 */
+  --panel-muted-bg: #1f2627;
   --header-bg: #171d1e;
   --input-bg: #12181a;
   --text-primary: #e8eeee;
@@ -251,7 +257,7 @@
   --panel-bg: var(--cinema-panel);
   --panel-solid-bg: var(--cinema-panel);
   --panel-subtle-bg: color-mix(in srgb, var(--cinema-panel) 55%, var(--cinema-bg));
-  --panel-muted-bg: color-mix(in srgb, var(--cinema-panel) 55%, var(--cinema-bg));
+  --panel-muted-bg: var(--cinema-panel-strong);
   --header-bg: var(--cinema-panel);
   --input-bg: color-mix(in srgb, var(--cinema-panel) 55%, var(--cinema-bg));
   --text-primary: var(--cinema-text);

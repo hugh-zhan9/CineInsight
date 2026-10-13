@@ -26,7 +26,7 @@
         <section v-if="actionVideo" class="detail-section drawer-action-bar" data-test="drawer-action-bar" aria-label="常用操作">
           <div class="drawer-action-bar__buttons">
             <button type="button" class="btn btn--primary btn--sm" data-test="drawer-action-play" :disabled="actionBusy === 'play'" @click="playFromDrawer"><AppIcon name="play" :size="16" />{{ actionBusy === 'play' ? '启动中…' : '播放' }}</button>
-            <button type="button" class="btn btn--secondary btn--sm drawer-toggle drawer-toggle--favorite" :aria-pressed="!!actionVideo.is_favorite" data-test="drawer-action-favorite" :disabled="!!actionBusy" @click="toggleVideoState('favorite')"><AppIcon name="heart" :size="16" />收藏</button>
+            <button type="button" class="btn btn--secondary btn--sm drawer-toggle" :aria-pressed="!!actionVideo.is_favorite" data-test="drawer-action-favorite" :disabled="!!actionBusy" @click="toggleVideoState('favorite')"><AppIcon name="heart" :size="16" />{{ actionVideo.is_favorite ? '已收藏' : '收藏' }}</button>
             <button type="button" class="btn btn--secondary btn--sm drawer-toggle" :aria-pressed="!!actionVideo.is_liked" data-test="drawer-action-like" :disabled="!!actionBusy" @click="toggleVideoState('liked')">点赞</button>
             <button type="button" class="btn btn--secondary btn--sm drawer-toggle" :aria-pressed="!!actionVideo.is_watched" data-test="drawer-action-watched" :disabled="!!actionBusy" @click="toggleVideoState('watched')"><AppIcon name="check" :size="16" />已看</button>
           </div>
@@ -1293,11 +1293,11 @@ span.entity-chip { padding-left: 10px; }
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--space-2); }.selection-row .btn-link { justify-self: start; text-align: left; }.selection-row small { color: var(--text-muted); font-size: var(--fs-caption); }
 .technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: var(--fs-caption); }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: var(--fs-caption); }.technical-status--current { color: var(--success-color); }.technical-status--stale,.technical-status--error { color: var(--warning-strong); }
 .proxy-block { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }.proxy-block__status { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); }
-/* 动作条（D-UD-13：开关与评分即存）。收藏 / 点赞 / 已看是开关按钮，按下态看 aria-pressed；星级每颗分左右两半，各是一个按钮。 */
+/* 动作条（D-UD-13：开关与评分即存）。收藏 / 点赞 / 已看是开关按钮，按下态看 aria-pressed，三个同一种强调色
+   （收藏不用红色：红色是危险操作的颜色），收藏后写「已收藏」，与整页详情一致；星级每颗分左右两半，各是一个按钮。 */
 .drawer-action-bar { gap: 10px; }
 .drawer-action-bar__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .drawer-toggle[aria-pressed="true"] { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
-.drawer-toggle--favorite[aria-pressed="true"] { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger-text); }
 .drawer-stars { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
 .drawer-star { position: relative; display: inline-block; width: 20px; height: 20px; flex: none; }
 /* 字形占满 20px 的格子，左半格正好盖住半颗星。 */

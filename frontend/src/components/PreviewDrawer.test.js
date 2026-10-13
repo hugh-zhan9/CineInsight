@@ -1149,6 +1149,20 @@ describe('P-037 抽屉动作条（D-PC47）', () => {
     expect(api.SetVideoFavorite).toHaveBeenCalledWith(1, false);
   });
 
+  // 收藏与点赞、已看同一种按下样式（不再是红色、像危险按钮），收藏后写「已收藏」，与整页详情一致。
+  it('PLAY-14 收藏按钮：没收藏写「收藏」，收藏后写「已收藏」，按下样式与其他开关相同', async () => {
+    const details = videoDetails(1);
+    const wrapper = await mountDrawer(details);
+    const favorite = () => wrapper.get('[data-test="drawer-action-favorite"]');
+    expect(favorite().text()).toBe('收藏');
+    expect(favorite().classes()).toEqual(wrapper.get('[data-test="drawer-action-like"]').classes());
+    expect(favorite().classes()).not.toContain('btn--danger');
+    await wrapper.setProps({ video: { ...details.video, is_favorite: true } });
+    expect(favorite().text()).toBe('已收藏');
+    expect(favorite().attributes('aria-pressed')).toBe('true');
+    expect(favorite().classes()).toEqual(wrapper.get('[data-test="drawer-action-like"]').classes());
+  });
+
   it('PLAY-14 状态写入失败时就地报错', async () => {
     const wrapper = await mountDrawer();
     api.SetVideoWatched.mockRejectedValueOnce(new Error('数据库维护中'));

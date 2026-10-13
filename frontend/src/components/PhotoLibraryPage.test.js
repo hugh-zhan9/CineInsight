@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils';
 
 // 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
 const feedback = vi.hoisted(() => ({
@@ -2179,8 +2179,10 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     await wrapper.findAll('[data-test="photo-card-delete"]')[0].trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="trash-unsupported-names"]').text()).toContain('photo-1.jpg');
-    await wrapper.get('[data-test="trash-unsupported-cancel"]').trigger('click');
+    // 二选一出现时 teleport 到 body 末尾（压在查看器等同层对话框之上，见 tokens.css「层级」），到 body 里找。
+    const body = new DOMWrapper(document.body);
+    expect(body.get('[data-test="trash-unsupported-names"]').text()).toContain('photo-1.jpg');
+    await body.get('[data-test="trash-unsupported-cancel"]').trigger('click');
     await flushPromises();
 
     expect(api.PermanentlyDeleteImages).not.toHaveBeenCalled();

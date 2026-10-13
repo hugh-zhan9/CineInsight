@@ -1,8 +1,10 @@
 <template>
-  <BaseModal
+  <DialogShell
     v-if="open"
-    class="command-palette-modal"
+    title="命令面板"
+    size="md"
     close-on-overlay
+    class="command-palette-modal"
     data-test="command-palette"
     @close="$emit('close')"
   >
@@ -26,7 +28,7 @@
             v-for="entry in group.entries"
             :key="entry.command.id"
             type="button"
-            :class="['command-palette__item', {
+            :class="['btn', 'btn--ghost', 'command-palette__item', {
               'command-palette__item--active': entry.index === activeIndex,
               'command-palette__item--disabled': !entry.enabled
             }]"
@@ -47,12 +49,12 @@
         </p>
       </div>
     </div>
-  </BaseModal>
+  </DialogShell>
 </template>
 
 <script>
 import { SearchLibraryVideoPage } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { COMMAND_GROUPS, filterCommands, isCommandEnabled } from '../utils/commandRegistry.js';
 import { notifyError, notifySuccess } from '../utils/feedback.js';
 
@@ -63,9 +65,11 @@ const VIDEO_QUERY_MIN_LENGTH = 2;
 
 // 命令面板（D-029）。面板自己只做三件事：过滤注册表、按 ≥2 字搜视频、执行选中项。
 // 所有业务动作都由各页面注册进 commandRegistry，面板不认识它们。
+// 外壳是 DialogShell（标题、×、Esc 与焦点归还同所有对话框）；面板里有输入框，点遮罩照旧关闭，所以显式传 close-on-overlay。
+// 面板只在没有别的对话框时打开（appCommands.js），执行前先关，不会和别的对话框叠在一起。
 export default {
   name: 'CommandPalette',
-  components: { BaseModal },
+  components: { DialogShell },
   props: {
     open: { type: Boolean, default: false },
     // 打开视频详情抽屉：走片库页既有的 openPreview，面板不新建打开路径。
@@ -240,15 +244,12 @@ export default {
 </script>
 
 <style scoped>
-:deep(.command-palette-modal) {
-  width: 560px;
-  max-width: 100%;
-  padding: 14px 14px 10px;
-}
+/* 尺寸由 DialogShell 的 md（560）给出；正文左右收窄一点，列表项与输入框对齐。 */
+:deep(.command-palette-modal .ui-dialog__body) { padding: 0 var(--space-4) var(--space-3); }
 .command-palette__legend {
-  margin: 8px 2px 4px;
+  margin: var(--space-2) 2px var(--space-1);
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--fs-caption);
 }
 .command-palette__list {
   max-height: 52vh;
@@ -258,37 +259,40 @@ export default {
 .command-palette__group {
   margin: 10px 2px 4px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
-.command-palette__item {
+/* 列表项是 .btn .btn--ghost：这里改成整行、左对齐、可省略，字重回到常规；高亮项（键盘或鼠标移到的那一项）
+   压过 .btn--ghost 的悬停底色（components.css 在构建产物里排在后面，选择器要多一层）。 */
+.command-palette .command-palette__item {
   width: 100%;
+  height: auto;
   display: block;
   padding: 7px 10px;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-regular);
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
 }
-.command-palette__item--active {
+.command-palette .command-palette__item--active,
+.command-palette .command-palette__item--active:hover:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-text);
 }
-.command-palette__item--disabled {
+/* 灰显项保持原来的样子：浅字、不变淡、不显示禁止光标（.btn:disabled 的半透明在这里会淡得看不清）。 */
+.command-palette .command-palette__item--disabled:disabled {
   color: var(--text-muted);
+  opacity: 1;
   cursor: default;
 }
 .command-palette__empty,
 .command-palette__error {
   padding: 10px 2px 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
 }
 .command-palette__empty { color: var(--text-muted); }
 .command-palette__error { color: var(--danger-color); }
