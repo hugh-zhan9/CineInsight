@@ -59,7 +59,7 @@ describe('下载任务页', () => {
       { id: 'importing-1', filename: '戊.mp4', state: 'importing' }
     ]);
 
-    // 已完成的行现在有「打开所在目录」等动作按钮（D-PC25），这里只数取消按钮。
+    // 已完成的行现在有「在访达中显示」等动作按钮（D-PC25），这里只数取消按钮。
     const buttons = wrapper.findAll('[data-test="download-item"] button').filter(button => button.text() === '取消');
     expect(buttons).toHaveLength(1);
     await buttons[0].trigger('click');
@@ -127,10 +127,10 @@ describe('下载完成后的入库出口与重试（D-PC25 / D-PC21）', () => {
   });
   const action = (wrapper, key) => wrapper.get(`[data-test="download-action-${key}"]`);
 
-  it('MEDIA-09 没入库的任务给出加入扫描目录、重新入库、打开所在目录三个出口', async () => {
+  it('MEDIA-09 没入库的任务给出加入扫描目录、重新入库、在访达中显示三个出口', async () => {
     const wrapper = await mountPage([notInScan()]);
     const labels = wrapper.findAll('[data-test="download-item"] .download-row__actions button').map(button => button.text());
-    expect(labels).toEqual(['把下载目录加入扫描目录', '重新入库', '打开所在目录']);
+    expect(labels).toEqual(['把下载目录加入扫描目录', '重新入库', '在访达中显示']);
 
     api.AddDownloadDirectoryToScan.mockResolvedValue({ code: 'ok', task: notInScan({ import_status: 'imported', import_error: '', video_id: 9 }) });
     await action(wrapper, 'add-directory').trigger('click');
@@ -162,7 +162,7 @@ describe('下载完成后的入库出口与重试（D-PC25 / D-PC21）', () => {
     }
   });
 
-  it('MEDIA-09 重新入库仍失败时不把原因再说一遍，打开所在目录走 RevealDownload', async () => {
+  it('MEDIA-09 重新入库仍失败时不把原因再说一遍，在访达中显示走 RevealDownload', async () => {
     const wrapper = await mountPage([notInScan()]);
     api.ReimportDownload.mockResolvedValue({ code: 'not_in_scan_roots', message: '下载目录不在片库扫描目录里', task: notInScan() });
     await action(wrapper, 'reimport').trigger('click');
@@ -241,7 +241,7 @@ describe('下载查重提示', () => {
     expect(match.get('[data-test="download-dup-dismiss"]').text()).toBe('保留两份');
     const notes = wrapper.findAll('[data-test="download-duplicate-note"]').map(node => node.text());
     expect(notes).toEqual([
-      '这次下载还没进片库，不能从这里删除；可以打开所在目录手动处理。',
+      '这次下载还没进片库，不能从这里删除；可以在访达中显示后手动处理。',
       '查重没有完成：读取失败',
       '片库里还有 12 部视频没算视频指纹，没参与「其他版本」的比对。'
     ]);
@@ -263,7 +263,7 @@ describe('下载查重提示', () => {
     wrapper.unmount();
   });
 
-  it('把这次下载移到废纸篓：先确认，再走删除宿主删这次下载的那条记录；取消时不删', async () => {
+  it('把这次下载移到废纸篓：「删除前确认」开着（默认）先确认，再走删除宿主删这次下载的那条记录；取消时不删', async () => {
     api.DeleteVideosWithResult.mockImplementation(ids => Promise.resolve({ batch_id: 'b1', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) }));
     const wrapper = await mountPage([done({ status: 'found', matches: [exact], unhashed_videos: 0 })]);
     feedback.confirmAction.mockResolvedValueOnce(false);
@@ -272,10 +272,22 @@ describe('下载查重提示', () => {
     expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
     await wrapper.get('[data-test="download-dup-trash"]').trigger('click');
     await flushPromises();
+    expect(feedback.confirmAction.mock.calls.at(-1)[0]).toMatchObject({ level: 'confirm', confirmText: '移到废纸篓' });
     expect(feedback.confirmAction.mock.calls.at(-1)[0].message).toContain('片库里保留《老片》');
     expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([50], true, expect.any(String));
     // 挂载一次、两次点击前各按当前片库重取一次、删完再取一次。
     expect(api.ListDownloadTasks).toHaveBeenCalledTimes(4);
+    wrapper.unmount();
+  });
+
+  it('「删除前确认」关了：不弹确认，直接移到废纸篓（可撤销）', async () => {
+    api.GetSettings.mockResolvedValueOnce({ confirm_before_delete: false });
+    api.DeleteVideosWithResult.mockImplementation(ids => Promise.resolve({ batch_id: 'b1', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) }));
+    const wrapper = await mountPage([done({ status: 'found', matches: [exact], unhashed_videos: 0 })]);
+    await wrapper.get('[data-test="download-dup-trash"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([50], true, expect.any(String));
     wrapper.unmount();
   });
 

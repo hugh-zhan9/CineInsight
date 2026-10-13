@@ -1,8 +1,7 @@
 <template>
   <!-- 规则编辑（D-RA-02）：媒体类型 + 一组同时满足的条件 + 一到多个动作。校验以后端为准，错误按字段落到对应的行。 -->
-  <div class="modal-overlay" data-test="rule-editor" @click.self="$emit('cancel')">
-    <div class="modal rule-editor" role="dialog" aria-modal="true" :aria-label="title">
-      <h2>{{ title }}</h2>
+  <DialogShell :title="title" size="lg" data-test="rule-editor" @close="$emit('cancel')">
+    <div class="rule-editor">
       <div class="rule-editor__head">
         <label class="rule-editor__field">
           <span>名称</span>
@@ -30,7 +29,7 @@
           </select>
           <template v-if="row.type === 'under_directory'">
             <input v-model="row.path" class="text-input rule-editor__grow" placeholder="选择文件夹（含子文件夹）" data-test="rule-condition-path" />
-            <button type="button" class="btn-secondary btn-compact" data-test="rule-condition-pick" @click="pickFolder(row)">选择…</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="rule-condition-pick" @click="pickFolder(row)">选择…</button>
           </template>
           <input v-else-if="row.type === 'name_contains'" v-model="row.text" class="text-input rule-editor__grow" placeholder="文件名里包含的文字，不分大小写" data-test="rule-condition-text" />
           <input v-else-if="row.type === 'name_glob'" v-model="row.pattern" class="text-input rule-editor__grow" placeholder="例如 *.2024.*，只匹配文件名" data-test="rule-condition-pattern" />
@@ -47,10 +46,10 @@
             <input v-model="row.max" type="number" min="0" class="number-input" placeholder="上限" data-test="rule-condition-max" />
             <span>{{ unitOf(row.type) }}</span>
           </span>
-          <button type="button" class="row-btn" :disabled="form.conditions.length === 1" data-test="rule-condition-remove" @click="form.conditions.splice(index, 1)">移除</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="form.conditions.length === 1" data-test="rule-condition-remove" @click="form.conditions.splice(index, 1)">移除</button>
           <p v-if="rowMessage('conditions', index)" class="rule-editor__error" data-test="rule-condition-error">{{ rowMessage('conditions', index) }}</p>
         </div>
-        <button type="button" class="btn-secondary btn-compact" data-test="rule-condition-add" @click="form.conditions.push(blankCondition())">添加条件</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="rule-condition-add" @click="form.conditions.push(blankCondition())">添加条件</button>
         <p v-if="fieldMessage('conditions')" class="rule-editor__error">{{ fieldMessage('conditions') }}</p>
       </section>
 
@@ -65,29 +64,31 @@
             <option value="" disabled>{{ row.type === 'add_to_collection' ? '选择作品集' : '选择标签' }}</option>
             <option v-for="option in targetOptions(row.type)" :key="option.id" :value="option.id">{{ option.label }}</option>
           </select>
-          <button type="button" class="row-btn" :disabled="form.actions.length === 1" data-test="rule-action-remove" @click="form.actions.splice(index, 1)">移除</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="form.actions.length === 1" data-test="rule-action-remove" @click="form.actions.splice(index, 1)">移除</button>
           <p v-if="rowMessage('actions', index)" class="rule-editor__error" data-test="rule-action-error">{{ rowMessage('actions', index) }}</p>
         </div>
-        <button type="button" class="btn-secondary btn-compact" data-test="rule-action-add" @click="form.actions.push(blankAction())">添加动作</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="rule-action-add" @click="form.actions.push(blankAction())">添加动作</button>
         <p v-if="fieldMessage('actions')" class="rule-editor__error">{{ fieldMessage('actions') }}</p>
       </section>
 
       <p v-if="generalMessage" class="rule-editor__error" role="alert" data-test="rule-error">{{ generalMessage }}</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" data-test="rule-cancel" @click="$emit('cancel')">取消</button>
-        <button type="button" class="btn-primary" :disabled="saving" data-test="rule-save" @click="$emit('save', toInput())">{{ saving ? '保存中…' : '保存' }}</button>
-      </div>
     </div>
-  </div>
+    <template #footer>
+      <button type="button" class="btn btn--secondary" data-test="rule-cancel" @click="$emit('cancel')">取消</button>
+      <button type="button" class="btn btn--primary" :disabled="saving" data-test="rule-save" @click="$emit('save', toInput())">{{ saving ? '保存中…' : '保存' }}</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { SelectDirectory } from '../../../wailsjs/go/main/App';
 import { blankAction, blankCondition, CONDITION_TYPES, conditionTypesFor, fieldRow, formToInput, parseRuleError, ruleToForm } from '../../utils/automationRules.js';
 import { notifyError } from '../../utils/feedback.js';
+import DialogShell from '../ui/DialogShell.vue';
 
 export default {
   name: 'AutomationRuleEditor',
+  components: { DialogShell },
   props: {
     // 要编辑的规则（列表里的一项）；null 为新建。
     rule: { type: Object, default: null },
@@ -162,18 +163,19 @@ export default {
 </script>
 
 <style scoped>
-.rule-editor { max-width: 760px; max-height: 86vh; overflow-y: auto; }
-.rule-editor__head { display: grid; grid-template-columns: 1fr 140px; gap: 10px 14px; align-items: end; }
-.rule-editor__field { display: grid; gap: 6px; font-size: 13px; }
+.rule-editor { display: grid; }
+.rule-editor__head { display: grid; grid-template-columns: 1fr 140px; gap: var(--space-3) 14px; align-items: end; }
+.rule-editor__field { display: grid; gap: 6px; font-size: var(--fs-secondary); }
 .rule-editor__field span { color: var(--text-secondary); }
-.rule-editor__enabled { grid-column: 1 / -1; font-size: 13px; }
-.rule-editor__section { display: grid; gap: 8px; margin-top: 18px; }
-.rule-editor__section h3 { font-size: 14px; font-weight: 600; }
-.rule-editor__section h3 small { margin-left: 8px; color: var(--text-muted); font-weight: 400; font-size: 12px; }
-.rule-editor__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.rule-editor__enabled { grid-column: 1 / -1; font-size: var(--fs-secondary); }
+.rule-editor__section { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
+.rule-editor__section > .btn { justify-self: start; }
+.rule-editor__section h3 { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.rule-editor__section h3 small { margin-left: var(--space-2); color: var(--text-muted); font-weight: var(--fw-regular); font-size: var(--fs-caption); }
+.rule-editor__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .rule-editor__type { flex: 0 0 130px; }
 .rule-editor__grow { flex: 1 1 220px; min-width: 0; }
-.rule-editor__range { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 220px; color: var(--text-secondary); font-size: 13px; }
+.rule-editor__range { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 220px; color: var(--text-secondary); font-size: var(--fs-secondary); }
 .rule-editor__range .number-input { width: 110px; }
-.rule-editor__error { flex-basis: 100%; color: var(--danger-text); font-size: 12px; }
+.rule-editor__error { flex-basis: 100%; color: var(--danger-text); font-size: var(--fs-caption); }
 </style>

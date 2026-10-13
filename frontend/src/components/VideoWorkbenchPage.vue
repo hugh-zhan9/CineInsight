@@ -1,9 +1,6 @@
 <template>
   <section class="page-content workbench-page" data-test="workbench-page">
-    <div class="workbench-heading">
-      <h2>视频工作台</h2>
-      <p>顺序合并、批量去片头与高清替换。成品另存入库，原片保持不变；确认成品无误后才提供原片清理入口。</p>
-    </div>
+    <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头与高清替换。成品另存入库，原片保持不变；确认成品无误后才提供原片清理入口。" />
     <div class="workbench-layout">
       <EditProjectList
         :projects="projects"
@@ -17,8 +14,8 @@
         @delete="deleteProject"
       />
       <div class="workbench-main">
-        <p v-if="!selectedId" class="workbench-placeholder" data-test="workbench-placeholder">从左侧选择一个编辑项目。</p>
-        <p v-else-if="!project" class="workbench-placeholder">正在读取项目…</p>
+        <EmptyState v-if="!selectedId" icon="videos" title="从左侧选择一个编辑项目" message="在片库里多选视频后点「合并为新视频」或「批量去片头」，或在行菜单选「高清替换…」，新项目会出现在左侧。" data-test="workbench-placeholder" />
+        <div v-else-if="!project" class="workbench-loading" role="status" aria-label="正在读取项目"><SkeletonBlock :lines="4" /></div>
         <template v-else>
           <header class="workbench-project" data-test="workbench-project">
             <div>
@@ -27,8 +24,8 @@
             </div>
             <span class="edit-list__spacer"></span>
             <span v-if="saving" class="help-text" data-test="workbench-saving">正在保存…</span>
-            <button v-if="cancellable" type="button" class="btn-secondary btn-compact" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
-            <button v-if="duplicable" type="button" class="btn-secondary btn-compact" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
+            <button v-if="cancellable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
+            <button v-if="duplicable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
           </header>
           <p v-if="project.error_message && project.status !== 'completed'" class="edit-error" data-test="workbench-project-error">{{ project.error_message }}</p>
           <p v-if="!editable && project.status !== 'analyzing'" class="help-text" data-test="workbench-readonly">项目已排队或已导出，配方只读。</p>
@@ -92,6 +89,9 @@ import EditResults from './video-workbench/EditResults.vue';
 import HDReplaceEditor from './video-workbench/HDReplaceEditor.vue';
 import MergeEditor from './video-workbench/MergeEditor.vue';
 import TrimIntroEditor from './video-workbench/TrimIntroEditor.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 import { confirmAction, notify, notifyError, notifySuccess } from '../utils/feedback.js';
 import {
@@ -110,7 +110,7 @@ const LIST_REFRESH_DELAY_MS = 800;
 // 进度与状态跟 video-edit-state 事件走：同状态的进度事件就地更新，状态变化时重读。
 export default {
   name: 'VideoWorkbenchPage',
-  components: { EditExportPanel, EditProjectList, EditResults, HDReplaceEditor, MergeEditor, TrimIntroEditor },
+  components: { EditExportPanel, EditProjectList, EditResults, EmptyState, HDReplaceEditor, MergeEditor, PageHeader, SkeletonBlock, TrimIntroEditor },
   mixins: [runtimeEventsMixin],
   props: {
     pageActive: { type: Boolean, default: true },
@@ -347,7 +347,7 @@ export default {
       }
       if (projectID !== this.selectedId) return;
       if (failure) {
-        if (isEditConflict(failure)) notify('项目已在别处被修改（例如自动识别刚写回结果），已重新载入；刚才的修改没有保存。');
+        if (isEditConflict(failure)) notify('项目已在别处被修改（例如自动识别刚写回结果），已刷新；刚才的修改没有保存。');
         else notifyError(`保存失败：${editErrorText(failure)}`);
         await this.loadProject(projectID);
       } else if (this.project) {
@@ -519,17 +519,14 @@ export default {
 
 <style scoped>
 .workbench-page { display: grid; gap: 14px; align-content: start; padding: 14px 18px 32px; }
-/* 标题、项目列表、项目头与空态都放进与人物/作品集页同款的面板，避免内容直接漂在灰底上。 */
-.workbench-heading { padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.workbench-heading h2 { margin: 0 0 3px; font-size: 18px; }
-.workbench-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.workbench-page > :deep(.ui-page-header) { margin-bottom: 0; }
 .workbench-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
-.workbench-main { min-width: 0; display: grid; gap: 12px; }
-.workbench-placeholder { margin: 0; padding: 56px 24px; border: 1px dashed var(--border-color); border-radius: var(--radius-md); background: var(--panel-bg); color: var(--text-muted); font-size: 13px; text-align: center; }
-.workbench-project { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.workbench-project h3 { margin: 0 0 2px; font-size: 16px; }
+.workbench-main { min-width: 0; display: grid; gap: var(--space-3); }
+.workbench-loading { padding: var(--space-5); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
+.workbench-project { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
+.workbench-project h3 { margin: 0 0 2px; font-size: var(--fs-section); }
 @media (max-width: 760px) {
-  .workbench-page { padding: 12px; }
+  .workbench-page { padding: var(--space-3); }
   .workbench-layout { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

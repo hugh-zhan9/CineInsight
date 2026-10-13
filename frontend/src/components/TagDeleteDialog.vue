@@ -1,8 +1,9 @@
 <template>
-  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks style="max-width: 400px; text-align: center;" @close="$emit('close')">
-      <div style="font-size: 40px; margin-bottom: 16px;">⚠️</div>
-      <h2 style="margin-bottom: 12px;">确认删除标签</h2>
-      <p style="color: var(--text-primary); margin-bottom: 8px;">确定要永久删除标签 <strong style="color: var(--accent-color);">"{{ tag?.name }}"</strong> 吗？</p>
+  <!-- 删除标签（D-UD-07 第 2 级「要确认」）：写清受影响的视频与图片数，回收站里的另列。 -->
+  <DialogShell v-if="visible" title="删除标签" size="sm" stop-modal-clicks data-test="tag-delete-dialog" @close="$emit('close')">
+    <div class="tag-delete">
+      <AppIcon class="tag-delete__icon" name="warning" :size="24" />
+      <p class="tag-delete__lead">确定要删除标签 <strong class="tag-delete__name">"{{ tag?.name }}"</strong> 吗？</p>
       <!-- D-PC37：删除前把影响范围说清楚（META-14），回收站里的媒体同样会失去这个标签。 -->
       <p class="tag-delete-impact" data-test="tag-delete-impact">
         <template v-if="usageLoading">正在统计受影响的视频和图片…</template>
@@ -10,21 +11,22 @@
         <template v-else-if="usage">{{ impactText }}</template>
       </p>
       <p class="help-text">此操作不可撤销，该标签将从所有视频和图片中移除，相关待审候选会失效。</p>
-
-      <div class="modal-actions" style="justify-content: center; margin-top: 32px;">
-        <button @click="$emit('close')" class="btn-secondary" style="min-width: 100px;">取消</button>
-        <button @click="$emit('confirm-delete', tag)" class="btn-danger" style="min-width: 100px;">确认删除</button>
-      </div>
-  </BaseModal>
+    </div>
+    <template #footer>
+      <button type="button" class="btn btn--secondary" data-test="tag-delete-cancel" @click="$emit('close')">取消</button>
+      <button type="button" class="btn btn--danger" data-test="tag-delete-confirm" @click="$emit('confirm-delete', tag)">删除标签</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { GetTagUsageCounts } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
 
 export default {
   name: 'TagDeleteDialog',
-  components: { BaseModal },
+  components: { AppIcon, DialogShell },
   props: {
     visible: { type: Boolean, default: false },
     tag: { type: Object, default: null }
@@ -74,10 +76,14 @@ export default {
 </script>
 
 <style scoped>
+.tag-delete { display: grid; justify-items: center; gap: var(--space-2); text-align: center; }
+.tag-delete__icon { color: var(--warning-text); }
+.tag-delete__lead { margin: 0; color: var(--text-primary); }
+.tag-delete__name { color: var(--accent-text); }
 .tag-delete-impact {
   min-height: 20px;
-  margin: 0 0 8px;
+  margin: 0;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 </style>

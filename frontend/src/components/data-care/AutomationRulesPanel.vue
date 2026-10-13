@@ -1,5 +1,5 @@
 <template>
-  <!-- 本地规则（D-RA-01..05）：新入库的条目按规则自动加标签、加入作品集；也可以先预览再对现有内容运行。 -->
+  <!-- 本地规则（D-RA-01..05）：新入库的条目按规则自动加标签、加入作品集；也可以先试运行再对现有内容运行。 -->
   <section class="data-care-panel rules-panel" data-test="data-care-panel-rules">
     <header class="rules-head">
       <div>
@@ -7,18 +7,22 @@
         <p class="rules-muted">新入库的条目自动套用启用的规则：只加标签、加入作品集，只加不撤，你手动去掉的不会再加回来；规则不移动、不改名、不删除文件。新建或修改规则不会自动处理已有内容，要点「对现有内容运行」。</p>
       </div>
       <div class="rules-head__actions">
-        <button type="button" class="btn-secondary" :disabled="running || !enabledIDs.length" data-test="rules-run-all" @click="openRunAll">对现有内容运行…</button>
-        <button type="button" class="btn-primary" data-test="rules-new" @click="openEditor(null)">新建规则</button>
+        <button type="button" class="btn btn--secondary" :disabled="running || !enabledIDs.length" data-test="rules-run-all" @click="openRunAll">对现有内容运行…</button>
+        <button type="button" class="btn btn--primary" data-test="rules-new" @click="openEditor(null)">新建规则</button>
       </div>
     </header>
 
     <div v-if="runText" :class="['rules-run', { 'rules-run--active': running }]" data-test="rules-run-status">
       <span>{{ runText }}</span>
-      <button v-if="running" type="button" class="btn-secondary btn-compact" data-test="rules-run-cancel" @click="cancelRun">取消</button>
+      <button v-if="running" type="button" class="btn btn--secondary btn--sm" data-test="rules-run-cancel" @click="cancelRun">取消</button>
     </div>
     <p v-if="error" class="rules-alert" role="alert" data-test="rules-error">{{ error }}</p>
-    <p v-if="loading && !rules.length" class="empty-hint" data-test="rules-loading">正在读取规则…</p>
-    <p v-else-if="!rules.length" class="rules-empty" data-test="rules-empty">还没有规则。比如「下载目录里的视频都打上『待整理』」，点「新建规则」开始。</p>
+    <div v-if="loading && !rules.length" role="status" aria-label="正在读取规则" data-test="rules-loading"><SkeletonBlock :lines="3" /></div>
+    <EmptyState v-else-if="!rules.length" title="还没有规则" message="比如「下载目录里的视频都打上『待整理』」，点「新建规则」开始。" data-test="rules-empty">
+      <template #actions>
+        <button type="button" class="btn btn--primary btn--sm" data-test="rules-empty-new" @click="openEditor(null)">新建规则</button>
+      </template>
+    </EmptyState>
 
     <ul v-else class="rules-list">
       <li v-for="(rule, index) in rules" :key="rule.id" :class="['rules-row', { 'rules-row--off': !rule.enabled }]" data-test="rules-row">
@@ -37,11 +41,11 @@
           <small v-if="rule.last_run_at" class="rules-muted">上次对现有内容运行：{{ formatTime(rule.last_run_at) }}</small>
         </div>
         <div class="rules-row__actions">
-          <button type="button" class="row-btn" :disabled="busy || index === 0" title="上移" data-test="rules-up" @click="move(index, -1)">上移</button>
-          <button type="button" class="row-btn" :disabled="busy || index === rules.length - 1" title="下移" data-test="rules-down" @click="move(index, 1)">下移</button>
-          <button type="button" class="row-btn" :disabled="!rule.actions.length" data-test="rules-preview" @click="openPreview(rule)">预览</button>
-          <button type="button" class="row-btn" data-test="rules-edit" @click="openEditor(rule)">编辑</button>
-          <button type="button" class="row-btn" :disabled="busy" data-test="rules-delete" @click="remove(rule)">删除</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || index === 0" title="上移" data-test="rules-up" @click="move(index, -1)">上移</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || index === rules.length - 1" title="下移" data-test="rules-down" @click="move(index, 1)">下移</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="!rule.actions.length" title="先算会处理多少条，不改任何内容" data-test="rules-preview" @click="openPreview(rule)">试运行</button>
+          <button type="button" class="btn btn--secondary btn--sm" data-test="rules-edit" @click="openEditor(rule)">编辑</button>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" data-test="rules-delete" @click="remove(rule)">删除</button>
         </div>
       </li>
     </ul>
@@ -57,33 +61,32 @@
       @cancel="editor = null"
     />
 
-    <div v-if="previewState" class="modal-overlay" data-test="rules-preview-dialog" @click.self="previewState = null">
-      <div class="modal rules-preview" role="dialog" aria-modal="true" aria-label="规则预览">
-        <h2>预览：{{ previewState.rule.name }}</h2>
-        <p v-if="previewState.loading" class="rules-muted">正在计算…</p>
+    <!-- 试运行（D-RA-01「先试运行再执行」）：只算会处理多少条、列出前几条，不改任何内容。 -->
+    <DialogShell v-if="previewState" :title="`试运行：${previewState.rule.name}`" size="md" data-test="rules-preview-dialog" @close="previewState = null">
+      <div class="rules-preview">
+        <p v-if="previewState.loading" class="rules-muted" role="status">正在计算…</p>
         <p v-else-if="previewState.error" class="rules-alert" role="alert">{{ previewState.error }}</p>
         <template v-else>
           <p data-test="rules-preview-count">现有内容里有 <strong>{{ previewState.result.count }}</strong> 条会被处理（已经处理过的不算）。</p>
           <ul v-if="previewState.result.samples.length" class="rules-samples">
             <li v-for="sample in previewState.result.samples" :key="sample.id" data-test="rules-preview-sample">
-              <button v-if="sample.media_kind === 'video'" type="button" class="rules-sample__name" :title="sample.name" @click="$emit('open-video-id', sample.id)">{{ sample.name }}</button>
+              <button v-if="sample.media_kind === 'video'" type="button" class="btn-link rules-sample__name" :title="sample.name" @click="$emit('open-video-id', sample.id)">{{ sample.name }}</button>
               <span v-else class="rules-sample__name">{{ sample.name }}</span>
               <small class="rules-muted" :title="sample.directory">{{ sample.directory }}</small>
             </li>
           </ul>
           <p v-if="previewState.result.count > previewState.result.samples.length" class="rules-muted">只列出前 {{ previewState.result.samples.length }} 条。</p>
         </template>
-        <div class="modal-actions">
-          <button type="button" class="btn-secondary" data-test="rules-preview-close" @click="previewState = null">关闭</button>
-          <button type="button" class="btn-primary" :disabled="previewState.loading || !previewState.result || !previewState.result.count || running" data-test="rules-preview-run" @click="runFromPreview">执行</button>
-        </div>
       </div>
-    </div>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="rules-preview-close" @click="previewState = null">关闭</button>
+        <button type="button" class="btn btn--primary" :disabled="previewState.loading || !previewState.result || !previewState.result.count || running" data-test="rules-preview-run" @click="runFromPreview">执行</button>
+      </template>
+    </DialogShell>
 
-    <!-- D-RA-01「先预览再执行」：逐条规则先算会处理多少条，确认后才运行。 -->
-    <div v-if="runAll" class="modal-overlay" data-test="rules-run-all-dialog" @click.self="runAll = null">
-      <div class="modal rules-preview" role="dialog" aria-modal="true" aria-label="对现有内容运行">
-        <h2>对现有内容运行</h2>
+    <!-- D-RA-01「先试运行再执行」：逐条规则先算会处理多少条，确认后才运行。 -->
+    <DialogShell v-if="runAll" title="对现有内容运行" size="md" data-test="rules-run-all-dialog" @close="runAll = null">
+      <div class="rules-preview">
         <p class="rules-muted">只处理还没被这些规则处理过的条目；已完成的部分在取消后保留。</p>
         <ul class="rules-samples">
           <li v-for="item in runAll.items" :key="item.rule.id" class="rules-run-all__row" data-test="rules-run-all-item">
@@ -94,12 +97,12 @@
           </li>
         </ul>
         <p v-if="!runAllLoading" data-test="rules-run-all-total">合计 <strong>{{ runAllTotal }}</strong> 条<span v-if="runAll.items.length > 1" class="rules-muted">（同一条目符合几条规则时分别计数）</span></p>
-        <div class="modal-actions">
-          <button type="button" class="btn-secondary" data-test="rules-run-all-cancel" @click="runAll = null">取消</button>
-          <button type="button" class="btn-primary" :disabled="runAllLoading || !runAllTotal || running" data-test="rules-run-all-confirm" @click="confirmRunAll">执行</button>
-        </div>
       </div>
-    </div>
+      <template #footer>
+        <button type="button" class="btn btn--secondary" data-test="rules-run-all-cancel" @click="runAll = null">取消</button>
+        <button type="button" class="btn btn--primary" :disabled="runAllLoading || !runAllTotal || running" data-test="rules-run-all-confirm" @click="confirmRunAll">执行</button>
+      </template>
+    </DialogShell>
   </section>
 </template>
 
@@ -109,6 +112,9 @@ import {
   PreviewAutomationRule, ReorderAutomationRules, RunAutomationRules, SaveAutomationRule, SetAutomationRuleEnabled
 } from '../../../wailsjs/go/main/App';
 import AutomationRuleEditor from './AutomationRuleEditor.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import EmptyState from '../ui/EmptyState.vue';
+import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import { DISABLED_REASON_LABELS, MEDIA_KIND_LABELS, parseRuleError, ruleSummary } from '../../utils/automationRules.js';
 import { confirmAction, notifySuccess } from '../../utils/feedback.js';
 
@@ -116,7 +122,7 @@ export const AUTOMATION_RULES_RUN_EVENT = 'automation-rules-run';
 
 export default {
   name: 'AutomationRulesPanel',
-  components: { AutomationRuleEditor },
+  components: { AutomationRuleEditor, DialogShell, EmptyState, SkeletonBlock },
   props: { directories: { type: Array, default: () => [] } },
   emits: ['open-video-id', 'run-command', 'videos-changed', 'open-library-missing', 'navigate'],
   data() {
@@ -299,7 +305,7 @@ export default {
         state.loading = false;
       }
     },
-    // openRunAll 先逐条预览启用的规则（D-RA-01 先预览再执行），确认后只跑有条目要处理的规则。
+    // openRunAll 先逐条试运行启用的规则（D-RA-01 先试运行再执行），确认后只跑有条目要处理的规则。
     async openRunAll() {
       const rules = this.rules.filter(rule => this.enabledIDs.includes(rule.id));
       this.runAll = { items: rules.map(rule => ({ rule, loading: true, count: 0, error: '' })) };
@@ -347,31 +353,30 @@ export default {
 
 <style scoped>
 .rules-panel { display: grid; gap: 14px; }
-.rules-head { display: flex; align-items: flex-start; gap: 16px; }
+.rules-head { display: flex; align-items: flex-start; gap: var(--space-4); }
 .rules-head > div:first-child { flex: 1 1 auto; }
-.rules-head h3 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
-.rules-head__actions { display: flex; gap: 8px; flex-shrink: 0; }
-.rules-muted { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
-.rules-alert { color: var(--danger-text); font-size: 13px; }
-.rules-empty { padding: 28px 16px; border: 1px dashed var(--hairline); border-radius: var(--radius-lg); color: var(--text-secondary); text-align: center; }
-.rules-run { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); font-size: 13px; }
+.rules-head h3 { font-size: var(--fs-section); font-weight: var(--fw-bold); margin-bottom: var(--space-1); }
+.rules-head__actions { display: flex; gap: var(--space-2); flex-shrink: 0; }
+.rules-muted { color: var(--text-secondary); font-size: var(--fs-caption); line-height: 1.5; }
+.rules-alert { color: var(--danger-text); font-size: var(--fs-secondary); }
+.rules-run { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); font-size: var(--fs-secondary); }
 .rules-run--active { border-color: var(--accent-color); }
 .rules-run span { flex: 1 1 auto; }
-.rules-list { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
-.rules-row { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.rules-list { display: grid; gap: var(--space-2); list-style: none; margin: 0; padding: 0; }
+.rules-row { display: flex; align-items: flex-start; gap: 14px; padding: var(--space-3) 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
 .rules-row--off .rules-row__main { opacity: 0.7; }
 .rules-row__toggle { flex-shrink: 0; }
 .rules-row__main { flex: 1 1 auto; display: grid; gap: 3px; min-width: 0; }
-.rules-row__title { display: flex; align-items: center; gap: 8px; }
-.rules-row__line { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.rules-row__actions { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; justify-content: flex-end; max-width: 260px; }
-.rules-chip { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--text-secondary); font-size: 11px; }
-.rules-warning { color: var(--danger-text); font-size: 12px; }
-.rules-preview { max-width: 640px; max-height: 86vh; overflow-y: auto; }
-.rules-samples { display: grid; gap: 6px; max-height: 50vh; overflow-y: auto; margin: 12px 0 0; padding: 0; list-style: none; }
+.rules-row__title { display: flex; align-items: center; gap: var(--space-2); }
+.rules-row__line { color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.rules-row__actions { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; justify-content: flex-end; max-width: 280px; }
+.rules-chip { padding: 1px var(--space-2); border-radius: var(--radius-pill); border: 1px solid var(--hairline); color: var(--text-secondary); font-size: var(--fs-caption); }
+.rules-warning { color: var(--danger-text); font-size: var(--fs-caption); }
+.rules-preview { display: grid; gap: var(--space-2); }
+.rules-samples { display: grid; gap: 6px; max-height: 50vh; overflow-y: auto; margin: var(--space-2) 0 0; padding: 0; list-style: none; }
 .rules-samples li { display: grid; gap: 2px; min-width: 0; }
-.rules-sample__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 13px; color: var(--text-primary); background: none; border: 0; padding: 0; }
-button.rules-sample__name { cursor: pointer; color: var(--accent-color); }
+.rules-sample__name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: var(--fs-secondary); color: var(--text-primary); }
+.btn-link.rules-sample__name { color: var(--accent-text); }
 .rules-samples small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rules-run-all__row { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; }
+.rules-run-all__row { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-3); }
 </style>

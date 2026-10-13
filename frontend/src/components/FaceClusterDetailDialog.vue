@@ -1,14 +1,10 @@
 <template>
   <Teleport to="body">
-    <BaseModal v-if="!videoSource && !imageSource" class="face-source-dialog" aria-label="人脸来源详情" @close="$emit('close')">
-      <div class="face-source-dialog__header">
-        <h3>{{ cluster.person_name || '待命名人脸' }} · 来源详情</h3>
-        <button type="button" class="btn-secondary btn-compact" @click="$emit('close')">关闭</button>
-      </div>
+    <DialogShell v-if="!videoSource && !imageSource" :title="`${cluster.person_name || '待命名人脸'} · 来源详情`" size="xl" class="face-source-dialog" @close="$emit('close')">
       <p>查看这张脸出现的原图或视频，确认身份后再命名。视频会跳到人脸出现的位置。</p>
       <p v-if="canRemoveSources">识别有误的来源可逐条移除，原图片和视频会保留<template v-if="cluster.status === 'named'">；已经建立的人物关系不受影响，需要时在「解除关联」里处理</template>。</p>
-      <p v-if="error" role="alert">{{ error }}</p>
-      <p v-if="removeError" role="alert">{{ removeError }}</p>
+      <p v-if="error" class="face-source-dialog__error" role="alert">{{ error }}</p>
+      <p v-if="removeError" class="face-source-dialog__error" role="alert">{{ removeError }}</p>
       <div class="face-source-dialog__list">
         <article v-for="source in sources" :key="source.observation_id" class="face-source-dialog__row">
           <img v-if="!cropFailed[source.observation_id]" :src="`/preview/face-crop/${source.observation_id}`" alt="此处识别到的人脸" loading="lazy" @error="cropFailed[source.observation_id] = true" />
@@ -18,19 +14,19 @@
             <p>{{ source.media_kind === 'video' ? '视频' : '图片' }} · {{ formatBytes(source.size) }}<template v-if="source.media_kind === 'video' && source.frame_ms >= 0"> · {{ timestamp(source.frame_ms) }}</template></p>
             <p class="face-source-dialog__path">{{ source.path }}</p>
             <span v-if="source.unavailable">{{ source.unavailable }}</span>
-            <button v-else type="button" class="btn-secondary btn-compact" :data-test="`face-source-open-${source.observation_id}`" @click="openSource(source)">{{ source.media_kind === 'video' ? '查看视频片段' : '查看原图' }}</button>
-            <button v-if="canRemoveSources" type="button" class="btn-secondary btn-compact face-source-dialog__remove" :disabled="loading || removingID !== null" :data-test="`face-source-remove-${source.observation_id}`" @click="removeSource(source)">{{ removingID === source.observation_id ? '移除中…' : '移除' }}</button>
+            <button v-else type="button" class="btn btn--secondary btn--sm" :data-test="`face-source-open-${source.observation_id}`" @click="openSource(source)">{{ source.media_kind === 'video' ? '查看视频片段' : '查看原图' }}</button>
+            <button v-if="canRemoveSources" type="button" class="btn btn--danger btn--sm face-source-dialog__remove" :disabled="loading || removingID !== null" :data-test="`face-source-remove-${source.observation_id}`" @click="removeSource(source)">{{ removingID === source.observation_id ? '移除中…' : '移除' }}</button>
           </div>
         </article>
         <p v-if="!loading && !sources.length && !error">暂无可查看的图片或视频来源。</p>
       </div>
-      <button v-if="nextID || error" type="button" class="btn-secondary" :disabled="loading || removingID !== null" data-test="face-source-more" @click="loadMore">{{ error ? '重试' : '加载更多来源' }}</button>
+      <button v-if="nextID || error" type="button" class="btn btn--secondary" :disabled="loading || removingID !== null" data-test="face-source-more" @click="loadMore">{{ error ? '重试' : '加载更多来源' }}</button>
       <p v-if="loading" role="status">正在加载来源…</p>
-      <div v-if="cluster.status === 'unnamed'" class="face-source-dialog__actions">
-        <button type="button" class="btn-primary" :disabled="removingID !== null" @click="$emit('name', cluster)">命名为新人物</button>
-        <button type="button" class="btn-secondary" :disabled="removingID !== null" @click="$emit('link', cluster)">关联到现有人物</button>
-      </div>
-    </BaseModal>
+      <template v-if="cluster.status === 'unnamed'" #footer>
+        <button type="button" class="btn btn--secondary" :disabled="removingID !== null" @click="$emit('link', cluster)">关联到现有人物</button>
+        <button type="button" class="btn btn--primary" :disabled="removingID !== null" @click="$emit('name', cluster)">命名为新人物</button>
+      </template>
+    </DialogShell>
     <div v-if="videoSource" class="face-source-video">
       <PreviewDrawer :initial-entity="{ type: 'video', id: videoSource.media_id }" :start-time-ms="videoSource.frame_ms >= 0 ? videoSource.frame_ms : null" @close="videoSource = null" @preview-externally="previewExternally" />
       <p v-if="videoError" class="face-source-video__error" role="alert">{{ videoError }}</p>
@@ -39,7 +35,7 @@
   <ImageSourceDialog v-if="imageSource" :image="imageSource" @close="imageSource = null" />
 </template>
 <script>
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import { GetFaceClusterObservations, RemoveFaceClusterObservation, PreviewExternally } from '../../wailsjs/go/main/App';
@@ -57,7 +53,7 @@ function removeErrorText(err) {
   return code ? REMOVE_ERROR_TEXT[code] : `移除来源失败：${raw}`;
 }
 export default {
-  name: 'FaceClusterDetailDialog', components: { BaseModal, PreviewDrawer, ImageSourceDialog },
+  name: 'FaceClusterDetailDialog', components: { DialogShell, PreviewDrawer, ImageSourceDialog },
   props: { cluster: { type: Object, required: true } }, emits: ['close', 'name', 'link', 'removed'],
   data: () => ({ sources: [], nextID: 0, loading: false, error: '', removeError: '', removingID: null, videoError: '', cropFailed: {}, videoSource: null, imageSource: null }),
   // D-PC30：未命名与已命名簇都能逐条移除来源（已命名簇移除不动人物关系）；已忽略的要先恢复。
@@ -114,15 +110,16 @@ export default {
 };
 </script>
 <style scoped>
-:deep(.face-source-dialog) { width: min(900px, 92vw); max-width: 92vw; max-height: 90vh; display: flex; flex-direction: column; gap: 12px; }
-.face-source-dialog__header,.face-source-dialog__actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.face-source-dialog__header h3 { margin: 0; }
+:deep(.face-source-dialog) { max-height: 90vh; }
+.face-source-dialog__error { color: var(--danger-text); }
 .face-source-dialog__list { overflow-y: auto; min-height: 0; }
-.face-source-dialog__row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--hairline); }
-.face-source-dialog__row img,.face-source-dialog__fallback { width: 88px; height: 88px; object-fit: contain; border-radius: 8px; }
-.face-source-dialog__path { overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; }
-.face-source-dialog__remove { margin-left: 8px; color: var(--danger-color); }
-.face-source-video { position: fixed; inset: 0; z-index: 1200; background: rgba(0,0,0,.65); }
+.face-source-dialog__row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; padding: var(--space-3) 0; border-bottom: 1px solid var(--hairline); }
+.face-source-dialog__row img,.face-source-dialog__fallback { width: 88px; height: 88px; object-fit: contain; border-radius: var(--radius-sm); }
+.face-source-dialog__path { overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--fs-caption); }
+.face-source-dialog__remove { margin-left: var(--space-2); }
+/* 全屏看视频片段：要压在打开着的审阅对话框上面。旧的 .modal-overlay（components.css）还在 z-index 1000，
+   层级刻度里没有比它高的档，等公共层把遮罩换成 --z-modal 后改成 var(--z-modal)（见统一设计第 0 步 B3b 交接）。 */
+.face-source-video { position: fixed; inset: 0; z-index: 1200; background: var(--overlay-strong); }
 .face-source-video :deep(.preview-drawer) { width: min(900px, 94vw); max-width: 94vw; }
-.face-source-video__error { position: absolute; bottom: 15px; right: 20px; z-index: 1; padding: 10px; background: var(--panel-bg); }
+.face-source-video__error { position: absolute; bottom: 15px; right: 20px; z-index: 1; padding: var(--space-3); background: var(--panel-bg); }
 </style>

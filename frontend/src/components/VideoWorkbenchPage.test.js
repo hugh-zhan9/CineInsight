@@ -99,7 +99,7 @@ describe('视频工作台页（视频编辑合同「界面」）', () => {
     expect(request).toMatchObject({ project_id: 1, expected_revision: 3, mode: '' });
     expect(request.recipe.merge.sources.map(source => source.video_id)).toEqual([11, 13, 12]);
     expect(api.GetEditProject).toHaveBeenLastCalledWith(1);
-    expect(toastText()).toContain('已重新载入');
+    expect(toastText()).toContain('已刷新；刚才的修改没有保存');
     const order = wrapper.findAll('[data-test^="merge-source-"]').map(node => node.attributes('data-test'));
     expect(order).toEqual(['merge-source-11', 'merge-source-12', 'merge-source-13']);
     expect(wrapper.text()).toContain('版本 4');
@@ -144,7 +144,7 @@ describe('视频工作台页（视频编辑合同「界面」）', () => {
     expect(api.AnalyzeEditProject).toHaveBeenCalledWith({ project_id: 2, expected_revision: 3, window_ms: 300000 });
     handlers['video-edit-state']({ project_id: 2, status: 'analyzing', progress: 0.5 });
     await flushPromises();
-    expect(wrapper.get('[data-test="trim-analysis-progress"]').attributes('aria-valuenow')).toBe('50');
+    expect(wrapper.get('[data-test="trim-analysis-progress"] [role="progressbar"]').attributes('aria-valuenow')).toBe('50');
     expect(api.GetEditProject).toHaveBeenCalledTimes(1);
     api.GetEditProject.mockResolvedValue(trimProject({ revision: 3 }));
     await wrapper.get('[data-test="trim-cancel-analysis"]').trigger('click');
@@ -237,7 +237,11 @@ describe('事件驱动刷新与列表动作', () => {
     handlers['video-edit-state']({ project_id: 1, item_id: 7, status: 'running', item_status: 'running', phase: 'concat', progress: 0.6 });
     await flushPromises();
     expect(api.GetEditProject).toHaveBeenCalledTimes(1);
-    expect(wrapper.get('[data-test="edit-result-7"]').text()).toContain('拼接 60%');
+    // 进度条是共用的 ProgressBar：阶段写在标签上，百分比在 aria-valuenow 与右侧数字里。
+    const bar = wrapper.get('[data-test="edit-result-7"] [role="progressbar"]');
+    expect(bar.attributes('aria-label')).toBe('拼接');
+    expect(bar.attributes('aria-valuenow')).toBe('60');
+    expect(wrapper.get('[data-test="edit-result-7"]').text()).toContain('60%');
     api.GetEditProject.mockResolvedValue(mergeProject({ status: 'completed', items: [{ ...runningItem, status: 'completed', progress: 1, output_video_id: 99 }] }));
     handlers['video-edit-state']({ project_id: 1, item_id: 7, status: 'completed', item_status: 'completed', phase: 'done', progress: 1 });
     await flushPromises();

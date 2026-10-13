@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { collectLostItems, lostMediaErrorText, reasonChips, skippedSummary } from './lostMedia.js';
+import { collectLostItems, LOST_PURGE_CONFIRM_TEXT, lostMediaErrorText, lostPurgeConfirmOptions, reasonChips, skippedSummary } from './lostMedia.js';
 
 describe('失联数据工具', () => {
   it('只展示后端固定码的说明，其余错误用兜底文案（不带路径）', () => {
@@ -27,5 +27,18 @@ describe('失联数据工具', () => {
     const items = await collectLostItems(list, 'video', '/a', 2);
     expect(items.map(item => item.id)).toEqual([3, 5, 9]);
     expect(list).toHaveBeenLastCalledWith({ kind: 'video', directory: '/a', after_id: 5, limit: 2 });
+  });
+
+  it('清除走不可逆确认：按钮与输入的确认词都是后端要的「清除记录」，写清数量与影响', () => {
+    const options = lostPurgeConfirmOptions({ count: 3, kindNoun: '图片' });
+    expect(options).toEqual({
+      level: 'irreversible',
+      title: '清除失联图片记录',
+      message: '将清除 3 条图片记录，它们的原文件已经找不到。',
+      impact: '清除后不能撤销，也不进废纸篓；观看笔记照常保留。',
+      confirmText: '清除记录'
+    });
+    expect(LOST_PURGE_CONFIRM_TEXT).toBe('清除记录');
+    expect(lostPurgeConfirmOptions().message).toContain('0 条视频记录');
   });
 });

@@ -59,5 +59,5 @@ export default {
 
 <style scoped>
 .review-candidate-window__candidate { display: flow-root; padding: 4px 0 8px; }
-.review-candidate-window__context { color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; margin-bottom: 4px; }
+.review-candidate-window__context { color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; margin-bottom: var(--space-1); }
 </style>

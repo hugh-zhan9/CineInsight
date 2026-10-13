@@ -2,8 +2,8 @@
   <section class="system-health" data-test="system-health">
     <div class="system-health__toolbar">
       <p>检查各项能力的当前状态；不会自动安装、扫描或修复。</p>
-      <button type="button" class="btn-secondary btn-compact" :disabled="loading" data-test="health-refresh" @click="refresh">刷新状态</button>
-      <button type="button" class="btn-secondary btn-compact" :disabled="exporting" data-test="health-export" @click="exportReport">{{ exporting ? '正在导出…' : '导出诊断' }}</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="loading" data-test="health-refresh" @click="refresh">刷新状态</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="exporting" data-test="health-export" @click="exportReport">{{ exporting ? '正在导出…' : '导出诊断' }}</button>
     </div>
     <p class="system-health__privacy">诊断只保存到你选择的位置，包含状态与计数，不含路径、媒体内容、凭证或原始日志。</p>
     <p v-if="exportMessage" role="status" data-test="health-export-message">{{ exportMessage }}</p>
@@ -16,7 +16,7 @@
         <div class="system-health__item-head">
           <strong>{{ item.label }}</strong>
           <span :class="['system-health__state', `system-health__state--${item.state}`]">{{ stateLabel(item.state) }}</span>
-          <button v-if="actionsEnabled && item.action_id" type="button" class="btn-secondary btn-compact" :data-test="`health-action-${item.key}`" @click="$emit('run-command', item.action_id)">查看 / 处理</button>
+          <button v-if="actionsEnabled && item.action_id" type="button" class="btn btn--secondary btn--sm" :data-test="`health-action-${item.key}`" @click="$emit('run-command', item.action_id)">查看 / 处理</button>
         </div>
         <p>{{ item.detail }}</p>
         <p v-if="item.local_detail" class="system-health__local" :title="item.local_detail">{{ item.local_detail }}</p>
@@ -97,23 +97,23 @@ export default {
 </script>
 
 <style scoped>
-.system-health { display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
-.system-health__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.system-health__toolbar p { flex: 1 1 100%; margin: 0; color: var(--text-secondary); font-size: 13px; }
-.system-health__privacy, .system-health__local { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; margin: 0; }
-.system-health__section { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--hairline); }
-.system-health__section header, .system-health__item-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.system-health__section h3 { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
-.system-health__section header > span { font-size: 12px; color: var(--text-muted); }
-.system-health__section > p { margin: 0; font-size: 12px; color: var(--text-secondary); }
-.system-health__item { padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.system-health__item-head strong { flex: 1; font-size: 13px; }
-.system-health__item p { margin: 6px 0 0; color: var(--text-secondary); font-size: 12.5px; }
-.system-health__state { padding: 1px 8px; border-radius: 999px; background: var(--neutral-soft); color: var(--text-secondary); font-size: 11.5px; }
+.system-health { display: flex; flex-direction: column; gap: var(--space-3); font-size: var(--fs-secondary); }
+.system-health__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.system-health__toolbar p { flex: 1 1 100%; margin: 0; color: var(--text-secondary); font-size: var(--fs-secondary); }
+.system-health__privacy, .system-health__local { color: var(--text-muted); font-size: var(--fs-caption); overflow-wrap: anywhere; margin: 0; }
+.system-health__section { display: grid; gap: 6px; padding-top: var(--space-3); border-top: 1px solid var(--hairline); }
+.system-health__section header, .system-health__item-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.system-health__section h3 { flex: 1; margin: 0; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.system-health__section header > span { font-size: var(--fs-caption); color: var(--text-muted); }
+.system-health__section > p { margin: 0; font-size: var(--fs-caption); color: var(--text-secondary); }
+.system-health__item { padding: var(--space-3) var(--space-3); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
+.system-health__item-head strong { flex: 1; font-size: var(--fs-secondary); }
+.system-health__item p { margin: 6px 0 0; color: var(--text-secondary); font-size: var(--fs-secondary); }
+.system-health__state { padding: 1px var(--space-2); border-radius: var(--radius-pill); background: var(--neutral-soft); color: var(--text-secondary); font-size: var(--fs-caption); }
 .system-health__state--ok { background: var(--accent-soft); color: var(--accent-text); }
 .system-health__state--warning { background: var(--warning-soft); color: var(--warning-text); }
 .system-health__state--unavailable { background: var(--danger-soft); color: var(--danger-text); }
-.system-health__metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 0; font-size: 12px; }
+.system-health__metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: var(--space-2) 0 0; font-size: var(--fs-caption); }
 .system-health__metrics > div { display: flex; gap: 6px; }
 .system-health__metrics dt { color: var(--text-muted); }
 .system-health__metrics dd { margin: 0; font-variant-numeric: tabular-nums; }

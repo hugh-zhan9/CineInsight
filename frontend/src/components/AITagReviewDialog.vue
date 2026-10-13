@@ -1,14 +1,19 @@
 <template>
-  <BaseModal v-if="visible" class="ai-tag-review-modal" :class="{ 'ai-tag-review-modal--wide': qualityEnabled }">
+  <DialogShell
+    v-if="visible"
+    title="AI 标签管理"
+    size="lg"
+    :class="['ai-tag-review-modal', { 'ai-tag-review-modal--wide': qualityEnabled }]"
+    data-test="ai-tag-review-dialog"
+    @close="$emit('close')"
+  >
       <div class="ai-tag-review-header">
         <div>
-          <h3>AI 标签管理</h3>
           <!-- 分页之后 candidates 是"已加载的"，不是总数：总数取后端汇总（META-08），
                还有下一页时再单独说已加载了多少。 -->
           <p class="help-text" data-test="ai-review-counts">AI 标签待审 {{ pendingCandidateTotal }} 条<span v-if="candidateCursor">（已加载 {{ candidates.length }} 条）</span>，视频同源待审 {{ pendingSameSourceCount }} 条<span v-if="reviewSection === 'tags' && hasActiveFilter">，当前筛选 {{ filteredCandidates.length }} 条标签</span>。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
-        <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
       </div>
 
       <!-- 原型 A6：两个页签合并成主从布局——待审在左，质量评估作为右侧
@@ -32,7 +37,7 @@
             placeholder="搜索视频、路径、候选标签"
           />
           <p v-else class="same-source-help">同源判断只提供证据；确认后可「去清理」决定删哪一个，删除后会退出当前待审列表。</p>
-          <button type="button" class="btn-secondary" @click="loadCandidates" :disabled="loading">刷新</button>
+          <button type="button" class="btn btn--secondary" @click="loadCandidates" :disabled="loading">刷新</button>
         </div>
 
         <!-- 同源「删除 A / 删除 B」走带结果码的删除（D-PC04）：删完给整批撤销条，撤销后重取两类待审。 -->
@@ -52,18 +57,18 @@
           </select>
           <button
             type="button"
-            class="btn-primary btn-compact"
+            class="btn btn--primary btn--sm"
             data-test="ai-approve-filtered"
             :disabled="!filteredApprovableIDs.length || reviewBatchBusy || reviewRefreshCount > 0"
-            title="先预览数量，再批准已加载的筛选结果"
+            title="先统计数量，再批准已加载的筛选结果"
             @click="approveFilteredResults"
           >批准已加载结果（{{ filteredApprovableIDs.length }}）…</button>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             data-test="ai-approve-by-tag"
             :disabled="reviewBatchBusy || reviewRefreshCount > 0"
-            title="先预览数量，再批准当前全部筛选结果，包括未加载的候选"
+            title="先统计数量，再批准当前全部筛选结果，包括未加载的候选"
             @click="approveByTag"
           >批准全部筛选结果…</button>
           <span class="help-text ai-tag-review-batch-hint">手动添加标签只会让同一标签的候选退出待审，不会作废这个视频的其他候选。</span>
@@ -79,7 +84,7 @@
         <div class="ai-review-workbench-content" data-test="ai-review-scroll-area">
           <!-- 人物候选面板自己管加载与报错，不受 AI 标签候选那一次请求的成败影响。 -->
           <FaceClusterReviewPanel v-if="reviewSection === 'face'" />
-          <div v-else-if="loading && !candidates.length" class="ai-tag-review-empty">加载中...</div>
+          <div v-else-if="loading && !candidates.length" class="ai-tag-review-empty" role="status">加载中…</div>
           <div v-else-if="error && !candidates.length" class="ai-tag-review-empty">候选未能加载，请重试。</div>
           <template v-else-if="reviewSection === 'same-source'">
             <section v-if="sameSourceRelations.length" class="same-source-review-section">
@@ -95,7 +100,7 @@
                           loading="lazy"
                           @error="markThumbnailFailed(relation.video_a_id)"
                         />
-                        <span v-else aria-hidden="true">▶</span>
+                        <AppIcon v-else name="play" :size="24" />
                       </div>
                       <div class="same-source-video-title"><span>A</span><strong :title="relation.video_a?.name || ''">{{ relation.video_a?.name || `视频 ${relation.video_a_id}` }}</strong></div>
                       <p v-if="formatMediaMeta(relation.video_a).length" class="same-source-meta" data-test="same-source-meta">{{ formatMediaMeta(relation.video_a).join(' · ') }}</p>
@@ -111,7 +116,7 @@
                           loading="lazy"
                           @error="markThumbnailFailed(relation.video_b_id)"
                         />
-                        <span v-else aria-hidden="true">▶</span>
+                        <AppIcon v-else name="play" :size="24" />
                       </div>
                       <div class="same-source-video-title"><span>B</span><strong :title="relation.video_b?.name || ''">{{ relation.video_b?.name || `视频 ${relation.video_b_id}` }}</strong></div>
                       <p v-if="formatMediaMeta(relation.video_b).length" class="same-source-meta" data-test="same-source-meta">{{ formatMediaMeta(relation.video_b).join(' · ') }}</p>
@@ -124,18 +129,18 @@
                   </div>
                 </div>
                 <div class="ai-candidate-actions">
-                  <button type="button" class="btn-secondary btn-compact" title="同时打开两个视频" @click="previewSameSource(relation)" :disabled="processingIds.includes(`same-source-preview-${relation.id}`)">预览</button>
-                  <button type="button" class="btn-danger btn-compact" @click="openSameSourceDelete(relation, 'a')" :disabled="processingIds.includes(`same-source-delete-${relation.video_a_id}`)">删除 A</button>
-                  <button type="button" class="btn-danger btn-compact" @click="openSameSourceDelete(relation, 'b')" :disabled="processingIds.includes(`same-source-delete-${relation.video_b_id}`)">删除 B</button>
+                  <button type="button" class="btn btn--secondary btn--sm" title="同时打开两个视频" @click="previewSameSource(relation)" :disabled="processingIds.includes(`same-source-preview-${relation.id}`)">预览</button>
+                  <button type="button" class="btn btn--danger btn--sm" title="磁盘上的原文件保留，记录可在回收站中恢复" @click="openSameSourceDelete(relation, 'a')" :disabled="processingIds.includes(`same-source-delete-${relation.video_a_id}`)">从片库移除 A</button>
+                  <button type="button" class="btn btn--danger btn--sm" title="磁盘上的原文件保留，记录可在回收站中恢复" @click="openSameSourceDelete(relation, 'b')" :disabled="processingIds.includes(`same-source-delete-${relation.video_b_id}`)">从片库移除 B</button>
                   <!-- D-PC27：确认同源之后卡片留下，给出「去清理」——清理中心会把这一对标为
                        「已确认同源」，用户只需决定删哪一个。 -->
                   <template v-if="relation.confirmed">
                     <span class="same-source-confirmed-badge" :data-test="`same-source-confirmed-${relation.id}`">已确认同源</span>
-                    <button type="button" class="btn-primary btn-compact" :data-test="`same-source-go-cleanup-${relation.id}`" @click="goToCleanup(relation)">去清理</button>
+                    <button type="button" class="btn btn--primary btn--sm" :data-test="`same-source-go-cleanup-${relation.id}`" @click="goToCleanup(relation)">去清理</button>
                   </template>
                   <template v-else>
-                    <button type="button" class="btn-primary btn-compact" @click="confirmSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">确认同源</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="rejectSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">不是同源</button>
+                    <button type="button" class="btn btn--primary btn--sm" @click="confirmSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">确认同源</button>
+                    <button type="button" class="btn btn--secondary btn--sm" @click="rejectSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">不是同源</button>
                   </template>
                 </div>
               </div>
@@ -161,7 +166,7 @@
                       loading="lazy"
                       @error="markThumbnailFailed(group.videoId)"
                     />
-                    <span v-else aria-hidden="true">▶</span>
+                    <AppIcon v-else name="play" :size="20" />
                   </div>
                   <!-- 标题列自己占满剩余宽度，动作按钮另起一行：五个按钮和缩略图
                        挤在同一行时，标题会被压到一个字一行。 -->
@@ -179,16 +184,16 @@
                 <div class="ai-video-actions">
                   <button
                     type="button"
-                    class="btn-primary btn-compact"
+                    class="btn btn--primary btn--sm"
                     :data-test="`ai-approve-group-${group.videoId}`"
                     :disabled="group.videoDeleted || !approvableCandidateIDs(group.candidates).length || reviewBatchBusy || reviewRefreshCount > 0"
                     @click="approveGroup(group)"
                   >批准本组全部</button>
-                  <button type="button" class="btn-secondary btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
-                  <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
-                  <button type="button" class="btn-secondary btn-compact" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
-                  <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
-                  <button type="button" class="btn-secondary btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
+                  <button type="button" class="btn btn--secondary btn--sm" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+                  <button type="button" class="btn btn--secondary btn--sm" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
+                  <button type="button" class="btn btn--secondary btn--sm" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
+                  <button type="button" class="btn btn--secondary btn--sm" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
+                  <button type="button" class="btn btn--secondary btn--sm" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
                 </div>
                 <div class="ai-video-existing-tags">
                   <span class="ai-video-existing-tags-label">已有标签</span>
@@ -223,8 +228,8 @@
                     <p v-if="candidate.reasoning" class="ai-candidate-reason">{{ candidate.reasoning }}</p>
                   </div>
                   <div class="ai-candidate-actions">
-                    <button type="button" class="btn-primary" @click="approve(candidate)" :disabled="candidate.video_deleted || processingIds.includes(candidate.id)">批准</button>
-                    <button type="button" class="btn-secondary" @click="reject(candidate)" :disabled="processingIds.includes(candidate.id)">拒绝</button>
+                    <button type="button" class="btn btn--primary" @click="approve(candidate)" :disabled="candidate.video_deleted || processingIds.includes(candidate.id)">批准</button>
+                    <button type="button" class="btn btn--secondary" @click="reject(candidate)" :disabled="processingIds.includes(candidate.id)">拒绝</button>
                   </div>
                 </div>
               </template>
@@ -232,7 +237,7 @@
             <div v-if="candidateCursor" class="ai-review-load-more">
               <button
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 data-test="ai-candidate-load-more"
                 :disabled="loadingMore || loading"
                 @click="loadMoreCandidates()"
@@ -249,52 +254,25 @@
         </aside>
       </div>
 
-      <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
-        <div class="ai-confirm-dialog glass-surface">
-          <h4>确认全部拒绝</h4>
-          <!-- 后端按视频拒绝全部待审候选，不只是当前已加载的这几条：分页之后
-               这两个数可能不一样，文案不能只报已加载的条数。 -->
-          <p>将拒绝这个视频下全部待审 AI 标签候选（当前已加载 {{ rejectConfirm.count }} 个）。</p>
-          <p class="ai-confirm-video">{{ rejectConfirm.videoName }}</p>
-          <div class="ai-confirm-actions">
-            <button type="button" class="btn-secondary" @click="cancelRejectVideoGroup">取消</button>
-            <button type="button" class="btn-danger" @click="confirmRejectVideoGroup" :disabled="processingIds.includes(`reject-video-${rejectConfirm.videoId}`)">全部拒绝</button>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="renameConfirm.show" class="ai-confirm-overlay">
-        <div class="ai-confirm-dialog glass-surface">
-          <h4>重命名视频</h4>
-          <input
-            v-model="renameConfirm.newName"
-            type="text"
-            class="text-input ai-tag-rename-input"
-            placeholder="输入新文件名"
-            @keyup.enter="renameConfirmVideo"
-            ref="renameInput"
-          />
-          <p>扩展名会自动保留（{{ renameConfirm.ext }}）</p>
-          <p class="ai-confirm-video">{{ renameConfirm.videoName }}</p>
-          <div class="ai-confirm-actions">
-            <button type="button" class="btn-secondary" @click="cancelRenameDialog">取消</button>
-            <button type="button" class="btn-primary" @click="renameConfirmVideo" :disabled="processingIds.includes(`rename-${renameConfirm.videoId}`)">确认</button>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="sameSourceDeleteConfirm.show" class="ai-confirm-overlay">
-        <div class="ai-confirm-dialog glass-surface">
-          <h4>删除视频 {{ sameSourceDeleteConfirm.side.toUpperCase() }}</h4>
-          <p>将从片库删除这条视频记录，磁盘上的原文件会保留；记录可在回收站中恢复。</p>
-          <p class="ai-confirm-video">{{ sameSourceDeleteConfirm.videoName }}<span v-if="sameSourceDeleteConfirm.videoMeta" class="ai-confirm-meta">{{ sameSourceDeleteConfirm.videoMeta }}</span></p>
-          <p class="ai-confirm-path">{{ sameSourceDeleteConfirm.videoPath || '原始路径不可用' }}</p>
-          <div class="ai-confirm-actions">
-            <button type="button" class="btn-secondary" @click="cancelSameSourceDelete">取消</button>
-            <button type="button" class="btn-danger" @click="confirmSameSourceDelete" :disabled="processingIds.includes(`same-source-delete-${sameSourceDeleteConfirm.videoId}`)">确认删除记录</button>
-          </div>
-        </div>
-      </div>
+      <!-- 重命名是表单，用叠在上面的对话框（Esc 只关这一层）；「全部拒绝」与「从片库移除」走统一确认框（D-UD-07 第 2 级）。 -->
+      <DialogShell v-if="renameConfirm.show" title="重命名视频" size="sm" class="ai-confirm-dialog" data-test="ai-rename-dialog" @close="cancelRenameDialog">
+        <input
+          v-model="renameConfirm.newName"
+          type="text"
+          class="text-input ai-tag-rename-input"
+          placeholder="输入新文件名"
+          aria-label="新文件名"
+          data-test="ai-rename-input"
+          @keyup.enter="renameConfirmVideo"
+          ref="renameInput"
+        />
+        <p class="ai-confirm-note">扩展名会自动保留（{{ renameConfirm.ext }}）</p>
+        <p class="ai-confirm-video">{{ renameConfirm.videoName }}</p>
+        <template #footer>
+          <button type="button" class="btn btn--secondary" @click="cancelRenameDialog">取消</button>
+          <button type="button" class="btn btn--primary" data-test="ai-rename-confirm" @click="renameConfirmVideo" :disabled="processingIds.includes(`rename-${renameConfirm.videoId}`)">重命名</button>
+        </template>
+      </DialogShell>
 
       <AddTagDialog
         :visible="manualTagDialog.show"
@@ -303,7 +281,7 @@
         @close="closeManualTagDialog"
         @tag-added="handleManualTagAdded"
       />
-  </BaseModal>
+  </DialogShell>
 </template>
 
 <script>
@@ -313,7 +291,8 @@ import AIReviewBatchControls from './AIReviewBatchControls.vue';
 import ReviewCandidateWindow from './ReviewCandidateWindow.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
-import BaseModal from './ui/BaseModal.vue';
+import AppIcon from './ui/AppIcon.vue';
+import DialogShell from './ui/DialogShell.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { appendCandidates, applyReviewCandidateRefresh, reviewOutcomeCandidateIDs, approvableCandidateIDs, candidateTagOptions, confidenceMeta, createRejectVideoConfirm, filterCandidatesByAttributes, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia, removeCandidatesForManualTags } from '../utils/aiTagReview.js';
 import { formatMediaMeta } from '../utils/mediaDetails.js';
@@ -321,7 +300,7 @@ import { confirmAction } from '../utils/feedback.js';
 
 export default {
   name: 'AITagReviewDialog',
-  components: { ReviewCandidateWindow, AIReviewBatchControls, AddTagDialog, AIQualityPanel, BaseModal, FaceClusterReviewPanel, TrashUndoBanner },
+  components: { ReviewCandidateWindow, AIReviewBatchControls, AddTagDialog, AIQualityPanel, AppIcon, DialogShell, FaceClusterReviewPanel, TrashUndoBanner },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] },
@@ -643,10 +622,20 @@ export default {
         videoIds: [Number(relation.video_a_id), Number(relation.video_b_id)]
       });
     },
+    // 全部拒绝（D-UD-07 第 2 级）：统一确认框写清范围——后端按视频拒绝全部待审候选，不只是已加载的这几条。
     async rejectVideoGroup(group) {
       const confirmState = createRejectVideoConfirm(group);
       if (!confirmState) return;
+      const confirmed = await confirmAction({
+        level: 'confirm',
+        title: '确认全部拒绝',
+        message: `将拒绝「${confirmState.videoName}」下全部待审 AI 标签候选（当前已加载 ${confirmState.count} 个）。`,
+        confirmText: '全部拒绝',
+        danger: true
+      });
+      if (!confirmed) return;
       this.rejectConfirm = confirmState;
+      await this.confirmRejectVideoGroup();
     },
     cancelRejectVideoGroup() {
       this.rejectConfirm = { show: false, videoId: 0, videoName: '', count: 0, candidateIds: [] };
@@ -689,12 +678,13 @@ export default {
         ]);
       });
     },
-    openSameSourceDelete(relation, side) {
+    // 从片库移除（D-UD-07 第 2 级、D-UD-08）：只删记录、原文件保留，统一确认框写清是哪一条与影响。
+    async openSameSourceDelete(relation, side) {
       const normalizedSide = side === 'b' ? 'b' : 'a';
       const video = normalizedSide === 'a' ? relation?.video_a : relation?.video_b;
       const videoId = Number(video?.id || (normalizedSide === 'a' ? relation?.video_a_id : relation?.video_b_id) || 0);
       if (!relation?.id || !videoId) return;
-      this.sameSourceDeleteConfirm = {
+      const state = {
         show: true,
         relationId: Number(relation.id),
         side: normalizedSide,
@@ -703,6 +693,17 @@ export default {
         videoPath: video?.path || '',
         videoMeta: formatMediaMeta(video).join(' · '),
       };
+      const confirmed = await confirmAction({
+        level: 'confirm',
+        title: `从片库移除视频 ${normalizedSide.toUpperCase()}`,
+        message: `将从片库移除 1 条视频记录：「${state.videoName}」${state.videoMeta ? `（${state.videoMeta}）` : ''}，${state.videoPath || '原始路径不可用'}。`,
+        impact: '磁盘上的原文件会保留；记录可在回收站中恢复。',
+        confirmText: '从片库移除',
+        danger: true
+      });
+      if (!confirmed) return;
+      this.sameSourceDeleteConfirm = state;
+      await this.confirmSameSourceDelete();
     },
     cancelSameSourceDelete() {
       this.sameSourceDeleteConfirm = { show: false, relationId: 0, side: 'a', videoId: 0, videoName: '', videoPath: '' };
@@ -773,10 +774,8 @@ export default {
     },
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
-      return `rgba(${r},${g},${b},0.35)`;
+      // 标签色压到 35% 不透明（与原先按 rgba 算的一样），用 color-mix 免得在样式里写颜色函数。
+      return `color-mix(in srgb, ${hex} 35%, transparent)`;
     },
     openRenameDialog(group) {
       if (!group?.videoId) return;
@@ -873,10 +872,18 @@ export default {
   flex-direction: column;
 }
 
-/* 右侧常驻质量面板要吃掉 352px，弹窗不加宽的话左侧待审流只剩三百多像素。 */
-:deep(.ai-tag-review-modal--wide) {
+/* 右侧常驻质量面板要吃掉 352px，弹窗不加宽的话左侧待审流只剩三百多像素。
+   多带一个 .ui-dialog 压过 DialogShell 的尺寸档（lg 760）。 */
+:deep(.ai-tag-review-modal--wide.ui-dialog) {
   width: min(1120px, calc(100vw - 40px));
   max-width: 1120px;
+}
+
+/* 对话框正文不自己滚：滚动交给待审工作台的内容区（虚拟列表以它为滚动容器）。 */
+:deep(.ai-tag-review-modal > .ui-dialog__body) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .ai-tag-review-header {
@@ -936,14 +943,14 @@ export default {
   padding: 1px 6px;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 12%, transparent);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .same-source-help {
   flex: 1;
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .ai-tag-review-batch-bar {
@@ -972,7 +979,7 @@ export default {
   border-radius: 8px;
   background: var(--accent-soft);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   line-height: 1.5;
 }
 
@@ -983,7 +990,7 @@ export default {
   border-radius: 6px;
   background: var(--accent-soft);
   color: var(--accent-text);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-weight: 700;
 }
 
@@ -1010,7 +1017,7 @@ export default {
 .ai-review-quality-title {
   margin: 14px 0 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   font-weight: 700;
 }
 
@@ -1109,7 +1116,6 @@ export default {
   border-radius: 8px;
   background: var(--thumb-bg);
   color: var(--thumb-fg);
-  font-size: 24px;
 }
 
 .same-source-thumbnail img {
@@ -1139,8 +1145,8 @@ export default {
   border-radius: 6px;
   background: var(--accent-soft);
   color: var(--accent-color);
-  font-size: 11px;
-  font-weight: 800;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-bold);
 }
 
 .same-source-video-title strong {
@@ -1153,15 +1159,14 @@ export default {
 .same-source-meta {
   margin: 6px 0 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-variant-numeric: tabular-nums;
 }
 
-.same-source-path,
-.ai-confirm-path {
+.same-source-path {
   margin: 7px 0 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   overflow-wrap: anywhere;
 }
 
@@ -1192,7 +1197,7 @@ export default {
   gap: 10px;
   padding: 14px 0 4px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .ai-video-group {
@@ -1239,7 +1244,7 @@ export default {
   flex-wrap: wrap;
   gap: 2px 8px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1259,7 +1264,6 @@ export default {
   border-radius: 8px;
   background: var(--thumb-bg);
   color: var(--thumb-fg);
-  font-size: 18px;
 }
 
 .ai-video-thumbnail img {
@@ -1280,7 +1284,7 @@ export default {
   border-radius: 6px;
   background: var(--danger-soft);
   color: var(--danger-color);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-weight: 700;
 }
 
@@ -1294,7 +1298,7 @@ export default {
 .ai-video-path {
   min-width: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1311,7 +1315,7 @@ export default {
 .ai-video-existing-tags-label {
   flex: 0 0 auto;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .ai-video-existing-tag-list {
@@ -1329,7 +1333,7 @@ export default {
 
 .ai-video-no-tags {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .ai-candidate-row {
@@ -1353,7 +1357,7 @@ export default {
   height: 24px;
   padding: 0 8px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-weight: 700;
   margin-right: 8px;
 }
@@ -1384,14 +1388,14 @@ export default {
 .ai-match-note {
   margin-left: 8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   overflow-wrap: anywhere;
 }
 
 .ai-candidate-reason {
   margin: 8px 0 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   line-height: 1.45;
 }
 
@@ -1413,31 +1417,8 @@ export default {
   color: var(--text-muted);
 }
 
-.ai-confirm-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--overlay-bg);
-}
-
-.ai-confirm-dialog {
-  width: min(420px, 100%);
-  padding: 22px;
-  border-radius: var(--radius-lg);
-}
-
-.ai-confirm-dialog h4 {
-  margin: 0 0 10px;
-  color: var(--text-primary);
-  font-size: 17px;
-}
-
-.ai-confirm-dialog p {
-  margin: 0 0 10px;
+.ai-confirm-note {
+  margin: 0 0 var(--space-3);
   color: var(--text-secondary);
   line-height: 1.5;
 }
@@ -1456,25 +1437,10 @@ export default {
   overflow-wrap: anywhere;
 }
 
-.ai-confirm-meta {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.ai-confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 16px;
-}
 
 @media (max-width: 640px) {
   :deep(.ai-tag-review-modal) {
     width: calc(100vw - 24px);
-    padding: 18px;
   }
 
   .ai-tag-review-header,

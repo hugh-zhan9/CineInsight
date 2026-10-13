@@ -1,14 +1,14 @@
 <template>
   <div v-show="visible" class="ai-review-batch-status">
-    <p v-if="preparing" role="status">正在预览本次批准范围…</p>
+    <p v-if="preparing" role="status">正在统计本次批准范围…</p>
     <p v-if="state.token" role="status" data-test="review-batch-summary">
       {{ stateLabel }} · 已处理 {{ state.processed || 0 }} / {{ state.total || 0 }} · 成功 {{ state.succeeded || 0 }} · 跳过 {{ state.skipped || 0 }} · 失败 {{ state.failed || 0 }}
-      <span v-if="state.state !== 'running' && state.remaining"> · 未处理 {{ state.remaining }}，需要重新预览确认</span>
-      <button v-if="state.state === 'running'" type="button" class="btn-secondary btn-compact" data-test="review-batch-cancel" @click="cancelBatch">取消剩余</button>
+      <span v-if="state.state !== 'running' && state.remaining"> · 未处理 {{ state.remaining }}，需要再统计一次并确认</span>
+      <button v-if="state.state === 'running'" type="button" class="btn btn--secondary btn--sm" data-test="review-batch-cancel" @click="cancelBatch">取消剩余</button>
     </p>
     <p v-if="state.skipped" class="help-text">已变化或失效的候选未被批准；可刷新候选列表重新审阅。</p>
     <p v-if="notice" role="status" data-test="review-batch-notice">{{ notice }}</p>
-    <p v-if="error" class="error-text" role="alert" data-test="review-batch-error">{{ error }} <button type="button" class="btn-secondary btn-compact" @click="refresh">刷新批次状态</button></p>
+    <p v-if="error" class="error-text" role="alert" data-test="review-batch-error">{{ error }} <button type="button" class="btn btn--secondary btn--sm" @click="refresh">刷新批次状态</button></p>
     <details v-if="failures.length"><summary>未批准的候选（展示前 {{ failures.length }} 项）</summary><ul><li v-for="item in failures" :key="item.id">候选 #{{ item.id }}：{{ reasonLabel(item.code) }}</li></ul></details>
   </div>
 </template>
@@ -56,7 +56,7 @@ export default {
         }
         this.after = Number(result.next_after || 0);
         this.draining = !!result.has_more;
-        if (result.state === 'failed') this.error = '批次已中止，请检查运行状态；未处理项需要重新预览。';
+        if (result.state === 'failed') this.error = '批次已中止，请检查运行状态；未处理项需要再统计一次。';
         if (result.has_more || result.state === 'running') {
           this.timer = setTimeout(() => this.poll(generation), result.has_more ? 0 : 1000);
         } else if (this.settledToken !== result.token) {
@@ -72,7 +72,7 @@ export default {
     async releasePreview(token) {
       if (!token) return;
       try { await CancelAIReviewApproval(this.kind, token); }
-      catch (_err) { if (!this.disposed) this.error = '未能释放预览，请稍后重试；预览将在 10 分钟后失效。'; }
+      catch (_err) { if (!this.disposed) this.error = '未能释放这次统计的结果，请稍后重试；它会在 10 分钟后自动失效。'; }
     },
     async preview(scope, ids, title = '') {
       if (this.busy || this.disposed || !this.visible) return;
@@ -86,7 +86,7 @@ export default {
         if (this.disposed || !this.visible || generation !== this.generation) { await this.releasePreview(preview?.token); return; }
         if (!preview?.eligible || !preview.token) { this.notice = `本次匹配 ${preview?.matched || 0} 条，没有可批准的待审候选。`; return; }
         const range = scope === 'loaded' ? `已加载${title ? `「${title}」` : ''}的结果` : '全部筛选结果（包括未加载的候选）';
-        const confirmed = await confirmAction({ title: '确认批量批准', message: `范围：${range}。本次匹配 ${preview.matched} 条，其中可批准 ${preview.eligible} 条，涉及 ${preview.media_count} 个文件、${preview.link_count} 个标签关联；排除 ${preview.excluded} 条不可批准项。只处理本次预览集合，新增或变化的候选不会作为本批新成员。`, confirmText: `批准 ${preview.eligible} 条` });
+        const confirmed = await confirmAction({ title: '确认批量批准', message: `范围：${range}。本次匹配 ${preview.matched} 条，其中可批准 ${preview.eligible} 条，涉及 ${preview.media_count} 个文件、${preview.link_count} 个标签关联；排除 ${preview.excluded} 条不可批准项。只处理这次统计到的集合，新增或变化的候选不会作为本批新成员。`, confirmText: `批准 ${preview.eligible} 条` });
         if (!confirmed || this.disposed || !this.visible || generation !== this.generation) { await this.releasePreview(preview.token); return; }
         const state = await StartAIReviewApproval(this.kind, preview.token);
         if (this.disposed || generation !== this.generation) return;
@@ -107,8 +107,8 @@ export default {
 </script>
 
 <style scoped>
-.ai-review-batch-status { flex: 0 0 auto; font-size: 12px; }
+.ai-review-batch-status { flex: 0 0 auto; font-size: var(--fs-caption); }
 .ai-review-batch-status p { margin: 6px 0; }
 .ai-review-batch-status details { max-height: 160px; overflow: auto; }
-.error-text { color: var(--danger-color); }
+.error-text { color: var(--danger-text); }
 </style>

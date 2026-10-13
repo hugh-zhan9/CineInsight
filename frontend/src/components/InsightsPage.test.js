@@ -10,7 +10,8 @@ import InsightsPage from './InsightsPage.vue';
 import { GetLibraryInsights } from '../../wailsjs/go/main/App';
 
 function mountWith(stats, directories = []) {
-  const wrapper = shallowMount(InsightsPage, { props: { directories } });
+  // 页头不桩掉：页签与刷新按钮在 PageHeader 的 actions 插槽里。
+  const wrapper = shallowMount(InsightsPage, { props: { directories }, global: { stubs: { PageHeader: false } } });
   wrapper.vm.stats = stats;
   return wrapper;
 }

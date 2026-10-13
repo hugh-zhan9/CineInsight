@@ -6,14 +6,14 @@
       <div class="download-thumb" :class="{ 'download-thumb--empty': !task.video_id }">
         <img v-if="task.video_id" :src="`/preview/thumbnail/${task.video_id}`" alt="" loading="lazy" />
       </div>
-      <span class="download-pill" :class="`download-pill--${task.state}`">{{ stateLabel }}</span>
+      <AppBadge class="download-pill" :tone="stateTone">{{ stateLabel }}</AppBadge>
       <strong class="download-row__name" :title="task.filename || task.title">
         {{ task.filename || task.title || task.url }}
       </strong>
       <button
         v-if="cancellable"
         type="button"
-        class="btn-secondary download-row__cancel"
+        class="btn btn--secondary download-row__cancel"
         @click="$emit('cancel', task.id)"
       >
         取消
@@ -22,9 +22,7 @@
 
     <!-- 不确定态：桥接任务拿不到总时长（HLS 要额外探测才知道），
          与其画一个假的百分比，不如老实显示"在动"。 -->
-    <div v-if="active" class="download-bar">
-      <i></i>
-    </div>
+    <ProgressBar v-if="active" class="download-bar" />
 
     <div class="download-row__meta">{{ metaText }}</div>
 
@@ -45,7 +43,7 @@
           <button
             v-if="task.video_id"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="busy"
             data-test="download-dup-trash"
             @click="$emit('duplicate-action', { action: 'trash', task, match })"
@@ -53,7 +51,7 @@
           <button
             v-if="match.kind === 'version' && task.video_id"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="busy"
             data-test="download-dup-compare"
             @click="$emit('duplicate-action', { action: 'compare', task, match })"
@@ -61,14 +59,14 @@
           <button
             v-if="match.kind === 'version' && task.video_id"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="busy"
             data-test="download-dup-version-group"
             @click="$emit('duplicate-action', { action: 'version-group', task, match })"
           >建立版本组</button>
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="busy"
             data-test="download-dup-dismiss"
             @click="$emit('duplicate-action', { action: 'dismiss', task, match })"
@@ -91,7 +89,7 @@
         v-for="action in actions"
         :key="action.key"
         type="button"
-        class="btn-secondary btn-compact"
+        class="btn btn--secondary btn--sm"
         :disabled="busy"
         :data-test="`download-action-${action.key}`"
         @click="$emit('action', { action: action.key, task })"
@@ -111,6 +109,8 @@
 
 <script>
 import { formatBytes } from '../../utils/mediaDetails.js';
+import AppBadge from '../ui/AppBadge.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 
 // 「对方」相对这次下载（后端 DownloadRelation*）。
 const DUPLICATE_RELATION_TEXT = {
@@ -133,14 +133,24 @@ const STATE_LABELS = {
 
 const ACTIVE_STATES = ['running', 'importing'];
 
+// 状态徽标的颜色（AppBadge 的 tone）。
+const STATE_TONES = {
+  running: 'accent',
+  importing: 'accent',
+  done: 'success',
+  failed: 'danger',
+  interrupted: 'danger'
+};
+
 // 入库状态（后端 BrowserDownloadImport*）：没进扫描范围与扫描失败给不同的出口（D-PC25）。
 const IMPORT_NOT_IN_SCAN_ROOTS = 'not_in_scan_roots';
 const IMPORT_FAILED = 'import_failed';
 
-// 一条下载任务。只负责展示与发出意图（取消 / 重试 / 入库 / 打开位置），不自己调接口；
+// 一条下载任务。只负责展示与发出意图（取消 / 重试 / 入库 / 在访达中显示），不自己调接口；
 // 动作的结果由下载页经 notice 传回来显示在这一行上。
 export default {
   name: 'DownloadRow',
+  components: { AppBadge, ProgressBar },
   props: {
     task: { type: Object, required: true },
     // 最近一次动作的结果：{ level: 'info' | 'warn' | 'error' | 'success', text }。
@@ -151,6 +161,9 @@ export default {
   computed: {
     stateLabel() {
       return STATE_LABELS[this.task.state] || this.task.state;
+    },
+    stateTone() {
+      return STATE_TONES[this.task.state] || 'neutral';
     },
     active() {
       return ACTIVE_STATES.includes(this.task.state);
@@ -182,7 +195,7 @@ export default {
         notes.push(`片库里还有 ${duplicate.unhashed_videos} 部视频没算视频指纹，没参与「其他版本」的比对。`);
       }
       if (!this.task.video_id && this.duplicateMatches.length) {
-        notes.push('这次下载还没进片库，不能从这里删除；可以打开所在目录手动处理。');
+        notes.push('这次下载还没进片库，不能从这里删除；可以在访达中显示后手动处理。');
       }
       return notes.join('');
     },
@@ -203,7 +216,7 @@ export default {
         if (task.import_status === IMPORT_NOT_IN_SCAN_ROOTS || task.import_status === IMPORT_FAILED) {
           list.push({ key: 'reimport', label: '重新入库' });
         }
-        list.push({ key: 'reveal', label: '打开所在目录' });
+        list.push({ key: 'reveal', label: '在访达中显示' });
       }
       return list;
     },
@@ -249,31 +262,32 @@ export default {
 
 <style scoped>
 .download-row {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--bg-color);
-  border-left: 3px solid transparent;
+  padding: var(--space-3) 14px;
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
 }
 
 .download-row--failed,
-.download-row--interrupted { border-left-color: var(--danger-color, #c0392b); }
-.download-row--done { border-left-color: var(--success-color, #1e8e3e); }
+.download-row--interrupted { border-left-color: var(--danger-color); }
+.download-row--done { border-left-color: var(--success-color); }
 .download-row--running,
-.download-row--importing { border-left-color: var(--accent-color, #2f6feb); }
+.download-row--importing { border-left-color: var(--accent-color); }
 
 .download-row__head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .download-thumb {
   flex: none;
   width: 64px;
   height: 36px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  background: var(--border-color, #e2e5ea);
+  background: var(--thumb-bg);
 }
 
 .download-thumb img {
@@ -293,104 +307,63 @@ export default {
 
 .download-row__cancel { flex: none; }
 
-.download-pill {
-  flex: none;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  background: var(--border-color, #e2e5ea);
-  color: var(--text-secondary);
-}
+.download-pill { flex: none; }
 
-.download-pill--running,
-.download-pill--importing {
-  background: var(--accent-color, #2f6feb);
-  color: #fff;
-}
-
-.download-pill--done { background: var(--success-color, #1e8e3e); color: #fff; }
-.download-pill--failed,
-.download-pill--interrupted { background: var(--danger-color, #c0392b); color: #fff; }
-
-.download-bar {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--border-color, #e2e5ea);
-  overflow: hidden;
-  margin: 10px 0 6px;
-}
-
-.download-bar > i {
-  display: block;
-  height: 100%;
-  width: 35%;
-  border-radius: 999px;
-  background: var(--accent-color, #2f6feb);
-  animation: download-slide 1.4s ease-in-out infinite;
-}
-
-@keyframes download-slide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(320%); }
-}
-
-/* 关掉动效偏好时不做无限动画，静态显示一段即可。 */
-@media (prefers-reduced-motion: reduce) {
-  .download-bar > i { animation: none; width: 100%; opacity: 0.6; }
-}
+/* 不确定态：桥接任务拿不到总时长（HLS 要额外探测才知道），与其画一个假的百分比，不如老实显示"在动"。 */
+.download-bar { margin: var(--space-3) 0 6px; }
 
 .download-row__meta {
   color: var(--text-secondary);
-  font-size: 13px;
-  margin-top: 4px;
+  font-size: var(--fs-secondary);
+  margin-top: var(--space-1);
 }
 
 .download-row__error {
   margin: 6px 0 0;
-  font-size: 13px;
-  color: var(--danger-color, #c0392b);
+  font-size: var(--fs-secondary);
+  color: var(--danger-text);
   word-break: break-word;
 }
 
 .download-row__warn {
   margin: 6px 0 0;
-  font-size: 13px;
-  color: var(--warning-color, #b26a00);
+  font-size: var(--fs-secondary);
+  color: var(--warning-text);
   word-break: break-word;
 }
 
 .download-row__hint {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
 }
 
 .download-row__notice {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
   word-break: break-word;
   color: var(--text-secondary);
 }
 
-.download-row__notice--success { color: var(--success-color, #1e8e3e); }
-.download-row__notice--warn { color: var(--warning-color, #b26a00); }
-.download-row__notice--error { color: var(--danger-color, #c0392b); }
+.download-row__notice--success { color: var(--success-color); }
+.download-row__notice--warn { color: var(--warning-text); }
+.download-row__notice--error { color: var(--danger-text); }
 
-.download-dup { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--warning-color); border-radius: 10px; background: var(--warning-soft); }
+.download-dup { display: grid; gap: var(--space-2); margin-top: var(--space-2); padding: var(--space-3) var(--space-3); border: 1px solid var(--warning-border); border-radius: var(--radius); background: var(--warning-soft); }
 .download-dup__item { display: grid; gap: 6px; }
-.download-dup__text { margin: 0; color: var(--text-primary); font-size: 13px; }
+.download-dup__text { margin: 0; color: var(--text-primary); font-size: var(--fs-secondary); }
 .download-dup__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .download-row__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .download-row__source {
   display: block;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;

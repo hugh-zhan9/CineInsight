@@ -29,13 +29,15 @@ export default {
 <style scoped>
 /* 与 InsightsPage 里的面板卡同一组令牌：这里不能省掉（共享类名不能只靠父组件的 scoped 样式），
    但两处必须一致，否则热力图面板和分桶面板边框、圆角不一样。 */
-.insights-panel { border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); padding: 14px 16px; }
+.insights-panel { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); padding: 14px var(--space-4); }
 .insights-panel__heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.insights-panel__heading h3 { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.insights-panel__heading span { font-size: var(--fs-caption); }
 .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
-.bucket-list { display: grid; gap: 10px; }
-.bucket-row { display: grid; grid-template-columns: minmax(80px, 0.9fr) minmax(80px, 1.4fr) max-content; align-items: center; gap: 10px; font-size: 12px; }
+.bucket-list { display: grid; gap: var(--space-3); }
+.bucket-row { display: grid; grid-template-columns: minmax(80px, 0.9fr) minmax(80px, 1.4fr) max-content; align-items: center; gap: var(--space-3); font-size: var(--fs-caption); }
 .bucket-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bucket-row > div { height: 8px; overflow: hidden; border-radius: 999px; background: var(--control-hover-bg); }
+.bucket-row > div { height: 8px; overflow: hidden; border-radius: var(--radius-pill); background: var(--control-hover-bg); }
 .bucket-row i { display: block; height: 100%; border-radius: inherit; background: var(--accent-color); }
 .bucket-row strong { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 </style>

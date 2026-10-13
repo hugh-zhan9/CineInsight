@@ -9,18 +9,48 @@
       <header class="task-center__head">
         <h2>任务中心</h2>
         <span class="task-center__summary" data-test="task-center-summary">{{ summaryText }}</span>
-        <button type="button" class="task-center__close" aria-label="关闭任务中心" data-test="task-center-close" @click="$emit('close')">×</button>
+        <button type="button" class="btn-icon btn--sm task-center__close" aria-label="关闭任务中心" data-test="task-center-close" @click="$emit('close')"><AppIcon name="close" :size="16" /></button>
       </header>
 
-      <nav class="task-center__tabs" aria-label="任务与运行状态">
-        <button type="button" class="btn-secondary btn-compact" :aria-pressed="section === 'tasks'" data-test="task-center-tab-tasks" @click="section = 'tasks'">任务</button>
-        <button type="button" class="btn-secondary btn-compact" :aria-pressed="section === 'health'" data-test="task-center-tab-health" @click="section = 'health'">运行状态与诊断</button>
+      <nav class="task-center__tabs" aria-label="任务中心内容">
+        <button type="button" class="btn btn--ghost btn--sm" :aria-pressed="section === 'tasks'" data-test="task-center-tab-tasks" @click="section = 'tasks'">任务</button>
+        <button type="button" class="btn btn--ghost btn--sm" :aria-pressed="section === 'recent'" data-test="task-center-tab-recent" @click="section = 'recent'">
+          最近操作<AppBadge v-if="operations.length" :count="operations.length" />
+        </button>
+        <button type="button" class="btn btn--ghost btn--sm" :aria-pressed="section === 'health'" data-test="task-center-tab-health" @click="section = 'health'">运行状态与诊断</button>
       </nav>
       <div v-if="section === 'health'" class="task-center__body">
         <SystemHealthPanel @run-command="runHealthCommand" />
       </div>
+      <!-- 最近操作（统一设计 D-UD-09）：事后撤销的入口，与提示里的「撤销」是同一条记录。只在内存里，重启后清空。 -->
+      <div v-else-if="section === 'recent'" class="task-center__body" data-test="task-center-operations">
+        <p class="task-center__note" data-test="task-center-operations-note">这里列出最近 {{ operationsLimit }} 次可以撤销的操作（移到废纸篓、批量编辑等），新的在前。只记在内存里，应用重启后清空。</p>
+        <EmptyState
+          v-if="!operations.length"
+          icon="undo"
+          title="还没有可以撤销的操作"
+          message="移到废纸篓、批量编辑这类操作完成后会出现在这里，错过了提示里的「撤销」也能在这里撤销。"
+          data-test="task-center-operations-empty"
+        />
+        <ul v-else class="task-center__items">
+          <li v-for="operation in operations" :key="operation.id" class="task-item task-operation" :data-test="`task-operation-${operation.id}`">
+            <div class="task-item__main">
+              <span class="task-item__name" :title="operation.label">{{ operation.label }}</span>
+              <span class="task-item__spacer"></span>
+              <time class="task-item__state" :datetime="isoTime(operation.at)" :title="formatTime(operation.at)">{{ relativeTime(operation.at) }}</time>
+              <button
+                type="button"
+                class="btn btn--secondary btn--sm task-item__action"
+                :disabled="operation.undoing"
+                :data-test="`task-operation-undo-${operation.id}`"
+                @click="undoOperation(operation)"
+              >{{ operation.undoing ? '撤销中…' : '撤销' }}</button>
+            </div>
+          </li>
+        </ul>
+      </div>
       <div v-else class="task-center__body">
-        <p v-if="loadError" class="task-center__error" role="alert" data-test="task-center-error">{{ loadError }}</p>
+        <AppBanner v-if="loadError" tone="danger" title="读取任务状态失败" :message="loadError" data-test="task-center-error" />
         <ul v-if="warnings.length" class="task-center__warnings" role="status" data-test="task-center-warnings">
           <li v-for="(warning, index) in warnings" :key="`warning-${index}`">{{ warning }}</li>
         </ul>
@@ -42,14 +72,14 @@
                   v-for="action in itemActions(item)"
                   :key="action.action"
                   type="button"
-                  class="btn-secondary task-item__action"
+                  class="btn btn--secondary btn--sm task-item__action"
                   :disabled="isBusy(`item:${item.key}`)"
                   :data-test="`task-action-${item.key}-${action.action}`"
                   @click="runItemAction(item, action)"
                 >{{ action.label }}</button>
               </div>
               <div v-if="item.progress && item.progress.total > 0" class="task-item__progress" :data-test="`task-item-progress-${item.key}`">
-                <span class="task-item__bar"><i :style="{ width: `${progressPercent(item)}%` }"></i></span>
+                <ProgressBar class="task-item__bar" :value="progressPercent(item) / 100" />
                 <span class="task-item__progress-text">{{ item.progress.done }}/{{ item.progress.total }}</span>
               </div>
               <p v-if="lastRunText(item)" class="task-item__last" :data-test="`task-item-last-${item.key}`">{{ lastRunText(item) }}</p>
@@ -83,7 +113,7 @@
                     v-for="action in recentActions(job)"
                     :key="action.action"
                     type="button"
-                    class="btn-secondary task-item__action"
+                    class="btn btn--secondary btn--sm task-item__action"
                     :disabled="isBusy(`recent:${job.kind}:${job.id}`)"
                     :data-test="`task-recent-action-${job.kind}-${job.id}-${action.action}`"
                     @click="runRecentAction(job, action)"
@@ -116,10 +146,18 @@ import { PLAYBACK_PROXY_CODE_LABELS } from '../utils/playbackProxy.js';
 import { EDIT_STATUS_LABELS } from '../utils/videoEdit.js';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 import { findCommand, isCommandEnabled } from '../utils/commandRegistry.js';
+import * as recentOperations from '../utils/recentOperations.js';
 import SystemHealthPanel from './SystemHealthPanel.vue';
+import AppBadge from './ui/AppBadge.vue';
+import AppBanner from './ui/AppBanner.vue';
+import AppIcon from './ui/AppIcon.vue';
+import EmptyState from './ui/EmptyState.vue';
+import ProgressBar from './ui/ProgressBar.vue';
 
 // 事件驱动的重拉合并窗口：清理分析与字幕队列的进度事件可能一秒好几条，只取最后一次。
 const REFRESH_DEBOUNCE_MS = 300;
+// 「最近操作」里的相对时间（刚刚、3 分钟前）多久走一次。
+const CLOCK_TICK_MS = 30000;
 
 const ITEM_SECTIONS = [
   { key: 'running', label: '运行中' },
@@ -180,12 +218,26 @@ function numericID(value) {
   return id;
 }
 
+// 相对时间：一分钟内「刚刚」，一小时内「N 分钟前」，一天内「N 小时前」，再早写月日时分。
+export function relativeTimeText(at, now = Date.now()) {
+  const time = Number(at);
+  if (!Number.isFinite(time) || time <= 0) return '';
+  const minutes = Math.floor(Math.max(0, now - time) / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} 小时前`;
+  const date = new Date(time);
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 // 任务中心抽屉（D-PC18、APP-03）。只读聚合 GetTaskCenterSnapshot：22 个后台任务 key 的状态、
 // 进度、上一轮结果与可用动作，外加字幕 / 超分 / 下载 / 播放代理 / 集中整理的最近任务。
 // 常挂载（关着也在），这样顶栏角标能跟着 task-center-changed 走；打开时再主动拉一次。
+// 「最近操作」页签（统一设计 D-UD-09）读 utils/recentOperations.js：生产方用 notifyUndoable 记下的可撤销操作，
+// 撤销走同一条记录（recentOperations.undo），失败时记录留着并提示原因。
 export default {
   name: 'TaskCenterDrawer',
-  components: { SystemHealthPanel },
+  components: { AppBadge, AppBanner, AppIcon, EmptyState, ProgressBar, SystemHealthPanel },
   mixins: [runtimeEventsMixin],
   props: {
     open: { type: Boolean, default: false }
@@ -196,10 +248,16 @@ export default {
       snapshot: { items: [], recent: [], warnings: [] },
       loadError: '',
       section: 'tasks',
-      busy: {}
+      busy: {},
+      operationsLimit: recentOperations.RECENT_OPERATIONS_LIMIT,
+      now: Date.now()
     };
   },
   computed: {
+    // 新的在前（recentOperations.list 的顺序）；读的是响应式状态，别处记下或撤销后这里跟着变。
+    operations() {
+      return recentOperations.list();
+    },
     items() {
       return asArray(this.snapshot.items);
     },
@@ -234,6 +292,10 @@ export default {
   watch: {
     open(open) {
       if (open) this.refresh();
+      this.syncClock();
+    },
+    section() {
+      this.syncClock();
     },
     badge: {
       immediate: true,
@@ -252,8 +314,33 @@ export default {
   beforeUnmount() {
     document.removeEventListener('keydown', this.handleDocumentKeydown);
     clearTimeout(this._refreshTimer);
+    clearInterval(this._clockTimer);
   },
   methods: {
+    // 只在「最近操作」页签开着时走表，免得关着的抽屉每半分钟重渲染一次。
+    syncClock() {
+      clearInterval(this._clockTimer);
+      this._clockTimer = null;
+      this.now = Date.now();
+      if (this.open && this.section === 'recent') this._clockTimer = setInterval(() => { this.now = Date.now(); }, CLOCK_TICK_MS);
+    },
+    relativeTime(at) {
+      return relativeTimeText(at, this.now);
+    },
+    isoTime(at) {
+      const date = new Date(Number(at));
+      return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+    },
+    // 撤销成功后记录自己从列表里消失；失败时记录留着可再试，原因用全局提示说（与提示里的「撤销」同一口径）。
+    async undoOperation(operation) {
+      try {
+        await recentOperations.undo(operation.id);
+      } catch (err) {
+        const detail = typeof err === 'string' ? err : err?.message;
+        const reason = typeof detail === 'string' ? detail.trim() : '';
+        notifyError(reason ? `撤销失败：${reason}` : '撤销失败');
+      }
+    },
     async runHealthCommand(id) {
       if (id === 'action:task-center') {
         this.section = 'tasks';
@@ -288,7 +375,7 @@ export default {
       try {
         this.applySnapshot(await GetTaskCenterSnapshot());
       } catch (err) {
-        this.loadError = `读取任务状态失败：${err}`;
+        this.loadError = String(err?.message || err || '').trim() || '请稍后重试';
       }
     },
     scheduleRefresh() {
@@ -447,12 +534,12 @@ export default {
 </script>
 
 <style scoped>
-.task-center__tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 18px; border-bottom: 1px solid var(--border-color); }
-.task-center__tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-border); }
+.task-center__tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--hairline); }
+.task-center__tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
 .task-center-overlay {
   position: fixed;
   inset: 0;
-  z-index: 950;
+  z-index: var(--z-drawer);
   display: flex;
   justify-content: flex-end;
   background: var(--overlay-bg);
@@ -471,72 +558,64 @@ export default {
 .task-center__head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--hairline);
 }
-.task-center__head h2 { font-size: 16px; font-weight: 700; }
-.task-center__summary { color: var(--text-muted); font-size: 12px; }
-.task-center__close {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-}
+.task-center__head h2 { font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.task-center__summary { color: var(--text-muted); font-size: var(--fs-caption); }
+.task-center__close { margin-left: auto; }
 .task-center__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 10px 16px 18px;
+  padding: var(--space-3) var(--space-4) var(--space-4);
 }
-.task-center__error { color: var(--danger-color); font-size: 13px; margin-bottom: 8px; }
+.task-center__note { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--fs-caption); line-height: 1.6; }
 .task-center__warnings {
-  margin: 0 0 10px;
-  padding: 8px 10px 8px 26px;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) 26px;
   border: 1px solid var(--warning-border);
   border-radius: var(--radius);
-  color: var(--warning-color);
-  font-size: 12.5px;
+  color: var(--warning-text);
+  font-size: var(--fs-secondary);
 }
-.task-center__section { margin-top: 10px; }
+.task-center__section { margin-top: var(--space-3); }
 .task-center__section h3 {
   margin-bottom: 6px;
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.04em;
 }
 .task-center__count { margin-left: 6px; color: var(--text-muted); font-family: var(--font-mono); }
-.task-center__empty { color: var(--text-muted); font-size: 12.5px; }
+.task-center__empty { color: var(--text-muted); font-size: var(--fs-secondary); }
 .task-center__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.task-recent-group h4 { margin: 8px 0 4px; color: var(--text-muted); font-size: 11.5px; font-weight: 600; }
+.task-recent-group h4 { margin: var(--space-2) 0 var(--space-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .task-item,
 .task-recent {
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
 }
 .task-item--running { border-color: var(--border-strong); }
 .task-item--failed { border-color: var(--warning-border); }
-.task-item__main { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.task-item__name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-item__main { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.task-item__name { font-weight: var(--fw-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-item__state { flex: none; color: var(--text-secondary); }
-.task-item--waiting_idle .task-item__state { color: var(--warning-color); }
+.task-item--waiting_idle .task-item__state { color: var(--warning-text); }
 .task-item__spacer { flex: 1; }
-.task-item__action { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
-.task-item__progress { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.task-item__bar { flex: 1; height: 4px; border-radius: 2px; background: var(--hairline); overflow: hidden; }
-.task-item__bar i { display: block; height: 100%; background: var(--accent-color); }
-.task-item__progress-text { color: var(--text-muted); font-family: var(--font-mono); font-size: 11.5px; }
-.task-item__last { margin-top: 4px; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
-.task-item__failures { margin-top: 4px; color: var(--text-secondary); font-size: 12px; }
-.task-item__failures summary { cursor: pointer; color: var(--warning-color); }
-.task-item__failures ul { margin: 4px 0 0; padding-left: 18px; max-height: 160px; overflow-y: auto; }
+.task-item__action { flex: none; }
+.task-item__progress { display: flex; align-items: center; gap: var(--space-2); margin-top: 6px; }
+.task-item__bar { flex: 1; }
+.task-item__progress-text { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-caption); }
+.task-item__last { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.task-item__failures { margin-top: var(--space-1); color: var(--text-secondary); font-size: var(--fs-caption); }
+.task-item__failures summary { cursor: pointer; color: var(--warning-text); }
+.task-item__failures ul { margin: var(--space-1) 0 0; padding-left: 18px; max-height: 160px; overflow-y: auto; }
 .task-item__failures li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-operation .task-item__state { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 </style>

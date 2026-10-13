@@ -11,6 +11,7 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import StorageHealthPanel from './StorageHealthPanel.vue';
+import { feedbackState, resetFeedback } from '../../utils/feedback.js';
 
 const GIB = 1024 ** 3;
 const item = (id, size, extra = {}) => ({
@@ -48,6 +49,7 @@ const tileText = (wrapper, key) => wrapper.get(`[data-test="storage-tile-${key}"
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetFeedback();
   document.body.innerHTML = '';
   api.GetStorageReport.mockResolvedValue(report());
   api.GetCleanupStatus.mockResolvedValue({
@@ -88,11 +90,18 @@ describe('存储体检', () => {
     wrapper.unmount();
   });
 
-  it('勾选后先汇总确认（收藏、评过分的单独提醒），确认才移到废纸篓，并通知片库刷新', async () => {
+  it('勾选后底部出现选择操作条（总大小、收藏或评过分的提醒）；「删除前确认」开着（默认）先汇总确认，确认才移到废纸篓，并通知片库刷新', async () => {
     const wrapper = await mountPanel();
+    // 没勾选时页面上没有批量动作（D-UD-10）。
+    expect(wrapper.find('[data-test="storage-selection-bar"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="storage-delete-selected"]').exists()).toBe(false);
     await wrapper.get('[data-test="storage-select-all"]').setValue(true);
-    expect(wrapper.get('[data-test="storage-selected-summary"]').text()).toBe('已选 3 部 · 30.0 GB');
+    expect(wrapper.get('[data-test="selection-bar-count"]').text()).toBe('已选当前结果全部 3 项');
+    expect(wrapper.get('[data-test="storage-selected-summary"]').text()).toBe('共 30.0 GB');
+    expect(wrapper.get('[data-test="storage-selected-curated"]').text()).toContain('其中 1 部已收藏或评过分');
+    expect(wrapper.get('[data-test="storage-delete-selected"]').text()).toBe('移到废纸篓（3）');
     await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
     expect(wrapper.get('[data-test="storage-delete-summary"]').text()).toBe('将把 3 个视频移到废纸篓，共 30.0 GB。');
     expect(wrapper.get('[data-test="storage-delete-curated"]').text()).toContain('其中 1 个已收藏或评过分');
 
@@ -110,11 +119,48 @@ describe('存储体检', () => {
     const wrapper = await mountPanel();
     await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[1].setValue(true);
     await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
     await wrapper.get('[data-test="storage-delete-cancel"]').trigger('click');
     await flushPromises();
     expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
     expect(wrapper.emitted('videos-changed')).toBeUndefined();
     expect(wrapper.vm.selection).toEqual([2]);
+    wrapper.unmount();
+  });
+
+  it('设置「删除前确认」关了：不弹确认，直接移到废纸篓（可撤销，D-UD-07 第 1 级），只处理此刻清单里勾着的行', async () => {
+    api.GetSettings.mockResolvedValueOnce({ confirm_before_delete: false });
+    const wrapper = await mountPanel();
+    await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[1].setValue(true);
+    await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[2].setValue(true);
+    // 例如之前发出的取数此时回来，3 号片不在新清单里，它的勾选随之放掉。
+    api.GetStorageReport.mockResolvedValue(report({
+      unwatched: { count: 2, bytes: 26 * GIB, savings: 0, items: [item(1, 20 * GIB), item(2, 6 * GIB)], has_more: false }
+    }));
+    await wrapper.vm.load();
+    await flushPromises();
+    await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="storage-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(feedbackState.confirm).toBe(null);
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([2], true, expect.any(String));
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [2] }]]);
+    wrapper.unmount();
+  });
+
+  it('全选当前结果（N）的 N 是列出的部数；取消选择（Esc）清掉勾选，什么都不删', async () => {
+    const wrapper = await mountPanel();
+    await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[1].setValue(true);
+    expect(wrapper.get('[data-test="selection-bar-count"]').text()).toBe('已选 1 项');
+    expect(wrapper.get('[data-test="selection-bar-select-all-matching"]').text()).toBe('全选当前结果（3）');
+    await wrapper.get('[data-test="selection-bar-select-all-matching"]').trigger('click');
+    expect(wrapper.vm.selection).toEqual([1, 2, 3]);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(wrapper.vm.selection).toEqual([]);
+    expect(wrapper.find('[data-test="storage-selection-bar"]').exists()).toBe(false);
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
+    expect(wrapper.emitted('videos-changed')).toBeUndefined();
     wrapper.unmount();
   });
 
@@ -174,9 +220,12 @@ describe('存储体检的删除保护（审查 I-2 / I-3）', () => {
     expect(wrapper.get('[data-test="storage-select-all"]').element.disabled).toBe(true);
     expect(wrapper.findAll('[data-test="storage-unwatched-toggle"]').every(node => node.element.disabled)).toBe(true);
     wrapper.vm.toggleSelection(1);
+    wrapper.vm.selectAllListed();
     wrapper.vm.askDelete();
+    await wrapper.vm.deleteSelected();
     expect(wrapper.vm.selection).toEqual([]);
     expect(wrapper.find('[data-test="storage-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
     finish();
     await pending;
     await flushPromises();
@@ -188,6 +237,7 @@ describe('存储体检的删除保护（审查 I-2 / I-3）', () => {
     const wrapper = await mountPanel();
     await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[2].setValue(true);
     await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
     expect(wrapper.find('[data-test="storage-delete-confirm-dialog"]').exists()).toBe(true);
     // 例如对话框打开前已经发出的取数此时回来，3 号片不在新清单里。
     api.GetStorageReport.mockResolvedValue(report({
@@ -212,6 +262,7 @@ describe('存储体检的删除保护（审查 I-2 / I-3）', () => {
     expect(reclaimValue()).toBe('1.0 GB');
     await wrapper.get('[data-test="storage-select-all"]').setValue(true);
     await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
     await wrapper.get('[data-test="storage-delete-confirm"]').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('status-change').at(-1)).toEqual([{ loading: false, processing: true }]);
@@ -259,6 +310,7 @@ describe('存储体检复审修复（部分失败、撤销中、清理结果乱�
     await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[0].setValue(true);
     await wrapper.findAll('[data-test="storage-unwatched-toggle"]')[1].setValue(true);
     await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');
+    await flushPromises();
     await wrapper.get('[data-test="storage-delete-confirm"]').trigger('click');
     await flushPromises();
     expect(api.GetStorageReport).toHaveBeenCalledTimes(2);

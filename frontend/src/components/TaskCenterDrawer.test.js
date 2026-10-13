@@ -10,9 +10,10 @@ const api = vi.hoisted(() => new Proxy({}, {
 }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 
-import TaskCenterDrawer from './TaskCenterDrawer.vue';
+import TaskCenterDrawer, { relativeTimeText } from './TaskCenterDrawer.vue';
 import { BACKGROUND_TASK_LABELS } from '../utils/idleScheduling.js';
-import { feedbackState, resetFeedback, resolveConfirm } from '../utils/feedback.js';
+import { feedbackState, notifyUndoable, resetFeedback, resolveConfirm, runToastAction } from '../utils/feedback.js';
+import * as recentOperations from '../utils/recentOperations.js';
 
 const KEYS = Object.keys(BACKGROUND_TASK_LABELS);
 
@@ -47,6 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   while (wrappers.length) wrappers.pop().unmount();
   delete window.runtime;
+  recentOperations.clear();
   vi.useRealTimers();
 });
 
@@ -367,5 +369,100 @@ describe('视频工作台最近任务（P-008）', () => {
     await flushPromises();
     expect(wrapper.emitted('open-video-edit')[0]).toEqual([32]);
     expect(wrapper.emitted('close')).toBeTruthy();
+  });
+});
+
+// 统一设计 D-UD-09：任务中心「最近操作」页签——事后撤销的入口，与提示里的「撤销」是同一条记录。
+describe('最近操作（D-UD-09）', () => {
+  async function openRecent() {
+    const wrapper = mountDrawer();
+    await flushPromises();
+    await wrapper.get('[data-test="task-center-tab-recent"]').trigger('click');
+    return wrapper;
+  }
+
+  it('没有记录时给空状态，并写明只在内存里、重启后清空', async () => {
+    const wrapper = await openRecent();
+    expect(wrapper.get('[data-test="task-center-tab-recent"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.find('[data-test="task-center-operations-empty"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="task-center-operations-note"]').text()).toContain('应用重启后清空');
+    expect(wrapper.get('[data-test="task-center-operations-note"]').text()).toContain('最近 20 次');
+    expect(wrapper.find('[data-test="task-center-recent"]').exists()).toBe(false);
+  });
+
+  it('新的在前，每条有说明、相对时间与「撤销」；页签上带条数', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-13T10:00:00Z'), toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const older = recentOperations.push({ label: '移到废纸篓：3 个视频', undo: vi.fn() });
+    vi.setSystemTime(new Date('2026-10-13T10:05:00Z'));
+    const newer = recentOperations.push({ label: '批量编辑：12 部视频', undo: vi.fn() });
+    vi.setSystemTime(new Date('2026-10-13T10:05:20Z'));
+    const wrapper = await openRecent();
+
+    const rows = wrapper.findAll('[data-test^="task-operation-"]').filter(row => !row.attributes('data-test').includes('undo'));
+    expect(rows.map(row => row.attributes('data-test'))).toEqual([`task-operation-${newer}`, `task-operation-${older}`]);
+    expect(rows[0].text()).toContain('批量编辑：12 部视频');
+    expect(rows[0].text()).toContain('刚刚');
+    expect(rows[1].text()).toContain('5 分钟前');
+    expect(rows[0].get(`[data-test="task-operation-undo-${newer}"]`).text()).toBe('撤销');
+    expect(wrapper.get('[data-test="task-center-tab-recent"]').text()).toContain('2');
+
+    // 开着时相对时间会走：再过一分钟，「刚刚」变成「1 分钟前」。
+    vi.advanceTimersByTime(60000);
+    await flushPromises();
+    expect(wrapper.get(`[data-test="task-operation-${newer}"]`).text()).toContain('1 分钟前');
+  });
+
+  it('点「撤销」执行一次既有的恢复接口，成功后这条从列表消失', async () => {
+    const undo = vi.fn(() => Promise.resolve());
+    const id = recentOperations.push({ label: '移到废纸篓：1 个视频', undo });
+    const wrapper = await openRecent();
+
+    await wrapper.get(`[data-test="task-operation-undo-${id}"]`).trigger('click');
+    await flushPromises();
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(`[data-test="task-operation-${id}"]`).exists()).toBe(false);
+    expect(wrapper.find('[data-test="task-center-operations-empty"]').exists()).toBe(true);
+    expect(feedbackState.toasts.filter(toast => toast.level === 'error')).toEqual([]);
+  });
+
+  it('撤销失败：用全局提示说原因，这条留着可以再试', async () => {
+    const undo = vi.fn().mockRejectedValueOnce(new Error('回收站里的记录已被清空')).mockResolvedValueOnce();
+    const id = recentOperations.push({ label: '批量编辑：2 张图片', undo });
+    const wrapper = await openRecent();
+
+    await wrapper.get(`[data-test="task-operation-undo-${id}"]`).trigger('click');
+    await flushPromises();
+    expect(feedbackState.toasts.map(toast => [toast.level, toast.message])).toContainEqual(['error', '撤销失败：回收站里的记录已被清空']);
+    expect(wrapper.find(`[data-test="task-operation-${id}"]`).exists()).toBe(true);
+    expect(wrapper.get(`[data-test="task-operation-undo-${id}"]`).element.disabled).toBe(false);
+
+    await wrapper.get(`[data-test="task-operation-undo-${id}"]`).trigger('click');
+    await flushPromises();
+    expect(undo).toHaveBeenCalledTimes(2);
+    expect(wrapper.find(`[data-test="task-operation-${id}"]`).exists()).toBe(false);
+  });
+
+  it('notifyUndoable 记下的操作出现在这里；从提示里撤销后这里同步消失，恢复接口只执行一次', async () => {
+    const undo = vi.fn(() => Promise.resolve());
+    const toastID = notifyUndoable('已移到废纸篓：2 个视频', undo);
+    const wrapper = await openRecent();
+    expect(wrapper.text()).toContain('已移到废纸篓：2 个视频');
+
+    await runToastAction(toastID);
+    await flushPromises();
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(wrapper.findAll('[data-test^="task-operation-undo-"]')).toHaveLength(0);
+  });
+});
+
+describe('relativeTimeText', () => {
+  const now = new Date(2026, 9, 13, 18, 30).getTime();
+  it('刚刚 / 分钟 / 小时，再早写月日时分；无效时间给空串', () => {
+    expect(relativeTimeText(now - 20 * 1000, now)).toBe('刚刚');
+    expect(relativeTimeText(now - 59 * 60000, now)).toBe('59 分钟前');
+    expect(relativeTimeText(now - 3 * 3600000, now)).toBe('3 小时前');
+    expect(relativeTimeText(new Date(2026, 9, 11, 9, 5).getTime(), now)).toBe('10-11 09:05');
+    expect(relativeTimeText(0, now)).toBe('');
+    expect(relativeTimeText(undefined, now)).toBe('');
   });
 });

@@ -11,6 +11,7 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import LostMediaPanel from './LostMediaPanel.vue';
+import { feedbackState, resetFeedback, resolveConfirm } from '../../utils/feedback.js';
 
 const item = (id, extra = {}) => ({ id, name: `${id}.mp4`, path: `/old/a/${id}.mp4`, directory: '/old/a', size: 10, source: 'stale', reason: 'missing', purgeable: true, ...extra });
 
@@ -34,6 +35,7 @@ async function mountPanel() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetFeedback();
   document.body.innerHTML = '';
   api.GetLostMediaReport.mockImplementation(kind => Promise.resolve(report(kind)));
   api.ListLostMediaItems.mockResolvedValue({ items: [item(1), item(2)], has_more: false });
@@ -83,23 +85,60 @@ describe('失联数据面板（D-LD-*）', () => {
     wrapper.unmount();
   });
 
-  it('在文件夹里找：展开后勾选的条目才参与；取消选文件夹什么都不做', async () => {
+  it('从文件夹找回：选择操作条只处理勾选的条目，目录行上的按钮处理整个目录；取消选文件夹什么都不做', async () => {
     api.PreviewLostRelinkSearch.mockResolvedValue({ kind: 'video', unmatched: 0, items: [] });
     const wrapper = await mountPanel();
     await wrapper.get('[data-test="lost-dir-expand"]').trigger('click');
     await flushPromises();
+    // 没勾选时页面上没有批量动作（D-UD-10）。
+    expect(wrapper.find('[data-test="lost-selection-bar"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="lost-items"]').text()).not.toContain('不勾选时');
     await wrapper.findAll('[data-test="lost-item-toggle"]')[1].setValue(true);
-    await wrapper.get('[data-test="lost-dir-search"]').trigger('click');
+    expect(wrapper.get('[data-test="selection-bar-count"]').text()).toBe('已选 1 项');
+    await wrapper.get('[data-test="lost-selection-search"]').trigger('click');
     await flushPromises();
     expect(api.PreviewLostRelinkSearch).toHaveBeenCalledWith({ kind: 'video', directory: '/new', item_ids: [2] });
+    // 有勾选时，目录行上的按钮仍然只按整个目录处理，不跟着勾选变。
+    await wrapper.get('[data-test="lost-dir-search"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewLostRelinkSearch).toHaveBeenLastCalledWith({ kind: 'video', directory: '/new', item_ids: [1, 2] });
     api.SelectDirectory.mockResolvedValueOnce('');
     await wrapper.get('[data-test="lost-search-all"]').trigger('click');
     await flushPromises();
-    expect(api.PreviewLostRelinkSearch).toHaveBeenCalledTimes(1);
+    expect(api.PreviewLostRelinkSearch).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
 
-  it('清除：列出连带影响，先备份交给宿主，输入「清除记录」才可执行；结果按原因列出跳过', async () => {
+  it('全选当前结果（N）：N 是这个目录里可处理的条数，含还没加载的；Esc 取消选择', async () => {
+    api.ListLostMediaItems
+      .mockResolvedValueOnce({ items: [item(1), item(2)], has_more: true })
+      .mockResolvedValueOnce({ items: [item(1), item(2), item(5)], has_more: false });
+    api.PreviewLostPurge.mockResolvedValue({ kind: 'video', ids: [1, 2, 5], count: 3, size: 30, not_purgeable: 0, skipped: {} });
+    const report3 = report();
+    report3.roots[0].directories[0].purgeable = 3;
+    api.GetLostMediaReport.mockResolvedValueOnce(report3);
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="lost-dir-expand"]').trigger('click');
+    await flushPromises();
+    await wrapper.findAll('[data-test="lost-item-toggle"]')[0].setValue(true);
+    expect(wrapper.get('[data-test="selection-bar-select-all-matching"]').text()).toBe('全选当前结果（3）');
+    await wrapper.get('[data-test="selection-bar-select-all-matching"]').trigger('click');
+    expect(wrapper.get('[data-test="selection-bar-count"]').text()).toBe('已选当前结果全部 3 项');
+    expect(wrapper.findAll('[data-test="lost-item-toggle"]').map(toggle => toggle.element.checked)).toEqual([true, true]);
+    await wrapper.get('[data-test="lost-selection-purge"]').trigger('click');
+    await flushPromises();
+    // 「全部」按目录逐页读完，不是只拿已加载的两条。
+    expect(api.PreviewLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2, 5], confirm: '' });
+    await wrapper.get('[data-test="lost-purge-close"]').trigger('click');
+    await flushPromises();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="lost-selection-bar"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('清除：列出连带影响，先备份交给宿主，在不可逆确认框里输入「清除记录」才执行；结果按原因列出跳过', async () => {
     api.ListLostMediaItems.mockResolvedValue({ items: [item(1), item(2), item(3)], has_more: false });
     api.PreviewLostPurge.mockResolvedValue({ kind: 'video', ids: [1, 2], count: 2, size: 20, not_purgeable: 1, skipped: { file_present: 1 },
       play_events: 7, tag_links: 3, person_links: 1, collection_links: 0, version_groups_dissolved: 1, version_groups_shrunk: 0,
@@ -117,12 +156,18 @@ describe('失联数据面板（D-LD-*）', () => {
     await wrapper.get('[data-test="lost-purge-backup"]').trigger('click');
     expect(wrapper.emitted('run-command')).toEqual([['action:backup-now', '立即备份数据库']]);
     const apply = wrapper.get('[data-test="lost-purge-apply"]');
-    expect(apply.attributes('disabled')).toBeDefined();
-    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除');
-    expect(apply.attributes('disabled')).toBeDefined();
-    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除记录');
-    expect(apply.attributes('disabled')).toBeUndefined();
+    // 按钮上的字就是要输入的确认词（D-UD-07 第 3 级）。
+    expect(apply.text()).toBe('清除记录');
     await apply.trigger('click');
+    expect(feedbackState.confirm).toMatchObject({ level: 'irreversible', requiredText: '清除记录', confirmText: '清除记录', danger: true });
+    expect(feedbackState.confirm.message).toContain('将清除 2 条视频记录');
+    expect(feedbackState.confirm.impact).toContain('不能撤销');
+    // 不确认就不执行。
+    resolveConfirm(false);
+    await flushPromises();
+    expect(api.ApplyLostPurge).not.toHaveBeenCalled();
+    await apply.trigger('click');
+    resolveConfirm(true);
     await flushPromises();
     // 只执行预览时通过复核的条目：3 号预览时文件还在，确认前即使变得可清除也不处理。
     expect(api.ApplyLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2], confirm: '清除记录' });
@@ -163,8 +208,9 @@ describe('失联数据面板（D-LD-*）', () => {
     await wrapper.get('[data-test="lost-dir-purge"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-test="lost-purge-impact-views"]').text()).toContain('2 条');
-    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除记录');
     await wrapper.get('[data-test="lost-purge-apply"]').trigger('click');
+    expect(feedbackState.confirm.title).toBe('清除失联图片记录');
+    resolveConfirm(true);
     await flushPromises();
     expect(api.ApplyLostPurge).toHaveBeenCalledWith({ kind: 'image', ids: [1], confirm: '清除记录' });
     expect(wrapper.emitted('videos-changed')).toEqual([[{ kind: 'image' }]]);
@@ -177,8 +223,8 @@ describe('失联数据面板（D-LD-*）', () => {
     const wrapper = await mountPanel();
     await wrapper.get('[data-test="lost-dir-purge"]').trigger('click');
     await flushPromises();
-    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除记录');
     await wrapper.get('[data-test="lost-purge-apply"]').trigger('click');
+    resolveConfirm(true);
     await flushPromises();
     const text = wrapper.get('[data-test="lost-purge-result"]').text();
     expect(text).toContain('已取消，其余未处理');

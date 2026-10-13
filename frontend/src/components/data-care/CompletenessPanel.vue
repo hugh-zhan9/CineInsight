@@ -6,11 +6,11 @@
         <h3>元数据完整度</h3>
         <small>按片库默认范围统计：扫描目录之内、未排除、路径有效。个人评分与作品集不是每部片都该有，不计入。</small>
       </div>
-      <button type="button" class="btn-secondary btn-compact" :disabled="loading" data-test="completeness-refresh" @click="load">{{ loading ? '统计中…' : '重新统计' }}</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="loading" data-test="completeness-refresh" @click="load">{{ loading ? '统计中…' : '刷新' }}</button>
     </header>
 
-    <p v-if="error" class="completeness-alert" role="alert" data-test="completeness-error">{{ error }}</p>
-    <div v-if="loading && !report" class="completeness-empty" data-test="completeness-loading">正在统计…</div>
+    <AppBanner v-if="error" tone="danger" :title="error" data-test="completeness-error" />
+    <div v-if="loading && !report" class="completeness-loading" role="status" aria-label="正在统计" data-test="completeness-loading"><SkeletonBlock :lines="5" /></div>
 
     <template v-else-if="report">
       <section v-for="group in groups" :key="group.key" class="completeness-group" :data-test="`completeness-group-${group.key}`">
@@ -30,7 +30,7 @@
               <button
                 v-if="item.missing > 0"
                 type="button"
-                class="row-btn"
+                class="btn btn--secondary btn--sm"
                 :aria-expanded="isOpen(item)"
                 :data-test="`completeness-directories-${item.kind}-${item.field}`"
                 @click="toggleDirectories(item)"
@@ -38,7 +38,7 @@
               <button
                 v-if="item.action && item.missing > 0"
                 type="button"
-                class="btn-secondary btn-compact"
+                class="btn btn--secondary btn--sm"
                 :data-test="`completeness-go-${item.kind}-${item.field}`"
                 @click="goHandle(item)"
               >去处理</button>
@@ -76,7 +76,7 @@
             <button
               v-if="batch.undoable"
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :disabled="undoingID !== 0"
               data-test="batch-edit-history-undo"
               @click="undoBatch(batch)"
@@ -95,6 +95,8 @@ import { GetMetadataCompleteness, GetMetadataCompletenessByDirectory, ListMetada
 import { logFrontend } from '../../utils/frontendLog.js';
 import { isMissingFilterField, missingFieldLabel } from '../../utils/metadataCompleteness.js';
 import { batchEditErrorMessage, describeBatchOp, undoResultText } from '../../utils/metadataBatchEdit.js';
+import AppBanner from '../ui/AppBanner.vue';
+import SkeletonBlock from '../ui/SkeletonBlock.vue';
 
 // 「缺得最多的目录」一次取几个（后端默认 10）。
 const DIRECTORY_LIMIT = 10;
@@ -111,6 +113,7 @@ const ITEM_HINTS = {
 
 export default {
   name: 'CompletenessPanel',
+  components: { AppBanner, SkeletonBlock },
   props: { directories: { type: Array, default: () => [] } },
   emits: ['open-video-id', 'run-command', 'videos-changed', 'open-library-missing', 'navigate'],
   data() {
@@ -268,39 +271,39 @@ export default {
 
 <style scoped>
 /* 与洞察页「存储体检」同一套样子：面板、分组标题、静音说明、警示条。 */
-.completeness { display: grid; gap: 22px; }
-.completeness-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 16px; }
-.completeness-head h3 { margin: 0 0 4px; font-size: 17px; font-weight: 750; }
-.completeness-head small { color: var(--text-muted); font-size: 12px; }
-.completeness-alert { margin: 0; padding: 9px 14px; border: 1px solid var(--danger-color); border-radius: 10px; color: var(--danger-color); font-size: 12px; }
-.completeness-empty { padding: 48px 8px; color: var(--text-secondary); text-align: center; }
-.completeness-muted { margin: 0; color: var(--text-muted); font-size: 12px; }
+.completeness { display: grid; gap: var(--space-5); }
+.completeness-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3) var(--space-4); }
+.completeness-head h3 { margin: 0 0 var(--space-1); font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.completeness-head small { color: var(--text-muted); font-size: var(--fs-caption); }
+.completeness-alert { margin: 0; padding: 9px 14px; border: 1px solid var(--danger-border); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-caption); }
+.completeness-loading { padding: var(--space-5) 0; }
+.completeness-muted { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 
-.completeness-group { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
-.completeness-group__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.completeness-group__head h4 { margin: 0; font-size: 15px; font-weight: 700; }
-.completeness-group__head small { color: var(--text-muted); font-size: 12px; }
+.completeness-group { display: grid; gap: var(--space-3); padding: 14px var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.completeness-group__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.completeness-group__head h4 { margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.completeness-group__head small { color: var(--text-muted); font-size: var(--fs-caption); }
 
-.completeness-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.completeness-item { display: grid; gap: 6px; padding: 6px 8px; border-radius: 10px; }
+.completeness-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.completeness-item { display: grid; gap: 6px; padding: 6px var(--space-2); border-radius: var(--radius); }
 .completeness-item:hover { background: var(--control-hover-bg); }
-.completeness-item__row { display: grid; grid-template-columns: 96px minmax(80px, 1fr) 128px auto auto; align-items: center; gap: 12px; font-size: 13px; }
-.completeness-item__label { font-weight: 600; white-space: nowrap; }
+.completeness-item__row { display: grid; grid-template-columns: 96px minmax(80px, 1fr) 128px auto auto; align-items: center; gap: var(--space-3); font-size: var(--fs-secondary); }
+.completeness-item__label { font-weight: var(--fw-semibold); white-space: nowrap; }
 .completeness-item__count { color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.completeness-bar { position: relative; height: 8px; overflow: hidden; border-radius: 999px; background: var(--control-bg); }
+.completeness-bar { position: relative; height: 8px; overflow: hidden; border-radius: var(--radius-pill); background: var(--control-bg); }
 .completeness-bar__fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; }
 .completeness-bar__fill--accent { background: var(--accent-color); }
 .completeness-bar__fill--warning { background: var(--warning-text); }
 
-.completeness-batch { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; font-size: 13px; }
-.completeness-batch__title { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.completeness-batch { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3); font-size: var(--fs-secondary); }
+.completeness-batch__title { overflow: hidden; font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 
-.completeness-dirs { padding: 2px 0 4px 108px; }
-.completeness-dirs__list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.completeness-dirs__list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; font-size: 12px; }
+.completeness-dirs { padding: 2px 0 var(--space-1) 108px; }
+.completeness-dirs__list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.completeness-dirs__list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); font-size: var(--fs-caption); }
 .completeness-dirs__list small { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.completeness-dirs__path { overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
+.completeness-dirs__path { overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 720px) {
   .completeness-item__row { grid-template-columns: 80px minmax(60px, 1fr) auto; }

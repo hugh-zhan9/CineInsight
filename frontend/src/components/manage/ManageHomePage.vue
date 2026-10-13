@@ -1,10 +1,7 @@
 <template>
   <section class="page-content manage-home" data-test="manage-home">
     <!-- 管理首页（D-UI-03）：四张统计卡点开对应动作；「最近的变化」只列本次会话收到的事件。 -->
-    <header class="manage-home__head">
-      <h2>管理</h2>
-      <p>维护片库：待处理的事、能回收的空间、在跑的任务和磁盘状态</p>
-    </header>
+    <PageHeader title="管理" subtitle="维护片库：待处理的事、能回收的空间、在跑的任务和磁盘状态" />
 
     <div class="manage-home__cards" data-test="manage-home-cards">
       <StatTile
@@ -32,7 +29,7 @@
         <li v-for="item in changes" :key="item.id">
           <button
             type="button"
-            class="manage-home__change"
+            class="btn manage-home__change"
             :disabled="!item.page"
             data-test="manage-change"
             @click="item.page && $emit('navigate', item.page)"
@@ -58,6 +55,7 @@ import { markRaw } from 'vue';
 import {
   GetAllDirectories, GetBackgroundTasks, GetCleanupStatus, GetImageCleanupStatus, GetLibraryWatcherStatus, GetPendingWorkSummary
 } from '../../../wailsjs/go/main/App';
+import PageHeader from '../ui/PageHeader.vue';
 import StatTile from '../ui/StatTile.vue';
 import { runtimeEventsMixin } from '../video-list/runtimeEvents.js';
 import { translateBackendError } from '../../utils/feedback.js';
@@ -68,12 +66,8 @@ import { reclaimHeadline, reclaimSummary } from '../../utils/storageReclaim.js';
 
 export const MANAGE_CHANGES_SHOWN = 10;
 
-const ICONS = {
-  pending: ['M4 13h4l2 3h4l2-3h4', 'M5.5 5h13l1.5 8v6h-16v-6z'],
-  reclaim: ['M4 7h16', 'M9.5 7V4.5h5V7', 'M6.5 7l1 13h9l1-13', 'M10.5 11v5.5', 'M13.5 11v5.5'],
-  tasks: ['M3 12h4l3-7 4 14 3-7h4'],
-  disks: ['M3.5 14.5h17v5h-17z', 'M5 14.5l2.5-9h9l2.5 9', 'M16.5 17h.01']
-};
+// 统计卡图标：图标集 ui/icons.js 里的名字（D-UD-06）。
+const ICONS = { pending: 'inbox', reclaim: 'trash', tasks: 'activity', disks: 'disk' };
 
 // 扫描目录所在的卷：/Volumes/<名字> 一块盘，其余算系统盘（与洞察页的卷统计同一口径）。
 export function volumeOf(path) {
@@ -104,7 +98,7 @@ function failureText(err) {
 
 export default {
   name: 'ManageHomePage',
-  components: { StatTile },
+  components: { PageHeader, StatTile },
   mixins: [runtimeEventsMixin],
   // pageActive：宿主把页面切回来时为 true，这里静默重取一遍（离开期间计数可能变了）。
   props: { pageActive: { type: Boolean, default: true } },
@@ -198,27 +192,31 @@ export default {
 
 <style scoped>
 .manage-home { display: grid; gap: 22px; align-content: start; padding-bottom: 56px; }
-.manage-home__head h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
-.manage-home__head p { margin: 2px 0 0; color: var(--text-secondary); font-size: 12.5px; }
+.manage-home > :deep(.ui-page-header) { margin-bottom: 0; }
 .manage-home__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
 .manage-home__changes { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+/* 整行可点的变化记录：沿用 .btn 的焦点环与禁用口径，版式由这里接管。 */
 .manage-home__change {
   display: grid;
   grid-template-columns: 48px minmax(120px, auto) minmax(0, 1fr);
   align-items: baseline;
-  gap: 12px;
+  justify-content: stretch;
+  gap: var(--space-3);
   width: 100%;
-  padding: 10px 14px;
+  height: auto;
+  padding: var(--space-3) 14px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--panel-bg);
   color: var(--text-primary);
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-regular);
   text-align: left;
-  cursor: pointer;
+  white-space: normal;
 }
 .manage-home__change:hover:not(:disabled) { border-color: var(--accent-border); }
-.manage-home__change:disabled { cursor: default; }
-.manage-home__change time { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.manage-home__change strong { font-size: 13px; }
-.manage-home__change span { overflow: hidden; color: var(--text-secondary); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.manage-home__change:disabled { opacity: 1; cursor: default; }
+.manage-home__change time { color: var(--text-muted); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.manage-home__change strong { font-size: var(--fs-secondary); font-weight: var(--fw-semibold); }
+.manage-home__change span { overflow: hidden; color: var(--text-secondary); font-size: var(--fs-secondary); text-overflow: ellipsis; white-space: nowrap; }
 </style>

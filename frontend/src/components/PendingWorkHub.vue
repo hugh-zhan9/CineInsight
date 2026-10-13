@@ -1,13 +1,9 @@
 <template>
-  <BaseModal v-if="open" class="pending-work-modal" close-on-overlay data-test="pending-work-hub" @close="$emit('close')">
-    <div class="pending-work__head">
-      <h2>待处理</h2>
-      <span v-if="summary" class="pending-work__total" data-test="pending-work-total">共 {{ formatCount(summary.total) }} 项</span>
-      <button type="button" class="pending-work__close" aria-label="关闭待处理" @click="$emit('close')">×</button>
-    </div>
+  <DialogShell v-if="open" title="待处理" size="sm" class="pending-work-modal" data-test="pending-work-hub" @close="$emit('close')">
+    <p v-if="summary" class="pending-work__total" data-test="pending-work-total">共 {{ formatCount(summary.total) }} 项</p>
 
-    <p v-if="error" class="pending-work__error" role="alert" data-test="pending-work-error">{{ error }}</p>
-    <p v-else-if="!summary" class="pending-work__hint">正在读取…</p>
+    <AppBanner v-if="error" tone="danger" :title="error" data-test="pending-work-error" />
+    <div v-else-if="!summary" class="pending-work__loading" role="status" aria-label="正在读取"><SkeletonBlock :lines="4" /></div>
 
     <template v-if="summary && !error">
       <ul class="pending-work__list">
@@ -22,7 +18,7 @@
           <kbd v-if="row.shortcut" class="pending-work__kbd">{{ row.shortcut }}</kbd>
           <button
             type="button"
-            class="btn-secondary pending-work__go"
+            class="btn btn--secondary btn--sm pending-work__go"
             :disabled="row.count === 0"
             :data-test="`pending-go-${row.field}`"
             @click="go(row)"
@@ -31,16 +27,18 @@
       </ul>
       <p v-if="summary.ai_video_failed_runs > 0" class="pending-work__failed" data-test="pending-ai-failed">
         另有 {{ formatCount(summary.ai_video_failed_runs) }} 个视频 AI 打标失败（不计入待处理）。
-        <button type="button" class="link-btn" data-test="pending-open-task-center" @click="openTaskCenter">在任务中心查看</button>
+        <button type="button" class="btn-link" data-test="pending-open-task-center" @click="openTaskCenter">在任务中心查看</button>
       </p>
       <p v-if="summary.total === 0" class="pending-work__hint" data-test="pending-work-empty">暂无待处理事项。</p>
     </template>
-  </BaseModal>
+  </DialogShell>
 </template>
 
 <script>
 import { GetPendingWorkSummary } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import AppBanner from './ui/AppBanner.vue';
+import DialogShell from './ui/DialogShell.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 
 // 顶栏角标与工作台的刷新周期：数量来自好几个面板背后的计数查询，不跟每个进度事件走。
 const REFRESH_INTERVAL_MS = 60000;
@@ -61,7 +59,7 @@ export const PENDING_WORK_ROWS = [
 // 待处理工作台（D-PC27、META-08、APP-11）。常挂载，关着时也定时刷新，顶栏「待处理」角标读它。
 export default {
   name: 'PendingWorkHub',
-  components: { BaseModal },
+  components: { AppBanner, DialogShell, SkeletonBlock },
   props: {
     open: { type: Boolean, default: false }
   },
@@ -120,56 +118,31 @@ export default {
 </script>
 
 <style scoped>
-:deep(.pending-work-modal) {
-  width: 460px;
-  max-width: 100%;
-  padding: 18px 20px 16px;
-}
-.pending-work__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
-.pending-work__head h2 { margin: 0; font-size: 17px; }
-.pending-work__total { color: var(--text-muted); font-size: 12.5px; }
-.pending-work__close {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-}
-.pending-work__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.pending-work__total { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--fs-secondary); }
+.pending-work__loading { padding: var(--space-3) 0; }
+.pending-work__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
 .pending-work__row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
+  gap: var(--space-3);
+  padding: 7px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 .pending-work__row--empty { color: var(--text-muted); }
 .pending-work__label { flex: 1; min-width: 0; }
-.pending-work__count { font-family: var(--font-mono); font-weight: 600; }
-.pending-work__row--empty .pending-work__count { font-weight: 400; }
+.pending-work__count { font-family: var(--font-mono); font-weight: var(--fw-semibold); }
+.pending-work__row--empty .pending-work__count { font-weight: var(--fw-regular); }
 .pending-work__kbd {
   padding: 1px 5px;
   border: 1px solid var(--hairline);
   border-radius: 4px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
-.pending-work__go { height: 26px; padding: 0 10px; font-size: 12px; }
-.pending-work__failed { margin-top: 10px; color: var(--warning-color); font-size: 12.5px; }
-.pending-work__error { color: var(--danger-color); font-size: 13px; }
-.pending-work__hint { margin-top: 8px; color: var(--text-muted); font-size: 12.5px; }
-.link-btn {
-  border: 0;
-  background: transparent;
-  color: var(--accent-text);
-  font-size: 12.5px;
-  cursor: pointer;
-  padding: 0;
-}
+.pending-work__failed { margin-top: var(--space-3); color: var(--warning-text); font-size: var(--fs-secondary); }
+.pending-work__hint { margin-top: var(--space-2); color: var(--text-muted); font-size: var(--fs-secondary); }
 </style>

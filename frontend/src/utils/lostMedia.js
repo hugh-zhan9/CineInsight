@@ -1,7 +1,20 @@
 // 失联数据治理（docs/loopx/design/2026-10-12-data-care，D-LD-*）的界面文案与小工具。
 // 原因码、配对结果与跳过原因都是后端的固定码，这里只负责翻成中文。
 
+// 清除失联记录是不可逆操作（统一设计 D-UD-07 第 3 级）：走 confirmAction 的 level 'irreversible'，
+// 按钮上的字就是要输入的确认词。确认词同时是后端 ApplyLostPurge 的 Confirm 合同（services/lost_media.go），不能改。
 export const LOST_PURGE_CONFIRM_TEXT = '清除记录';
+
+// lostPurgeConfirmOptions 给 confirmAction 的参数：数量与影响写清，按钮与输入框都是「清除记录」。
+export function lostPurgeConfirmOptions({ count = 0, kindNoun = '视频' } = {}) {
+  return {
+    level: 'irreversible',
+    title: `清除失联${kindNoun}记录`,
+    message: `将清除 ${Number(count) || 0} 条${kindNoun}记录，它们的原文件已经找不到。`,
+    impact: '清除后不能撤销，也不进废纸篓；观看笔记照常保留。',
+    confirmText: LOST_PURGE_CONFIRM_TEXT
+  };
+}
 
 export const LOST_REASON_LABELS = {
   offline: '卷未挂载',
