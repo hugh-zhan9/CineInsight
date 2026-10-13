@@ -1,9 +1,6 @@
 <template>
   <section class="page-content movie-chart-page">
-    <header class="movie-chart-heading">
-      <h2>年度榜单</h2>
-      <p>按年份浏览在内地公映的电影（含尚未上映的），看到合适的就直接标「想看 / 不想看 / 已看」。</p>
-    </header>
+    <PageHeader title="年度榜单" subtitle="按年份浏览在内地公映的电影（含尚未上映的），看到合适的就直接标「想看 / 不想看 / 已看」。" />
 
     <div class="movie-chart-toolbar">
       <label class="movie-chart-field">
@@ -30,10 +27,10 @@
       </label>
 
       <div class="movie-chart-toolbar-actions">
-        <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading || cache.refreshing"
+        <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading || cache.refreshing"
           data-test="movie-chart-refresh" @click="refresh">刷新</button>
         <!-- 取消只在真的有一轮在跑时出现：抓一整年要二十多分钟，没有它用户只能等。 -->
-        <button v-if="cache.refreshing" class="btn-secondary btn-compact" type="button" :disabled="busy"
+        <button v-if="cache.refreshing" class="btn btn--secondary btn--sm" type="button" :disabled="busy"
           data-test="movie-chart-cancel" @click="cancelRefresh">取消刷新</button>
       </div>
     </div>
@@ -57,13 +54,14 @@
     <!-- 撞名不是失败：标记已经记下了，所以这条用中性样式，和上面的报错分开。 -->
     <p v-if="notice" class="movie-chart-notice" role="status" data-test="movie-chart-notice">{{ notice }}</p>
 
-    <p v-if="loading && !items.length" class="movie-chart-hint" role="status" data-test="movie-chart-loading">正在读取…</p>
+    <SkeletonBlock v-if="loading && !items.length" class="movie-chart-skeleton" :lines="4" data-test="movie-chart-loading" />
 
-    <div v-else-if="!items.length" class="movie-chart-empty" data-test="movie-chart-empty">
-      <p>{{ emptyText }}</p>
-      <button v-if="emptyRefreshVisible" class="btn-primary btn-compact" type="button" :disabled="busy || loading"
-        data-test="movie-chart-empty-refresh" @click="refresh">点此刷新</button>
-    </div>
+    <EmptyState v-else-if="!items.length" class="movie-chart-empty" icon="inbox" :title="emptyText" data-test="movie-chart-empty">
+      <template v-if="emptyRefreshVisible" #actions>
+        <button class="btn btn--primary btn--sm" type="button" :disabled="busy || loading"
+          data-test="movie-chart-empty-refresh" @click="refresh">刷新</button>
+      </template>
+    </EmptyState>
 
     <ul v-else class="movie-chart-list">
       <li v-for="item in items" :key="item.douban_id" class="movie-chart-item" data-test="movie-chart-item">
@@ -91,7 +89,7 @@
         </div>
         <div class="movie-chart-actions">
           <button v-for="option in markOptions" :key="option.value" type="button"
-            :class="['btn-secondary', 'btn-compact', { 'movie-chart-mark--on': item.mark === option.value }]"
+            :class="['btn', 'btn--secondary', 'btn--sm', { 'movie-chart-mark--on': item.mark === option.value }]"
             :aria-pressed="item.mark === option.value ? 'true' : 'false'"
             :title="markButtonTitle(item, option.value)"
             :disabled="busy || loading" :data-test="`movie-chart-mark-${option.value}`"
@@ -101,12 +99,12 @@
     </ul>
 
     <div v-if="totalPages > 1" class="movie-chart-pager">
-      <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading || page <= 1"
+      <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading || page <= 1"
         data-test="movie-chart-prev" @click="goPage(page - 1)">上一页</button>
       <span class="movie-chart-page-info" data-test="movie-chart-page-info">
         第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条
       </span>
-      <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading || page >= totalPages"
+      <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading || page >= totalPages"
         data-test="movie-chart-next" @click="goPage(page + 1)">下一页</button>
     </div>
   </section>
@@ -117,6 +115,9 @@ import {
   CancelMovieChartRefresh, ClearMovieChartMark, ListMovieChart, ListMovieChartYears,
   MarkMovieChartEntry, OpenMovieChartYear, RefreshMovieChart
 } from '../../wailsjs/go/main/App';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
 // 六类失败分类码各有各的一句话，**不合并**（D-MC07）。把代理连不上和「豆瓣没收录」
@@ -150,6 +151,7 @@ const EMPTY_BACKFILL = { pending: 0, total: 0 };
 
 export default {
   name: 'MovieChartPage',
+  components: { EmptyState, PageHeader, SkeletonBlock },
   data() {
     const currentYear = new Date().getFullYear();
     return {
@@ -475,44 +477,48 @@ export default {
 
 <style scoped>
 .movie-chart-page { max-width: 1000px; margin: 0 auto; padding: 24px 28px 40px; }
-.movie-chart-heading h2 { margin: 0 0 6px; }
-.movie-chart-heading p, .movie-chart-hint, .movie-chart-note { color: var(--text-secondary); font-size: 13px; }
-.movie-chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 20px 0 12px; }
-.movie-chart-field { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.movie-chart-field .select-input { min-width: 108px; }
-.movie-chart-sort { display: flex; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }
-.movie-chart-sort-btn { min-height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
-.movie-chart-sort-btn.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
-.movie-chart-sort-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.movie-chart-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.movie-chart-note { color: var(--text-secondary); font-size: var(--fs-secondary); }
+.movie-chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
+.movie-chart-field { display: flex; align-items: center; gap: 8px; font-size: var(--fs-secondary); }
+.movie-chart-field > span { flex: none; white-space: nowrap; }
+.movie-chart-field .select-input { width: auto; min-width: 108px; }
+/* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
+   SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
+.movie-chart-sort { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
+.movie-chart-sort-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
+.movie-chart-sort-btn:hover:not(:disabled) { color: var(--text-primary); }
+.movie-chart-sort-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.movie-chart-sort-btn.active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
+.movie-chart-sort-btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
+.movie-chart-toggle { display: flex; align-items: center; gap: 6px; font-size: var(--fs-secondary); }
 .movie-chart-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
 .movie-chart-toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.movie-chart-status { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); }
-.movie-chart-status--stale, .movie-chart-status--failed { color: var(--danger-color); }
-.movie-chart-backfill { margin: 0 0 8px; font-size: 12px; color: var(--text-secondary); }
+.movie-chart-status { margin: 0 0 8px; font-size: var(--fs-secondary); color: var(--text-secondary); }
+.movie-chart-status--stale, .movie-chart-status--failed { color: var(--danger-text); }
+.movie-chart-backfill { margin: 0 0 8px; font-size: var(--fs-caption); color: var(--text-secondary); }
 .movie-chart-note { margin: 0 0 14px; line-height: 1.6; }
-.movie-chart-error { color: var(--danger-color); overflow-wrap: anywhere; }
-.movie-chart-notice { color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
-.movie-chart-empty { padding: 40px 16px; text-align: center; color: var(--text-secondary); display: grid; justify-items: center; gap: 12px; }
+.movie-chart-error { color: var(--danger-text); overflow-wrap: anywhere; }
+.movie-chart-notice { color: var(--text-secondary); font-size: var(--fs-secondary); overflow-wrap: anywhere; }
+.movie-chart-skeleton, .movie-chart-empty { margin-top: var(--space-2); }
 .movie-chart-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .movie-chart-item { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-faint); }
 /* 海报按高度定尺寸、宽度随原图比例走，与想看片单同形：豆瓣海报基本是 2:3，
    但个别条目是横版剧照，写死 aspect-ratio 会把它裁成一条。 */
 .movie-chart-poster { flex: 0 0 auto; align-self: flex-start; height: 132px; width: auto; max-width: 110px; border-radius: var(--radius); object-fit: contain; background: var(--surface-muted, transparent); }
 .movie-chart-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
-.movie-chart-title { font-size: 15px; overflow-wrap: anywhere; }
-.movie-chart-original { color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
-.movie-chart-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
-.movie-chart-release { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; }
+.movie-chart-title { font-size: var(--fs-body); overflow-wrap: anywhere; }
+.movie-chart-original { color: var(--text-secondary); font-size: var(--fs-secondary); overflow-wrap: anywhere; }
+.movie-chart-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--fs-caption); }
+.movie-chart-release { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: var(--radius-pill); }
 /* 待确认用中性描边，不用告警色：它只是还没补全，不是出错了。 */
 .movie-chart-release--pending { border-style: dashed; }
-.movie-chart-mark-tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-color); }
-.movie-chart-subtitle { margin: 0; color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.movie-chart-detail-error { margin: 0; color: var(--danger-color); font-size: 12px; overflow-wrap: anywhere; }
+.movie-chart-mark-tag { padding: 1px 8px; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent-text); }
+.movie-chart-subtitle { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.movie-chart-detail-error { margin: 0; color: var(--danger-text); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .movie-chart-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }
-.movie-chart-mark--on { border-color: var(--accent-color); color: var(--accent-color); font-weight: 600; }
+.movie-chart-mark--on { border-color: var(--accent-color); color: var(--accent-text); font-weight: var(--fw-semibold); }
 .movie-chart-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 20px; }
-.movie-chart-page-info { color: var(--text-secondary); font-size: 12px; }
+.movie-chart-page-info { color: var(--text-secondary); font-size: var(--fs-caption); }
 
 @media (max-width: 560px) {
   .movie-chart-poster { height: 96px; max-width: 80px; }

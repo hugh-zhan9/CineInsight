@@ -52,18 +52,18 @@ export default {
 
 <style scoped>
 .recap-calendar--month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
-.recap-calendar__weekday { color: var(--text-muted); font-size: 11px; text-align: center; }
+.recap-calendar__weekday { color: var(--text-muted); font-size: var(--fs-caption); text-align: center; }
 .recap-calendar__cell {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 34px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-variant-numeric: tabular-nums;
 }
-.recap-calendar__cell.level-3, .recap-calendar__cell.level-4 { color: var(--accent-on); font-weight: 700; }
+.recap-calendar__cell.level-3, .recap-calendar__cell.level-4 { color: var(--accent-on); font-weight: var(--fw-bold); }
 .recap-calendar__weeks { display: flex; gap: 3px; overflow-x: auto; padding-bottom: 4px; }
 .recap-calendar__week { display: grid; grid-template-rows: repeat(7, 11px); gap: 3px; }
 .recap-calendar__dot { width: 11px; height: 11px; border-radius: 3px; }

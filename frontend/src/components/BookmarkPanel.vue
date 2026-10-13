@@ -2,7 +2,7 @@
   <section class="viewing-notes-panel" data-test="bookmark-panel">
     <header class="notes-toolbar">
       <h3>片段书签</h3>
-      <button v-if="video" type="button" class="btn-primary" :disabled="!session?.source_version" data-test="bookmark-add" @click="create">记下当前位置</button>
+      <button v-if="video" type="button" class="btn btn--primary" :disabled="!session?.source_version" data-test="bookmark-add" @click="create">记下当前位置</button>
       <input v-model="keyword" class="search-input notes-search" aria-label="搜索片段书签" placeholder="搜索片名、笔记或标签" data-test="bookmark-search" />
     </header>
     <p v-if="error" class="notes-alert" role="alert">{{ error }}</p>
@@ -15,20 +15,19 @@
       <p class="notes-body">{{ item.note }}</p><p>{{ (item.tags || []).join(' · ') }}</p>
       <small v-if="!item.source_available" class="notes-unavailable">原片不可用；笔记仍保留</small>
       <div class="notes-toolbar">
-        <button type="button" class="row-btn" @click="resolve(item)">定位 / 核对原片</button>
-        <button type="button" class="row-btn" @click="edit(item)">编辑笔记</button>
-        <button type="button" class="row-btn" @click="remove(item)">删除书签</button>
+        <button type="button" class="btn btn--secondary btn--sm" @click="resolve(item)">定位 / 核对原片</button>
+        <button type="button" class="btn btn--secondary btn--sm" @click="edit(item)">编辑笔记</button>
+        <button type="button" class="btn btn--secondary btn--sm" @click="remove(item)">删除书签</button>
       </div>
       </div>
     </article>
-    <nav class="notes-toolbar notes-pager" aria-label="书签分页"><button type="button" class="btn-secondary btn-compact" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn-secondary btn-compact" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
-    <div v-if="draft && editorSuspended" class="notes-toolbar" data-test="bookmark-checking"><span>核对原片后可继续编辑，草稿已保留。</span><button type="button" class="btn-secondary btn-compact" @click="editorSuspended = false">返回书签编辑</button></div>
-    <BaseModal v-if="draft && !editorSuspended" class="notes-modal" :close-on-overlay="false" @close="closeEditor">
-      <form class="notes-editor" @submit.prevent="save">
+    <nav class="notes-toolbar notes-pager" aria-label="书签分页"><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
+    <div v-if="draft && editorSuspended" class="notes-toolbar" data-test="bookmark-checking"><span>核对原片后可继续编辑，草稿已保留。</span><button type="button" class="btn btn--secondary btn--sm" @click="editorSuspended = false">返回书签编辑</button></div>
+    <DialogShell v-if="draft && !editorSuspended" :title="draft.id ? '编辑片段书签' : '新建片段书签'" size="md" :busy="saving" :close-on-overlay="false" @close="closeEditor">
+      <form :id="formID" class="notes-editor" @submit.prevent="save">
         <fieldset :disabled="saving" class="notes-editor-fields">
-        <h3>{{ draft.id ? '编辑片段书签' : '新建片段书签' }}</h3>
         <p v-if="sourceChanged" class="notes-alert" role="alert">原片内容已改变。请打开当前原片，核对起止位置后再确认；只保存文字不会接受新原片。</p>
-        <button v-if="sourceChanged && currentVideo" type="button" class="btn-secondary btn-compact" @click="previewCurrent">打开当前原片核对</button>
+        <button v-if="sourceChanged && currentVideo" type="button" class="btn btn--secondary btn--sm" @click="previewCurrent">打开当前原片核对</button>
         <label>标题<input v-model="draft.title" class="text-input" required data-test="bookmark-title" /></label>
         <label>开始（秒）<input v-model="draft.startSeconds" class="number-input" type="number" min="0" step="0.001" required data-test="bookmark-start" /></label>
         <label>结束（秒，留空为时间点）<input v-model="draft.endSeconds" class="number-input" type="number" min="0" step="0.001" data-test="bookmark-end" /></label>
@@ -36,22 +35,28 @@
         <label>标签（每行一个，最多20个）<textarea v-model="draft.tagText" class="text-input settings-textarea" rows="3" /></label>
         <label v-if="sourceChanged" class="notes-check"><input v-model="acceptSource" type="checkbox" data-test="bookmark-accept-source" />我已核对当前原片与以上位置</label>
         <p v-if="formError" class="notes-alert" role="alert">{{ formError }}</p>
-        <footer class="notes-toolbar"><button type="submit" class="btn-primary" :disabled="saving" data-test="bookmark-save">{{ saving ? '保存中…' : '保存' }}</button><button type="button" class="btn-secondary" :disabled="saving" @click="closeEditor">取消</button></footer>
         </fieldset>
       </form>
-    </BaseModal>
+      <!-- 底部按钮在表单外（DialogShell 的 footer 插槽），保存靠 form 属性提交同一张表单。 -->
+      <template #footer>
+        <button type="button" class="btn btn--secondary" :disabled="saving" @click="closeEditor">取消</button>
+        <button type="submit" :form="formID" class="btn btn--primary" :disabled="saving" data-test="bookmark-save">{{ saving ? '保存中…' : '保存' }}</button>
+      </template>
+    </DialogShell>
   </section>
 </template>
 <script>
 import { ListVideoBookmarks, SaveVideoBookmark, DeleteVideoBookmark, ResolveVideoBookmark } from '../../wailsjs/go/main/App';
-import BaseModal from './ui/BaseModal.vue';
+import DialogShell from './ui/DialogShell.vue';
 import NotesThumb from './NotesThumb.vue';
 import { confirmAction } from '../utils/feedback.js';
+
+let formSeq = 0;
 export default {
-  name: 'BookmarkPanel', components: { BaseModal, NotesThumb },
+  name: 'BookmarkPanel', components: { DialogShell, NotesThumb },
   props: { pageActive: { type: Boolean, default: true }, video: { type: Object, default: null }, session: { type: Object, default: null }, currentPosition: { type: Function, default: () => 0 } },
   emits: ['open-bookmark', 'open-video'],
-  data: () => ({ items: [], keyword: '', cursor: 0, cursors: [], hasMore: false, loading: false, error: '', draft: null, saving: false, formError: '', sourceChanged: false, editorSuspended: false, currentVideo: null, currentToken: '', acceptSource: false, generation: 0, resolveGeneration: 0 }),
+  data: () => ({ formID: `bookmark-editor-form-${++formSeq}`, items: [], keyword: '', cursor: 0, cursors: [], hasMore: false, loading: false, error: '', draft: null, saving: false, formError: '', sourceChanged: false, editorSuspended: false, currentVideo: null, currentToken: '', acceptSource: false, generation: 0, resolveGeneration: 0 }),
   watch: { pageActive(active) { if (active) this.load(); }, keyword() { this.reset(); }, 'video.id'() { this.draft = null; this.resolveGeneration++; this.reset(); } },
   mounted() { this.load(); }, beforeUnmount() { this.generation++; this.resolveGeneration++; this._disposed = true; },
   methods: {
@@ -115,3 +120,7 @@ export default {
   }
 };
 </script>
+<style scoped>
+/* 编辑框的正文由 DialogShell 负责滚动，表单本身不再限高、不再单独出滚动条。 */
+.notes-editor { max-height: none; overflow: visible; }
+</style>

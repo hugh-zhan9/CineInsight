@@ -6,12 +6,7 @@
     @dragleave="onDragLeave"
     @drop.prevent="onDrop"
   >
-    <div class="scenes-heading">
-      <div>
-        <h2>场景检索</h2>
-        <p>在字幕对白与画面内容里找具体的时间区间。没建索引的内容不会被当成"没有命中"。也可以拖进、粘贴一张截图或剧照，找出它是哪部片的哪一段。</p>
-      </div>
-    </div>
+    <PageHeader title="场景检索" subtitle="在字幕对白与画面内容里找具体的时间区间。没建索引的内容不会被当成「没有命中」。也可以拖进、粘贴一张截图或剧照，找出它是哪部片的哪一段。" />
 
     <form class="scenes-search" data-test="scenes-search-form" @submit.prevent="search">
       <input
@@ -30,12 +25,12 @@
           role="radio"
           :aria-checked="mode === option.value"
           :data-test="`scenes-mode-${option.value}`"
-          :class="['scenes-mode', { active: mode === option.value }]"
+          :class="['scenes-mode', { 'scenes-mode--on': mode === option.value }]"
           @click="setMode(option.value)"
         >{{ option.label }}</button>
       </div>
-      <button type="submit" class="btn-primary" data-test="scenes-submit" :disabled="!canSearch">检索</button>
-      <button type="button" class="btn-secondary" data-test="scenes-pick-image" title="选一张图片，也可以直接拖进本页或粘贴" @click="$refs.imageInput.click()">以图搜片</button>
+      <button type="submit" class="btn btn--primary" data-test="scenes-submit" :disabled="!canSearch">检索</button>
+      <button type="button" class="btn btn--secondary" data-test="scenes-pick-image" title="选一张图片，也可以直接拖进本页或粘贴" @click="$refs.imageInput.click()">以图搜片</button>
       <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden data-test="scenes-image-input" @change="onImagePicked" />
     </form>
 
@@ -44,34 +39,34 @@
       <img v-if="imageQuery" :src="imageQuery.dataURL" alt="查询图片" class="scenes-image-query__thumb" />
       <img v-else :src="frameURL({ video_id: similarSource.videoID, start_ms: similarSource.atMS })" alt="" class="scenes-image-query__thumb" />
       <span class="scenes-image-query__text">{{ imageQueryText }}</span>
-      <button type="button" class="btn-secondary btn-compact" data-test="scenes-clear-image" @click="clearImageQuery">清除</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="scenes-clear-image" @click="clearImageQuery">清除</button>
     </div>
 
     <div class="scenes-scope" data-test="scenes-scope">
       <span>范围：{{ scopeFilter ? '片库当前筛选' : '全部视频' }}</span>
-      <button v-if="scopeFilter" type="button" class="btn-secondary btn-compact" data-test="scenes-clear-scope" @click="clearScope">改为全部视频</button>
+      <button v-if="scopeFilter" type="button" class="btn btn--secondary btn--sm" data-test="scenes-clear-scope" @click="clearScope">改为全部视频</button>
     </div>
 
     <div class="scenes-coverage" data-test="scenes-coverage" role="status">
-      <div class="scenes-coverage__bar"><i :style="{ width: `${visualPercent}%` }"></i></div>
+      <ProgressBar class="scenes-coverage__bar" :value="visualPercent / 100" />
       <span>{{ coverageText }}</span>
       <span class="scenes-coverage__provider" data-test="scenes-provider">画面来源：{{ providerText }}</span>
     </div>
 
     <div class="scenes-actions" data-test="scenes-actions">
       <span v-if="!imageSearch && !isExternal" class="scenes-runtime" data-test="scenes-runtime-state">{{ runtimeText }}</span>
-      <button v-if="!imageSearch && !isExternal && runtimePreparing" type="button" class="btn-secondary" data-test="scenes-cancel-prepare" @click="cancelPrepare">取消准备</button>
-      <button v-else-if="!imageSearch && !isExternal && runtimeCanPrepare" type="button" class="btn-primary" data-test="scenes-prepare" @click="prepareRuntime">准备模型</button>
-      <button v-if="indexRunning" type="button" class="btn-secondary" data-test="scenes-cancel-index" @click="cancelIndex">取消建立索引</button>
+      <button v-if="!imageSearch && !isExternal && runtimePreparing" type="button" class="btn btn--secondary" data-test="scenes-cancel-prepare" @click="cancelPrepare">取消准备</button>
+      <button v-else-if="!imageSearch && !isExternal && runtimeCanPrepare" type="button" class="btn btn--primary" data-test="scenes-prepare" @click="prepareRuntime">准备模型</button>
+      <button v-if="indexRunning" type="button" class="btn btn--secondary" data-test="scenes-cancel-index" @click="cancelIndex">取消建立索引</button>
       <button
         v-else
         type="button"
-        class="btn-secondary"
+        class="btn btn--secondary"
         data-test="scenes-start-index"
         :disabled="!canStartIndex"
         @click="startIndex"
       >{{ scopeFilter ? '为当前范围建立画面索引' : '为全部建立画面索引' }}</button>
-      <button type="button" class="btn-secondary" data-test="scenes-clear-stale" :disabled="indexRunning" @click="clearStale">清理旧索引</button>
+      <button type="button" class="btn btn--secondary" data-test="scenes-clear-stale" :disabled="indexRunning" @click="clearStale">清理旧索引</button>
     </div>
     <p v-if="imageSearch" class="help-text" data-test="scenes-apple-note">以图检索使用苹果系统能力，无需准备中文文字模型；第一次使用需要建立苹果画面索引。</p>
     <p v-if="indexText" class="scenes-index-status" data-test="scenes-index-status">{{ indexText }}</p>
@@ -81,14 +76,19 @@
       <li v-for="code in notices" :key="code" :data-test="`scenes-notice-${code}`">{{ noticeText(code) }}</li>
     </ul>
 
-    <div v-if="searching" class="scenes-empty" data-test="scenes-loading">正在检索…</div>
-    <div v-else-if="searched && groups.length === 0" class="scenes-empty" data-test="scenes-empty">
-      <h3>{{ emptyTitle }}</h3>
-      <p>{{ emptyHint }}</p>
+    <div v-if="searching" class="scenes-loading" data-test="scenes-loading" aria-busy="true">
+      <p class="scenes-loading__text" role="status">正在检索…</p>
+      <SkeletonBlock :lines="4" />
     </div>
-    <div v-else-if="!searched" class="scenes-empty" data-test="scenes-idle">
-      <p>输入一句描述或台词，选择在对白、画面或两者里检索；或者把一张截图拖进来、粘贴进来。</p>
-    </div>
+    <EmptyState v-else-if="searched && groups.length === 0" class="scenes-empty" icon="search" :title="emptyTitle" :message="emptyHint" data-test="scenes-empty" />
+    <EmptyState
+      v-else-if="!searched"
+      class="scenes-empty"
+      icon="search"
+      title="输入描述或台词开始检索"
+      message="选择在对白、画面或两者里检索；或者把一张截图拖进来、粘贴进来。"
+      data-test="scenes-idle"
+    />
 
     <div v-else class="scenes-results" data-test="scenes-results">
       <section v-for="group in groups" :key="group.videoID" class="scenes-group" :data-test="`scenes-group-${group.videoID}`">
@@ -114,7 +114,7 @@
         <div class="scenes-hit__actions">
           <button
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             title="用这一刻的画面在全部视频里找相似的段"
             :data-test="`scenes-similar-${group.videoID}-${index}`"
             @click="searchSimilar({ videoID: hit.video_id, atMS: hit.start_ms, title: group.title })"
@@ -123,7 +123,7 @@
           <button
             v-if="hit.source === 'dialogue' && hit.text"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             title="把这句台词和这一刻的画面做成一张图"
             :data-test="`scenes-quote-${group.videoID}-${index}`"
             @click="openQuoteCard(hit, group.title)"
@@ -169,6 +169,10 @@ import {
 } from '../utils/sceneSearch.js';
 import { quoteCardMomentMS } from '../utils/quoteCard.js';
 import QuoteCardDialog from './QuoteCardDialog.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import ProgressBar from './ui/ProgressBar.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 
 const PREPARABLE_STATES = ['missing_python', 'missing_venv', 'missing_model', 'download_failed'];
 const RUNTIME_STATE_TEXT = {
@@ -184,7 +188,7 @@ const RUNTIME_STATE_TEXT = {
 // 每次检索取一个请求代次，晚到的旧结果直接丢弃；点击命中交给宿主打开详情抽屉并内嵌播放。
 export default {
   name: 'ScenesPage',
-  components: { QuoteCardDialog },
+  components: { EmptyState, PageHeader, ProgressBar, QuoteCardDialog, SkeletonBlock },
   props: {
     pageActive: { type: Boolean, default: true },
     // 片库工具栏「在当前筛选中搜场景」带来的范围：{ filter, token }；为空表示全部视频。
@@ -537,32 +541,32 @@ export default {
 
 <style scoped>
 .scenes-page { padding: 20px 24px 40px; max-width: 1040px; margin: 0 auto; }
-.scenes-heading { margin-bottom: 14px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.scenes-heading h2 { margin: 0 0 3px; font-size: 18px; }
-.scenes-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .scenes-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .scenes-search__input { flex: 1 1 320px; min-width: 0; }
-.scenes-modes { display: inline-flex; border: 1px solid var(--border-color); border-radius: var(--radius-sm); overflow: hidden; }
-.scenes-mode { border: 0; background: var(--control-bg); color: var(--text-secondary); padding: 6px 12px; cursor: pointer; font-size: 13px; }
-.scenes-mode.active { background: var(--accent-color); color: var(--accent-on); }
-.scenes-scope { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; margin-bottom: 10px; }
-.scenes-coverage { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); font-size: 13px; color: var(--text-secondary); }
-.scenes-coverage__bar { height: 6px; border-radius: 3px; background: var(--border-color); overflow: hidden; }
-.scenes-coverage__bar i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
-.scenes-coverage__provider { font-size: 12px; }
+/* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
+   SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
+.scenes-modes { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
+.scenes-mode { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
+.scenes-mode:hover:not(:disabled) { color: var(--text-primary); }
+.scenes-mode:disabled { opacity: 0.45; cursor: not-allowed; }
+.scenes-mode--on { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
+.scenes-mode:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
+.scenes-scope { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--fs-secondary); margin-bottom: 10px; }
+.scenes-coverage { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); font-size: var(--fs-secondary); color: var(--text-secondary); }
+.scenes-coverage__provider { font-size: var(--fs-caption); }
 .scenes-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
-.scenes-runtime { font-size: 13px; color: var(--text-secondary); margin-right: 4px; }
-.scenes-index-status { margin: 8px 0 0; font-size: 13px; color: var(--text-secondary); }
-.scenes-error { color: var(--danger-color); margin: 12px 0 0; }
-.scenes-notices { margin: 12px 0 0; padding: 10px 12px 10px 28px; border-radius: var(--radius); background: var(--control-bg); color: var(--text-secondary); font-size: 13px; }
-.scenes-empty { margin-top: 24px; text-align: center; color: var(--text-secondary); }
-.scenes-empty h3 { margin: 0 0 6px; color: var(--text-primary); }
-.scenes-empty p { margin: 0; }
+.scenes-runtime { font-size: var(--fs-secondary); color: var(--text-secondary); margin-right: 4px; }
+.scenes-index-status { margin: 8px 0 0; font-size: var(--fs-secondary); color: var(--text-secondary); }
+.scenes-error { color: var(--danger-text); margin: 12px 0 0; }
+.scenes-notices { margin: 12px 0 0; padding: 10px 12px 10px 28px; border-radius: var(--radius); background: var(--control-bg); color: var(--text-secondary); font-size: var(--fs-secondary); }
+.scenes-empty, .scenes-loading { margin-top: 24px; }
+.scenes-loading { display: grid; gap: var(--space-3); }
+.scenes-loading__text { margin: 0; color: var(--text-secondary); font-size: var(--fs-secondary); }
 .scenes-results { display: grid; gap: 18px; margin-top: 18px; }
-.scenes-group__title { margin: 0 0 8px; font-size: 15px; }
-.scenes-group__title small { color: var(--text-secondary); font-weight: normal; margin-left: 6px; }
+.scenes-group__title { margin: 0 0 8px; font-size: var(--fs-section); }
+.scenes-group__title small { color: var(--text-secondary); font-weight: var(--fw-regular); margin-left: 6px; }
 .scenes-page--dropping { outline: 2px dashed var(--accent-color); outline-offset: -6px; }
-.scenes-image-query { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--accent-color); border-radius: var(--radius); background: var(--accent-soft); font-size: 13px; }
+.scenes-image-query { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--accent-color); border-radius: var(--radius); background: var(--accent-soft); font-size: var(--fs-secondary); }
 .scenes-image-query__thumb { width: 96px; height: 54px; border-radius: 4px; object-fit: cover; background: var(--control-bg); }
 .scenes-image-query__text { flex: 1; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
 .scenes-hit-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
@@ -571,14 +575,13 @@ export default {
 .scenes-hit { display: flex; gap: 12px; width: 100%; padding: 8px; margin-bottom: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .scenes-hit:hover { border-color: var(--accent-color); }
 .scenes-hit__frame { width: 160px; height: 90px; flex: 0 0 160px; object-fit: cover; border-radius: 4px; background: var(--control-bg); }
-.scenes-hit__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 13px; }
+.scenes-hit__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: var(--fs-secondary); }
 .scenes-hit__meta { display: flex; align-items: center; gap: 8px; }
-.scenes-hit__source { padding: 1px 6px; border-radius: 3px; font-size: 12px; background: var(--control-bg); }
-.scenes-hit__source--dialogue { color: var(--accent-color); }
+.scenes-hit__source { padding: 1px 6px; border-radius: 3px; font-size: var(--fs-caption); background: var(--control-bg); }
+.scenes-hit__source--dialogue { color: var(--accent-text); }
 .scenes-hit__range { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.scenes-hit__context { color: var(--text-secondary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scenes-hit__context { color: var(--text-secondary); font-size: var(--fs-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scenes-hit__text { color: var(--text-primary); }
-.btn-compact { height: 28px; padding: 0 10px; font-size: 12px; }
 @media (max-width: 640px) {
   .scenes-page { padding: 16px 16px 32px; }
   .scenes-hit__frame { width: 112px; height: 63px; flex-basis: 112px; }

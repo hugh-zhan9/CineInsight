@@ -7,7 +7,7 @@
         <h2 class="recap-hero__title" data-test="home-hero-title">{{ hero.title }}</h2>
         <p v-if="hero.meta" class="recap-hero__meta" data-test="home-hero-meta">{{ hero.meta }}</p>
         <div class="recap-hero__actions">
-          <button type="button" class="btn-primary" data-test="home-hero-open" @click="openVideo(hero.video)"><RecapIcon name="play" /> 打开详情</button>
+          <button type="button" class="btn btn--primary" data-test="home-hero-open" @click="openVideo(hero.video)"><AppIcon name="play" /> 打开详情</button>
         </div>
       </div>
     </RecapBackdrop>
@@ -19,8 +19,8 @@
         <h2 class="recap-hero__title recap-hero__title--quiet">还没有可以接着看或推荐的视频</h2>
         <p class="recap-hero__meta">先添加扫描目录把视频收进片库，或者直接去片库里挑一部。</p>
         <div class="recap-hero__actions">
-          <button type="button" class="btn-primary" data-test="home-guide-scan" @click="$emit('navigate', 'settings')">去添加扫描目录</button>
-          <button type="button" class="btn-secondary" data-test="home-guide-library" @click="$emit('navigate', 'videos')">去片库</button>
+          <button type="button" class="btn btn--primary" data-test="home-guide-scan" @click="$emit('navigate', 'settings')">去添加扫描目录</button>
+          <button type="button" class="btn btn--secondary" data-test="home-guide-library" @click="$emit('navigate', 'videos')">去片库</button>
         </div>
       </div>
     </RecapBackdrop>
@@ -28,7 +28,9 @@
     <section v-if="blockVisible(continueBlock)" class="recap-section" data-test="home-continue">
       <header class="recap-section__head"><h3><RecapIcon name="play" /> 继续观看</h3><small>从上次停下的地方接着看</small></header>
       <p v-if="continueBlock.error" class="viewer-home__error" role="alert" data-test="home-continue-error">{{ continueBlock.error }}</p>
-      <p v-else-if="continueBlock.loading && !continueBlock.items.length" class="recap-muted" data-test="home-continue-loading">正在读取…</p>
+      <div v-else-if="continueBlock.loading && !continueBlock.items.length" class="viewer-home__skeletons" aria-busy="true" data-test="home-continue-loading">
+        <SkeletonBlock v-for="n in 4" :key="n" shape="card" :lines="2" />
+      </div>
       <div v-if="continueBlock.items.length" class="recap-strip">
         <RecapMediaCard
           v-for="video in continueBlock.items"
@@ -46,10 +48,12 @@
       <header class="recap-section__head">
         <h3><RecapIcon name="spark" /> 今晚看什么</h3>
         <small>和随机播放同一套均衡抽取，播放越少越容易被抽到</small>
-        <button type="button" class="btn-secondary btn-compact viewer-home__reroll" :disabled="tonightBlock.loading" data-test="home-tonight-reroll" @click="rerollTonight">{{ tonightBlock.loading ? '正在抽…' : '换一批' }}</button>
+        <button type="button" class="btn btn--secondary btn--sm viewer-home__reroll" :disabled="tonightBlock.loading" data-test="home-tonight-reroll" @click="rerollTonight"><AppIcon name="refresh" /> {{ tonightBlock.loading ? '正在抽…' : '换一批' }}</button>
       </header>
       <p v-if="tonightBlock.error" class="viewer-home__error" role="alert" data-test="home-tonight-error">{{ tonightBlock.error }}</p>
-      <p v-else-if="tonightBlock.loading && !tonightBlock.items.length" class="recap-muted" data-test="home-tonight-loading">正在读取…</p>
+      <div v-else-if="tonightBlock.loading && !tonightBlock.items.length" class="viewer-home__skeletons" aria-busy="true" data-test="home-tonight-loading">
+        <SkeletonBlock v-for="n in 3" :key="n" shape="card" :lines="2" />
+      </div>
       <p v-else-if="tonightBlock.notice" class="recap-muted" role="status" data-test="home-tonight-notice">{{ tonightBlock.notice }}</p>
       <div v-if="tonightBlock.items.length" class="viewer-home__tonight">
         <RecapMediaCard
@@ -67,7 +71,9 @@
     <section v-if="blockVisible(recentBlock)" class="recap-section" data-test="home-recent">
       <header class="recap-section__head"><h3><RecapIcon name="videos" /> 最近添加</h3><small>最近 30 天收进片库的视频</small></header>
       <p v-if="recentBlock.error" class="viewer-home__error" role="alert" data-test="home-recent-error">{{ recentBlock.error }}</p>
-      <p v-else-if="recentBlock.loading && !recentBlock.items.length" class="recap-muted" data-test="home-recent-loading">正在读取…</p>
+      <div v-else-if="recentBlock.loading && !recentBlock.items.length" class="viewer-home__posters" aria-busy="true" data-test="home-recent-loading">
+        <SkeletonBlock v-for="n in 7" :key="n" shape="poster" :lines="1" />
+      </div>
       <div v-if="recentBlock.items.length" class="viewer-home__posters">
         <RecapMediaCard
           v-for="video in recentBlock.items"
@@ -85,7 +91,7 @@
     <section v-if="blockVisible(recapBlock, topPeople)" class="recap-section" data-test="home-people">
       <header class="recap-section__head"><h3><RecapIcon name="person" /> 本月常看的人物</h3><small>按本月播放次数</small></header>
       <p v-if="recapBlock.error" class="viewer-home__error" role="alert" data-test="home-people-error">{{ recapBlock.error }}</p>
-      <p v-else-if="recapBlock.loading && !topPeople.length" class="recap-muted" data-test="home-people-loading">正在读取…</p>
+      <SkeletonBlock v-else-if="recapBlock.loading && !topPeople.length" class="viewer-home__skeleton-lines" :lines="2" data-test="home-people-loading" />
       <div v-if="topPeople.length" class="recap-people">
         <button
           v-for="item in topPeople"
@@ -106,10 +112,10 @@
       <header class="recap-section__head">
         <h3><RecapIcon name="heart" /> 本月回顾亮点</h3>
         <small v-if="highlight">{{ highlight.label }}{{ highlight.inProgress ? '（进行中）' : '' }}</small>
-        <button type="button" class="btn-secondary btn-compact viewer-home__reroll" data-test="home-open-recap" @click="$emit('navigate', 'recap')">看完整回顾 <RecapIcon name="arrow" /></button>
+        <button type="button" class="btn btn--secondary btn--sm viewer-home__reroll" data-test="home-open-recap" @click="$emit('navigate', 'recap')">看完整回顾 <AppIcon name="arrow" /></button>
       </header>
       <p v-if="recapBlock.error" class="viewer-home__error" role="alert" data-test="home-highlight-error">{{ recapBlock.error }}</p>
-      <p v-else-if="recapBlock.loading && !highlight" class="recap-muted" data-test="home-highlight-loading">正在读取…</p>
+      <SkeletonBlock v-else-if="recapBlock.loading && !highlight" class="viewer-home__skeleton-lines" :lines="3" data-test="home-highlight-loading" />
       <div v-if="highlight" class="viewer-home__highlight">
         <RecapMediaCard
           v-if="highlight.favorite"
@@ -146,6 +152,8 @@ import RecapBackdrop from '../recap/RecapBackdrop.vue';
 import RecapCountUp from '../recap/RecapCountUp.vue';
 import RecapIcon from '../recap/RecapIcon.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
+import AppIcon from '../ui/AppIcon.vue';
+import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import StatTile from '../ui/StatTile.vue';
 import { translateBackendError } from '../../utils/feedback.js';
 import { formatDuration } from '../../utils/mediaDetails.js';
@@ -183,7 +191,7 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
-  components: { RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, StatTile },
+  components: { AppIcon, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、最近添加、本月回顾；期间可能看过片），
   // 取回之前保留现有内容。今晚看什么只在「换一批」时重抽，大图定下后不再换。
   props: { pageActive: { type: Boolean, default: true } },
@@ -353,7 +361,9 @@ export default {
     radial-gradient(1100px 360px at 88% -80px, color-mix(in srgb, var(--accent-color) 13%, transparent), transparent 70%),
     radial-gradient(800px 300px at 2% -60px, color-mix(in srgb, var(--warning-color) 9%, transparent), transparent 70%);
 }
-.viewer-home__error { margin: 0; color: var(--danger-text); font-size: 13px; }
+.viewer-home__error { margin: 0; color: var(--danger-text); font-size: var(--fs-secondary); }
+.viewer-home__skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.viewer-home__skeleton-lines { max-width: 520px; }
 .viewer-home__reroll { margin-left: auto; align-self: center; }
 .viewer-home__tonight { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .viewer-home__posters { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 16px 14px; }

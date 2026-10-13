@@ -60,14 +60,14 @@ export default {
   cursor: pointer;
 }
 .recap-film__frame:disabled { cursor: default; }
-.recap-film__month { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
-.recap-film__month small { margin-left: 2px; font-size: 11px; font-weight: 500; color: var(--recap-hero-muted); }
-.recap-film__shot { display: block; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 6px; background: var(--recap-hero-chip); }
+.recap-film__month { font-size: var(--fs-title); font-weight: var(--fw-bold); letter-spacing: -0.02em; }
+.recap-film__month small { margin-left: 2px; font-size: var(--fs-caption); font-weight: var(--fw-medium); color: var(--recap-hero-muted); }
+.recap-film__shot { display: block; aspect-ratio: 16 / 10; overflow: hidden; border-radius: var(--radius-sm); background: var(--recap-hero-chip); }
 .recap-film__shot img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 400ms ease; }
 .recap-film__frame:not(:disabled):hover .recap-film__shot img { transform: scale(1.08); }
 .recap-film__caption { display: grid; gap: 1px; min-width: 0; }
-.recap-film__caption strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.recap-film__caption small { color: var(--recap-hero-muted); font-size: 11px; }
+.recap-film__caption strong { overflow: hidden; font-size: var(--fs-caption); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.recap-film__caption small { color: var(--recap-hero-muted); font-size: var(--fs-caption); }
 .is-empty .recap-film__shot { opacity: 0.4; }
 .is-unavailable .recap-film__shot { filter: grayscale(1); opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) { .recap-film__shot img { transition: none; } }

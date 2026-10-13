@@ -105,7 +105,7 @@ export default {
 };
 </script>
 <style scoped>
-.queue-inline-player { background: #111; border-radius: 10px; overflow: hidden; }
+.queue-inline-player { background: var(--player-bg); border-radius: var(--radius); overflow: hidden; }
 .queue-inline-player video { display: block; width: 100%; height: min(34vh, 300px); object-fit: contain; }
-.queue-inline-player p { color: #fff; padding: 8px; margin: 0; }
+.queue-inline-player p { color: var(--media-badge-fg); padding: var(--space-2); margin: 0; }
 </style>

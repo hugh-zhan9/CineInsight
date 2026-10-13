@@ -21,6 +21,8 @@ describe('ViewingNotesPage', () => {
     const wrapper = shallowMount(ViewingNotesPage); api.ListViewingDiary.mockResolvedValueOnce({ items: [item(9, '2023-01-01')] }); await wrapper.setData({ year: 2023 }); await flushPromises();
     old({ items: [item(1, '2024-01-01')] }); await flushPromises(); expect(wrapper.text()).toContain('影片9'); expect(wrapper.text()).not.toContain('影片1');
     api.ListViewingDiary.mockRejectedValueOnce(new Error('unavailable')); await wrapper.vm.reset(); await flushPromises(); expect(wrapper.text()).toContain('unavailable'); expect(wrapper.text()).not.toContain('当前条件没有记录');
+    // 空态是 EmptyState（统一设计 D-UD-06，浅渲染下是桩、不出文字）：读失败时它也不能出现。
+    expect(wrapper.find('[data-test="notes-empty"]').exists()).toBe(false);
   });
   it('history prefills only a title and saving a manual entry returns to its own year', async () => {
     api.ListUnconfirmedPlaybackHistory.mockResolvedValue({ items: [{ id: 7, video_id: 5, title: '过去的播放', played_at: '2020-01-01T00:00:00Z', source: 'desktop_play' }] });

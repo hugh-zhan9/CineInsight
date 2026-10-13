@@ -1,33 +1,29 @@
 <template>
   <main :class="['entity-library', { 'entity-library--with-drawer': drawerEntity }]">
-    <section class="entity-library__toolbar glass-surface">
-      <div class="entity-library__title">
-        <button v-if="selectedEntity" type="button" class="btn-secondary btn-compact" @click="closeEntity">返回{{ isPeople ? '人物' : '作品集' }}列表</button>
-        <div>
-          <h2>{{ selectedEntity ? selectedEntityName : (isPeople ? '人物' : '作品集') }}</h2>
-          <p v-if="selectedEntity && isPeople">已加载：视频 {{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部 · 图片 {{ entityImages.length }} / {{ selectedEntityImageCount }} 张。</p>
-          <p v-else-if="selectedEntity">{{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部已加载，可直接查看详情、播放或打开目录。</p>
-          <p v-else>{{ isPeople ? '本地维护的演员实体；同名人物会保持独立。' : '手工编排的视频集合；一个视频可以属于多个作品集。' }}</p>
-        </div>
-      </div>
-      <div v-if="selectedEntity" class="entity-library__search">
-        <button type="button" class="btn-primary" @click="drawerEntity = { ...selectedEntity }">编辑与批量关联</button>
-        <!-- D-PC32：人物合并与显式删除（META-03 / META-05）。 -->
-        <template v-if="isPeople">
-          <button type="button" class="btn-secondary" data-test="person-merge-open" :disabled="personActionBusy" @click="openMergeForm">合并其他人物</button>
-          <button type="button" class="btn-danger" data-test="person-delete" :disabled="personActionBusy" @click="requestDeletePerson">删除人物</button>
+    <nav v-if="selectedEntity" class="entity-library__nav">
+      <button type="button" class="btn btn--secondary btn--sm" @click="closeEntity"><AppIcon name="chevron-left" /> 返回{{ isPeople ? '人物' : '作品集' }}列表</button>
+    </nav>
+    <PageHeader class="entity-library__toolbar" :title="pageTitle" :subtitle="pageSubtitle">
+      <template #actions>
+        <template v-if="selectedEntity">
+          <button type="button" class="btn btn--primary" @click="drawerEntity = { ...selectedEntity }">编辑与批量关联</button>
+          <!-- D-PC32：人物合并与显式删除（META-03 / META-05）。 -->
+          <template v-if="isPeople">
+            <button type="button" class="btn btn--secondary" data-test="person-merge-open" :disabled="personActionBusy" @click="openMergeForm">合并其他人物</button>
+            <button type="button" class="btn btn--danger" data-test="person-delete" :disabled="personActionBusy" @click="requestDeletePerson">删除人物</button>
+          </template>
         </template>
-      </div>
-      <div v-else class="entity-library__search">
-        <input v-model="keyword" :placeholder="isPeople ? '搜索显示或原始姓名' : '搜索名称或简介'" @keyup.enter="reload" />
-        <button type="button" class="btn-secondary" @click="reload">搜索</button>
-      </div>
-    </section>
+        <div v-else class="entity-library__search">
+          <input v-model="keyword" :placeholder="isPeople ? '搜索显示或原始姓名' : '搜索名称或简介'" @keyup.enter="reload" />
+          <button type="button" class="btn btn--secondary" @click="reload">搜索</button>
+        </div>
+      </template>
+    </PageHeader>
 
     <section v-if="!selectedEntity" class="entity-library__create glass-surface">
       <input v-model="createForm.name" :placeholder="isPeople ? '显示姓名' : '作品集名称'" maxlength="200" />
       <input v-model="createForm.secondary" :placeholder="isPeople ? '原始姓名（可空）' : '简介（可空）'" :maxlength="isPeople ? 200 : 4000" />
-      <button type="button" class="btn-primary" :disabled="creating" @click="createEntity">{{ creating ? '创建中...' : (isPeople ? '明确新建人物' : '新建作品集') }}</button>
+      <button type="button" class="btn btn--primary" :disabled="creating" @click="createEntity">{{ creating ? '创建中…' : (isPeople ? '明确新建人物' : '新建作品集') }}</button>
     </section>
 
     <p v-if="error" class="entity-library__error" role="alert">{{ error }}</p>
@@ -37,7 +33,7 @@
       <p>把其他人物合并到「{{ selectedEntityName }}」：它们的视频、图片关系并入「{{ selectedEntityName }}」（重复的自动去掉），人脸组改指向「{{ selectedEntityName }}」，被并入的人物随后删除。</p>
       <div class="entity-library__search">
         <input v-model="mergeForm.keyword" placeholder="搜索要并入的人物" data-test="person-merge-search" @keyup.enter="searchMergeCandidates" />
-        <button type="button" class="btn-secondary" :disabled="mergeForm.searching" @click="searchMergeCandidates">搜索</button>
+        <button type="button" class="btn btn--secondary" :disabled="mergeForm.searching" @click="searchMergeCandidates">搜索</button>
       </div>
       <div class="entity-person-merge__options">
         <label v-for="item in mergeCandidates" :key="entityID(item)" class="entity-person-merge__option" :data-test="`person-merge-option-${entityID(item)}`">
@@ -49,8 +45,8 @@
       </div>
       <p v-if="mergeForm.error" class="entity-library__error" role="alert">{{ mergeForm.error }}</p>
       <div class="entity-person-merge__actions">
-        <button type="button" class="btn-secondary" :disabled="personActionBusy" @click="closeMergeForm">取消</button>
-        <button type="button" class="btn-danger" data-test="person-merge-submit" :disabled="personActionBusy || !mergeForm.selectedIDs.length" @click="submitMerge">合并（{{ mergeForm.selectedIDs.length }}）</button>
+        <button type="button" class="btn btn--secondary" :disabled="personActionBusy" @click="closeMergeForm">取消</button>
+        <button type="button" class="btn btn--danger" data-test="person-merge-submit" :disabled="personActionBusy || !mergeForm.selectedIDs.length" @click="submitMerge">合并（{{ mergeForm.selectedIDs.length }}）</button>
       </div>
     </section>
 
@@ -62,7 +58,7 @@
           <h3>待命名人脸</h3>
           <p data-test="people-face-review-summary">{{ faceReviewSummary }}</p>
         </div>
-        <button type="button" class="btn-secondary btn-compact" data-test="people-face-review-toggle" @click="toggleFaceReview">{{ faceReviewCollapsed ? '展开' : '收起' }}</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="people-face-review-toggle" @click="toggleFaceReview">{{ faceReviewCollapsed ? '展开' : '收起' }}</button>
       </div>
       <FaceClusterReviewPanel v-show="!faceReviewCollapsed" @changed="reload" @loaded="onFaceReviewLoaded" />
     </section>
@@ -80,7 +76,13 @@
           </div>
         </button>
       </section>
-      <div v-if="!loading && !items.length" class="empty-state">暂无{{ isPeople ? '人物' : '作品集' }}。</div>
+      <EmptyState
+        v-if="!loading && !items.length"
+        :icon="isPeople ? 'person' : 'collection'"
+        :title="`暂无${isPeople ? '人物' : '作品集'}`"
+        :message="keyword.trim() ? '换个关键词再搜一次。' : (isPeople ? '在上面明确新建人物，或者给待命名人脸起名。' : '在上面新建作品集，再把视频加进去。')"
+        data-test="entity-library-empty"
+      />
     </template>
 
     <template v-else>
@@ -95,14 +97,14 @@
             <small>{{ formatBytes(video.size) }} · {{ formatDuration(video.duration) }}</small>
           </div>
           <div class="entity-video-card__actions">
-            <button type="button" class="btn-secondary btn-compact" :data-test="`entity-video-detail-${video.id}`" @click="openVideoDetails(video)">详情</button>
-            <button type="button" class="btn-primary btn-compact" :disabled="playingVideoIDs.includes(Number(video.id))" @click="playEntityVideo(video)">{{ playingVideoIDs.includes(Number(video.id)) ? '启动中...' : '播放' }}</button>
-            <button type="button" class="btn-secondary btn-compact" @click="openVideoDirectory(video)">目录</button>
-            <button v-if="isPeople" type="button" class="btn-danger btn-compact" :data-test="`person-video-delete-${video.id}`" @click="requestPersonMediaDelete('video', video)">删除</button>
+            <button type="button" class="btn btn--secondary btn--sm" :data-test="`entity-video-detail-${video.id}`" @click="openVideoDetails(video)">详情</button>
+            <button type="button" class="btn btn--primary btn--sm" :disabled="playingVideoIDs.includes(Number(video.id))" @click="playEntityVideo(video)">{{ playingVideoIDs.includes(Number(video.id)) ? '启动中…' : '播放' }}</button>
+            <button type="button" class="btn-icon btn--secondary btn--sm" aria-label="在访达中显示" title="在访达中显示" @click="openVideoDirectory(video)"><AppIcon name="folder" /></button>
+            <button v-if="isPeople" type="button" class="btn btn--danger btn--sm" :data-test="`person-video-delete-${video.id}`" @click="requestPersonMediaDelete('video', video)">移除…</button>
           </div>
         </article>
       </section>
-      <div v-if="!entityVideosLoading && !entityVideos.length" class="empty-state">当前还没有关联视频。点击“编辑与批量关联”可按文件夹筛选并多选加入。</div>
+      <EmptyState v-if="!entityVideosLoading && !entityVideos.length" icon="videos" title="当前还没有关联视频" message="点击「编辑与批量关联」可按文件夹筛选并多选加入。" data-test="entity-videos-empty" />
       <section v-if="isPeople" class="entity-image-section" aria-label="相关图片" data-test="person-image-section">
         <h3>图片（{{ selectedEntityImageCount }}）</h3>
         <p v-if="entityImagesError" class="entity-library__error" role="alert">{{ entityImagesError }}</p>
@@ -114,21 +116,21 @@
             <figcaption :title="image.name">{{ image.name }}</figcaption>
             <small v-if="image.size > 0" class="entity-image-card__size">{{ formatBytes(image.size) }}</small>
             <div class="entity-image-card__actions">
-              <button type="button" class="btn-secondary btn-compact" @click="revealPersonImage(image)">目录</button>
-              <button type="button" class="btn-secondary btn-compact" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`entity-image-unlink-${image.id}`" @click="unlinkPersonImage(image)">解绑</button>
-              <button type="button" class="btn-danger btn-compact" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">删除</button>
+              <button type="button" class="btn-icon btn--secondary btn--sm" aria-label="在访达中显示" title="在访达中显示" @click="revealPersonImage(image)"><AppIcon name="folder" /></button>
+              <button type="button" class="btn btn--secondary btn--sm" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`entity-image-unlink-${image.id}`" @click="unlinkPersonImage(image)">解绑</button>
+              <button type="button" class="btn btn--danger btn--sm" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">移除…</button>
             </div>
           </figure>
         </div>
-        <div v-else class="empty-state">当前还没有关联图片。在照片页的单图详情里可以维护人物。</div>
+        <EmptyState v-else icon="images" title="当前还没有关联图片" message="在照片页的单图详情里可以维护人物。" data-test="person-images-empty" />
         <button
           v-if="entityImageCursor"
           type="button"
-          class="btn-secondary entity-library__more"
+          class="btn btn--secondary entity-library__more"
           :disabled="entityImagesLoading"
           data-test="person-image-more"
           @click="loadMoreEntityImages"
-        >{{ entityImagesLoading ? '加载中...' : '加载更多相关图片' }}</button>
+        >{{ entityImagesLoading ? '加载中…' : '加载更多相关图片' }}</button>
       </section>
     </template>
 
@@ -136,11 +138,11 @@
     <button
       v-if="selectedEntity ? entityVideosHasMore : hasMore"
       type="button"
-      class="btn-secondary entity-library__more"
+      class="btn btn--secondary entity-library__more"
       :disabled="selectedEntity ? entityVideosLoading : loading"
       @click="selectedEntity ? loadEntityVideos(false) : loadMore()"
     >
-      {{ (selectedEntity ? entityVideosLoading : loading) ? '加载中...' : (selectedEntity ? '加载更多相关视频' : `加载更多${isPeople ? '人物' : '作品集'}`) }}
+      {{ (selectedEntity ? entityVideosLoading : loading) ? '加载中…' : (selectedEntity ? '加载更多相关视频' : `加载更多${isPeople ? '人物' : '作品集'}`) }}
     </button>
 
     <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="unlinkingImageIDs.includes(imagePreview.id)" :action-error="entityImagesError" @close="imagePreview = null" @unlink="unlinkPersonImage" @delete="requestPersonMediaDelete('image', $event)" />
@@ -172,6 +174,9 @@ import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
+import AppIcon from './ui/AppIcon.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
 import { confirmAction, notify, notifySuccess } from '../utils/feedback.js';
 import { formatBytes, formatDuration } from '../utils/mediaDetails.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
@@ -192,7 +197,7 @@ const emptyMergeForm = () => ({ open: false, keyword: '', results: [], selectedI
 
 export default {
   name: 'EntityLibraryPage',
-  components: { FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
+  components: { AppIcon, EmptyState, FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PageHeader, PersonMediaDeleteDialog },
   // open-video(video)：点了某部相关视频，App 按观看区分流进整页详情。
   emits: ['open-video'],
   props: {
@@ -220,6 +225,15 @@ export default {
     selectedEntityName() { return this.selectedItem ? this.entityName(this.selectedItem) : (this.isPeople ? '人物作品' : '作品集成员'); },
     selectedEntityVideoCount() { return Number(this.selectedItem?.active_video_count || this.entityVideos.length); },
     selectedEntityImageCount() { return Number(this.selectedItem?.active_image_count || this.entityImages.length); },
+    // 页头（PageHeader）：列表时是「人物 / 作品集」，打开某一个时是它的名字与已加载的数量。
+    pageTitle() { return this.selectedEntity ? this.selectedEntityName : (this.isPeople ? '人物' : '作品集'); },
+    pageSubtitle() {
+      if (this.selectedEntity && this.isPeople) {
+        return `已加载：视频 ${this.entityVideos.length} / ${this.selectedEntityVideoCount} 部 · 图片 ${this.entityImages.length} / ${this.selectedEntityImageCount} 张。`;
+      }
+      if (this.selectedEntity) return `${this.entityVideos.length} / ${this.selectedEntityVideoCount} 部已加载，可直接查看详情、播放或在访达中显示。`;
+      return this.isPeople ? '本地维护的演员实体；同名人物会保持独立。' : '手工编排的视频集合；一个视频可以属于多个作品集。';
+    },
     faceReviewSummary() {
       const counts = this.faceReviewCounts;
       if (!counts) return '正在读取人脸候选…';
@@ -306,7 +320,7 @@ export default {
     },
     async revealPersonImage(image) {
       try { await RevealImage(Number(image.id)); }
-      catch (err) { this.entityImagesError = `打开目录失败：${err}`; }
+      catch (err) { this.entityImagesError = `在访达中显示失败：${err}`; }
     },
     async unlinkPersonImage(image) {
       const personID = Number(this.selectedEntity?.id); const imageID = Number(image.id);
@@ -615,7 +629,7 @@ export default {
     },
     async openVideoDirectory(video) {
       try { await OpenDirectory(Number(video.id)); }
-      catch (err) { this.error = `打开目录失败：${err}`; }
+      catch (err) { this.error = `在访达中显示失败：${err}`; }
     },
     entityID(item) { return Number(this.isPeople ? item?.person?.id : item?.collection?.id); },
     entityName(item) { return this.isPeople ? item?.person?.display_name : item?.collection?.name; },
@@ -646,15 +660,17 @@ export default {
 </script>
 
 <style scoped>
-.entity-image-card__select { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.entity-image-card__select { display: flex; align-items: center; gap: 6px; font-size: var(--fs-caption); }
 .entity-image-card__select input { min-width: 0; width: auto; padding: 0; }
 .entity-image-card__preview { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .entity-image-card__actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .entity-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }.entity-library--with-drawer { padding-right: calc(18px + 520px); }
-.entity-library__toolbar,.entity-library__create { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; gap: 12px; align-items: center; justify-content: space-between; }.entity-library__toolbar h2 { margin: 0 0 3px; font-size: 18px; }.entity-library__toolbar p { margin: 0; color: var(--text-muted); font-size: 12px; }
-.entity-library__title { display: flex; align-items: center; gap: 12px; min-width: 0; }.entity-library__title > div { min-width: 0; }.entity-library__title h2,.entity-library__title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.entity-face-review { display: grid; gap: 10px; padding: 12px 14px; border-radius: var(--radius-md); }.entity-face-review__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.entity-face-review__head h3 { margin: 0; font-size: 14px; }.entity-face-review__head p { margin: 3px 0 0; color: var(--text-secondary); font-size: 12px; }
-.entity-library__search,.entity-library__create { display: flex; gap: 8px; }.entity-library input { min-width: 180px; border: 1px solid var(--border-color); border-radius: 8px; padding: 9px 10px; color: var(--text-primary); background: var(--control-bg); }.entity-library__create { justify-content: flex-start; }.entity-library__create input:nth-child(2) { flex: 1; }
+/* 页头是 PageHeader：这里只把它与下面的分区间距交给外层 gap。 */
+.entity-library__toolbar { margin-bottom: 0; }
+.entity-library__nav { display: flex; align-items: center; }
+.entity-library__create { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.entity-face-review { display: grid; gap: 10px; padding: 12px 14px; border-radius: var(--radius-md); }.entity-face-review__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.entity-face-review__head h3 { margin: 0; font-size: var(--fs-body); }.entity-face-review__head p { margin: 3px 0 0; color: var(--text-secondary); font-size: var(--fs-caption); }
+.entity-library__search,.entity-library__create { display: flex; gap: 8px; }.entity-library input { min-width: 180px; height: var(--h-unit); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0 10px; color: var(--text-primary); background: var(--control-bg); font-size: var(--fs-secondary); }.entity-library__create { justify-content: flex-start; }.entity-library__create input:nth-child(2) { flex: 1; }
 /* 原型 A9：卡片改成竖版，封面在上、名称与作品数在下；列宽随窗口自增。 */
 .entity-library__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .entity-card { display: flex; flex-direction: column; padding: 0; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); text-align: left; color: var(--text-primary); cursor: pointer; }
@@ -662,29 +678,29 @@ export default {
 .entity-card img,.entity-card__placeholder { width: 100%; height: 150px; object-fit: cover; border-radius: 0; }
 .entity-card__placeholder { display: grid; place-items: center; color: var(--text-muted); background: var(--thumb-fallback-bg); }
 .entity-card > div:last-child { min-width: 0; display: grid; gap: 3px; padding: 9px 10px 11px; }
-.entity-card strong { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.entity-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
-.entity-card small { color: var(--accent-text); font-size: 11.5px; font-weight: 600; }
+.entity-card strong { font-size: var(--fs-secondary); font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--fs-caption); }
+.entity-card small { color: var(--accent-text); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .entity-card .entity-card__media-count { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
-.entity-video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }.entity-video-card { min-width: 0; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }.entity-video-card__preview { width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border: 0; background: var(--thumb-bg); cursor: pointer; }.entity-video-card__preview img { width: 100%; height: 100%; display: block; object-fit: cover; }.entity-video-card__copy { display: grid; gap: 4px; min-width: 0; padding: 11px 12px 7px; }.entity-video-card__copy strong,.entity-video-card__copy span,.entity-video-card__copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.entity-video-card__copy span,.entity-video-card__copy small { color: var(--text-muted); font-size: 11px; }.entity-video-card__actions { display: flex; justify-content: flex-end; gap: 7px; padding: 0 12px 11px; }
+.entity-video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }.entity-video-card { min-width: 0; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }.entity-video-card__preview { width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border: 0; background: var(--thumb-bg); cursor: pointer; }.entity-video-card__preview img { width: 100%; height: 100%; display: block; object-fit: cover; }.entity-video-card__copy { display: grid; gap: 4px; min-width: 0; padding: 11px 12px 7px; }.entity-video-card__copy strong,.entity-video-card__copy span,.entity-video-card__copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.entity-video-card__copy span,.entity-video-card__copy small { color: var(--text-muted); font-size: var(--fs-caption); }.entity-video-card__actions { display: flex; justify-content: flex-end; gap: 7px; padding: 0 12px 11px; }
 .entity-image-section { display: grid; gap: 10px; }
 .entity-video-card__actions { flex-wrap: wrap; }
-.entity-image-section h3 { margin: 0; font-size: 15px; }
+.entity-image-section h3 { margin: 0; font-size: var(--fs-section); }
 .entity-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); align-items: start; gap: 12px; }
 .entity-image-card { margin: 0; min-width: 0; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.entity-image-card img { width: 100%; height: auto; display: block; object-fit: contain; border-radius: 8px; background: var(--thumb-bg); }
-.entity-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
-.entity-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.entity-library__more { align-self: center; }.entity-library__sentinel { height: 1px; }.entity-library__error { color: var(--danger-color); }
+.entity-image-card img { width: 100%; height: auto; display: block; object-fit: contain; border-radius: var(--radius-sm); background: var(--thumb-bg); }
+.entity-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--fs-caption); }
+.entity-image-card__size { color: var(--text-muted); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.entity-library__more { align-self: center; }.entity-library__sentinel { height: 1px; }.entity-library__error { color: var(--danger-text); }
 .entity-person-merge { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.entity-person-merge > p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.entity-person-merge > p { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); line-height: 1.5; }
 .entity-person-merge__options { display: grid; gap: 4px; max-height: 240px; overflow-y: auto; }
-.entity-person-merge__option { display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.entity-person-merge__option { display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: var(--fs-secondary); }
 .entity-person-merge__option:hover { background: var(--control-hover-bg); }
 .entity-person-merge__option input { min-width: 0; width: auto; padding: 0; }
-.entity-person-merge__option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
-.entity-person-merge__empty { margin: 0; color: var(--text-muted); font-size: 12px; }
+.entity-person-merge__option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--fs-caption); }
+.entity-person-merge__empty { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 .entity-person-merge__actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 1100px) { .entity-library--with-drawer { padding-right: 18px; } }
-@media (max-width: 900px) {.entity-library__toolbar,.entity-library__create { align-items: stretch; flex-direction: column; }.entity-library__title { align-items: flex-start; }.entity-library__search { display: flex; }.entity-video-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); } }
+@media (max-width: 900px) {.entity-library__create { align-items: stretch; flex-direction: column; }.entity-library__search { display: flex; }.entity-video-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); } }
 </style>

@@ -160,7 +160,10 @@ describe('空态与失败是两回事', () => {
     api.ListWatchedMovies.mockResolvedValue([]);
     const wrapper = await page();
 
-    expect(find(wrapper, 'empty').text()).toBe('还没有标记过已看');
+    // 空态换成 EmptyState（统一设计 D-UD-06）：标题原样不变，另带「去榜单」这个下一步。
+    expect(find(wrapper, 'empty').get('.ui-empty__title').text()).toBe('还没有标记过已看');
+    await find(wrapper, 'empty-chart').trigger('click');
+    expect(wrapper.emitted('navigate')).toEqual([['movie-chart']]);
     expect(findAll(wrapper, 'error')).toHaveLength(0);
     expect(wrapper.findAll('[role="alert"]')).toHaveLength(0);
     expect(find(wrapper, 'summary').text()).toBe('共 0 部');
@@ -282,7 +285,8 @@ describe('重新读取', () => {
 describe('观影记录与片库的闭环（D-PC52）', () => {
   it('APP-05 标题改为「观影记录」，说明关联后已看双向同步', async () => {
     const wrapper = await page();
-    expect(wrapper.get('h2').text()).toBe('观影记录');
+    // 页头换成 PageHeader（统一设计 D-UD-06），页面标题是 h1。
+    expect(wrapper.get('h1').text()).toBe('观影记录');
     expect(find(wrapper, 'scope-note').text()).toContain('互相同步');
   });
 

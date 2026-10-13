@@ -102,7 +102,8 @@ export default {
 .recap-backdrop--large { min-height: 420px; }
 .recap-backdrop--medium { min-height: 300px; }
 .recap-backdrop--small { min-height: 200px; }
-.recap-backdrop__stage { position: absolute; inset: 0; z-index: -2; }
+/* 画面层与压暗层同在 -1（同层按文档顺序，压暗层在后、盖在画面上），文字层在它们之上；isolation 把这些局部叠放关在本组件里。 */
+.recap-backdrop__stage { position: absolute; inset: 0; z-index: -1; }
 .recap-backdrop__frame {
   position: absolute;
   inset: -4%;

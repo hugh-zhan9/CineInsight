@@ -1,38 +1,40 @@
 <template>
   <main class="page-content recap-page" data-test="recap-page">
-    <header class="recap-head">
-      <div class="recap-head__title">
-        <h2>观看回顾</h2>
-        <p>只统计真实的播放与看图记录，不推算观看时长</p>
-      </div>
-      <nav class="recap-tabs" aria-label="回顾范围">
-        <button
-          v-for="item in tabs"
-          :key="item.key"
-          type="button"
-          :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': tab === item.key }]"
-          :aria-pressed="tab === item.key"
-          :data-test="`recap-tab-${item.key}`"
-          @click="setTab(item.key)"
-        >{{ item.label }}</button>
-      </nav>
-      <div v-if="tab !== 'live'" class="recap-period">
-        <button type="button" class="btn-secondary btn-compact" :disabled="!canBack" data-test="recap-prev" @click="shift(-1)">‹ 上一{{ unit }}</button>
-        <strong class="recap-period__label" data-test="recap-period-label">{{ periodLabel }}</strong>
-        <span v-if="result && result.in_progress" class="recap-pill" data-test="recap-in-progress">进行中</span>
-        <button type="button" class="btn-secondary btn-compact" :disabled="!canForward" data-test="recap-next" @click="shift(1)">下一{{ unit }} ›</button>
-      </div>
-      <div v-else class="recap-period">
-        <span class="recap-live-dot" aria-hidden="true"></span>
-        <strong class="recap-period__label">今天</strong>
-        <small v-if="result" class="recap-period__note">更新于 {{ formatClock(result.generated_at) }}</small>
-      </div>
-    </header>
+    <PageHeader class="recap-head" title="观看回顾" subtitle="只统计真实的播放与看图记录，不推算观看时长">
+      <template #actions>
+        <div class="recap-head__controls">
+          <nav class="recap-tabs" aria-label="回顾范围">
+            <button
+              v-for="item in tabs"
+              :key="item.key"
+              type="button"
+              :class="['recap-tabs__option', { 'recap-tabs__option--on': tab === item.key }]"
+              :aria-pressed="tab === item.key"
+              :data-test="`recap-tab-${item.key}`"
+              @click="setTab(item.key)"
+            >{{ item.label }}</button>
+          </nav>
+          <div v-if="tab !== 'live'" class="recap-period">
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="!canBack" data-test="recap-prev" @click="shift(-1)"><AppIcon name="chevron-left" /> 上一{{ unit }}</button>
+            <strong class="recap-period__label" data-test="recap-period-label">{{ periodLabel }}</strong>
+            <span v-if="result && result.in_progress" class="recap-pill" data-test="recap-in-progress">进行中</span>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="!canForward" data-test="recap-next" @click="shift(1)">下一{{ unit }} <AppIcon name="chevron-right" /></button>
+          </div>
+          <div v-else class="recap-period">
+            <span class="recap-live-dot" aria-hidden="true"></span>
+            <strong class="recap-period__label">今天</strong>
+            <small v-if="result" class="recap-period__note">更新于 {{ formatClock(result.generated_at) }}</small>
+          </div>
+        </div>
+      </template>
+    </PageHeader>
 
-    <p v-if="error" class="notes-alert" role="alert" data-test="recap-error">{{ error }}</p>
+    <AppBanner v-if="error" tone="danger" :title="error" data-test="recap-error">
+      <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="recap-retry" @click="load()">重试</button></template>
+    </AppBanner>
     <div v-if="loading && !result" class="recap-skeleton" data-test="recap-loading" aria-busy="true">
-      <div class="recap-skeleton__hero"></div>
-      <div class="recap-skeleton__row"><span v-for="n in 4" :key="n"></span></div>
+      <RecapBackdrop size="medium"><div class="recap-hero__body"><p class="recap-hero__meta">正在读取回顾…</p></div></RecapBackdrop>
+      <div class="recap-skeleton__row"><SkeletonBlock v-for="n in 4" :key="n" class="recap-skeleton__tile" :lines="3" /></div>
     </div>
 
     <template v-if="result && result.period === 'live'">
@@ -42,7 +44,7 @@
           <h3 class="recap-hero__title">{{ liveHero.video.title || '已删除的视频' }}</h3>
           <p class="recap-hero__meta">{{ liveHero.meta }}</p>
           <div class="recap-hero__actions">
-            <button type="button" class="btn-primary" :disabled="!liveHero.video.available" data-test="recap-live-open" @click="openVideo(liveHero.video)"><RecapIcon name="play" /> 打开详情</button>
+            <button type="button" class="btn btn--primary" :disabled="!liveHero.video.available" data-test="recap-live-open" @click="openVideo(liveHero.video)"><AppIcon name="play" /> 打开详情</button>
           </div>
         </div>
       </RecapBackdrop>
@@ -85,13 +87,11 @@
     </template>
 
     <template v-else-if="result">
-      <section v-if="result.empty" class="recap-empty" data-test="recap-empty">
-        <span class="recap-empty__icon"><RecapIcon name="spark" /></span>
-        <h3>{{ result.label }}还没有观看记录</h3>
-        <p>回顾只统计真实发生的播放与看图：在片库播放、在应用内观看、手机端或 Jellyfin 观看，以及在图片页看图都会记进来。</p>
-        <p v-if="result.in_progress" class="recap-muted">这一期还没结束，看点什么再回来。</p>
-        <p v-else-if="result.overview.previous.plays || result.overview.previous.image_views" class="recap-muted">{{ result.overview.previous.label }}有 {{ result.overview.previous.plays }} 次播放、{{ result.overview.previous.image_views }} 次看图，可以翻过去看看。</p>
-      </section>
+      <EmptyState v-if="result.empty" class="recap-empty" icon="spark" :title="`${result.label}还没有观看记录`" :message="emptyMessage" data-test="recap-empty">
+        <template v-if="emptyHasPrevious && canBack" #actions>
+          <button type="button" class="btn btn--secondary btn--sm" data-test="recap-empty-previous" @click="shift(-1)"><AppIcon name="chevron-left" /> 看{{ result.overview.previous.label }}</button>
+        </template>
+      </EmptyState>
 
       <template v-else>
         <RecapBackdrop v-if="hero" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="recap-hero">
@@ -108,7 +108,7 @@
                 <button v-for="item in hero.collections" :key="`c${item.id}`" type="button" class="recap-chip" @click="openEntity('collection', item)"><RecapIcon name="collection" />{{ item.name }}</button>
               </div>
               <div class="recap-hero__actions">
-                <button type="button" class="btn-primary" :disabled="!hero.available" data-test="recap-hero-open" @click="hero.open()"><RecapIcon name="play" /> {{ hero.action }}</button>
+                <button type="button" class="btn btn--primary" :disabled="!hero.available" data-test="recap-hero-open" @click="hero.open()"><AppIcon name="play" /> {{ hero.action }}</button>
                 <span v-if="!hero.available" class="recap-hero__note">原文件已不在库中，记录仍然保留</span>
               </div>
             </div>
@@ -286,13 +286,13 @@
                 <li v-for="quarter in result.quarter_tags" :key="quarter.quarter">
                   <strong>Q{{ quarter.quarter }}</strong>
                   <span v-if="!quarter.tags.length" class="recap-muted">—</span>
-                  <button v-for="item in quarter.tags" :key="item.tag.id" type="button" class="recap-chip recap-chip--plain" :style="{ '--chip-color': item.tag.color || 'var(--accent-color)' }" @click="openTag(item.tag)"><i class="recap-chip__dot"></i>{{ item.tag.name }}</button>
+                  <TagPill v-for="item in quarter.tags" :key="item.tag.id" clickable :label="item.tag.name" @click="openTag(item.tag)" />
                 </li>
               </ol>
             </section>
           </div>
           <p class="recap-diary-link">
-            <button type="button" class="btn-secondary btn-compact" data-test="recap-open-diary" @click="$emit('navigate', 'viewing-notes')"><RecapIcon name="diary" /> 查看观影日记</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="recap-open-diary" @click="$emit('navigate', 'viewing-notes')"><AppIcon name="diary" /> 查看观影日记</button>
             <span>观看笔记里的「年度回顾」按日记条目统计，与这里的播放流水口径不同，两者各自保留。</span>
           </p>
         </template>
@@ -314,7 +314,13 @@ import RecapIcon from './recap/RecapIcon.vue';
 import RecapLiveFeed from './recap/RecapLiveFeed.vue';
 import RecapMediaCard from './recap/RecapMediaCard.vue';
 import RecapMonthStrip from './recap/RecapMonthStrip.vue';
+import AppBanner from './ui/AppBanner.vue';
+import AppIcon from './ui/AppIcon.vue';
+import EmptyState from './ui/EmptyState.vue';
+import PageHeader from './ui/PageHeader.vue';
+import SkeletonBlock from './ui/SkeletonBlock.vue';
 import StatTile from './ui/StatTile.vue';
+import TagPill from './ui/TagPill.vue';
 import { reveal } from './recap/reveal.js';
 import {
   RECAP_TABS, SLOT_LABELS, SLOT_RANGES, canShiftBack, canShiftForward, changeText, changeTone, currentCursor, formatClock, formatDateLabel,
@@ -329,7 +335,10 @@ export const RECAP_ACTIVITY_DEBOUNCE_MS = 600;
 export default {
   name: 'RecapPage',
   mixins: [runtimeEventsMixin],
-  components: { RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon, RecapLiveFeed, RecapMediaCard, RecapMonthStrip, StatTile },
+  components: {
+    AppBanner, AppIcon, EmptyState, PageHeader, RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon, RecapLiveFeed,
+    RecapMediaCard, RecapMonthStrip, SkeletonBlock, StatTile, TagPill
+  },
   directives: { reveal },
   props: { pageActive: { type: Boolean, default: true } },
   emits: ['open-video-id', 'open-tag', 'open-image', 'open-entity', 'navigate'],
@@ -420,7 +429,19 @@ export default {
         label: sourceLabel(item.kind, item.source), percent: percentText(total ? item.count / total : 0)
       }));
     },
-    sourcesTitle() { return this.sourceBars.map(item => `${item.label} ${item.count}`).join(' · '); }
+    sourcesTitle() { return this.sourceBars.map(item => `${item.label} ${item.count}`).join(' · '); },
+    // 空期（EmptyState）：说明回顾统计什么，再按情况给一句下一步——还没结束就等等，上一期有记录就翻过去。
+    emptyHasPrevious() {
+      const previous = this.result?.overview?.previous;
+      return Boolean(!this.result?.in_progress && (previous?.plays || previous?.image_views));
+    },
+    emptyMessage() {
+      const base = '回顾只统计真实发生的播放与看图：在片库播放、在应用内观看、手机端或 Jellyfin 观看，以及在图片页看图都会记进来。';
+      const previous = this.result?.overview?.previous || {};
+      if (this.result?.in_progress) return `${base}这一期还没结束，看点什么再回来。`;
+      if (this.emptyHasPrevious) return `${base}${previous.label}有 ${previous.plays} 次播放、${previous.image_views} 次看图，可以翻过去看看。`;
+      return base;
+    }
   },
   watch: {
     key() { this.load(); },
@@ -554,53 +575,27 @@ export default {
     radial-gradient(1100px 360px at 88% -80px, color-mix(in srgb, var(--accent-color) 13%, transparent), transparent 70%),
     radial-gradient(800px 300px at 2% -60px, color-mix(in srgb, var(--warning-color) 9%, transparent), transparent 70%);
 }
-.recap-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
-.recap-head__title { flex: 1 1 260px; min-width: 0; }
-.recap-head__title h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
-.recap-head__title p { margin: 2px 0 0; color: var(--text-secondary); font-size: 12.5px; }
-.recap-tabs { display: inline-flex; gap: 6px; padding: 4px; border: 1px solid var(--hairline); border-radius: 999px; background: var(--panel-bg); }
-.recap-tabs .toolbar-btn { border-radius: 999px; border-color: transparent; }
-.recap-tabs .toolbar-btn--on { border-color: var(--accent-color); }
+/* 页头是 PageHeader：页面本身是 grid + gap，不要它自带的下外边距；动作区放范围切换与翻期。 */
+.recap-head { margin-bottom: 0; }
+.recap-head__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+/* 外观照 SegmentedControl（选项要带各自的 data-test 钩子，组件还不能透传，先保留这组按钮的标记，只换外观；
+   SegmentedControl 支持逐项钩子后换成组件，删掉这几条）。 */
+.recap-tabs { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); }
+.recap-tabs__option { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: calc(var(--h-unit) - 6px); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--fs-secondary); cursor: pointer; white-space: nowrap; }
+.recap-tabs__option:hover:not(:disabled) { color: var(--text-primary); }
+.recap-tabs__option:disabled { opacity: 0.45; cursor: not-allowed; }
+.recap-tabs__option--on { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-segment); }
+.recap-tabs__option:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 .recap-period { display: inline-flex; align-items: center; gap: 10px; }
-.recap-period__label { min-width: 92px; font-size: 15px; text-align: center; font-variant-numeric: tabular-nums; }
-.recap-period__note { color: var(--text-muted); font-size: 12px; }
-.recap-pill { padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 11.5px; font-weight: 600; }
+.recap-period__label { min-width: 92px; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-align: center; font-variant-numeric: tabular-nums; }
+.recap-period__note { color: var(--text-muted); font-size: var(--fs-caption); }
+.recap-pill { padding: 2px 9px; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .recap-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger-color); box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger-color) 60%, transparent); animation: recap-pulse 1.8s ease-out infinite; }
 @keyframes recap-pulse { to { box-shadow: 0 0 0 10px transparent; } }
 
 .recap-skeleton { display: grid; gap: 16px; }
-.recap-skeleton__hero, .recap-skeleton__row span {
-  border-radius: var(--radius-lg);
-  background: linear-gradient(90deg, var(--panel-muted-bg) 0%, var(--panel-bg) 50%, var(--panel-muted-bg) 100%) 0 0 / 200% 100%;
-  animation: recap-shimmer 1.4s linear infinite;
-}
-.recap-skeleton__hero { height: 360px; }
 .recap-skeleton__row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-.recap-skeleton__row span { height: 110px; }
-@keyframes recap-shimmer { to { background-position: -200% 0; } }
-
-.recap-empty {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-  padding: 64px 24px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--panel-bg);
-  text-align: center;
-}
-.recap-empty h3 { margin: 0; font-size: 20px; }
-.recap-empty p { max-width: 560px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
-.recap-empty__icon {
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--warning-color) 18%, var(--panel-bg)));
-  color: var(--accent-text);
-  font-size: 30px;
-}
+.recap-skeleton__tile { padding: 18px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
 
 /* 大幅背景里的文字：两主题都是白字压在暗化的画面上。 */
 .recap-hero__layout { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 36px 40px; }
@@ -612,13 +607,13 @@ export default {
   gap: 4px;
   flex: none;
   color: var(--recap-hero-fg);
-  font-size: clamp(64px, 9vw, 120px);
-  font-weight: 900;
+  font-size: var(--fs-hero);
+  font-weight: var(--fw-bold);
   line-height: 0.9;
   letter-spacing: -0.05em;
   text-shadow: 0 6px 40px var(--recap-scrim);
 }
-.recap-hero__count small { font-size: 0.24em; font-weight: 700; letter-spacing: 0; color: var(--recap-hero-muted); }
+.recap-hero__count small { font-size: var(--fs-body); font-weight: var(--fw-bold); letter-spacing: 0; color: var(--recap-hero-muted); }
 .recap-chip {
   display: inline-flex;
   align-items: center;
@@ -626,11 +621,11 @@ export default {
   height: 30px;
   padding: 0 12px;
   border: 1px solid var(--recap-hero-chip-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--recap-hero-chip);
   color: var(--recap-hero-fg);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
   backdrop-filter: blur(6px);
   transition: background var(--transition), transform var(--transition);
@@ -638,12 +633,10 @@ export default {
 .recap-chip:hover { background: color-mix(in srgb, var(--recap-hero-fg) 24%, transparent); transform: translateY(-1px); }
 .recap-chip__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--chip-color) 35%, transparent); }
 .recap-chip--person img { width: 20px; height: 20px; margin-left: -6px; border-radius: 50%; object-fit: cover; }
-.recap-chip--plain { border-color: var(--hairline); background: var(--panel-subtle-bg); color: var(--text-primary); backdrop-filter: none; }
-.recap-chip--plain:hover { background: var(--control-hover-bg); }
 
 .recap-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
-.recap-stat__delta { justify-self: start; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
-.recap-stat__delta small { font-weight: 500; opacity: 0.8; }
+.recap-stat__delta { justify-self: start; padding: 1px 8px; border-radius: var(--radius-pill); font-size: var(--fs-caption); font-weight: var(--fw-bold); }
+.recap-stat__delta small { font-weight: var(--fw-medium); opacity: 0.8; }
 .recap-stat__delta.is-up { background: var(--accent-soft); color: var(--accent-text); }
 .recap-stat__delta.is-down { background: var(--warning-soft); color: var(--warning-text); }
 .recap-stat__delta.is-flat { background: var(--panel-muted-bg); color: var(--text-secondary); }
@@ -675,20 +668,20 @@ export default {
   border-radius: 16px;
   background: var(--accent-color);
   color: var(--accent-on);
-  font-size: 26px;
+  font-size: var(--fs-display);
   transform: rotate(-6deg);
   box-shadow: 0 10px 24px color-mix(in srgb, var(--accent-color) 30%, transparent);
 }
 .recap-title--1 .recap-title__icon { background: var(--warning-color); box-shadow: 0 10px 24px color-mix(in srgb, var(--warning-color) 30%, transparent); }
 .recap-title--2 .recap-title__icon { background: var(--text-primary); color: var(--panel-bg); box-shadow: none; }
 .recap-title__text { display: grid; gap: 4px; min-width: 0; }
-.recap-title__text strong { font-size: 18px; font-weight: 800; }
-.recap-title__text p { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.5; }
+.recap-title__text strong { font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.recap-title__text p { margin: 0; color: var(--text-secondary); font-size: var(--fs-secondary); line-height: 1.5; }
 
 .recap-posters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-flow: dense; gap: 14px; }
 .recap-posters__lead { grid-column: span 2; grid-row: span 2; }
-.recap-posters__lead :deep(.recap-card__rank) { font-size: 64px; }
-.recap-posters__lead :deep(.recap-card__text strong) { font-size: 15px; }
+.recap-posters__lead :deep(.recap-card__rank) { font-size: var(--fs-hero); }
+.recap-posters__lead :deep(.recap-card__text strong) { font-size: var(--fs-section); }
 
 .recap-cloud { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
 .recap-cloud__tag {
@@ -700,15 +693,15 @@ export default {
   border-bottom: 2px solid color-mix(in srgb, var(--chip-color) 60%, transparent);
   background: transparent;
   color: var(--text-primary);
-  font-weight: 750;
+  font-weight: var(--fw-bold);
   line-height: 1.2;
   cursor: pointer;
   transition: color var(--transition), transform var(--transition);
 }
 .recap-cloud__tag:hover { color: var(--chip-color); transform: translateY(-2px); }
-.recap-cloud__tag small { color: var(--text-muted); font-size: 11px; font-weight: 600; }
+.recap-cloud__tag small { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 
-.recap-collection small { color: var(--text-muted); font-size: 11.5px; }
+.recap-collection small { color: var(--text-muted); font-size: var(--fs-caption); }
 .recap-collections { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .recap-collection {
   display: grid;
@@ -725,9 +718,9 @@ export default {
   cursor: pointer;
 }
 .recap-collection:hover { border-color: var(--accent-border); }
-.recap-collection__cover { display: grid; place-items: center; width: 44px; height: 44px; overflow: hidden; border-radius: 8px; background: var(--thumb-bg); color: var(--thumb-fg); font-size: 20px; }
+.recap-collection__cover { display: grid; place-items: center; width: 44px; height: 44px; overflow: hidden; border-radius: var(--radius-sm); background: var(--thumb-bg); color: var(--thumb-fg); font-size: var(--fs-title); }
 .recap-collection__cover img { width: 100%; height: 100%; object-fit: cover; }
-.recap-collection strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.recap-collection strong { overflow: hidden; font-size: var(--fs-secondary); text-overflow: ellipsis; white-space: nowrap; }
 
 .recap-mosaic { columns: 6 150px; column-gap: 12px; }
 .recap-mosaic__item { break-inside: avoid; margin-bottom: 12px; }
@@ -743,20 +736,20 @@ export default {
   border-radius: var(--radius-md);
   background: var(--panel-bg);
 }
-.recap-fact small { color: var(--text-muted); font-size: 11.5px; }
-.recap-fact strong { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; }
-.recap-fact > span { color: var(--text-secondary); font-size: 11.5px; }
+.recap-fact small { color: var(--text-muted); font-size: var(--fs-caption); }
+.recap-fact strong { font-size: var(--fs-title); font-weight: var(--fw-bold); letter-spacing: -0.01em; }
+.recap-fact > span { color: var(--text-secondary); font-size: var(--fs-caption); }
 .recap-fact--accent { border-color: var(--accent-border); background: linear-gradient(135deg, var(--accent-soft), var(--panel-bg)); }
-.recap-sources { grid-column: 1 / -1; display: flex; gap: 3px; height: 12px; overflow: hidden; border-radius: 999px; background: var(--panel-muted-bg); }
+.recap-sources { grid-column: 1 / -1; display: flex; gap: 3px; height: 12px; overflow: hidden; border-radius: var(--radius-pill); background: var(--panel-muted-bg); }
 .recap-sources__bar { flex-basis: 0; min-width: 4px; background: var(--accent-color); }
 .recap-sources__bar.is-image { background: var(--warning-color); }
 .recap-sources__bar:nth-child(2n).is-video { background: color-mix(in srgb, var(--accent-color) 60%, var(--panel-bg)); }
-.recap-sources__legend { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; color: var(--text-secondary); font-size: 11.5px; }
+.recap-sources__legend { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; color: var(--text-secondary); font-size: var(--fs-caption); }
 .recap-sources__legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 2px; background: var(--accent-color); }
 .recap-sources__legend i.is-image { background: var(--warning-color); }
 
 .recap-fresh { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.recap-fresh .recap-fact strong { font-size: 26px; }
+.recap-fresh .recap-fact strong { font-size: var(--fs-display); }
 
 .recap-bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; align-items: end; height: 170px; }
 .recap-bars__col { display: grid; grid-template-rows: 1fr auto; gap: 6px; height: 100%; min-width: 0; text-align: center; }
@@ -764,15 +757,15 @@ export default {
 .recap-bars__plays, .recap-bars__views { display: block; flex: none; transition: height 700ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .recap-bars__plays { background: linear-gradient(0deg, var(--accent-color), color-mix(in srgb, var(--accent-color) 65%, var(--panel-bg))); }
 .recap-bars__views { background: var(--warning-color); }
-.recap-bars__col small { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.recap-bars__col small { color: var(--text-muted); font-size: var(--fs-caption); white-space: nowrap; }
 .recap-bars--week { height: 150px; }
 .recap-live-clock { max-width: 240px; justify-self: center; }
 
 .recap-quarters { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .recap-quarters li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px dashed var(--hairline); }
 .recap-quarters li:last-child { border-bottom: 0; padding-bottom: 0; }
-.recap-quarters strong { width: 30px; color: var(--accent-text); font-size: 14px; font-weight: 800; }
-.recap-diary-link { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.recap-quarters strong { width: 30px; color: var(--accent-text); font-size: var(--fs-body); font-weight: var(--fw-bold); }
+.recap-diary-link { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; color: var(--text-muted); font-size: var(--fs-secondary); }
 
 /* v-reveal：进入视口时淡入上移，序号越大越晚。 */
 .recap-reveal { opacity: 0; transform: translateY(18px); transition: opacity 620ms ease, transform 620ms cubic-bezier(0.2, 0.8, 0.2, 1); transition-delay: var(--reveal-delay, 0ms); }
@@ -791,7 +784,7 @@ export default {
 @media (prefers-reduced-motion: reduce) {
   .recap-reveal, .recap-bars__plays, .recap-bars__views { transition: none; }
   .recap-reveal { opacity: 1; transform: none; }
-  .recap-live-dot, .recap-skeleton__hero, .recap-skeleton__row span { animation: none; }
+  .recap-live-dot { animation: none; }
   .recap-chip, .recap-cloud__tag { transition: none; }
 }
 </style>
