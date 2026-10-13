@@ -229,8 +229,17 @@ describe('应用级命令注册', () => {
       wrapper.vm.currentPage = area;
       await commandByID('nav:smart:continue_watching').run();
       expect(wrapper.vm.navigateParams).toEqual({ watch: 'continue_watching' });
+      // 三期集成：点赞与最近播放回到海报墙，带各自的 { watch }；最近添加仍去「视频」的全部。
       wrapper.vm.currentPage = area;
-      await findCommand('nav:smart:liked').run();
+      await commandByID('nav:smart:liked').run();
+      expect(wrapper.vm.currentPage).toBe('videos');
+      expect(wrapper.vm.navigateParams).toEqual({ watch: 'liked' });
+      wrapper.vm.currentPage = area;
+      await commandByID('nav:smart:recently_played').run();
+      expect(wrapper.vm.currentPage).toBe('videos');
+      expect(wrapper.vm.navigateParams).toEqual({ watch: 'recently_played' });
+      wrapper.vm.currentPage = area;
+      await findCommand('nav:smart:recently_added').run();
       expect(wrapper.vm.currentPage).toBe('videos');
       expect(wrapper.vm.navigateParams).toEqual({ watch: '' });
     }
@@ -265,7 +274,8 @@ describe('应用级命令注册', () => {
       expect(smartViewTarget(view, 'manage')).toEqual({ page: 'videos', watch: view });
       expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'videos', watch: view });
     }
-    for (const view of ['liked', 'recently_played', 'recently_added', 'nope']) {
+    expect(VIDEO_BROWSE_SMART_VIEWS).toEqual(['', 'unwatched', 'continue_watching', 'watched', 'favorites', 'liked', 'recently_played']);
+    for (const view of ['recently_added', 'nope']) {
       expect(smartViewTarget(view, 'manage'), view).toEqual({ page: 'videos', watch: '' });
     }
     for (const view of ['untagged', 'no_subtitle', 'local_metadata_updated', 'stale']) {
@@ -333,11 +343,11 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('downloads');
   });
 
-  // 命令 ID 不变：十二条都还在；海报墙表达不了的观看向视图（点赞、最近播放、最近添加）不在面板里列出（hidden），
-  // 按 ID 照样能执行（D-P3-03）。
-  it('智能视图逐条注册为导航命令（ID 不变），点赞 / 最近播放 / 最近添加不在面板里列出', () => {
+  // 命令 ID 不变：十二条都还在；海报墙不单列的「最近添加」不在面板里列出（hidden），按 ID 照样能执行（D-P3-03）。
+  // 三期集成：点赞、最近播放回到海报墙，重新列出。
+  it('智能视图逐条注册为导航命令（ID 不变），只有最近添加不在面板里列出', () => {
     host();
-    const hidden = ['liked', 'recently_played', 'recently_added'];
+    const hidden = ['recently_added'];
     for (const view of COMMAND_PALETTE_SMART_VIEWS) {
       const id = `nav:smart:${view.value || 'all'}`;
       const command = findCommand(id);

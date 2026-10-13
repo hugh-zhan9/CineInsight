@@ -198,17 +198,6 @@ func randomConditionsLog(request services.RandomPlayRequest) string {
 	return fmt.Sprintf("watch=%s favorites=%v max_duration=%d exclude=%d", request.WatchState, request.FavoritesOnly, request.MaxDurationSeconds, len(request.ExcludeIDs))
 }
 
-// PickRandomVideos 在当前片库筛选范围内随机抽取若干视频，只返回列表不发起播放。
-func (a *App) PickRandomVideos(request services.RandomPlayRequest, count int) (*services.RandomPickResult, error) {
-	result, err := a.videoService.PickRandomVideos(request, count)
-	if result != nil {
-		log.Printf("API PickRandomVideos %s count=%d picked=%d reason=%s err=%v", randomConditionsLog(request), count, len(result.Videos), result.ReasonCode, err)
-	} else {
-		log.Printf("API PickRandomVideos %s count=%d result=nil err=%v", randomConditionsLog(request), count, err)
-	}
-	return result, err
-}
-
 // GetVideosByIDs 按给定顺序刷新这些视频的最新记录，查不到的条目会被跳过。
 func (a *App) GetVideosByIDs(ids []uint) ([]models.Video, error) {
 	return a.videoService.GetVideosByIDs(ids)

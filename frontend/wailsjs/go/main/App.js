@@ -1154,10 +1154,6 @@ export function PermanentlyDeleteVideos(arg1) {
   return window['go']['main']['App']['PermanentlyDeleteVideos'](arg1);
 }
 
-export function PickRandomVideos(arg1, arg2) {
-  return window['go']['main']['App']['PickRandomVideos'](arg1, arg2);
-}
-
 export function PlayPlaybackQueue(arg1, arg2) {
   return window['go']['main']['App']['PlayPlaybackQueue'](arg1, arg2);
 }

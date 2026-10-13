@@ -238,16 +238,17 @@ const COMMAND_SMART_VIEWS = [
 
 // 「视频」海报墙（viewer/VideoBrowsePage.vue）的观看状态对应的智能视图，与它的 VIDEO_BROWSE_WATCH_OPTIONS 逐项一致
 // （VideoBrowsePage.test.js 钉住）。写在这里而不从页面导入：页面经 viewerNavigation.js 已经依赖本文件，反过来会成环。
-export const VIDEO_BROWSE_SMART_VIEWS = Object.freeze(['', 'unwatched', 'continue_watching', 'watched', 'favorites']);
+// 点赞、最近播放（按最近一次播放倒序）在三期集成时补回海报墙。
+export const VIDEO_BROWSE_SMART_VIEWS = Object.freeze(['', 'unwatched', 'continue_watching', 'watched', 'favorites', 'liked', 'recently_played']);
 
 // 片库管理认得的智能视图（D-P3-03：全部、未打标签、无字幕、本地资料有更新、路径失效）。保存视图或命令带来别的视图时，
 // 片库管理退回「全部」并提示一次（VideoListPage）。
 export const LIBRARY_MANAGE_SMART_VIEWS = Object.freeze(COMMAND_SMART_VIEWS.filter(view => !view.viewer).map(view => view.value));
 
 // 智能视图命令的落点（D-P3-03「命令改指向观看侧」）：
-// - 海报墙认得的观看状态（未看、继续观看、已看、收藏）一律去「视频」并带上 { watch }，不论当前在哪一侧；
-// - 海报墙表达不了的观看向视图（点赞、最近播放、最近添加）片库管理已不再提供：命令保留但不在面板里列出（hidden），
-//   执行时去「视频」的全部（海报墙默认按最近添加排序）；
+// - 海报墙认得的观看状态（未看、继续观看、已看、收藏、点赞、最近播放）一律去「视频」并带上 { watch }，不论当前在哪一侧；
+// - 海报墙不单列的「最近添加」（海报墙默认就按最近添加排序）片库管理已不再提供：命令保留但不在面板里列出（hidden），
+//   执行时去「视频」的全部；
 // - 「全部视频」跟着当前区域：管理侧是片库管理的全部，观看侧是「视频」的全部；
 // - 其余（管理向）去「片库管理」套上这个视图。
 export function smartViewTarget(value, area) {
@@ -464,7 +465,7 @@ export const appCommandsMixin = {
           group: 'navigate',
           label: `视频 · ${view.label}`,
           keywords: ['smart view', '智能视图', view.value].filter(Boolean),
-          // 海报墙表达不了的观看向视图（点赞、最近播放、最近添加）不再列出，命令 ID 照旧可执行（见 smartViewTarget）。
+          // 海报墙不单列的观看向视图（最近添加）不再列出，命令 ID 照旧可执行（见 smartViewTarget）。
           ...(view.viewer && !VIDEO_BROWSE_SMART_VIEWS.includes(view.value) ? { hidden: true } : {}),
           run: () => this.applySmartViewFromCommand(view.value)
         });

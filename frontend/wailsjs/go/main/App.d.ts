@@ -581,8 +581,6 @@ export function PermanentlyDeleteImages(arg1:Array<number>):Promise<services.Bat
 
 export function PermanentlyDeleteVideos(arg1:Array<number>):Promise<services.BatchResult>;
 
-export function PickRandomVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<services.RandomPickResult>;
-
 export function PlayPlaybackQueue(arg1:number,arg2:number):Promise<void>;
 
 export function PlayRandomVideoWithFilter(arg1:services.RandomPlayRequest):Promise<services.PlaybackAttemptResult>;

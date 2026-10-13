@@ -5,6 +5,7 @@ const api = vi.hoisted(() => ({
   CountLibraryVideos: vi.fn(),
   ListCollectionProgress: vi.fn(),
   ListPeople: vi.fn(),
+  ListRecentlyPlayedWithFilter: vi.fn(),
   PlayVideo: vi.fn(),
   PlayRandomVideoWithFilter: vi.fn(),
   RerollRandom: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock('../../../wailsjs/go/main/App', async importOriginal => ({ ...(await imp
 vi.mock('../../utils/feedback.js', async importOriginal => ({ ...(await importOriginal()), notify: vi.fn(), notifyError: vi.fn() }));
 
 import VideoBrowsePage, {
-  collectionProgressCard, VIDEO_BROWSE_PAGE_SIZE, VIDEO_BROWSE_WATCH_OPTIONS, videoBrowseFilter, videoBrowseMark
+  collectionProgressCard, recentlyPlayedNextCursor, VIDEO_BROWSE_PAGE_SIZE, VIDEO_BROWSE_WATCH_OPTIONS, videoBrowseFilter, videoBrowseMark
 } from './VideoBrowsePage.vue';
 import BaseMenu from '../ui/BaseMenu.vue';
 import RandomPickBanner from '../video-list/RandomPickBanner.vue';
@@ -61,6 +62,7 @@ beforeEach(() => {
   api.CountLibraryVideos.mockReset().mockResolvedValue(1234);
   api.ListCollectionProgress.mockReset().mockResolvedValue([]);
   api.ListPeople.mockReset().mockResolvedValue([]);
+  api.ListRecentlyPlayedWithFilter.mockReset().mockResolvedValue([]);
   api.PlayVideo.mockReset().mockResolvedValue({ dispatch_succeeded: true });
   api.PlayRandomVideoWithFilter.mockReset();
   api.RerollRandom.mockReset();
@@ -109,7 +111,21 @@ describe('VideoBrowsePage pure helpers', () => {
 
   it('offers exactly the watch states the command palette routes here', () => {
     expect(VIDEO_BROWSE_WATCH_OPTIONS.map(option => option.value)).toEqual([...VIDEO_BROWSE_SMART_VIEWS]);
-    expect(VIDEO_BROWSE_WATCH_OPTIONS.map(option => option.label)).toEqual(['全部', '没看过', '在看', '看过', '收藏']);
+    expect(VIDEO_BROWSE_WATCH_OPTIONS.map(option => option.label)).toEqual(['全部', '没看过', '在看', '看过', '收藏', '点赞', '最近播放']);
+  });
+
+  it('does not collapse versions for 最近播放 (that listing is per file), so the count matches the list', () => {
+    expect(videoBrowseFilter({ watch: 'recently_played' })).toEqual({ ...DEFAULT_FILTER, smart_view: 'recently_played', collapse_versions: false });
+    expect(videoBrowseFilter({ watch: 'liked' })).toEqual({ ...DEFAULT_FILTER, smart_view: 'liked' });
+  });
+
+  it('builds the 最近播放 cursor from the last row only when a full page came back', () => {
+    const rows = n => Array.from({ length: n }, (_, index) => ({ id: 100 - index, last_played_at: `2026-10-13T10:00:0${index % 10}.123456789+08:00` }));
+    expect(recentlyPlayedNextCursor(rows(3), 3)).toEqual({ lastPlayedAt: '2026-10-13T10:00:02.123456789+08:00', id: 98 });
+    expect(recentlyPlayedNextCursor(rows(2), 3)).toBeNull();
+    expect(recentlyPlayedNextCursor([], 3)).toBeNull();
+    expect(recentlyPlayedNextCursor([{ id: 5, last_played_at: null }], 1)).toBeNull();
+    expect(recentlyPlayedNextCursor(null)).toBeNull();
   });
 });
 
@@ -342,7 +358,8 @@ describe('VideoBrowsePage filters', () => {
     await wrapper.setProps({ navigationRequest: { watch: 'favorites', token: 3 } });
     await flushPromises();
     expect(lastRequest().filter).toEqual({ ...DEFAULT_FILTER, smart_view: 'favorites', sort_mode: 'title_asc' });
-    await wrapper.setProps({ navigationRequest: { watch: 'liked', token: 4 } });
+    // 海报墙不认的观看状态（最近添加没有单列）按「全部」。
+    await wrapper.setProps({ navigationRequest: { watch: 'recently_added', token: 4 } });
     await flushPromises();
     expect(lastRequest().filter).toEqual({ ...DEFAULT_FILTER, sort_mode: 'title_asc' });
   });
@@ -526,6 +543,22 @@ describe('VideoBrowsePage scrolling and shortcuts', () => {
     host.remove();
   });
 
+  it('restores the scroll position in 最近播放 too, without refetching the list', async () => {
+    const { host, mountPoint } = scrollHost();
+    api.ListRecentlyPlayedWithFilter.mockResolvedValue([video(1, { last_played_at: '2026-10-13T10:00:00Z' })]);
+    const wrapper = await mountPage({ navigationRequest: { watch: 'recently_played', token: 1 } }, { attachTo: mountPoint });
+    const calls = api.ListRecentlyPlayedWithFilter.mock.calls.length;
+    host.scrollTop = 700;
+    await wrapper.setProps({ pageActive: false });
+    host.scrollTop = 0;
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(host.scrollTop).toBe(700);
+    expect(api.ListRecentlyPlayedWithFilter.mock.calls.length).toBe(calls);
+    wrapper.unmount();
+    host.remove();
+  });
+
   it('loads the next batch when the sentinel nears the viewport, only while the page is active', async () => {
     const observers = [];
     const original = window.IntersectionObserver;
@@ -570,5 +603,103 @@ describe('VideoBrowsePage scrolling and shortcuts', () => {
     window.dispatchEvent(hidden);
     expect(hidden.defaultPrevented).toBe(false);
     wrapper.unmount();
+  });
+});
+
+// 三期集成：点赞走原来的分页；最近播放按最近一次播放倒序，用 ListRecentlyPlayedWithFilter 的键集分页（last_played_at, id）。
+describe('VideoBrowsePage 点赞 and 最近播放', () => {
+  const played = (id, at) => video(id, { last_played_at: at });
+  const fullPage = (start, at) => Array.from({ length: VIDEO_BROWSE_PAGE_SIZE }, (_, index) => played(start - index, at(index)));
+
+  it('点赞 stays on the regular paged search with smart_view liked', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="browse-watch-liked"]').trigger('click');
+    await flushPromises();
+    expect(lastRequest()).toEqual({ filter: { ...DEFAULT_FILTER, smart_view: 'liked' }, limit: 60 });
+    expect(api.ListRecentlyPlayedWithFilter).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="browse-sort"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('最近播放 pages by last play with the (last_played_at, id) cursor, ties included, and stops on a short page', async () => {
+    // 第一页最后几行同一时刻播放：游标取最后一行的时间与 id，同时间靠 id 排开。
+    const tie = '2026-10-13T09:00:00.5+08:00';
+    const page1 = fullPage(500, index => (index >= VIDEO_BROWSE_PAGE_SIZE - 3 ? tie : `2026-10-13T10:${String(59 - index).padStart(2, '0')}:00+08:00`));
+    const page2 = [played(441, tie), played(440, tie), played(100, '2026-10-12T08:00:00Z')];
+    api.ListRecentlyPlayedWithFilter.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
+    const wrapper = await mountPage();
+    const searchCalls = api.SearchLibraryVideoPage.mock.calls.length;
+    await wrapper.get('[data-test="browse-watch-recent"]').trigger('click');
+    await flushPromises();
+
+    const filter = { ...DEFAULT_FILTER, smart_view: 'recently_played', collapse_versions: false };
+    expect(api.ListRecentlyPlayedWithFilter).toHaveBeenNthCalledWith(1, filter, '', 0, 60);
+    expect(api.SearchLibraryVideoPage.mock.calls.length).toBe(searchCalls);
+    expect(api.CountLibraryVideos).toHaveBeenLastCalledWith(filter);
+    expect(wrapper.findAll('[data-test="browse-card"]')).toHaveLength(60);
+    expect(wrapper.find('[data-test="browse-load-more"]').exists()).toBe(true);
+
+    await wrapper.get('[data-test="browse-load-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListRecentlyPlayedWithFilter).toHaveBeenNthCalledWith(2, filter, tie, 441, 60);
+    // 第二页把第一页最后那一行又带回来（同一时刻）也不重复出卡。
+    const ids = wrapper.findAll('[data-test="browse-card"]').map(card => card.text());
+    expect(ids).toHaveLength(62);
+    expect(wrapper.findAll('[data-test="browse-card"]').at(-1).text()).toContain('影片100');
+    expect(wrapper.find('[data-test="browse-load-more"]').exists()).toBe(false);
+    expect(wrapper.vm.loadMore()).toBeNull();
+    expect(api.ListRecentlyPlayedWithFilter).toHaveBeenCalledTimes(2);
+  });
+
+  it('locks the sort select to 「按最近播放时间」 while selected and restores the chosen sort afterwards', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="browse-sort"]').setValue('title_asc');
+    await flushPromises();
+    await wrapper.get('[data-test="browse-watch-recent"]').trigger('click');
+    await flushPromises();
+    const select = wrapper.get('[data-test="browse-sort"]');
+    expect(select.attributes('disabled')).toBeDefined();
+    expect(select.findAll('option').map(option => option.text())).toEqual(['按最近播放时间']);
+    expect(select.attributes('title')).toContain('按播放时间从近到远');
+    // 锁住期间不论从哪写进来（下拉本身已禁用），都不改掉用户原来选的排序。
+    wrapper.vm.sortModel = 'recently_played';
+    expect(wrapper.vm.sort).toBe('title_asc');
+
+    await wrapper.get('[data-test="browse-watch-watched"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="browse-sort"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[data-test="browse-sort"]').element.value).toBe('title_asc');
+    expect(lastRequest().filter).toEqual({ ...DEFAULT_FILTER, smart_view: 'watched', sort_mode: 'title_asc' });
+  });
+
+  it('drops a late 最近播放 page after switching away, and a late search page after switching to it', async () => {
+    let resolveRecent;
+    const wrapper = await mountPage();
+    api.ListRecentlyPlayedWithFilter.mockReturnValueOnce(new Promise(resolve => { resolveRecent = resolve; }));
+    await wrapper.get('[data-test="browse-watch-recent"]').trigger('click');
+    api.SearchLibraryVideoPage.mockResolvedValueOnce(page([video(7)]));
+    await wrapper.get('[data-test="browse-watch-favorites"]').trigger('click');
+    await flushPromises();
+    resolveRecent([played(1, '2026-10-13T10:00:00Z'), played(2, '2026-10-13T09:00:00Z')]);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test="browse-card"]').map(card => card.text())).toEqual([expect.stringContaining('影片7')]);
+
+    let resolveSearch;
+    api.SearchLibraryVideoPage.mockReturnValueOnce(new Promise(resolve => { resolveSearch = resolve; }));
+    await wrapper.get('[data-test="browse-watch-all"]').trigger('click');
+    api.ListRecentlyPlayedWithFilter.mockResolvedValueOnce([played(9, '2026-10-13T10:00:00Z')]);
+    await wrapper.get('[data-test="browse-watch-recent"]').trigger('click');
+    await flushPromises();
+    resolveSearch(page([video(1), video(2)]));
+    await flushPromises();
+    expect(wrapper.findAll('[data-test="browse-card"]').map(card => card.text())).toEqual([expect.stringContaining('影片9')]);
+  });
+
+  it('opens straight into 最近播放 from a navigation request (palette 「视频 · 最近播放」)', async () => {
+    api.ListRecentlyPlayedWithFilter.mockResolvedValueOnce([played(3, '2026-10-13T10:00:00Z')]);
+    const wrapper = await mountPage({ navigationRequest: { watch: 'recently_played', token: 1 } });
+    expect(api.ListRecentlyPlayedWithFilter).toHaveBeenCalledWith({ ...DEFAULT_FILTER, smart_view: 'recently_played', collapse_versions: false }, '', 0, 60);
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="browse-watch-recent"]').attributes('aria-checked')).toBe('true');
+    expect(wrapper.findAll('[data-test="browse-card"]')).toHaveLength(1);
   });
 });

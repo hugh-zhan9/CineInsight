@@ -65,8 +65,17 @@
           >人物<AppBadge v-if="people.length" tone="accent" :count="people.length" /><AppIcon name="chevron-down" :size="16" /></button>
           <label class="video-browse__sort">
             <span>排序</span>
-            <select v-model="sort" class="select-input" aria-label="排序" data-test="browse-sort" @change="reloadNow">
-              <option v-for="option in sortOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            <!-- 「最近播放」只按播放时间从近到远排（键集分页），排序锁住并写明；换回别的观看状态时恢复原来选的排序。 -->
+            <select
+              v-model="sortModel"
+              class="select-input"
+              aria-label="排序"
+              data-test="browse-sort"
+              :disabled="recentlyPlayed"
+              :title="recentlyPlayed ? '最近播放按播放时间从近到远排列，不能换排序' : undefined"
+              @change="reloadNow"
+            >
+              <option v-for="option in sortSelectOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
           </label>
         </div>
@@ -266,7 +275,9 @@
 // - navigationRequest：App 的 navigateTo('videos', { keyword | watch | tagId }) 带来的一次新浏览——筛选回到默认再套上参数
 //   （排序保留），滚动回到顶部。
 // 事件：open-video(id) 进整页详情（App 按 from='videos' 分流）；navigate(key) 去别的页面（空片库的「去添加扫描目录」）。
-import { CountLibraryVideos, ListCollectionProgress, ListPeople, PlayVideo, SearchLibraryVideoPage } from '../../../wailsjs/go/main/App';
+import {
+  CountLibraryVideos, ListCollectionProgress, ListPeople, ListRecentlyPlayedWithFilter, PlayVideo, SearchLibraryVideoPage
+} from '../../../wailsjs/go/main/App';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import TonightPickerDialog from '../TonightPickerDialog.vue';
 import RandomPickBanner from '../video-list/RandomPickBanner.vue';
@@ -297,8 +308,14 @@ export const VIDEO_BROWSE_WATCH_OPTIONS = Object.freeze([
   { value: 'unwatched', label: '没看过', dataTest: 'browse-watch-unwatched' },
   { value: 'continue_watching', label: '在看', dataTest: 'browse-watch-continue' },
   { value: 'watched', label: '看过', dataTest: 'browse-watch-watched' },
-  { value: 'favorites', label: '收藏', dataTest: 'browse-watch-favorites' }
+  { value: 'favorites', label: '收藏', dataTest: 'browse-watch-favorites' },
+  { value: 'liked', label: '点赞', dataTest: 'browse-watch-liked' },
+  { value: 'recently_played', label: '最近播放', dataTest: 'browse-watch-recent' }
 ]);
+// 「最近播放」按最近一次播放倒序：走 ListRecentlyPlayedWithFilter 的键集分页（last_played_at DESC, id DESC），
+// 不走 SearchLibraryVideoPage，排序选择不适用（锁成这一项）。
+export const RECENTLY_PLAYED_VIEW = 'recently_played';
+export const RECENTLY_PLAYED_SORT_HINT = '按最近播放时间';
 export const VIDEO_BROWSE_SORT_OPTIONS = Object.freeze([
   { value: 'added_desc', label: '最近添加' },
   { value: 'year_desc', label: '年份' },
@@ -311,7 +328,9 @@ const SEARCH_DEBOUNCE_MS = 300;
 // 哨兵离可视区还有这么远就开始取下一批，滚到底时下一批多半已经在了。
 const LOAD_AHEAD_MARGIN = '800px 0px';
 
-// 本页的筛选状态 → LibraryFilter。只用片名（file）搜索，版本组合并成一张卡。
+// 本页的筛选状态 → LibraryFilter。只用片名（file）搜索，版本组合并成一张卡——「最近播放」除外：
+// ListRecentlyPlayedWithFilter 不认 collapse_versions（每个播放过的文件各占一张卡），这里如实写 false，
+// 让 CountLibraryVideos 的总数也按文件计、与列表对得上。
 export function videoBrowseFilter({ keyword = '', watch = '', tagIDs = [], people = [], sort = VIDEO_BROWSE_DEFAULT_SORT } = {}) {
   return {
     search_mode: 'file',
@@ -320,7 +339,7 @@ export function videoBrowseFilter({ keyword = '', watch = '', tagIDs = [], peopl
     tag_ids: tagIDs.map(Number).filter(id => id > 0),
     person_ids: people.map(person => Number(person.id)).filter(id => id > 0),
     sort_mode: sort || VIDEO_BROWSE_DEFAULT_SORT,
-    collapse_versions: true
+    collapse_versions: watch !== RECENTLY_PLAYED_VIEW
   };
 }
 
@@ -350,6 +369,16 @@ export function collectionProgressCard(progress) {
     subtitle: [position, String(next.title || '').trim()].filter(Boolean).join(' · '),
     badge: next.resume ? '续播' : ''
   };
+}
+
+// 「最近播放」下一页的游标：上一页最后一行的 last_played_at 原样回传（后端按 RFC3339Nano 解析）与它的 id，
+// 同一时刻播放的几部靠 id 排开（键集 (last_played_at, id)）。接口只回数组：不满一页就是最后一页；
+// 最后一行缺播放时间（不该出现）时也停，免得发出后端会拒绝的半截游标。
+export function recentlyPlayedNextCursor(videos, limit = VIDEO_BROWSE_PAGE_SIZE) {
+  const list = Array.isArray(videos) ? videos : [];
+  const last = list[list.length - 1];
+  if (list.length < limit || !last?.last_played_at || !Number(last.id)) return null;
+  return { lastPlayedAt: String(last.last_played_at), id: Number(last.id) };
 }
 
 function emptyList() {
@@ -396,6 +425,15 @@ export default {
   computed: {
     watchOptions() { return VIDEO_BROWSE_WATCH_OPTIONS; },
     sortOptions() { return VIDEO_BROWSE_SORT_OPTIONS; },
+    recentlyPlayed() { return this.watch === RECENTLY_PLAYED_VIEW; },
+    sortSelectOptions() {
+      return this.recentlyPlayed ? [{ value: RECENTLY_PLAYED_VIEW, label: RECENTLY_PLAYED_SORT_HINT }] : VIDEO_BROWSE_SORT_OPTIONS;
+    },
+    // 选「最近播放」时下拉显示那一句说明；用户原来选的排序留在 sort 里，换回别的观看状态时照用。
+    sortModel: {
+      get() { return this.recentlyPlayed ? RECENTLY_PLAYED_VIEW : this.sort; },
+      set(value) { if (!this.recentlyPlayed) this.sort = value; }
+    },
     filtersActive() {
       return Boolean(this.keyword.trim() || this.watch || this.tagIDs.length || this.people.length);
     },
@@ -582,12 +620,22 @@ export default {
       this.list = { ...list, loadingMore: true, moreError: '' };
       return this.fetchPage(this._tokens.list, list.cursor);
     },
+    // 一页：「最近播放」走 ListRecentlyPlayedWithFilter 的键集分页（游标是 { lastPlayedAt, id }），其余走
+    // SearchLibraryVideoPage（游标是后端给的 next_cursor）。两条路同样按代次丢弃晚到的旧页、翻页去重。
+    async fetchRawPage(cursor) {
+      const filter = this.currentFilter();
+      if (this.recentlyPlayed) {
+        const videos = (await ListRecentlyPlayedWithFilter(filter, cursor?.lastPlayedAt || '', Number(cursor?.id || 0), VIDEO_BROWSE_PAGE_SIZE)) || [];
+        return { videos, next_cursor: recentlyPlayedNextCursor(videos), version_groups: {} };
+      }
+      const request = { filter, limit: VIDEO_BROWSE_PAGE_SIZE };
+      if (cursor) request.cursor = cursor;
+      return SearchLibraryVideoPage(request);
+    },
     async fetchPage(token, cursor) {
       const first = !cursor;
-      const request = { filter: this.currentFilter(), limit: VIDEO_BROWSE_PAGE_SIZE };
-      if (cursor) request.cursor = cursor;
       try {
-        const page = await SearchLibraryVideoPage(request);
+        const page = await this.fetchRawPage(cursor);
         if (token !== this._tokens.list) return;
         const known = new Set(first ? [] : this.list.items.map(video => Number(video.id)));
         const fresh = (page?.videos || []).filter(video => !known.has(Number(video.id)));

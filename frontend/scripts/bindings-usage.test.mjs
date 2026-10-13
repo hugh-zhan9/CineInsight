@@ -17,12 +17,9 @@ assert.ok(exported.size > 0, 'App.d.ts should export bindings');
 const allowedUnused = new Map([
 ]);
 // 待裁决：前端已不用、去留还没定的绑定（SearchSubtitleMatchesWithFilters、ListMovieVideoLinks 已由主代理裁决删除 App 绑定）。
-// 2026-10-13 UI 三期 P3-D（D-P3-03）：片库管理拿掉了「随机 N 部」与「最近播放」智能视图，这两个绑定在前端没有调用方了；
-// 删 App 方法是后端改动，不在 P3-D 的范围，留给主代理裁决（服务层能力 Jellyfin / 手机端是否还用另查）。
-const pendingRuling = new Map([
-  ['PickRandomVideos', '片库管理「随机 N 部」入口随随机拆分按钮拿掉（D-P3-03），海报墙只有随机播放一部'],
-  ['ListRecentlyPlayedWithFilter', '片库管理拿掉「最近播放」智能视图（D-P3-03），观看侧海报墙没有这一视图']
-]);
+// 2026-10-13 三期集成裁决：P3-D 停放在这里的两项已处理——「最近播放」回到「视频」海报墙（ListRecentlyPlayedWithFilter 又有调用方），
+// PickRandomVideos 的 App 方法删除（服务层 VideoService.PickRandomVideos 保留，Go 测试仍覆盖）。
+const pendingRuling = new Map([]);
 
 function collectSources(dir) {
   const found = [];
