@@ -6,8 +6,8 @@
       </div>
       <!-- 顶栏两套导航（D-UI-02、D-UI-09）：区域由当前页面推出，只显示这一侧的导航；组间分隔，
            「片单」是一个页面（D-P2-04，不再是下拉）；「下载」只在开启浏览器插件桥接时出现。页面清单与命令面板同一份
-           （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的三项是动作：
-           执行命令面板里同 ID 的既有命令，打开待处理、清理中心与任务中心。
+           （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的项是动作：
+           执行命令面板里同 ID 的既有命令，打开待处理与任务中心（清理中心三期起是页面，D-P3-02）。
            导航项是 .btn .btn--ghost，尺寸与选中态由下面的 .header .nav-btn 收窄。 -->
       <nav class="header-nav" aria-label="页面导航" :data-test="`nav-area-${area}`">
         <template v-if="area === 'manage'">
@@ -122,8 +122,6 @@
         v-show="libraryPageVisible"
         :page-active="libraryPageVisible"
         :cleanup-hotkey="currentPage === 'library-manage'"
-        :consolidation-route="consolidationRoute"
-        @consolidation-opened="consolidationRoute = null"
         :tags="tags"
         :settings="settings"
         :directories="directories"
@@ -134,6 +132,8 @@
         @search-scenes="openScenesWithFilter"
         @find-similar-scenes="openSimilarScenes"
         @open-video-edit="openVideoEditProject"
+        @open-cleanup="openCleanupCenter({ ...$event, tab: 'video', open: true })"
+        @trash-restored="handleLibraryTrashRestored"
       />
 
       <!-- 观看回顾：首次进入才挂载，之后只隐藏；不可见时停掉实时刷新。 -->
@@ -217,6 +217,23 @@
           @open-video="openVideo($event, { from: 'entities-manage' })"
         />
       </div>
+      <!-- 清理中心（D-P3-02）：视频 · 图片两个标签。首次进入才挂载，之后只隐藏：视频这一侧的审阅进度（勾选、保留项、
+           已移到废纸篓的标记）在页面里，删除宿主（撤销提示、「最近操作」的撤销回调）也一直在。当前标签是页面参数
+           cleanupTab；request 是「打开清理审阅」、定位同源对、打开集中整理任务这类一次性请求。删除确认框开着或删除进行中
+           （cleanupBusy）不能离开这一页。删完通知片库（handleVideosChangedElsewhere）与图片库（handleCleanupImagesChanged）。 -->
+      <CleanupCenterPage
+        v-if="cleanupMounted"
+        ref="cleanupCenter"
+        v-show="currentPage === 'cleanup'"
+        :page-active="currentPage === 'cleanup'"
+        :tab="cleanupTab"
+        :request="cleanupRequest"
+        @update:tab="navigateTo('cleanup', { tab: $event })"
+        @busy-change="cleanupBusy = $event"
+        @videos-changed="handleVideosChangedElsewhere"
+        @images-changed="handleCleanupImagesChanged"
+        @navigate="navigateTo"
+      />
 	  <InsightsPage
 	    v-if="currentPage === 'insights'"
 	    :directories="directories"
@@ -256,6 +273,7 @@
 	    :settings="settings"
 	    :tags="tags"
 	    @open-settings="navigateTo('settings')"
+	    @open-cleanup="openCleanupCenter({ tab: 'image' })"
 	  />
     </div>
 
@@ -348,6 +366,7 @@ import VideoBrowsePage from './components/viewer/VideoBrowsePage.vue';
 import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
 import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
+import CleanupCenterPage from './components/manage/CleanupCenterPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
@@ -365,8 +384,8 @@ import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import {
-  appCommandsMixin, DEFAULT_LIST_TAB, isListTab, isNavPageVisible, LISTS_PAGE, MANAGE_NAV_GROUPS, pageArea, resolvePageRoute,
-  VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
+  appCommandsMixin, CLEANUP_PAGE, DEFAULT_CLEANUP_TAB, DEFAULT_LIST_TAB, isCleanupTab, isListTab, isNavPageVisible, LISTS_PAGE,
+  MANAGE_NAV_GROUPS, pageArea, resolvePageRoute, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
 } from './utils/appCommands.js';
 import { findCommand } from './utils/commandRegistry.js';
 import { opensVideoDetail, popDetailReturn, pushDetailReturn, restoreScrollWhenReachable } from './utils/viewerNavigation.js';
@@ -397,7 +416,7 @@ export default {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
-    HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs
+    HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, AppTabs, CleanupCenterPage
   },
   data() {
     return {
@@ -409,6 +428,13 @@ export default {
       listsMounted: false,
       listsTab: DEFAULT_LIST_TAB,
       videosMounted: false,
+      // 清理中心（D-P3-02）：首次进入才挂载；当前标签是页面参数（navigateTo('cleanup', { tab })），默认「视频」；
+      // cleanupRequest 是落在视频标签上的一次性请求 { token, open?, relationId?, consolidationTaskID? }；
+      // cleanupBusy：清理中心正在删除（或删除确认框开着），不能离开。
+      cleanupMounted: false,
+      cleanupTab: DEFAULT_CLEANUP_TAB,
+      cleanupRequest: null,
+      cleanupBusy: false,
       // 带参数切页（navigateTo(page, params)）：{ [page]: { ...params, token } }，token 每次都换，页面据此套用一次。
       // 二期只有「视频」用（{ keyword } / { watch } / { tagId }）。
       pageRequests: {},
@@ -457,8 +483,6 @@ export default {
       // 设置页有未保存修改（SettingsPage 的 update:dirty，D-PC57）：切走前要先确认。
       settingsDirty: false,
       taskCenterOpen: false,
-      consolidationRoute: null,
-      consolidationRouteGeneration: 0,
       pendingWorkOpen: false,
       // 两个顶栏角标的数据由常挂载的抽屉与工作台报上来。
       taskCenterBadge: { running: 0, failed: false },
@@ -573,6 +597,7 @@ export default {
         if (page === 'videos') this.videosMounted = true;
         if (page === 'photos' || page === 'photos-manage') this.photosMounted = true;
         if (page === LISTS_PAGE) this.listsMounted = true;
+        if (page === CLEANUP_PAGE) this.cleanupMounted = true;
         if (page === 'people') this.peopleMounted = true;
         if (page === 'collections') this.collectionsMounted = true;
         if (page === 'recap') this.recapMounted = true;
@@ -689,6 +714,11 @@ export default {
         notify('正在移到废纸篓，完成后再离开洞察页。');
         return false;
       }
+      // 清理中心同理（D-P3-02）：删除进度、「不支持废纸篓」二选一与删除确认框都在那一页上。
+      if (this.currentPage === CLEANUP_PAGE && this.cleanupBusy) {
+        notify('正在移到废纸篓，完成后再离开清理中心。');
+        return false;
+      }
       if (this.currentPage === 'settings' && this.settingsDirty) {
         return confirmAction({
           title: '离开设置页',
@@ -720,10 +750,12 @@ export default {
     // - 「视频」的 { keyword } / { watch } / { tagId }：经 pageRequests 交给海报墙，每次换 token，页面据此套用一次；
     // - 片单的标签（认不出的标签忽略，留在原来的标签上）；
     // - 人物 / 作品集的 { keyword }：页面回到列表并按它搜（每次交接换 token，同一个词再交一次也会重搜）；
-    // - 场景检索的 { query, mode } 或 { image: { dataURL, name } }：范围是全部视频，页面直接检索（ScenesPage 的 scopeRequest）。
+    // - 场景检索的 { query, mode } 或 { image: { dataURL, name } }：范围是全部视频，页面直接检索（ScenesPage 的 scopeRequest）；
+    // - 清理中心的 { tab }（认不出的忽略）与落在视频标签上的请求 { open | relationId | consolidationTaskID }。
     applyPageParams(page, params) {
       if (page === 'videos') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
+      if (page === CLEANUP_PAGE) this.applyCleanupParams(params);
       const entityKind = { people: 'person', collections: 'collection' }[page];
       if (entityKind && typeof params?.keyword === 'string') this.requestEntityKeyword(entityKind, params.keyword);
       if (page === 'scenes' && params && (typeof params.query === 'string' || params.mode || params.image?.dataURL)) {
@@ -754,12 +786,34 @@ export default {
       this._videoOpenGeneration = (this._videoOpenGeneration || 0) + 1;
       return this._videoOpenGeneration;
     },
-    async openConsolidationTask(taskID) {
-      const generation = ++this.consolidationRouteGeneration;
-      const navigated = await this.navigateTo('library-manage');
-      if (navigated === false || generation !== this.consolidationRouteGeneration) return;
-      this.consolidationRoute = { taskID: Number(taskID), generation };
-      this.taskCenterOpen = false;
+    applyCleanupParams(params) {
+      if (isCleanupTab(params?.tab)) this.cleanupTab = params.tab;
+      const relationId = Number(params?.relationId || 0);
+      const consolidationTaskID = Number(params?.consolidationTaskID || 0);
+      if (!params?.open && !relationId && !consolidationTaskID) return;
+      this._handOffSeq = (this._handOffSeq || 0) + 1;
+      this.cleanupRequest = { open: Boolean(params.open), relationId, consolidationTaskID, token: this._handOffSeq };
+    },
+    // 片库管理与图片管理里的「清理审阅」入口、AI 审阅的「去清理」：进清理中心的对应标签（D-P3-02）。
+    openCleanupCenter(params = {}) {
+      return this.navigateTo(CLEANUP_PAGE, params);
+    },
+    // 任务中心打开集中整理任务：进清理中心的视频标签打开那个任务（原先是片库页里的清理面板）。
+    // 参数随切页一起落下，用户在切页确认里放弃时什么也不发生。
+    openConsolidationTask(taskID) {
+      return whenNavigated(this.navigateTo(CLEANUP_PAGE, { tab: 'video', consolidationTaskID: Number(taskID) }), () => {
+        this.taskCenterOpen = false;
+        return true;
+      });
+    },
+    // 清理中心的图片标签删除或撤销删除了图片：顶栏计数重取，图片库重载（原来清理页 @deleted 的那一条路）。
+    handleCleanupImagesChanged() {
+      this.loadLibraryCounts();
+      return this.$refs.photoLibrary?.handleCleanupDeleted();
+    },
+    // 片库管理的回收站恢复了视频：清理中心视频审阅里的「已移到废纸篓」标记跟着放掉（原来同在片库页里）。
+    handleLibraryTrashRestored({ videoIDs = [], fromTrashDialog = false } = {}) {
+      return this.$refs.cleanupCenter?.handleVideosRestored(videoIDs, fromTrashDialog);
     },
     openTaskCenter() {
       this.pendingWorkOpen = false;
@@ -979,7 +1033,7 @@ export default {
     openPerson(person) {
       return this.openRecapEntity({ type: 'person', id: person?.id, name: person?.name });
     },
-    // 顶栏一项：页面就切页；动作（待处理、清理中心、任务中心）执行命令面板里同 ID 的既有命令。
+    // 顶栏一项：页面就切页；动作（待处理、任务中心）执行命令面板里同 ID 的既有命令。
     selectNavItem(item) {
       if (!item.command) return this.navigateTo(item.key);
       const command = findCommand(item.command);

@@ -141,7 +141,8 @@ describe('应用级命令注册', () => {
     const viewer = VIEWER_NAV_GROUPS.flatMap(group => group.pages).map(page => page.key);
     const manage = MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => !page.command).map(page => page.key);
     expect(viewer).toEqual(['home', 'videos', 'people', 'collections', 'photos', 'lists', 'recap', 'scenes']);
-    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'entities-manage', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
+    // 清理中心三期起是页面（D-P3-02）。
+    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'entities-manage', 'cleanup', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
     expect(viewer.filter(key => manage.includes(key))).toEqual([]);
     for (const key of viewer) expect(pageArea(key), key).toBe('viewer');
     for (const key of manage) expect(pageArea(key), key).toBe('manage');
@@ -150,10 +151,11 @@ describe('应用级命令注册', () => {
     for (const tab of LIST_TABS) expect(pageArea(tab.key), tab.key).toBe('viewer');
     expect(pageArea('pending-work')).toBeNull();
     expect(pageArea('no-such-page')).toBeNull();
-    // 管理侧的三个动作入口走既有命令。
+    // 管理侧的动作入口走既有命令（清理中心三期起是页面，D-P3-02）。
     expect(MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => page.command).map(page => [page.label, page.command])).toEqual([
-      ['待处理', 'action:pending-work'], ['清理中心', 'action:cleanup'], ['任务中心', 'action:task-center']
+      ['待处理', 'action:pending-work'], ['任务中心', 'action:task-center']
     ]);
+    expect(pageArea('cleanup')).toBe('manage');
   });
 
   // D-UI-09：命令面板列出两个区域的全部页面；拆分前就有的导航命令 ID 一个不少、不改名。
@@ -309,9 +311,24 @@ describe('全局命令（D-PC60、APP-12）', () => {
     expect(wrapper.vm.pendingWorkOpen).toBe(true);
   });
 
+  // D-P3-02：action:cleanup 三期起打开清理中心页（命令 ID 不变）；面板里已有页面导航「打开清理中心」，这一条只作跳转目标。
+  it('D-P3-02 action:cleanup 在任何页面都切到清理中心页，不再经片库管理的宿主命令', async () => {
+    const wrapper = host();
+    const run = vi.fn();
+    registerHost('library.openCleanup', run);
+    wrapper.vm.currentPage = 'settings';
+
+    expect(commandByID('action:cleanup')).toBeNull();
+    expect(commandByID('nav:page:cleanup').label).toBe('打开清理中心');
+    await findCommand('action:cleanup').run();
+
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.vm.navigateParams).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   // D-UI-03：这些是维护动作，宿主页记管理侧的「片库管理」（与「视频」同一个常挂载片库页）。
   it.each([
-    ['action:cleanup', 'library.openCleanup'],
     ['action:trash', 'library.openTrash'],
     ['action:tag-manager', 'library.openTagManager']
   ])('APP-12 %s 在任何页面都先切到片库管理，再执行宿主命令 %s', async (commandID, hostID) => {
@@ -358,7 +375,9 @@ describe('全局命令（D-PC60、APP-12）', () => {
 
   it('APP-11 固定命令 ID 都登记了宿主页，面板执行前据此先切页', async () => {
     expect(COMMAND_HOST_PAGES).toEqual(expect.objectContaining({
-      'library.openCleanup': 'library-manage',
+      // D-P3-02：两条清理命令的宿主是清理中心。
+      'library.openCleanup': 'cleanup',
+      'photos.openCleanup': 'cleanup',
       'library.openAIReview': 'library-manage',
       'library.openLocalMetadataUpdates': 'library-manage',
       'library.openCollectionSuggestions': 'library-manage',
@@ -373,6 +392,38 @@ describe('全局命令（D-PC60、APP-12）', () => {
     expect(wrapper.vm.currentPage).toBe('photos-manage');
     expect(await wrapper.vm.prepareCommandRun({ id: 'action:backup-now' })).toBe(true);
     expect(wrapper.vm.currentPage).toBe('photos-manage');
+  });
+
+  // D-P3-02：两条清理命令的宿主是清理中心，切页时一并带上标签（同一拍，不会先按上次的标签挂一遍）；
+  // 已在清理中心时也把标签交过去（navigateTo 对当前页只落参数）。用户在切页确认里放弃时不执行。
+  it('D-P3-02 library.openCleanup / photos.openCleanup 切到清理中心并带上各自的标签，再执行宿主命令', async () => {
+    const wrapper = host();
+    const runVideo = vi.fn();
+    const runImage = vi.fn();
+    registerCommands('test-cleanup-center', [
+      { id: 'library.openCleanup', group: 'action', label: '视频', hidden: true, run: runVideo },
+      { id: 'photos.openCleanup', group: 'action', label: '图片', hidden: true, run: runImage }
+    ]);
+    const calls = [];
+    const navigate = wrapper.vm.navigateTo;
+    wrapper.vm.navigateTo = (page, params) => { calls.push([page, params]); return navigate.call(wrapper.vm, page, params); };
+    wrapper.vm.currentPage = 'insights';
+
+    await wrapper.vm.runHostCommand('photos.openCleanup', '图片清理');
+    expect(calls).toEqual([['cleanup', { tab: 'image' }]]);
+    expect(runImage).toHaveBeenCalledTimes(1);
+
+    // 已在清理中心（图片标签）：换到视频标签再执行。
+    await wrapper.vm.runHostCommand('library.openCleanup', '清理候选');
+    expect(calls[1]).toEqual(['cleanup', { tab: 'video' }]);
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(runVideo).toHaveBeenCalledTimes(1);
+
+    wrapper.vm.currentPage = 'settings';
+    wrapper.vm.navigateTo = vi.fn(() => Promise.resolve(false));
+    expect(await wrapper.vm.runHostCommand('library.openCleanup', '清理候选')).toBe(false);
+    expect(runVideo).toHaveBeenCalledTimes(1);
+    unregisterCommands('test-cleanup-center');
   });
 
   it('人脸审阅的宿主是「人物与作品集」的人物那一种：切页与换种类同一拍，已在作品集那一种时只换种类', async () => {

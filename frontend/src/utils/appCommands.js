@@ -61,8 +61,9 @@ export const VIEWER_NAV_GROUPS = [
 
 export const SETTINGS_NAV_PAGE = { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] };
 
-// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的三项（待处理、清理中心、任务中心）
+// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的项（待处理、任务中心）
 // 是动作不是页面：点了执行命令面板里同 ID 的既有命令，打开现有弹窗或面板。顶栏与命令面板都叫「任务中心」（用词表 D-UD-14）。
+// 「清理中心」三期起是页面 `cleanup`（D-P3-02，视频 · 图片两个标签），命令 action:cleanup 改为打开这一页。
 export const MANAGE_NAV_GROUPS = [
   {
     key: 'manage-library',
@@ -80,7 +81,7 @@ export const MANAGE_NAV_GROUPS = [
     label: '待处理与清理',
     pages: [
       { key: 'pending-work', label: '待处理', command: 'action:pending-work' },
-      { key: 'cleanup', label: '清理中心', command: 'action:cleanup' }
+      { key: 'cleanup', label: '清理中心', keywords: ['cleanup', 'qingli', '清理', '重复', '废纸篓', '⌘⇧K'] }
     ]
   },
   {
@@ -123,6 +124,19 @@ const LIST_TAB_KEYS = new Set(LIST_TABS.map(tab => tab.key));
 
 export function isListTab(key) {
   return LIST_TAB_KEYS.has(key);
+}
+
+// 清理中心（D-P3-02）：一个页面 `cleanup`，两个标签，视频是默认标签。当前标签是 App 的页面参数
+// （navigateTo('cleanup', { tab })，与片单同一做法）；library.openCleanup / photos.openCleanup 落在对应标签上。
+export const CLEANUP_PAGE = 'cleanup';
+export const CLEANUP_TABS = [
+  { key: 'video', label: '视频' },
+  { key: 'image', label: '图片' }
+];
+export const DEFAULT_CLEANUP_TAB = CLEANUP_TABS[0].key;
+
+export function isCleanupTab(key) {
+  return CLEANUP_TABS.some(tab => tab.key === key);
 }
 
 // 页面 key（可能是别名）+ 参数 → 真正的页面与参数：别名换成 `lists` 并带上 { tab }，其余原样。
@@ -195,16 +209,24 @@ export const VIDEO_BROWSE_SMART_VIEWS = Object.freeze(['', 'unwatched', 'continu
 // 固定命令 ID → 宿主页（详细设计 §6.1）。命令由宿主页（或它的常挂载子组件）注册；宿主页可能
 // 还没挂载（人物页、图片页按需挂载），所以跳转前先切到宿主页、等它挂载完再按 ID 执行。
 // 片库与图片库的这些命令都是维护动作，宿主页记管理侧的 key（D-UI-03）：同一个常挂载实例，切过去即进管理区。
+// 两条清理命令的宿主是清理中心（D-P3-02），由清理中心页注册。
 export const COMMAND_HOST_PAGES = {
-  'library.openCleanup': 'library-manage',
+  'library.openCleanup': CLEANUP_PAGE,
   'library.openAIReview': 'library-manage',
   'library.openLocalMetadataUpdates': 'library-manage',
   'library.openCollectionSuggestions': 'library-manage',
   'library.openTrash': 'library-manage',
   'library.openTagManager': 'library-manage',
   'photos.openAIReview': 'photos-manage',
-  'photos.openCleanup': 'photos-manage',
+  'photos.openCleanup': CLEANUP_PAGE,
   'people.openFaceReview': 'entities-manage'
+};
+
+// 切到宿主页时一并带上的页面参数：清理中心的两条命令各自落在自己的标签上，切页与换标签同一拍，
+// 不会先按上次的标签挂一遍（图片标签一挂上就会读状态、没结果时还会自动开始分析）。
+const COMMAND_HOST_PARAMS = {
+  'library.openCleanup': { tab: 'video' },
+  'photos.openCleanup': { tab: 'image' }
 };
 
 // 宿主页上还要选定的实体种类：过渡期的「人物与作品集」一次只挂一种实体（App.vue 的 entitiesManageKind），
@@ -316,16 +338,15 @@ export const appCommandsMixin = {
       event.preventDefault();
       this.openCommandPalette();
     },
-    // ⌘⇧K：打开清理中心（D-UD-03；原先是 ⌘K，D-PC59 起走待处理工作台的清理入口 library.openCleanup）。
-    // 任何页面都能按：先切到片库管理（管理区）再打开。
-    // 片库页自己也监听 ⌘⇧K（它先挂载、先收到并 preventDefault），在片库页上这里让位；
-    // 有弹窗开着时同片库页一样不响应，免得把清理中心叠在别的弹窗上。
+    // ⌘⇧K：打开清理中心（D-UD-03；原先是 ⌘K）。三期起清理中心是管理侧页面 `cleanup`（D-P3-02），
+    // 任何页面都能按，停在上次看的那个标签上；片库页不再自己接 ⌘⇧K。
+    // 已被别的处理器接手（preventDefault）的按键让位；有弹窗开着时不响应，免得在弹窗背后切走页面。
     handleCleanupHotkey(event) {
       if (!event || event.isComposing || !isCleanupHotkey(event)) return;
       if (event.defaultPrevented || this.startupError) return;
       if (document.querySelector('[role="dialog"]')) return;
       event.preventDefault();
-      Promise.resolve(this.runHostCommand('library.openCleanup', '清理中心'))
+      Promise.resolve(this.navigateTo(CLEANUP_PAGE))
         .catch(err => notifyError(`打开清理中心失败：${err}`));
     },
     openCommandPalette() {
@@ -356,14 +377,16 @@ export const appCommandsMixin = {
     async prepareCommandRun(command) {
       return this.enterCommandHost(command?.id);
     },
-    // 切到固定命令的宿主页（还要选定实体种类的一并选上），等它挂载、注册完命令。已经在那儿时什么也不做；
-    // 用户在切页确认里放弃时返回 false。种类与切页同一拍改，宿主页只按目标种类挂载一次。
+    // 切到固定命令的宿主页（还要选定实体种类或页面标签的一并选上），等它挂载、注册完命令。已经在那儿时什么也不做；
+    // 用户在切页确认里放弃时返回 false。种类、标签与切页同一拍改，宿主页只按目标种类 / 标签挂载一次。
+    // 带页面参数的（清理中心的标签）已在宿主页上时也交一次参数：navigateTo 对当前页只落参数。
     async enterCommandHost(commandID) {
       const page = COMMAND_HOST_PAGES[commandID];
       const kind = COMMAND_HOST_ENTITY_KINDS[commandID];
-      const navigate = Boolean(page) && page !== this.currentPage;
+      const params = COMMAND_HOST_PARAMS[commandID] || null;
+      const navigate = Boolean(page) && (page !== this.currentPage || Boolean(params));
       if (!navigate && (!kind || this.entitiesManageKind === kind)) return true;
-      const arrived = await whenNavigated(navigate ? this.navigateTo(page) : true, () => {
+      const arrived = await whenNavigated(navigate ? this.navigateTo(page, params) : true, () => {
         if (kind) this.entitiesManageKind = kind;
         return true;
       });
@@ -452,12 +475,15 @@ export const appCommandsMixin = {
           keywords: ['pending', 'inbox', '待处理', '审阅', 'daichuli'],
           run: () => this.openPendingWork()
         },
+        // 清理中心三期起是页面（D-P3-02）：命令 ID 照旧，改为打开这一页。面板里已有同名的页面导航「打开清理中心」
+        // （nav:page:cleanup），这一条只作跳转目标（hidden），免得重复出现。
         {
           id: 'action:cleanup',
           group: 'action',
           label: '打开清理中心',
           keywords: ['cleanup', '清理', '重复', 'qingli', '⌘⇧K'],
-          run: () => this.runHostCommand('library.openCleanup', '清理中心')
+          hidden: true,
+          run: () => this.navigateTo(CLEANUP_PAGE)
         },
         {
           id: 'action:trash',

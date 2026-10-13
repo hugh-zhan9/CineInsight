@@ -139,6 +139,8 @@ const PAGE_FILES = {
   // 片单（D-P2-04）：想看、榜单、观影记录、观看笔记四页嵌在它的标签里，不再是顶层页面。
   lists: 'components/viewer/ListsPage.vue',
   'entities-manage': 'components/EntityLibraryPage.vue',
+  // 清理中心（D-P3-02）：视频与图片两个标签，原来的清理弹窗与图片清理页嵌在里面，不再是顶层页面。
+  cleanup: 'components/manage/CleanupCenterPage.vue',
   recap: 'components/RecapPage.vue',
   scenes: 'components/ScenesPage.vue',
   'manage-home': 'components/manage/ManageHomePage.vue',

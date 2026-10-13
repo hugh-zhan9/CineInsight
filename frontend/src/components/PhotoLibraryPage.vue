@@ -1,12 +1,5 @@
 <template>
-  <PhotoCleanupPage
-    v-if="showCleanup"
-    ref="cleanupPage"
-    @close="closeCleanup"
-    @deleted="handleCleanupDeleted"
-  />
-
-  <main v-else class="photo-library">
+  <main class="photo-library">
     <PageHeader class="photo-library__header" title="图片" subtitle="独立扫描入库的本地图片库，可筛选、查看与管理。" />
 
     <section class="photo-toolbar glass-surface">
@@ -821,7 +814,6 @@ import SkeletonBlock from './ui/SkeletonBlock.vue';
 import WallpaperButton from './WallpaperButton.vue';
 import BaseMenu from './ui/BaseMenu.vue';
 import BasePopover from './ui/BasePopover.vue';
-import PhotoCleanupPage from './PhotoCleanupPage.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
@@ -875,7 +867,7 @@ export default {
   name: 'PhotoLibraryPage',
   components: {
     AppBadge, AppBanner, AppIcon, BaseMenu, BasePopover, DialogShell, EmptyState, FilterChip, ImageAITagReviewPanel,
-    MetadataBatchEditDialog, PageHeader, PhotoCleanupPage, SegmentedControl, SelectionBar, SkeletonBlock, TrashUndoBanner,
+    MetadataBatchEditDialog, PageHeader, SegmentedControl, SelectionBar, SkeletonBlock, TrashUndoBanner,
     WallpaperButton
   },
   props: {
@@ -884,7 +876,8 @@ export default {
     // 切到别的标签页时本页只是隐藏、不卸载：已加载的图片和滚动位置都要留着。
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['open-settings'],
+  // open-cleanup：「管理」菜单的「清理审阅」进清理中心的图片标签（D-P3-02，原来是本页整页接管的清理审阅页）。
+  emits: ['open-settings', 'open-cleanup'],
   data() {
     return {
       viewerDirectoryError: '',
@@ -969,7 +962,6 @@ export default {
       deleteRecordOnlyHint: DELETE_RECORD_ONLY_HINT,
       showAITagReview: false,
       aiTagPending: 0,
-      showCleanup: false,
       deleteTarget: null,
       deleteFileChoice: false,
       deleting: false,
@@ -1062,8 +1054,8 @@ export default {
       const last = rows[this.folderWindow.endRow - 1];
       return first && last ? this.folderGroups.slice(first.startIndex, last.endIndex) : [];
     },
-    // 网格是否真的在视野里：切走标签页或清理审阅整页接管时都不是。
-    gridActive() { return this.pageActive && !this.showCleanup; },
+    // 网格是否真的在视野里：切走标签页时不是。
+    gridActive() { return this.pageActive; },
     layout() {
       return buildPhotoLayout({
         items: this.images,
@@ -1247,8 +1239,6 @@ export default {
     pageActive(active) {
       // 离开本页时查看器虽然还开着，但图已经不在眼前：取消未到点的查看计时，回来再重新计。
       this.scheduleViewRecord(active ? this.viewerImage?.id : null);
-      // 清理审阅页整页接管了主区域，这时保存/恢复的是它的滚动位置，与网格无关。
-      if (this.showCleanup) return;
       if (!active) {
         this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
         return;
@@ -1281,14 +1271,6 @@ export default {
       label: '打开图片 AI 标签审阅',
       keywords: ['ai', 'tag', 'review', '图片', '审阅'],
       run: () => this.openAITagReviewFromCommand()
-    }, {
-      // 洞察页「存储体检」按固定 ID 打开图片清理审阅。切到图片页由调用方先做。
-      id: 'photos.openCleanup',
-      group: 'action',
-      label: '打开图片清理审阅',
-      keywords: ['cleanup', 'duplicate', '图片', '清理', '重复'],
-      // 已经在清理审阅里时不再调 openCleanup：它会拿审阅页的滚动位置盖掉网格的。
-      run: () => { if (!this.showCleanup) this.openCleanup(); }
     }]);
     this.$nextTick(() => {
       this.attachResizeObserver();
@@ -1330,7 +1312,7 @@ export default {
     onPhotoManageSelect(item) {
       switch (item.id) {
         case 'scan': this.scanNow(); break;
-        case 'cleanup': this.openCleanup(); break;
+        case 'cleanup': this.$emit('open-cleanup'); break;
         case 'ai-tags': this.openAITagReview(); break;
         case 'trash': this.openTrashDialog(); break;
         case 'batch-edit-filter': this.openMetadataBatchEditForFilter(); break;
@@ -1940,16 +1922,11 @@ export default {
     openAITagReview() {
       this.showAITagReview = true;
     },
-    // 审阅面板挂在网格那一侧：清理审阅整页接管时先退回网格再打开。
+    // 命令 photos.openAIReview（待处理工作台）：打开图片 AI 标签审阅。
     openAITagReviewFromCommand() {
-      if (this.showCleanup && !this.closeCleanup()) return;
       this.openAITagReview();
     },
-    async openTrashDialog(tab = 'image') {
-      if (this.showCleanup) {
-        if (!this.closeCleanup()) return;
-        await this.$nextTick();
-      }
+    openTrashDialog(tab = 'image') {
       this.$refs.trashUndo?.openTrashDialog(tab);
     },
     closeAITagReview() {
@@ -1962,27 +1939,7 @@ export default {
       this.libraryChanged = true;
       this.refreshAITagSummary();
     },
-    openCleanup() {
-      // 审阅页会把网格从 DOM 里换走，先记下位置，返回时照原样恢复。
-      this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
-      this.showCleanup = true;
-    },
-    // 清理页删除进行中不能卸载它（P-032 评审 Minor 5）：撤销条与「不支持废纸篓」二选一都挂在那一页上。
-    // 返回 false 表示这次没有离开，调用方不要接着切走。
-    closeCleanup() {
-      if (this.$refs.cleanupPage?.processing) {
-        notify('正在把图片移到废纸篓，完成后再离开清理审阅。');
-        return false;
-      }
-      this.showCleanup = false;
-      this.$nextTick(() => {
-        // 换根之后要重新盯新的 $el，再恢复位置。
-        this.attachResizeObserver();
-        this.restoreScrollPosition();
-        this.checkLibraryFreshness();
-      });
-      return true;
-    },
+    // 清理中心的图片标签删除或撤销删除了图片（App 的 handleCleanupImagesChanged）：按当前条件重载。
     async handleCleanupDeleted() {
       await this.reload();
       // reload 会把列表清空重来，恢复到旧位置没有意义。

@@ -170,9 +170,8 @@ beforeEach(() => {
 //     响应式路径（这正是"翻页/首屏靠 images 侦听刷新窗口"要覆盖的东西）。
 //   - scrollTop 的 setter 复刻浏览器的钳制：写入值被 scrollHeight - clientHeight 限制。
 //     少了这一条就分不出"锚点在渲染前写"和"渲染后写"，锚点用例会失去意义。
-// fallbackContentHeight：网格不在 DOM 里时（清理审阅整页接管）宿主里装的是审阅页，
-// 它自己也很高。默认 0 保持既有用例不变；要覆盖"审阅页里滚动"的场景就把它调大。
-async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, settings = baseSettings(), fallbackContentHeight = 0 } = {}) {
+// 网格不在 DOM 里时（例如文件夹总览）内容高度按 0 算。
+async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, settings = baseSettings() } = {}) {
   const host = document.createElement('div');
   host.className = 'main-view';
   document.body.appendChild(host);
@@ -182,7 +181,7 @@ async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, sett
   // 内容高度 = 网格所有直接子节点（占位块 + 行）的内联高度之和，与真实文档流一致。
   const contentHeight = () => {
     const grid = host.querySelector('.photo-grid');
-    if (!grid) return fallbackContentHeight;
+    if (!grid) return 0;
     return Array.from(grid.children)
       .reduce((sum, child) => sum + (parseFloat(child.style.height) || 0), 0);
   };
@@ -1196,492 +1195,43 @@ describe('PhotoLibraryPage missing filter (D-MC-03)', () => {
   });
 });
 
-describe('PhotoLibraryPage cleanup review', () => {
-  const exactGroup = () => ({
-    original: makeImage(1, { name: 'keep.jpg', width: 4000, height: 3000 }),
-    candidates: [makeImage(2, { name: 'copy.jpg', width: 800, height: 600 })],
-    reason: '文件大小和采样哈希一致'
-  });
-  const nearGroup = () => ({
-    original: makeImage(3, { name: 'near-big.jpg', width: 4000, height: 3000 }),
-    candidates: [makeImage(4, { name: 'near-small.jpg', width: 1000, height: 750 })],
-    reason: '感知哈希相近，可能是同图不同尺寸或压缩（不会默认选中）'
-  });
-
-  // P-032：清理页删除前先弹汇总确认（D-PC49），确认后才合并元数据并删除。
-  async function confirmCleanupDelete(wrapper) {
-    await wrapper.get('[data-test="cleanup-delete-selected"]').trigger('click');
-    await flushPromises();
-    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
-    await flushPromises();
-  }
-
-  async function openCleanup(analysis, { staleHashCount = 0, skippedUnavailable = 0 } = {}) {
-    api.SearchImagePage.mockResolvedValue(makePage([]));
+// D-P3-02：图片清理审阅不再整页接管图片库，改成清理中心的图片标签。原来这一节的审阅用例迁到
+// manage/CleanupCenterPage.test.js（「图片标签（原图片库清理审阅的用例）」）；这里只钉住图片库这一侧的接线。
+describe('PhotoLibraryPage 清理审阅入口（D-P3-02）', () => {
+  it('「管理」菜单的「清理审阅」发 open-cleanup（进清理中心的图片标签），图片库本身不挂清理页、网格留在原地', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
     const wrapper = await mountPage();
-    const status = () => completedCleanupStatus({
-      ...analysis,
-      stale_hash_count: staleHashCount,
-      skipped_unavailable: skippedUnavailable
-    });
-    api.StartImageCleanupAnalysis.mockResolvedValue(status());
-    api.GetImageCleanupStatus.mockResolvedValue(status());
     await openPhotoManageItem(wrapper, 'cleanup');
-    await flushPromises();
-    return wrapper;
-  }
-
-  it('opens the panel and starts an analysis when the backend has nothing to show', async () => {
-    api.SearchImagePage.mockResolvedValue(makePage([]));
-    const wrapper = await mountPage();
-
+    expect(wrapper.emitted('open-cleanup')).toHaveLength(1);
     expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(false);
-
-    await openPhotoManageItem(wrapper, 'cleanup');
-    await flushPromises();
-
-    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
-    // 与视频侧同构（用户裁决）：既没在跑也没有可用结果时，打开面板就自动分析一次。
-    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
-  });
-
-  it('IMG-04 renders both group sections grouped by directory, auto-checks only exact copies, and shows the stale hash hint', async () => {
-    const wrapper = await openCleanup(
-      { duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] },
-      { staleHashCount: 7 }
-    );
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
-    // 精确重复与疑似重复分在两个区域，各自按目录分组：默认先看精确重复，推荐保留项在 /photos，只有一个目录区。
-    const cardKinds = () => wrapper.findAll('[data-test="cleanup-dir-section"]')
-      .flatMap(section => section.findAll('[data-test="cleanup-group-card"]'))
-      .map(card => card.attributes('data-kind'));
-    expect(wrapper.findAll('[data-test="cleanup-dir-section"]')).toHaveLength(1);
-    expect(cardKinds()).toEqual(['exact']);
-
-    // 每个成员都有勾选框；D-PC49 起只有精确重复按"保留推荐那份、其余勾删"预置，近似重复默认不勾。
-    const checkedLabels = () => wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
-      .filter(t => t.element.checked === true)
-      .map(t => t.attributes('aria-label'));
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(2);
-    expect(checkedLabels()).toEqual(['删除 copy.jpg']);
-
-    // 目录分组标题可见并显示路径。
-    const dirToggles = wrapper.findAll('[data-test="cleanup-dir-toggle"]');
-    expect(dirToggles.length).toBeGreaterThan(0);
-    expect(dirToggles[0].text()).toContain('/photos');
-
-    const thumbs = wrapper.findAll('.cleanup-member__thumb img');
-    expect(thumbs[0].attributes('src')).toBe('/preview/image-thumbnail/1');
-    expect(wrapper.text()).toContain('4000×3000');
-
-    expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('7');
-    // 口径改成「未回填 + 失效」之后，提示旁边必须给出补全入口——只报数字而没有
-    // 任何办法，正是这条链路以前的样子。
-    expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('还没有可用的指纹');
-    expect(wrapper.get('[data-test="cleanup-start-image-phash"]').exists()).toBe(true);
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-
-    await wrapper.get('[data-test="cleanup-kind-near"]').trigger('click');
-    expect(wrapper.findAll('[data-test="cleanup-dir-section"]')).toHaveLength(1);
-    expect(cardKinds()).toEqual(['near']);
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(2);
-    expect(checkedLabels()).toEqual([]);
-  });
-
-  it('reports images skipped this round and stays quiet when none were', async () => {
-    // 外置盘没挂载时这个数会很大。没有它，插着盘和不插盘跑出来的界面一模一样，
-    // 用户只会觉得"检测不准"。
-    const wrapper = await openCleanup(
-      { duplicate_groups: [exactGroup()], near_duplicate_groups: [] },
-      { skippedUnavailable: 1969 }
-    );
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    const hint = wrapper.get('[data-test="image-cleanup-skipped-hint"]');
-    expect(hint.text()).toContain('1969');
-    expect(hint.text()).toContain('文件不可访问');
-
-    const clean = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-    await clean.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-    expect(clean.find('[data-test="image-cleanup-skipped-hint"]').exists()).toBe(false);
-  });
-
-  it('collapses and expands a directory group', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // exactGroup 两个成员（保留项 + 候选）同目录，共 2 行，候选勾选框 1 个。
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(2);
-    // 折叠后成员行隐藏。
-    await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(0);
-    // 展开后恢复。
-    await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(2);
-  });
-
-  // §9.2 主代理裁决（P-032 评审 Minor 2）：换保留项后原保留项只解除锁定，不自动勾上，删不删由用户决定。
-  it('D-PC49 lets the user switch which copy to keep; the previous keeper becomes selectable but is not auto-checked', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // 初始：建议保留 id=1，候选 id=2 默认勾选待删。
-    let keepRadios = wrapper.findAll('[data-test="cleanup-keep-toggle"]');
-    expect(keepRadios).toHaveLength(2);
-    expect(keepRadios[0].element.checked).toBe(true); // id=1
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-
-    // 切换保留 id=2：id=2 移出勾选，id=1 解除锁定但不自动勾上。
-    await keepRadios[1].setValue(true);
-    await flushPromises();
-
-    keepRadios = wrapper.findAll('[data-test="cleanup-keep-toggle"]');
-    expect(keepRadios[1].element.checked).toBe(true); // id=2
-    // 一张都没勾：待删计数归零，选择操作条收起，页面上没有删除动作（D-UD-10）。
-    expect(wrapper.get('[data-test="cleanup-tile-pending"] [data-test="stat-tile-value"]').text()).toBe('0张');
-    expect(wrapper.find('[data-test="cleanup-delete-selected"]').exists()).toBe(false);
-    const previousKeeper = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
-      .find(toggle => toggle.attributes('aria-label').includes('keep.jpg'));
-    expect(previousKeeper.element.disabled).toBe(false);
-    await previousKeeper.setValue(true);
-    await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-
-    api.SearchImagePage.mockClear();
-    await confirmCleanupDelete(wrapper);
-    // P-032：删除走 *WithResult（经撤销条），默认先把 1 的元数据合并到新的保留项 2。
-    expect(api.MergeMediaMetadata).toHaveBeenCalledWith('image', 2, [1], { skip_playback_state: false, skip_subtitle: false });
-    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([1], true, expect.stringMatching(/^[0-9a-f]{32}$/));
-    expect(api.BatchDeleteImages).not.toHaveBeenCalled();
-  });
-
-  it('LIB-12 离开清理审阅以后再从「最近操作」撤销清理页的删除：图片库照样重载', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-    api.DeleteImagesWithResult.mockResolvedValueOnce(okDeleteResult([2], 'b-clean'));
-    await confirmCleanupDelete(wrapper);
-    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([2], true, expect.any(String));
-    expect(photoCleanupStore.review.deletedIDs).toEqual([2]);
-    await wrapper.get('[data-test="cleanup-back"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(false);
-
-    api.RestoreTrashBatch.mockResolvedValueOnce({ batch_id: 'b-clean', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: [{ id: 2, code: 'ok' }] });
-    api.SearchImagePage.mockClear();
-    expect(await recentOperations.undo(recentOperations.list()[0].id)).toBe(true);
-    await flushPromises();
-    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'b-clean');
-    expect(api.SearchImagePage).toHaveBeenCalled();
-    expect(photoCleanupStore.review.deletedIDs).toEqual([]);
+    expect(wrapper.findComponent({ name: 'PhotoCleanupPage' }).exists()).toBe(false);
+    expect(wrapper.findAll('.photo-card')).toHaveLength(2);
+    expect(api.StartImageCleanupAnalysis).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  // P-032 评审 Minor 5：删除进行中「返回图片库」禁用，命令等其他关闭路径也不能把清理页卸载掉。
-  it('D-PC49 删除进行中不能离开清理审阅：返回禁用，命令打开 AI 审阅被拒并提示', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-    let finishDelete;
-    api.DeleteImagesWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okDeleteResult(ids)); }));
-    await confirmCleanupDelete(wrapper);
-    expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1);
-
-    expect(wrapper.get('[data-test="cleanup-back"]').element.disabled).toBe(true);
-    const command = commandList().find(item => item.id === 'photos.openAIReview');
-    command.run();
-    await flushPromises();
-    expect(wrapper.vm.showCleanup).toBe(true);
-    expect(wrapper.vm.showAITagReview).toBe(false);
-    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
-    expect(feedback.notify.mock.calls.map(call => String(call[0])).join('\n')).toContain('完成后再离开清理审阅');
-    expect(wrapper.vm.closeCleanup()).toBe(false);
-    expect(wrapper.vm.showCleanup).toBe(true);
-
-    finishDelete();
-    await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-back"]').element.disabled).toBe(false);
-    command.run();
-    await flushPromises();
-    expect(wrapper.vm.showCleanup).toBe(false);
-    expect(wrapper.vm.showAITagReview).toBe(true);
-    wrapper.unmount();
-  });
-
-  // P-032 复审 m2：打开回收站也是一条离开清理页的路径，删除进行中同样被拦下。
-  it('D-PC49 删除进行中从图片库打开回收站被拦下：清理页留在原地并提示，删完之后照常打开', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-    let finishDelete;
-    api.DeleteImagesWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okDeleteResult(ids)); }));
-    await confirmCleanupDelete(wrapper);
-    expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1);
-
-    await wrapper.vm.openTrashDialog();
-    await flushPromises();
-    expect(wrapper.vm.showCleanup).toBe(true);
-    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
-    // 图片库那一侧的撤销条（回收站入口）没有挂载，回收站没被打开。
-    expect(wrapper.vm.$refs.trashUndo ?? null).toBeNull();
-    expect(feedback.notify.mock.calls.map(call => String(call[0])).join('\n')).toContain('完成后再离开清理审阅');
-
-    finishDelete();
-    await flushPromises();
-    await wrapper.vm.openTrashDialog();
-    await flushPromises();
-    expect(wrapper.vm.showCleanup).toBe(false);
-    expect(wrapper.vm.$refs.trashUndo.trashDialog).toEqual({ show: true, tab: 'image' });
-    wrapper.unmount();
-  });
-
-  it('lets the user skip a whole group so nothing in it is deleted, then restore it', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // 初始候选 id=2 默认勾选待删。
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-
-    // 跳过本组：勾选清空、删除计数归零、勾选框禁用。
-    await wrapper.get('[data-test="cleanup-skip-group"]').trigger('click');
-    await flushPromises();
-    // 一张都没勾：待删计数归零，选择操作条收起，页面上没有删除动作（D-UD-10）。
-    expect(wrapper.get('[data-test="cleanup-tile-pending"] [data-test="stat-tile-value"]').text()).toBe('0张');
-    expect(wrapper.find('[data-test="cleanup-delete-selected"]').exists()).toBe(false);
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]').every(t => t.element.disabled)).toBe(true);
-
-    // 恢复本组：按当前保留项重算默认勾选，id=2 重新进入待删。
-    await wrapper.get('[data-test="cleanup-skip-group"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-  });
-
-  it('keeps the reviewed result after deleting and only re-analyses when the user confirms', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
-
-    // 答"取消"：不重跑，结果留在原地，已删的行置灰标注，剩下的组还能继续审阅。
-    // D-PC49 起只有精确重复那张（id=2）默认勾选，近似重复那组原样留给用户逐组看。
-    await confirmCleanupDelete(wrapper);
-
-    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
-    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
-    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
-    expect(wrapper.get('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
-    await wrapper.get('[data-test="cleanup-kind-near"]').trigger('click');
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
-  });
-
-  it('keeps the review progress when the panel is closed and reopened', async () => {
-    const status = completedCleanupStatus({
-      duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()], stale_hash_count: 0
-    });
-    status.started_at = '2026-08-08T09:00:00Z';
-    api.GetImageCleanupStatus.mockResolvedValue(status);
-    api.StartImageCleanupAnalysis.mockResolvedValue(status);
-    api.SearchImagePage.mockResolvedValue(makePage([]));
+  it('菜单项照旧显示清理分析的进度与待审阅组数（读共享的 photoCleanupStore）', async () => {
     const wrapper = await mountPage();
-    await openPhotoManageItem(wrapper, 'cleanup');
+    photoCleanupStore.status = { running: true, completed: false, progress: { current: 3, total: 12 } };
     await flushPromises();
-
-    // 精确重复默认勾上、近似重复默认不勾（D-PC49）；切到疑似重复，手动勾上那张，然后折叠目录，模拟审阅到一半。
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-    await wrapper.get('[data-test="cleanup-kind-near"]').trigger('click');
-    const nearToggle = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
-      .find(toggle => toggle.attributes('aria-label').includes('near-small'));
-    await nearToggle.setValue(true);
-    await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
+    expect(wrapper.vm.photoManageItems.find(item => item.id === 'cleanup').label).toBe('清理审阅（分析中 3/12）');
+    photoCleanupStore.status = completedCleanupStatus({ duplicate_groups: [{ original: makeImage(1), candidates: [makeImage(2)] }], near_duplicate_groups: [] });
     await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
-
-    // 关掉面板再打开：勾选和折叠都还在，不用从头再勾一遍。
-    await wrapper.get('[data-test="cleanup-back"]').trigger('click');
-    await flushPromises();
-    await openPhotoManageItem(wrapper, 'cleanup');
-    await flushPromises();
-
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
-    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(0);
+    expect(wrapper.vm.photoManageItems.find(item => item.id === 'cleanup').label).toBe('清理审阅（待审阅 1 组）');
+    wrapper.unmount();
   });
 
-  it('keeps the results visible when part of the deletion fails and only greys the ones that went through', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // 切到疑似重复，手动把那张也勾上，凑成两张；其中 id=4 删除失败。
-    await wrapper.get('[data-test="cleanup-kind-near"]').trigger('click');
-    const nearToggle = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
-      .find(toggle => toggle.attributes('aria-label').includes('near-small'));
-    await nearToggle.setValue(true);
-    api.DeleteImagesWithResult.mockResolvedValue({
-      batch_id: 'batch-1', requested: 2, succeeded: 1, failed: 1, cancelled: 0,
-      items: [{ id: 2, code: 'ok' }, { id: 4, code: 'error', message: '记录不存在' }]
-    });
-    await confirmCleanupDelete(wrapper);
-
-    // 结果没有被错误信息顶掉，两组还在，可以接着审阅。
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
-    expect(wrapper.get('[data-test="cleanup-error"]').text()).toContain('1 张图片删除失败');
-    // 只有真正删掉的那张置灰；失败的那张仍然勾着可以重试。
-    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(0);
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-    await wrapper.get('[data-test="cleanup-kind-exact"]').trigger('click');
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
-    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
-  });
-
-  it('shows per-item facts, diffs against the kept copy, and can open the directory or reveal a file', async () => {
-    const wrapper = await openCleanup({
-      duplicate_groups: [{
-        original: {
-          ...makeImage(1, { name: 'keep.jpg', width: 4000, height: 3000, directory: '/photos' }),
-          file_size: 8_000_000,
-          mod_time_ns: Date.parse('2026-03-01T00:00:00Z') * 1e6,
-          tags: [{ id: 7, name: '旅行', color: '#0d9488' }],
-          is_favorite: true
-        },
-        candidates: [{
-          ...makeImage(2, { name: 'copy.jpg', width: 800, height: 600, directory: '/backup' }),
-          file_size: 1_000_000,
-          mod_time_ns: Date.parse('2026-03-03T00:00:00Z') * 1e6,
-          tags: []
-        }],
-        reason: '文件大小和采样哈希一致',
-        max_hamming_distance: 0
-      }],
-      near_duplicate_groups: []
-    });
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    const text = wrapper.text();
-    // 尺寸、体积、时间、元数据、AI 描述都要在卡片上直接看得到。
-    expect(text).toContain('4000×3000');
-    expect(text).toContain('7.6 MB');
-    expect(wrapper.get('[data-test="cleanup-member-favorite"]').text()).toBe('已收藏');
-    expect(wrapper.find('[data-test="cleanup-member-favorite"] [data-icon="star"]').exists()).toBe(true);
-    expect(text).toContain('旅行');
-    // 清理审阅刻意不展示 AI 内容：近似重复的两张图标签几乎一定相同，在这里帮不上判断。
-    expect(wrapper.find('[data-test="cleanup-member-description"]').exists()).toBe(false);
-    // 与保留项的差异直接标出来，不用自己换算。
-    expect(text).toContain('仅 1/25');
-    expect(text).toContain('小 87%');
-    expect(text).toContain('晚 2 天');
-    // 跨目录的副本要有醒目标记。
-    expect(wrapper.get('[data-test="cleanup-member-otherdir"]').text()).toContain('/backup');
-    expect(wrapper.get('[data-test="cleanup-cross-dir"]').exists()).toBe(true);
-
-    await wrapper.get('[data-test="cleanup-open-dir"]').trigger('click');
-    await flushPromises();
-    expect(api.OpenImageDirectory).toHaveBeenCalledWith('/photos');
-
-    await wrapper.findAll('[data-test="cleanup-reveal"]')[1].trigger('click');
-    await flushPromises();
-    expect(api.RevealImage).toHaveBeenCalledWith(2);
-  });
-
-  // 旧用例名「近似重复也按建议勾上」随 D-PC49 改为：只默认勾精确重复的副本。
-  it('IMG-04 marks every extra exact copy by default and leaves near duplicates unchecked', async () => {
-    const wrapper = await openCleanup({
-      duplicate_groups: [{
-        original: makeImage(11, { name: 'keep.jpg', directory: '/photos' }),
-        candidates: [
-          makeImage(12, { name: 'same-dir-copy.jpg', directory: '/photos' }),
-          makeImage(13, { name: 'other-dir-copy.jpg', directory: '/backup' })
-        ],
-        reason: '文件大小和采样哈希一致'
-      }],
-      near_duplicate_groups: [nearGroup()]
-    });
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // 两份精确副本都勾上（不管在不在同一目录），近似重复那份默认不勾。
-    const checkedLabels = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
-      .filter(toggle => toggle.element.checked)
-      .map(toggle => toggle.attributes('aria-label'));
-    expect(checkedLabels).toHaveLength(2);
-    expect(checkedLabels.join(' ')).toContain('same-dir-copy.jpg');
-    expect(checkedLabels.join(' ')).toContain('other-dir-copy.jpg');
-    expect(checkedLabels.join(' ')).not.toContain('near-small.jpg');
-
-    // 打开"只勾同目录"后，跨目录那份退出待删集合。
-    await wrapper.get('[data-test="cleanup-samedir-switch"] input').setValue(true);
-    await flushPromises();
-    const narrowed = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
-      .filter(toggle => toggle.element.checked)
-      .map(toggle => toggle.attributes('aria-label'));
-    expect(narrowed.join(' ')).toContain('same-dir-copy.jpg');
-    expect(narrowed.join(' ')).not.toContain('other-dir-copy.jpg');
-  });
-
-  it('re-reads the backend status when the panel opens so an outdated result is flagged', async () => {
-    api.SearchImagePage.mockResolvedValue(makePage([]));
+  it('photos.openCleanup 不再由图片库注册（宿主是清理中心）；清理中心删除后经 App 调 handleCleanupDeleted 重载', async () => {
     const wrapper = await mountPage();
-
-    // 面板打开时后端已经把结果标记为过期（例如刚从网格里删了一张图）。
-    api.GetImageCleanupStatus.mockResolvedValue(
-      completedCleanupStatus({ duplicate_groups: [exactGroup()], near_duplicate_groups: [], stale_hash_count: 0 }, { stale: true })
-    );
-    await openPhotoManageItem(wrapper, 'cleanup');
-    await flushPromises();
-
-    expect(wrapper.find('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
-  });
-
-  it('deletes only the selected candidates into the trash and re-analyses when confirmed', async () => {
-    feedback.confirmAction.mockResolvedValue(true);
-    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // 只有精确重复的 id=2 默认勾选（保留项是 id=1、id=3），近似重复的 id=4 默认不勾。
-    await wrapper.get('[data-test="cleanup-kind-near"]').trigger('click');
-    const toggles = wrapper.findAll('[data-test="cleanup-candidate-toggle"]');
-    const target = toggles.find(t => t.attributes('aria-label').includes('near-small'));
-    expect(target.element.checked).toBe(false);
-
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
-
+    expect(commandList().some(item => item.id === 'photos.openCleanup')).toBe(false);
+    expect(commandList().some(item => item.id === 'photos.openAIReview')).toBe(true);
     api.SearchImagePage.mockClear();
-    await confirmCleanupDelete(wrapper);
-
-    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([2], true, expect.any(String));
-    expect(api.BatchDeleteImages).not.toHaveBeenCalled();
-    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(2);
+    wrapper.vm.inactiveScrollTop = 500;
+    await wrapper.vm.handleCleanupDeleted();
+    await flushPromises();
     expect(api.SearchImagePage).toHaveBeenCalled();
-  });
-
-  it('IMG-07 dismisses a near-duplicate group with every member id after confirming and removes it from the list', async () => {
-    const wrapper = await openCleanup({ duplicate_groups: [], near_duplicate_groups: [nearGroup()] });
-
-    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
-    await flushPromises();
-
-    // 忽略前先确认（D-PC31）。
-    feedback.confirmAction.mockResolvedValueOnce(true);
-    await wrapper.get('[data-test="cleanup-dismiss-group"]').trigger('click');
-    await flushPromises();
-
-    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '不是重复' }));
-    expect(api.DismissImageNearDuplicateGroup).toHaveBeenCalledWith([3, 4]);
-    expect(wrapper.find('[data-test="cleanup-near-section"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="cleanup-empty"]').exists()).toBe(true);
+    expect(wrapper.vm.inactiveScrollTop).toBe(0);
+    wrapper.unmount();
   });
 });
 
@@ -1870,49 +1420,23 @@ describe('PhotoLibraryPage grid virtualization', () => {
 
   // 回归：清理审阅页整页接管主区域，但滚的是同一个 .main-view。网格已不在 DOM 里，
   // 再按那个 scrollTop 算窗口会把 maybeLoadMore 一路触发到翻完整个库。
-  it('does not paginate the grid while the cleanup review page is showing', async () => {
-    const cursor = { sort_mode: 'recent', created_at: '2026-08-07T09:00:00Z', size: 0, rating_is_null: false, id: 60 };
-    api.SearchImagePage.mockResolvedValue(
-      makePage(Array.from({ length: 60 }, (_, index) => makeImage(index + 1)), cursor)
-    );
-
-    const { wrapper, host, cleanup } = await mountInScrollOwner({ fallbackContentHeight: 200000 });
-    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
-
-    await openPhotoManageItem(wrapper, 'cleanup');
-    await flushPromises();
-    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
-
-    api.SearchImagePage.mockClear();
-    host.scrollTop = 100000;
-    host.dispatchEvent(new Event('scroll'));
-    await flushPromises();
-
-    expect(api.SearchImagePage).not.toHaveBeenCalled();
-    expect(wrapper.vm.images).toHaveLength(60);
-    cleanup();
-  });
-
-  // 回归：从网格顶部进入审阅页时保存的位置是 0，返回时必须真的回到 0，
-  // 而不是停在审阅页滚出去的偏移上。
-  it('returns the grid to the top when the review page was opened from the top', async () => {
+  // D-P3-02：清理审阅改到清理中心（另一页），不再在图片库里整页接管：打开它只是切页，网格与滚动位置留在原地，
+  // 回来时按「切走再切回」的既有路径恢复（见上面 keeps its scroll position when the tab is switched away and back）。
+  it('opening the cleanup review leaves the grid mounted and its scroll position untouched', async () => {
     api.SearchImagePage.mockResolvedValue(
       makePage(Array.from({ length: 600 }, (_, index) => makeImage(index + 1)), null)
     );
-    const { wrapper, host, cleanup } = await mountInScrollOwner({ fallbackContentHeight: 200000 });
-    expect(host.scrollTop).toBe(0);
+    const { wrapper, host, scrollTo, cleanup } = await mountInScrollOwner();
+    await scrollTo(4000);
+    const before = host.scrollTop;
+    expect(before).toBeGreaterThan(0);
+    api.SearchImagePage.mockClear();
 
     await openPhotoManageItem(wrapper, 'cleanup');
-    await flushPromises();
-    // 审阅页里滚了很远。
-    host.scrollTop = 100000;
-    host.dispatchEvent(new Event('scroll'));
-    await flushPromises();
-
-    await wrapper.get('[data-test="cleanup-back"]').trigger('click');
-    await flushPromises();
-
-    expect(host.scrollTop).toBe(0);
+    expect(wrapper.emitted('open-cleanup')).toHaveLength(1);
+    expect(host.querySelector('.photo-grid')).not.toBeNull();
+    expect(host.scrollTop).toBe(before);
+    expect(api.SearchImagePage).not.toHaveBeenCalled();
     cleanup();
   });
 
@@ -2238,17 +1762,14 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     wrapper.unmount();
   });
 
-  it('注册 photos.openAIReview：从清理审阅整页里也能打开图片 AI 标签审阅', async () => {
+  it('注册 photos.openAIReview：打开图片 AI 标签审阅，卸载后注销', async () => {
     const wrapper = await mountPage();
     const command = commandList().find(item => item.id === 'photos.openAIReview');
     expect(command).toBeTruthy();
-    wrapper.vm.showCleanup = true;
-    await wrapper.vm.$nextTick();
 
     command.run();
     await flushPromises();
 
-    expect(wrapper.vm.showCleanup).toBe(false);
     expect(wrapper.vm.showAITagReview).toBe(true);
     wrapper.unmount();
     expect(commandList().some(item => item.id === 'photos.openAIReview')).toBe(false);

@@ -469,25 +469,52 @@ describe('命令面板快捷键', () => {
     expect(wrapper.vm.commandPaletteOpen).toBe(true);
   });
 
-  // D-PC59：「管理」菜单去掉清理审阅后，清理中心走待处理工作台的清理入口（library.openCleanup），任何页面都能按。
-  // D-UD-03：快捷键从 ⌘K 改为 ⌘⇧K。D-UI-03：清理中心属于管理侧，宿主页是「片库管理」。
-  it('APP-11 ⌘⇧K 在其他页面先切到片库管理，再执行 library.openCleanup', async () => {
+  // D-UD-03：快捷键从 ⌘K 改为 ⌘⇧K。D-P3-02：清理中心三期起是管理侧页面 `cleanup`，⌘⇧K 在任何页面都切过去，
+  // 停在上次看的标签上（不另外执行 library.openCleanup）。
+  it('D-P3-02 ⌘⇧K 在任何页面都切到清理中心（含片库管理），标签不变', async () => {
     const wrapper = await mountApp();
     const run = vi.fn();
     registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
-    await wrapper.setData({ currentPage: 'insights' });
+    await wrapper.setData({ currentPage: 'insights', cleanupTab: 'image' });
 
     const event = pressKey(window, { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true });
     await flushPromises();
 
     expect(event.defaultPrevented).toBe(true);
-    expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.vm.cleanupTab).toBe('image');
+    expect(wrapper.vm.cleanupRequest).toBeNull();
+    expect(run).not.toHaveBeenCalled();
     expect(wrapper.vm.commandPaletteOpen).toBe(false);
+    expect(wrapper.findComponent({ name: 'CleanupCenterPage' }).exists()).toBe(true);
+
+    // 片库页不再自己接 ⌘⇧K：在片库管理上同样由 App 切过去。
+    await wrapper.setData({ currentPage: 'library-manage' });
+    pressKey(window, { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('cleanup');
     unregisterCommands('test-cleanup-host');
   });
 
-  it('APP-11 ⌘⇧K 已被片库页先接手（preventDefault）时让位，不重复打开', async () => {
+  // 对话框开着时不响应（与 ⌘K 同一条规矩）：免得在弹窗背后切走页面。
+  it('D-P3-02 ⌘⇧K 在对话框开着时不响应，关掉后照常', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'insights' });
+    const dialog = shallowMount(BaseModal, { attachTo: document.body, slots: { default: '<p>别的对话框</p>' } });
+    mountedWrappers.push(dialog);
+
+    const blocked = pressKey(window, { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true });
+    await flushPromises();
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(wrapper.vm.currentPage).toBe('insights');
+    dialog.unmount();
+
+    pressKey(window, { key: 'K', code: 'KeyK', ctrlKey: true, shiftKey: true });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+  });
+
+  it('APP-11 ⌘⇧K 已被别的处理器先接手（preventDefault）时让位，不重复打开', async () => {
     const wrapper = await mountApp();
     await wrapper.setData({ currentPage: 'videos' });
     const run = vi.fn();
@@ -812,18 +839,24 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.vm.currentPage).toBe('manage-home');
   });
 
-  it('D-UI-03 管理导航「清理中心」走既有命令：切到片库管理再执行 library.openCleanup', async () => {
+  // D-P3-02：管理导航的「清理中心」三期起是页面项（nav-cleanup），点了切到 `cleanup`；命令 action:cleanup 同样打开它。
+  it('D-P3-02 管理导航「清理中心」是页面：切到清理中心，选中态跟着走；命令 action:cleanup 也打开它', async () => {
     const wrapper = await mountApp();
     await enterManage(wrapper);
-    const run = vi.fn();
-    registerCommands('test-cleanup-nav', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+    expect(wrapper.find('[data-test="open-cleanup"]').exists()).toBe(false);
 
-    await wrapper.get('[data-test="open-cleanup"]').trigger('click');
+    await wrapper.get('[data-test="nav-cleanup"]').trigger('click');
     await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.get('[data-test="nav-cleanup"]').classes()).toContain('active');
+    expect(wrapper.find('[data-test="nav-area-manage"]').exists()).toBe(true);
+    const page = wrapper.findComponent({ name: 'CleanupCenterPage' });
+    expect(page.props()).toMatchObject({ pageActive: true, tab: 'video', request: null });
 
-    unregisterCommands('test-cleanup-nav');
-    expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(run).toHaveBeenCalledTimes(1);
+    await wrapper.setData({ currentPage: 'insights' });
+    await findCommand('action:cleanup').run();
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('cleanup');
   });
 
   // D-P2-06：人物观看页只看不改，人脸审阅在管理侧「人物与作品集」（过渡期挂 EntityLibraryPage 的人物那一种）。
@@ -1016,20 +1049,34 @@ describe('「待重启」遮罩与启动错误页', () => {
   });
 });
 
-it('集中整理任务从其他页路由到片库，以持久ID留待片库挂载后消费，保留壁纸组件', async () => {
-  const wrapper = await mountApp(); await wrapper.setData({ currentPage: 'photos' });
+// D-P3-02：集中整理任务（原先落在片库页的清理面板上）改为进清理中心的视频标签，带一次性请求打开那个任务。
+it('集中整理任务从其他页进清理中心的视频标签，以请求交给清理中心，关掉任务中心，保留壁纸组件', async () => {
+  const wrapper = await mountApp(); await wrapper.setData({ currentPage: 'photos', cleanupTab: 'image', taskCenterOpen: true });
   wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-consolidation', 42); await flushPromises();
-  expect(wrapper.vm.currentPage).toBe('library-manage');
-  expect(wrapper.findComponent({ name: 'VideoListPage' }).props('consolidationRoute')).toMatchObject({ taskID: 42 });
+  expect(wrapper.vm.currentPage).toBe('cleanup');
+  expect(wrapper.vm.taskCenterOpen).toBe(false);
+  const page = wrapper.findComponent({ name: 'CleanupCenterPage' });
+  expect(page.props('tab')).toBe('video');
+  expect(page.props('request')).toMatchObject({ consolidationTaskID: 42, relationId: 0, open: false, token: expect.any(Number) });
   expect(wrapper.findComponent({ name: 'WallpaperStatusBar' }).exists()).toBe(true);
-  wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('consolidation-opened'); await flushPromises(); expect(wrapper.vm.consolidationRoute).toBeNull();
+  // 再打开另一个任务：换一个新请求（新 token）。
+  const first = page.props('request').token;
+  wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-consolidation', 43); await flushPromises();
+  expect(page.props('request')).toMatchObject({ consolidationTaskID: 43 });
+  expect(page.props('request').token).not.toBe(first);
 });
 
-it('集中整理路由的旧导航确认迟到不会覆盖新任务', async () => {
-  const wrapper = await mountApp(); let resolveOld;
-  vi.spyOn(wrapper.vm, 'navigateTo').mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; })).mockResolvedValueOnce(true);
-  const old = wrapper.vm.openConsolidationTask(41); await wrapper.vm.openConsolidationTask(42); resolveOld(true); await old;
-  expect(wrapper.vm.consolidationRoute.taskID).toBe(42);
+it('集中整理任务：设置页有未保存修改、用户选「继续编辑」时什么也不发生', async () => {
+  const wrapper = await mountApp();
+  await wrapper.setData({ currentPage: 'settings', settingsDirty: true, taskCenterOpen: true });
+  const pending = wrapper.vm.openConsolidationTask(41);
+  await flushPromises();
+  expect(feedbackState.confirm).toBeTruthy();
+  resolveConfirm(false);
+  expect(await pending).toBe(false);
+  expect(wrapper.vm.currentPage).toBe('settings');
+  expect(wrapper.vm.cleanupRequest).toBeNull();
+  expect(wrapper.vm.taskCenterOpen).toBe(true);
 });
 
 // D-UI-07：观看笔记属于观看区，书签定位进整页详情并从书签起点起播；片库页的抽屉不再接手。
@@ -1310,12 +1357,14 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
     expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(true);
     expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(false);
 
+    // 图片清理的宿主是清理中心（D-P3-02），切页与换到图片标签同一拍。
     const run = vi.fn();
     registerCommands('test-manage-home', [{ id: 'photos.openCleanup', group: 'action', label: '图片清理', hidden: true, run }]);
     home.vm.$emit('run-command', 'photos.openCleanup', '图片清理');
     await flushPromises();
     unregisterCommands('test-manage-home');
-    expect(wrapper.vm.currentPage).toBe('photos-manage');
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.vm.cleanupTab).toBe('image');
     expect(run).toHaveBeenCalledTimes(1);
 
     await wrapper.setData({ currentPage: 'manage-home' });
@@ -1980,23 +2029,136 @@ describe('整页详情改了状态，片库页跟上（M-5）', () => {
   });
 });
 
-describe('「视频」上按 ⌘⇧K 与其他页面一致（M-6、D-UD-03）', () => {
-  it('片库页只在「片库管理」上自己接 ⌘⇧K；在「视频」上交给 App 先切到片库管理再开清理中心', async () => {
+describe('「视频」上按 ⌘⇧K 与其他页面一致（M-6、D-UD-03、D-P3-02）', () => {
+  it('在「视频」上按 ⌘⇧K 切到清理中心（管理区）；片库页的 cleanupHotkey 只管页头标题', async () => {
     const wrapper = await mountApp();
     await wrapper.setData({ currentPage: 'videos' });
     expect(wrapper.findComponent({ name: 'VideoListPage' }).props('cleanupHotkey')).toBe(false);
 
-    const run = vi.fn();
-    registerCommands('test-cleanup-videos', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
     const event = new KeyboardEvent('keydown', { key: 'K', code: 'KeyK', metaKey: true, shiftKey: true, bubbles: true, cancelable: true });
     window.dispatchEvent(event);
     await flushPromises();
-    unregisterCommands('test-cleanup-videos');
 
     expect(event.defaultPrevented).toBe(true);
-    expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.find('[data-test="nav-area-manage"]').exists()).toBe(true);
+    await wrapper.setData({ currentPage: 'library-manage' });
     expect(wrapper.findComponent({ name: 'VideoListPage' }).props('cleanupHotkey')).toBe(true);
+  });
+});
+
+// D-P3-02：清理中心页的接线——首次进入才挂载、之后只隐藏；标签是页面参数；删除进行中不能离开；
+// 删完与撤销后片库、图片库经既有的路刷新；片库与图片库的「清理审阅」入口、AI 审阅的「去清理」落在对应标签上。
+describe('清理中心页的接线（D-P3-02）', () => {
+  async function enterCleanup(wrapper, params = null) {
+    wrapper.vm.navigateTo('cleanup', params);
+    await flushPromises();
+    return wrapper.findComponent({ name: 'CleanupCenterPage' });
+  }
+
+  it('首次进入才挂载，离开只隐藏（pageActive 跟着走）；标签由 update:tab 落下，认不出的标签忽略', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.findComponent({ name: 'CleanupCenterPage' }).exists()).toBe(false);
+    const page = await enterCleanup(wrapper);
+    expect(page.props()).toMatchObject({ pageActive: true, tab: 'video' });
+
+    page.vm.$emit('update:tab', 'image');
+    await flushPromises();
+    expect(wrapper.vm.cleanupTab).toBe('image');
+    expect(page.props('tab')).toBe('image');
+    page.vm.$emit('update:tab', 'nope');
+    await flushPromises();
+    expect(wrapper.vm.cleanupTab).toBe('image');
+    // 只换标签不算请求。
+    expect(wrapper.vm.cleanupRequest).toBeNull();
+
+    await wrapper.setData({ currentPage: 'insights' });
+    expect(wrapper.findComponent({ name: 'CleanupCenterPage' }).exists()).toBe(true);
+    expect(page.props('pageActive')).toBe(false);
+    expect(page.attributes('style')).toContain('display: none');
+  });
+
+  it('删除进行中（busy-change true）不能离开清理中心，并提示；结束后可以', async () => {
+    const wrapper = await mountApp();
+    const page = await enterCleanup(wrapper);
+    page.vm.$emit('busy-change', true);
+    await flushPromises();
+    expect(wrapper.vm.navigateTo('insights')).toBe(false);
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(feedbackState.toasts.map(toast => toast.message)).toContain('正在移到废纸篓，完成后再离开清理中心。');
+    // 同一页上只换标签不算离开：App 照样落参数（删除进行中切标签由清理中心页自己禁用）。
+    expect(wrapper.vm.navigateTo('cleanup', { tab: 'image' })).toBe(true);
+    page.vm.$emit('busy-change', false);
+    await flushPromises();
+    expect(wrapper.vm.navigateTo('insights')).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('insights');
+  });
+
+  it('视频删完 / 撤销后经 videos-changed 让片库重取、顶栏计数刷新；图片经 images-changed 让图片库重载', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ photosMounted: true });
+    const reloadVideos = vi.fn();
+    const reloadImages = vi.fn();
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.handleVideosChangedElsewhere = reloadVideos;
+    wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.handleCleanupDeleted = reloadImages;
+    const page = await enterCleanup(wrapper);
+    const callsBefore = api.GetLibraryCounts.mock.calls.length;
+
+    page.vm.$emit('videos-changed', { removedIDs: [7, 8] });
+    await flushPromises();
+    expect(reloadVideos).toHaveBeenCalledWith([7, 8]);
+    expect(api.GetLibraryCounts.mock.calls.length).toBe(callsBefore + 1);
+
+    page.vm.$emit('images-changed');
+    await flushPromises();
+    expect(reloadImages).toHaveBeenCalledOnce();
+    expect(api.GetLibraryCounts.mock.calls.length).toBe(callsBefore + 2);
+    expect(reloadVideos).toHaveBeenCalledTimes(1);
+  });
+
+  it('片库管理的「去清理」带同源对进视频标签；图片管理的「清理审阅」进图片标签', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'library-manage', cleanupTab: 'image', photosMounted: true });
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('open-cleanup', { relationId: 9 });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.vm.cleanupTab).toBe('video');
+    expect(wrapper.vm.cleanupRequest).toMatchObject({ open: true, relationId: 9, consolidationTaskID: 0 });
+
+    await wrapper.setData({ currentPage: 'photos-manage' });
+    const before = wrapper.vm.cleanupRequest;
+    wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.$emit('open-cleanup');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.vm.cleanupTab).toBe('image');
+    // 图片标签挂上时自己读状态，不发视频的请求。
+    expect(wrapper.vm.cleanupRequest).toBe(before);
+  });
+
+  it('片库管理的回收站恢复了视频：交给清理中心放掉审阅里的已删标记（还没打开过清理中心时什么也不做）', async () => {
+    const wrapper = await mountApp();
+    const list = wrapper.findComponent({ name: 'VideoListPage' });
+    list.vm.$emit('trash-restored', { videoIDs: [3], fromTrashDialog: true });
+    await flushPromises();
+    const page = await enterCleanup(wrapper);
+    const restored = vi.fn();
+    page.vm.handleVideosRestored = restored;
+    list.vm.$emit('trash-restored', { videoIDs: [3, 4], fromTrashDialog: false });
+    await flushPromises();
+    expect(restored).toHaveBeenCalledWith([3, 4], false);
+  });
+
+  it('待处理与管理首页按命令 ID 打开：library.openCleanup 落在视频标签，宿主是清理中心', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'insights', cleanupTab: 'image' });
+    const run = vi.fn();
+    registerCommands('test-cleanup-command', [{ id: 'library.openCleanup', group: 'action', label: '清理中心 · 视频', hidden: true, run }]);
+    await wrapper.vm.runPendingCommand('library.openCleanup', '清理候选');
+    await flushPromises();
+    unregisterCommands('test-cleanup-command');
+    expect(wrapper.vm.currentPage).toBe('cleanup');
+    expect(wrapper.vm.cleanupTab).toBe('video');
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });
 

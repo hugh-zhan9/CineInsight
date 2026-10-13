@@ -98,24 +98,22 @@ it('别的页面删掉了视频：从列表拿掉、关掉对应预览、总数�
   wrapper.unmount();
 });
 
-// M-6：本页同时是观看侧「视频」与管理侧「片库管理」。在「视频」上（cleanupHotkey=false）不接 ⌘⇧K，
-// 让 App 的全局 ⌘⇧K 先切到片库管理再开清理中心；其余工具栏快捷键照旧。D-UD-03：⌘K 归命令面板，本页不接。
-it('cleanupHotkey 为 false 时本页不接 ⌘⇧K（不 preventDefault、不开清理中心），为 true 时照旧；⌘K 本页从不接', async () => {
-  const wrapper = await mountPage({ pageActive: true, cleanupHotkey: false });
-  const openCleanup = vi.spyOn(wrapper.vm, 'openCleanupDialog').mockImplementation(() => {});
-  const press = (shiftKey = true) => {
-    const event = new KeyboardEvent('keydown', { key: shiftKey ? 'K' : 'k', code: 'KeyK', metaKey: true, shiftKey, cancelable: true });
+// D-P3-02：清理中心三期起是 App 的页面 `cleanup`，⌘⇧K 只由 App 接（任何页面都切过去，见 App.test.js）；
+// 本页不论在不在「片库管理」上都不接 ⌘⇧K，也不再有清理弹窗。D-UD-03：⌘K 归命令面板，本页不接。其余工具栏快捷键照旧。
+it('本页不接 ⌘⇧K 与 ⌘K（不 preventDefault、不开任何东西），交给 App；⌘T 照旧打开 AI 审阅', async () => {
+  const wrapper = await mountPage({ pageActive: true, cleanupHotkey: true });
+  const press = (init) => {
+    const event = new KeyboardEvent('keydown', { code: 'KeyK', metaKey: true, cancelable: true, ...init });
     window.dispatchEvent(event);
     return event;
   };
-  expect(press().defaultPrevented).toBe(false);
-  expect(openCleanup).not.toHaveBeenCalled();
-
-  await wrapper.setProps({ cleanupHotkey: true });
-  expect(press(false).defaultPrevented).toBe(false);
-  expect(openCleanup).not.toHaveBeenCalled();
-  expect(press().defaultPrevented).toBe(true);
-  expect(openCleanup).toHaveBeenCalledTimes(1);
+  expect(press({ key: 'K', shiftKey: true }).defaultPrevented).toBe(false);
+  expect(press({ key: 'k' }).defaultPrevented).toBe(false);
+  await wrapper.setProps({ cleanupHotkey: false });
+  expect(press({ key: 'K', shiftKey: true }).defaultPrevented).toBe(false);
+  expect(wrapper.findComponent({ name: 'CleanupReviewPanel' }).exists()).toBe(false);
+  expect(press({ key: 't', code: 'KeyT' }).defaultPrevented).toBe(true);
+  expect(wrapper.vm.aiTagReviewDialog.show).toBe(true);
   wrapper.unmount();
 });
 
@@ -338,52 +336,8 @@ describe('VideoListPage media-detail integration', () => {
 	  wrapper.unmount();
 	});
 
-  // 清理面板已抽成 video-list/CleanupReviewPanel.vue，其自身用例见同目录的
-  // CleanupReviewPanel.test.js；这里只钉住片库页这一侧的接线。
-  it('清理面板要删的候选仍由片库页删除：移出列表、给撤销条、再重载', async () => {
-    const outcome = deleteOutcome({ trashed: [2], failures: [{ id: 3, code: 'volume_offline', text: '所在磁盘未连接或不可访问，未做任何改动' }], kept: [4] });
-    const runDelete = vi.fn().mockResolvedValue(outcome);
-    const showDeleteNotice = vi.fn();
-    const wrapper = await mountPage({}, {
-      global: { stubs: { TrashUndoBanner: { template: '<div />', methods: { runDelete, showDeleteNotice } } } }
-    });
-    wrapper.vm.videos = [{ id: 1, name: 'keep.mp4' }, { id: 2, name: 'copy.mp4' }, { id: 3, name: 'offline.mp4' }, { id: 4, name: 'smb.mp4' }];
-    // 第一步只删除并把行从已加载列表里摘掉；撤销条与重载是第二步，
-    // 中间留给清理面板收窄勾选。
-    api.SearchLibraryVideoPage.mockClear();
-
-    const result = await wrapper.vm.trashCleanupVideos([2, 3, 4]);
-
-    expect(runDelete).toHaveBeenCalledWith({ ids: [2, 3, 4], deleteFile: true, names: { 2: 'copy.mp4', 3: 'offline.mp4', 4: 'smb.mp4' } });
-    expect(result.succeededIDs).toEqual([2]);
-    expect([...result.failedIDs]).toEqual([3, 4]);
-    // 面板认识的结果形状：失败项带视频 ID 与中文原因。
-    expect(result.result).toEqual({
-      requested: 3,
-      succeeded: 1,
-      failed: 2,
-      errors: [
-        { video_id: 3, error: '所在磁盘未连接或不可访问，未做任何改动' },
-        { video_id: 4, error: '所在磁盘不支持废纸篓，已保留' }
-      ]
-    });
-    expect(wrapper.vm.videos.map(video => video.id)).toEqual([1, 3, 4]);
-    expect(showDeleteNotice).not.toHaveBeenCalled();
-    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
-
-    // 第二步：先撤销提示条，再重载列表；失败项由清理面板自己报告。
-    let reloadedBeforeUndo = false;
-    showDeleteNotice.mockImplementation(() => {
-      reloadedBeforeUndo = api.SearchLibraryVideoPage.mock.calls.length > 0;
-    });
-    await wrapper.vm.afterTrashCleanupVideos(result.succeededIDs);
-
-    expect(showDeleteNotice).toHaveBeenCalledWith(outcome, { reportFailures: false });
-    expect(reloadedBeforeUndo).toBe(false);
-    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
-    wrapper.unmount();
-  });
-
+  // 清理面板（video-list/CleanupReviewPanel.vue）三期起挂在清理中心页上（D-P3-02），候选的删除也在那里：
+  // 原来这里钉的「移出列表、给撤销条、再重载」见 manage/CleanupCenterPage.test.js。
   // 2026-09-29（D-PC27、D-PC59、APP-11）：「管理」菜单的徽标与清理项并入顶栏的待处理工作台，
   // 片库页不再给工具栏传这几项，也不再每分钟拉一次 AI 汇总。
   it('APP-11 不再给工具栏传徽标与分析中镜像，也不再轮询 AI 汇总；标签上的删除入口已拆掉', async () => {
@@ -398,9 +352,8 @@ describe('VideoListPage media-detail integration', () => {
     }
     expect(api.GetAITaggingStatusSummary).not.toHaveBeenCalled();
     expect(toolbar.vm.$attrs.onDeleteTag).toBeUndefined();
-    const panel = wrapper.findComponent({ name: 'CleanupReviewPanel' });
-    expect(panel.vm.$attrs.onBadgeChange).toBeUndefined();
-    expect(panel.vm.$attrs.onAnalyzingChange).toBeUndefined();
+    // 清理面板不在本页了（D-P3-02，在清理中心页上）。
+    expect(wrapper.findComponent({ name: 'CleanupReviewPanel' }).exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -1665,19 +1618,18 @@ describe('P-030 删除与回收站接线', () => {
     wrapper.unmount();
   });
 
-  it('从回收站恢复后放掉清理面板的已删标记、重载列表，来自回收站对话框的再刷新清理状态', async () => {
+  // D-P3-02：清理面板在清理中心页上，恢复的视频经 trash-restored 交给 App，由清理中心放掉已删标记、必要时再刷新清理状态。
+  it('从回收站恢复后重载列表，并把恢复了哪些、是否来自回收站对话框报给 App（清理中心放掉已删标记）', async () => {
     const wrapper = await mountPage();
-    const forget = vi.spyOn(wrapper.vm, 'forgetCleanupTrashed').mockImplementation(() => {});
     const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
-    const refresh = vi.spyOn(wrapper.vm, 'refreshCleanupStatus').mockResolvedValue();
 
     await wrapper.vm.afterTrashRestore([2, 3], false);
-    expect(forget.mock.calls.map(call => call[0])).toEqual([2, 3]);
+    expect(wrapper.emitted('trash-restored')).toEqual([[{ videoIDs: [2, 3], fromTrashDialog: false }]]);
     expect(reload).toHaveBeenCalledTimes(1);
-    expect(refresh).not.toHaveBeenCalled();
 
     await wrapper.vm.afterTrashRestore([], true);
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted('trash-restored')[1]).toEqual([{ videoIDs: [], fromTrashDialog: true }]);
+    expect(reload).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
 
@@ -1689,21 +1641,20 @@ describe('P-030 删除与回收站接线', () => {
     wrapper.unmount();
   });
 
-  it('注册待处理工作台要用的三条命令：清理、AI 审阅、本地资料有更新', async () => {
+  // D-P3-02：library.openCleanup 改由清理中心页注册（宿主页是 `cleanup`），本页只注册另外两条。
+  it('注册待处理工作台要用的命令：AI 审阅、本地资料有更新；清理入口不再由本页注册', async () => {
     const wrapper = await mountPage();
     const byID = id => commandList().find(item => item.id === id);
-    const openCleanup = vi.spyOn(wrapper.vm, 'openCleanupDialog').mockImplementation(() => {});
     const applyView = vi.spyOn(wrapper.vm, 'applySmartViewCommand').mockResolvedValue();
 
-    byID('library.openCleanup').run();
-    expect(openCleanup).toHaveBeenCalledTimes(1);
+    expect(byID('library.openCleanup')).toBeUndefined();
     byID('library.openAIReview').run();
     expect(wrapper.vm.aiTagReviewDialog.show).toBe(true);
     byID('library.openLocalMetadataUpdates').run();
     expect(applyView).toHaveBeenCalledWith('local_metadata_updated');
 
     wrapper.unmount();
-    expect(byID('library.openCleanup')).toBeUndefined();
+    expect(byID('library.openAIReview')).toBeUndefined();
   });
 });
 
@@ -2309,26 +2260,19 @@ describe('P-034 审阅与标签管理的回调', () => {
     wrapper.unmount();
   });
 
-  it('META-08 审阅里点「去清理」：关掉审阅，打开清理中心并把这一对交给面板', async () => {
-    const open = vi.fn();
-    const wrapper = await mountPage({}, { global: { stubs: { CleanupReviewPanel: { template: '<div />', methods: { open, refreshStatus() {}, forgetTrashed() {} } } } } });
+  // D-P3-02：清理中心是 App 的页面，本页只把要定位的那一对交给 App（open-cleanup），App 进清理中心的视频标签。
+  it('META-08 审阅里点「去清理」：关掉审阅，经 open-cleanup 把这一对交给清理中心', async () => {
+    const wrapper = await mountPage();
     wrapper.vm.openAITagReviewDialog();
     wrapper.findComponent({ name: 'AITagReviewDialog' }).vm.$emit('open-cleanup', { relationId: 9, videoIds: [1, 2] });
     await flushPromises();
     expect(wrapper.vm.aiTagReviewDialog.show).toBe(false);
-    expect(open).toHaveBeenCalledWith({ relationId: 9 });
-    wrapper.unmount();
-  });
+    expect(wrapper.emitted('open-cleanup')).toEqual([[{ relationId: 9 }]]);
 
-  it('D-PC02 清理面板传来的文件名表优先（P-032 约定），候选不在已加载列表里时二选一弹窗也能列出文件名', async () => {
-    const outcome = deleteOutcome({ trashed: [2] });
-    const runDelete = vi.fn().mockResolvedValue(outcome);
-    const wrapper = await mountPage({}, {
-      global: { stubs: { TrashUndoBanner: { template: '<div />', methods: { runDelete, showDeleteNotice: vi.fn() } } } }
-    });
-    wrapper.vm.videos = [{ id: 2, name: 'loaded.mp4' }];
-    await wrapper.vm.trashCleanupVideos([2, 7], { names: { 2: 'copy.mp4', 7: 'far-away.mp4' } });
-    expect(runDelete).toHaveBeenCalledWith({ ids: [2, 7], deleteFile: true, names: { 2: 'copy.mp4', 7: 'far-away.mp4' } });
+    wrapper.vm.openAITagReviewDialog();
+    wrapper.findComponent({ name: 'AITagReviewDialog' }).vm.$emit('open-cleanup', {});
+    await flushPromises();
+    expect(wrapper.emitted('open-cleanup')[1]).toEqual([{}]);
     wrapper.unmount();
   });
 
@@ -2609,37 +2553,8 @@ describe('P-036 批量生成字幕与字幕索引同步', () => {
   });
 });
 
-describe('P-032 评审 I-3 的父组件用例', () => {
-  it('D-PC02 清理候选不在当前已加载列表里：不支持废纸篓 → 永久删除的二次确认列出面板传来的文件名，而不是「视频（编号 N）」', async () => {
-    api.DeleteVideosWithResult.mockResolvedValue({ batch_id: 'b1', items: [{ id: 7, code: 'trash_unsupported' }] });
-    api.PermanentlyDeleteVideos.mockResolvedValue({ items: [{ id: 7, code: 'ok' }] });
-    const wrapper = await mountPage({}, {
-      attachTo: document.body,
-      // 二选一出现时 teleport 到 body（见 tokens.css「层级」）；teleport 桩让它留在页面子树里查。
-      global: { stubs: { teleport: true, TrashUndoBanner: false, TrashUnsupportedDialog: false, BaseModal: false } }
-    });
-    wrapper.vm.videos = [{ id: 1, name: 'keep.mp4', tags: [] }];
-
-    const pending = wrapper.vm.trashCleanupVideos([7], { names: { 7: 'far-away.mp4' } });
-    await flushPromises();
-    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([7], true, expect.any(String));
-    expect(wrapper.find('[data-test="trash-unsupported-names"]').text()).toContain('far-away.mp4');
-
-    await wrapper.find('[data-test="trash-unsupported-permanent"]').trigger('click');
-    const confirmNames = wrapper.find('[data-test="trash-unsupported-confirm-names"]').text();
-    expect(confirmNames).toContain('far-away.mp4');
-    expect(confirmNames).not.toContain('编号');
-
-    // 永久删除是不可逆的第 3 级确认（D-UD-07）：输入按钮上的文字才能点。
-    await wrapper.find('[data-test="trash-unsupported-confirm-input"]').setValue('永久删除');
-    await wrapper.find('[data-test="trash-unsupported-permanent-confirm"]').trigger('click');
-    const outcome = await pending;
-    expect(api.PermanentlyDeleteVideos).toHaveBeenCalledWith([7]);
-    expect(outcome.succeededIDs).toEqual([7]);
-    expect([...outcome.failedIDs]).toEqual([]);
-    wrapper.unmount();
-  });
-});
+// P-032 评审 I-3 的父组件用例（清理候选不在已加载列表里时，不支持废纸篓的二选一照样列出文件名）
+// 随删除宿主搬到清理中心页（D-P3-02），见 manage/CleanupCenterPage.test.js。
 
 describe('P-036 抽屉事件接线（P-037 的动作条与人物详情）', () => {
   async function mountWithDrawer() {
@@ -2699,27 +2614,17 @@ describe('P-036 抽屉事件接线（P-037 的动作条与人物详情）', () =
 });
 
 
-it('集中整理路由在片库首次挂载后打开正确任务，旧回调不消费新任务', async () => {
-  const openConsolidation = vi.fn().mockResolvedValue();
-  const wrapper = await mountPage({ consolidationRoute: { taskID: 81, generation: 1 } }, {
-    global: { stubs: { CleanupReviewPanel: { name: 'CleanupReviewPanel', template: '<div />', methods: { openConsolidation } } } }
-  });
-  expect(openConsolidation).toHaveBeenCalledWith(81); expect(wrapper.emitted('consolidation-opened')).toHaveLength(1);
-  let finish; openConsolidation.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValueOnce();
-  await wrapper.setProps({ consolidationRoute: { taskID: 82, generation: 2 } }); await flushPromises();
-  await wrapper.setProps({ consolidationRoute: { taskID: 83, generation: 3 } }); await flushPromises();
-  finish(); await flushPromises(); expect(wrapper.emitted('consolidation-opened')).toHaveLength(2); wrapper.unmount();
-});
-
+// 集中整理任务的打开（原来经 consolidationRoute 落在本页的清理面板上）三期起在清理中心页（D-P3-02），
+// 见 manage/CleanupCenterPage.test.js；清理面板自己听集中整理进度标出结果过期（CleanupReviewPanel.test.js）。
 it('任何后台集中整理终态都刷新片库一次，不依赖当前打开的历史任务；不触发清理', async () => {
   const handlers = {}; window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return vi.fn(); } };
-  const markConsolidationStale = vi.fn();
-  const wrapper = await mountPage({}, { global: { stubs: { CleanupReviewPanel: { name: 'CleanupReviewPanel', template: '<div />', methods: { markConsolidationStale } } } } });
+  const wrapper = await mountPage();
   const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
   await handlers['cleanup-consolidation-progress']({ id: 82, version: 2, status: 'running', completed: 1 }); expect(reload).not.toHaveBeenCalled();
   await handlers['cleanup-consolidation-progress']({ id: 82, version: 3, status: 'cancelled', completed: 1 });
   await wrapper.vm.handleConsolidationMoved({ id: 82, version: 3, status: 'cancelled', completed: 1 });
-  expect(reload).toHaveBeenCalledTimes(1); expect(markConsolidationStale).toHaveBeenCalledOnce(); expect(wrapper.emitted('reload-directories')).toHaveLength(1); wrapper.unmount();
+  expect(reload).toHaveBeenCalledTimes(1); expect(wrapper.emitted('reload-directories')).toHaveLength(1);
+  expect(api.GetCleanupStatus).not.toHaveBeenCalled(); wrapper.unmount();
 });
 
 it('书签定位保留0与区间，每次点击独立请求，普通预览清除区间', async () => {
