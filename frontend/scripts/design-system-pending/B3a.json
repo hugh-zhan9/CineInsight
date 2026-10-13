@@ -1,61 +1,13 @@
 {
   "owner": "B3a 设置（SettingsPage、settings/*）",
   "pending": {
-    "colors": {
-      "components/settings/MobileSection.vue": 1
-    },
-    "font-scale": {
-      "components/SettingsPage.vue": 6,
-      "components/settings/AITagSection.vue": 1,
-      "components/settings/AutomationSection.vue": 2,
-      "components/settings/BrowserBridgeSection.vue": 1,
-      "components/settings/DatabaseSection.vue": 11,
-      "components/settings/EnhanceSection.vue": 1,
-      "components/settings/FaceSection.vue": 3,
-      "components/settings/IINASyncSection.vue": 2,
-      "components/settings/IdleSchedulingSection.vue": 3,
-      "components/settings/JellyfinSection.vue": 1,
-      "components/settings/MobileSection.vue": 3,
-      "components/settings/OnlineSourceSection.vue": 2,
-      "components/settings/ProxySection.vue": 2,
-      "components/settings/ScanDirectoriesSection.vue": 7,
-      "components/settings/SceneSection.vue": 1,
-      "components/settings/SubtitleSection.vue": 2
-    },
-    "z-index": {
-      "components/SettingsPage.vue": 1
-    },
+    "colors": {},
+    "font-scale": {},
+    "z-index": {},
     "vars": {},
-    "dialogs": {
-      "components/settings/BasicSection.vue": 1,
-      "components/settings/DatabaseSection.vue": 2,
-      "components/settings/ScanDirectoriesSection.vue": 2
-    },
-    "page-header": {
-      "components/SettingsPage.vue": 1
-    },
-    "wording": {
-      "components/SettingsPage.vue": 1,
-      "components/settings/DatabaseSection.vue": 7
-    },
-    "buttons": {
-      "components/SettingsPage.vue": 2,
-      "components/settings/AITagSection.vue": 4,
-      "components/settings/AutomationSection.vue": 4,
-      "components/settings/BasicSection.vue": 2,
-      "components/settings/BrowserBridgeSection.vue": 5,
-      "components/settings/DatabaseSection.vue": 18,
-      "components/settings/EnhanceSection.vue": 2,
-      "components/settings/FaceSection.vue": 5,
-      "components/settings/IINASyncSection.vue": 1,
-      "components/settings/IdleSchedulingSection.vue": 3,
-      "components/settings/JellyfinSection.vue": 2,
-      "components/settings/MobileSection.vue": 6,
-      "components/settings/OnlineSourceSection.vue": 6,
-      "components/settings/ProxySection.vue": 4,
-      "components/settings/ScanDirectoriesSection.vue": 12,
-      "components/settings/SceneSection.vue": 2,
-      "components/settings/SubtitleSection.vue": 5
-    }
+    "dialogs": {},
+    "page-header": {},
+    "wording": {},
+    "buttons": {}
   }
 }

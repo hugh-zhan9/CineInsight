@@ -1,21 +1,22 @@
 <template>
   <div class="page-content settings-page">
+    <PageHeader title="设置" subtitle="标着「需保存」的分区改完点底部「保存所有设置」；「即时生效」的分区点了就生效。" />
     <!-- 原型 A10：分区改成左侧锚点导航 + 右侧连续长表单。
-         这是全应用唯一出现侧栏的地方。 -->
+         这是全应用唯一出现侧栏的地方。它是滚动定位的锚点导航（各分区始终都在页面上），不是页签，
+         所以不用 AppTabs（role=tablist 会让读屏以为一次只显示一个分区）；当前分区用 aria-current 标出。 -->
     <div class="settings-shell">
       <nav class="settings-nav" aria-label="设置分区">
         <button
           v-for="section in navSections"
           :key="section.key"
           type="button"
-          :class="['settings-nav__item', { active: activeSection === section.key }]"
+          :class="['btn', 'btn--ghost', 'settings-nav__item', { active: activeSection === section.key }]"
+          :aria-current="activeSection === section.key ? 'location' : undefined"
           @click="scrollToSection(section.key)"
         >{{ section.label }}</button>
       </nav>
 
       <div class="settings-body" ref="settingsBody">
-    <h2>设置</h2>
-
     <!-- 分区顺序必须与 SETTINGS_SECTIONS 一致（D-PC58：扫描目录排第 2 位）。 -->
     <div class="settings-grid-shell">
     <BasicSection :form="settingsForm" />
@@ -73,8 +74,8 @@
       >
         {{ saveMessage }}
       </div>
-      <button @click="saveSettings" class="btn-primary settings-save-button" :disabled="settingsSaving">
-        {{ settingsSaving ? '正在保存...' : '保存所有设置' }}
+      <button @click="saveSettings" class="btn btn--primary settings-save-button" :disabled="settingsSaving">
+        {{ settingsSaving ? '正在保存…' : '保存所有设置' }}
       </button>
     </div>
       </div>
@@ -279,6 +280,7 @@ export function changedSettingsFields(form, snapshot) {
   return Object.keys(current).filter(key => !sameValue(current[key], saved[key]));
 }
 
+import PageHeader from './ui/PageHeader.vue';
 import AITagSection from './settings/AITagSection.vue';
 import AutomationSection from './settings/AutomationSection.vue';
 import BasicSection from './settings/BasicSection.vue';
@@ -299,7 +301,7 @@ import SubtitleSection from './settings/SubtitleSection.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -439,7 +441,7 @@ export default {
       if (this.settingsSaving) return false;
       this.settingsSaving = true;
       this.saveState = 'saving';
-      this.saveMessage = '正在保存设置...';
+      this.saveMessage = '正在保存设置…';
       const payload = buildSettingsPayload(this.settingsForm);
       const previous = buildSettingsPayload(this.savedSnapshot);
       const aiChanged = Object.keys(payload)
@@ -487,12 +489,6 @@ export default {
 </script>
 
 <style scoped>
-.settings-page h2 {
-  margin: 0 0 14px;
-  font-size: 22px;
-  font-weight: 760;
-}
-
 .settings-shell {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
@@ -511,21 +507,21 @@ export default {
   background: var(--panel-subtle-bg);
 }
 
+/* 导航项是幽灵按钮（.btn .btn--ghost），这里只改成左对齐的列表项：高度随内容、常规字重。 */
 .settings-nav__item {
-  padding: 7px 12px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12.5px;
+  justify-content: flex-start;
+  height: auto;
+  min-height: var(--h-compact);
+  padding: 6px 12px;
+  font-size: var(--fs-secondary);
+  font-weight: var(--fw-regular);
   text-align: left;
-  cursor: pointer;
+  white-space: normal;
 }
 
-.settings-nav__item:hover { background: var(--control-hover-bg); color: var(--text-primary); }
-.settings-nav__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
+.settings-nav__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
 
-.settings-body { min-width: 0; padding: 18px 0 0 22px; }
+.settings-body { min-width: 0; padding: var(--space-4) 0 0 var(--space-5); }
 
 .settings-grid-shell {
   display: grid;
@@ -537,7 +533,7 @@ export default {
 .settings-actions {
   position: sticky;
   bottom: 0;
-  z-index: 20;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -549,7 +545,7 @@ export default {
 
 .settings-dirty-hint {
   color: var(--warning-text);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
   white-space: nowrap;
 }
 
@@ -565,7 +561,7 @@ export default {
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
   text-align: left;
 }
 

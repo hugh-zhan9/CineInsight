@@ -12,7 +12,7 @@
       <label class="switch">
         <input type="checkbox" v-model="form.delete_original_file" />
         <span class="slider"></span>
-        <span>默认将原始文件移入回收站</span>
+        <span>默认将原始文件移到废纸篓</span>
       </label>
     </div>
     <div class="setting-item">
@@ -43,13 +43,12 @@
     </div>
 	  <div class="setting-item">
 		<label>键盘快捷键</label>
-		<button data-test="shortcut-help-button" type="button" class="btn-secondary" @click="showShortcutHelp = true">查看快捷键</button>
+		<button data-test="shortcut-help-button" type="button" class="btn btn--secondary" @click="showShortcutHelp = true">查看快捷键</button>
 		<p class="help-text">命令面板、清理中心、片库与列表审阅、字幕编辑、图片查看器的快捷键。</p>
 	  </div>
   </div>
 
-	<BaseModal v-if="showShortcutHelp" stop-modal-clicks @close="showShortcutHelp = false">
-	  <h2>键盘快捷键</h2>
+	<DialogShell v-if="showShortcutHelp" title="键盘快捷键" size="md" stop-modal-clicks data-test="shortcut-help-dialog" @close="showShortcutHelp = false">
 	  <h3 class="shortcut-help-group">任何页面</h3>
 	  <dl class="shortcut-help-list" data-test="shortcut-help-global">
 		<dt>⌘K / ⌘⇧P</dt><dd>打开命令面板（页面、命令与视频搜索）</dd>
@@ -86,19 +85,19 @@
 		<dt>F</dt><dd>切换收藏</dd>
 		<dt>Esc</dt><dd>关闭查看器</dd>
 	  </dl>
-	  <p class="help-text">单键（J、K、空格、F、W、T、回车）在输入框、下拉框和弹窗处于焦点时不会触发快捷键；带 ⌘ 的组合键在输入框里也能用。Windows 与 Linux 上 ⌘ 换成 Ctrl。</p>
-	  <div class="modal-actions"><button type="button" class="btn-primary" @click="showShortcutHelp = false">知道了</button></div>
-	</BaseModal>
+	  <p class="help-text shortcut-help-note">单键（J、K、空格、F、W、T、回车）在输入框、下拉框和弹窗处于焦点时不会触发快捷键；带 ⌘ 的组合键在输入框里也能用。Windows 与 Linux 上 ⌘ 换成 Ctrl。</p>
+	  <template #footer><button type="button" class="btn btn--primary" @click="showShortcutHelp = false">知道了</button></template>
+	</DialogShell>
 </template>
 
 <script>
-import BaseModal from '../ui/BaseModal.vue';
+import DialogShell from '../ui/DialogShell.vue';
 
 // 基本设置分区。表单对象由 SettingsPage 持有并传下来，这里只绑定字段；
 // 「查看快捷键」弹窗只有这一个入口，跟着一起放在这里。
 export default {
   name: 'BasicSection',
-  components: { BaseModal },
+  components: { DialogShell },
   props: {
     form: { type: Object, required: true }
   },
@@ -109,23 +108,37 @@ export default {
 </script>
 
 <style scoped>
+/* 快捷键帮助（D-UD-14 列全，内容由 A 组维护）：分组小标题 + 两列「按键 / 作用」，按键用等宽字排成键帽样式。 */
 .shortcut-help-group {
-  margin: 16px 0 8px;
+  margin: var(--space-4) 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
 }
 
+.shortcut-help-group:first-child { margin-top: 0; }
+
 .shortcut-help-list {
   display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 8px 18px;
-  margin: 0 0 4px;
+  /* 按键列给一个最小宽度，各组的「作用」列就能对齐。 */
+  grid-template-columns: minmax(96px, max-content) 1fr;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-secondary);
 }
 
 .shortcut-help-list dt {
+  justify-self: start;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-subtle-bg);
   color: var(--text-primary);
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
 }
 
 .shortcut-help-list dd {
@@ -133,4 +146,5 @@ export default {
   color: var(--text-secondary);
 }
 
+.shortcut-help-note { margin-top: var(--space-4); }
 </style>

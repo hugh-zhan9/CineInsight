@@ -4,10 +4,18 @@
 
     <!-- 老库升级后服务默认仍开着（D-PC45 保持现状），这时还没有 PIN 就提醒一次；
          关掉提示只记在本机（localStorage），不新增数据库列。 -->
-    <div v-if="pinBannerVisible" class="short-feed-pin-banner" data-test="short-feed-pin-banner" role="status">
-      <span>手机端访问已开启但还没有设置 PIN：同一局域网里的任何设备都能打开，并可以收藏或删除视频。建议设置 PIN。</span>
-      <button type="button" class="btn-secondary btn-compact" data-test="short-feed-pin-banner-dismiss" @click="dismissPinBanner">不再提示</button>
-    </div>
+    <AppBanner
+      v-if="pinBannerVisible"
+      class="short-feed-pin-banner"
+      tone="warning"
+      title="手机端访问已开启，但还没有设置 PIN"
+      message="同一局域网里的任何设备都能打开，并可以收藏或删除视频。建议设置 PIN。"
+      data-test="short-feed-pin-banner"
+    >
+      <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="short-feed-pin-banner-dismiss" @click="dismissPinBanner">不再提示</button>
+      </template>
+    </AppBanner>
 
     <div class="setting-item">
       <label class="checkbox-label">
@@ -38,11 +46,11 @@
         <span v-else>手机端浏览服务状态未知</span>
       </div>
       <div class="short-feed-actions">
-        <button type="button" class="btn-secondary" @click="refreshAll">刷新</button>
+        <button type="button" class="btn btn--secondary" @click="refreshAll">刷新</button>
         <button
           v-if="shortFeedStatus && shortFeedStatus.running"
           type="button"
-          class="btn-primary"
+          class="btn btn--primary"
           @click="openShortFeed"
         >
           打开
@@ -79,13 +87,13 @@
           :disabled="pinBusy || !accessLoaded"
           data-test="short-feed-pin-input"
         />
-        <button type="button" class="btn-primary" :disabled="pinBusy || !accessLoaded" data-test="short-feed-pin-save" @click="savePIN">
+        <button type="button" class="btn btn--primary" :disabled="pinBusy || !accessLoaded" data-test="short-feed-pin-save" @click="savePIN">
           {{ accessStatus?.pin_set ? '修改 PIN' : '设置 PIN' }}
         </button>
         <button
           v-if="accessStatus?.pin_set"
           type="button"
-          class="btn-secondary btn-danger-outline"
+          class="btn btn--danger"
           :disabled="pinBusy"
           data-test="short-feed-pin-clear"
           @click="clearPIN"
@@ -94,10 +102,18 @@
       <p v-if="pinInputTooLong" class="help-text settings-error" role="alert" data-test="short-feed-pin-length-hint">{{ pinInputTooLong }}</p>
       <p v-if="pinMessage" :class="['help-text', { 'settings-error': pinMessageIsError }]" data-test="short-feed-pin-message" :role="pinMessageIsError ? 'alert' : 'status'">{{ pinMessage }}</p>
       <!-- 输错太多次会锁住所有新登录（24 小时后自动解除）；在电脑上可以直接解除。 -->
-      <div v-if="accessStatus?.login_locked" class="short-feed-lock" data-test="short-feed-login-locked" role="status">
-        <span>{{ lockText }}</span>
-        <button type="button" class="btn-secondary btn-compact" :disabled="pinBusy" data-test="short-feed-unlock" @click="unlockLogin">解除锁定</button>
-      </div>
+      <AppBanner
+        v-if="accessStatus?.login_locked"
+        class="short-feed-lock"
+        tone="warning"
+        title="手机端的新登录已被锁定"
+        :message="lockText"
+        data-test="short-feed-login-locked"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--secondary btn--sm" :disabled="pinBusy" data-test="short-feed-unlock" @click="unlockLogin">解除锁定</button>
+        </template>
+      </AppBanner>
     </div>
 
     <div class="setting-item short-feed-duration-setting">
@@ -123,6 +139,7 @@ import {
   SetShortFeedEnabled, SetShortFeedPIN, UnlockShortFeedLogin
 } from '../../../wailsjs/go/main/App';
 import { confirmAction } from '../../utils/feedback.js';
+import AppBanner from '../ui/AppBanner.vue';
 
 export const SHORT_FEED_PIN_BANNER_KEY = 'short-feed-pin-banner-dismissed';
 const PIN_MIN_LENGTH = 6;
@@ -169,6 +186,7 @@ function readBannerDismissed() {
 // 开关与 PIN 走各自的专用绑定、即时生效；只有时长上限是表单字段、随设置页统一保存。
 export default {
   name: 'MobileSection',
+  components: { AppBanner },
   props: {
     form: { type: Object, required: true }
   },
@@ -224,7 +242,8 @@ export default {
     lockText() {
       const until = this.accessStatus?.locked_until ? new Date(this.accessStatus.locked_until) : null;
       const untilText = until && !Number.isNaN(until.getTime()) ? `，将于 ${until.toLocaleString('zh-CN')} 自动解除` : '';
-      return `PIN 输错次数过多，手机端的新登录已被锁定${untilText}。已登录的手机不受影响。`;
+      // 横幅标题已经写了「手机端的新登录已被锁定」，这里只说原因、何时解除与影响范围。
+      return `PIN 输错次数过多${untilText}。已登录的手机不受影响。`;
     }
   },
   methods: {
@@ -375,29 +394,15 @@ export default {
 
 .short-feed-url--primary {
   color: var(--text-primary);
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
 }
 
 .short-feed-hint {
   color: var(--warning-text);
 }
 
-.short-feed-pin-banner,
-.short-feed-lock {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 8px 12px;
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius);
-  background: var(--warning-soft);
-  color: var(--warning-text);
-  font-size: 12.5px;
-}
-
-.short-feed-lock { margin: 10px 0 0; }
+.short-feed-pin-banner { margin-bottom: 14px; }
+.short-feed-lock { margin-top: 10px; }
 
 .short-feed-qr {
   display: flex;
@@ -405,15 +410,16 @@ export default {
   gap: 12px;
   margin-top: 10px;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
 }
 
+/* 二维码 PNG 自带不透明的白底与白边（services/qrcode_darwin.go 先整张填白再画码），两种主题下都能扫，
+   不再另垫白色底。 */
 .short-feed-qr img {
   width: 132px;
   height: 132px;
   image-rendering: pixelated;
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius-sm);
 }
 
 .short-feed-pin { margin-top: 18px; }

@@ -21,25 +21,30 @@
 
     <!-- 「当前后端」取自本进程启动时的环境，切换之后仍是旧后端；这里要说切到了哪个，看 next_backend
          （与 pending_restart 同一判定，I-2），读不到时退到本次迁移的目标。 -->
-    <p v-if="databaseStatus.pending_restart" class="database-restart-notice" role="status" data-test="db-pending-restart">
-      <template v-if="pendingRestartBackend">已切换到 {{ backendLabel(pendingRestartBackend) }}，</template><template v-else>数据库后端已切换，</template>但当前仍在使用切换前的库。<strong>重启应用后生效。</strong>
-    </p>
+    <AppBanner
+      v-if="databaseStatus.pending_restart"
+      class="database-banner"
+      tone="warning"
+      title="重启应用后生效"
+      :message="pendingRestartText"
+      data-test="db-pending-restart"
+    />
 
     <!-- 「待重启」终态（APP-02）：迁移或切回已经成功，重启前库保持只读，唯一出口是立即重启。
          挡住全部操作的全局遮罩由 App 层统一做（主代理裁决 2026-09-30），设置页这里只说明并给按钮，
          同时停用本页其余数据库操作。 -->
-    <div v-if="relaunchRequired" class="database-relaunch" data-test="db-relaunch-panel" role="status">
-      <strong>需要重启应用</strong>
-      <p>{{ relaunchMessage }}</p>
+    <div v-if="relaunchRequired" class="database-relaunch" data-test="db-relaunch-panel">
+      <AppBanner tone="warning" title="需要重启应用" :message="relaunchMessage">
+        <template #actions>
+          <button type="button" class="btn btn--primary" data-test="db-relaunch-now" :disabled="relaunch.busy || Boolean(relaunch.result)" @click="relaunchNow">
+            {{ relaunch.busy ? '正在重启…' : '立即重启' }}
+          </button>
+        </template>
+      </AppBanner>
       <p class="help-text">重启前数据库保持只读，其他数据库操作都已停用；重启之后才会使用新的数据库。</p>
       <p v-if="relaunchDownloadsActive" class="help-text" data-test="db-relaunch-downloads">进行中的下载会中断，重启后需回浏览器重新推送。</p>
       <p v-if="relaunch.result" class="help-text" data-test="db-relaunch-result">{{ relaunch.result.message || '应用即将重新启动。' }}</p>
       <p v-if="relaunch.error" class="backup-danger-text" role="alert" data-test="db-relaunch-error">{{ relaunch.error }}</p>
-      <div>
-        <button type="button" class="btn-primary" data-test="db-relaunch-now" :disabled="relaunch.busy || Boolean(relaunch.result)" @click="relaunchNow">
-          {{ relaunch.busy ? '正在重启...' : '立即重启' }}
-        </button>
-      </div>
     </div>
 
     <div class="setting-item">
@@ -51,18 +56,18 @@
         </select>
         <button
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="databaseLocked || switchBusy || switchTarget === databaseStatus.backend"
           data-test="db-preflight"
           @click="preflightDatabaseSwitch"
         >检查目标库</button>
         <button
           type="button"
-          class="btn-secondary btn-danger-outline"
+          class="btn btn--danger"
           :disabled="!canMigrate"
           data-test="db-switch-start"
           @click="startDatabaseSwitch"
-        >{{ switchBusy ? '迁移中...' : '迁移并切换' }}</button>
+        >{{ switchBusy ? '迁移中…' : '迁移并切换' }}</button>
       </div>
       <p v-if="switchPreflight" class="help-text" data-test="db-preflight-result">{{ preflightText }}</p>
       <!-- 目标库里已经有数据：多半就是之前用过的那个后端，直接切回去（只改配置、不迁移）。 -->
@@ -70,15 +75,15 @@
         <button
           v-if="canConfigOnly"
           type="button"
-          class="btn-secondary"
+          class="btn btn--secondary"
           :disabled="configOnlyBusy"
           data-test="db-switch-config-only"
           @click="switchBackendConfigOnly"
-        >{{ configOnlyBusy ? '正在切换...' : '切回之前的后端（只改配置）' }}</button>
+        >{{ configOnlyBusy ? '正在切换…' : '切回之前的后端（只改配置）' }}</button>
         <button
           v-if="canClearTarget"
           type="button"
-          class="btn-secondary btn-danger-outline"
+          class="btn btn--danger"
           data-test="db-clear-target"
           @click="openClearDialog"
         >清空目标库…</button>
@@ -115,26 +120,27 @@
       <span v-if="backupStatus?.notice" class="backup-file-note" data-test="backup-notice">{{ backupStatus.notice }}</span>
     </div>
     <!-- 上次还原整理文件的现场没收拾完（标记还在）：新的恢复会被拒绝。放弃收拾只删进行中标记，不碰任何文件夹。 -->
-    <div v-if="backupStatus?.recovery_pending" class="backup-recovery-pending" data-test="backup-recovery-pending" role="status">
-      <p class="backup-danger-text">上次还原整理过的文件没有收拾完，为免覆盖现场，暂时不能从备份恢复。</p>
+    <div v-if="backupStatus?.recovery_pending" class="backup-recovery-pending" data-test="backup-recovery-pending">
+      <AppBanner tone="danger" title="上次还原整理过的文件没有收拾完" message="为免覆盖现场，暂时不能从备份恢复。">
+        <template #actions>
+          <button type="button" class="btn btn--danger" data-test="backup-discard-recovery" :disabled="backupBusy" @click="discardInterruptedFilesRestore">放弃收拾，允许恢复</button>
+        </template>
+      </AppBanner>
       <p v-if="backupStatus.recovery_leftovers && backupStatus.recovery_leftovers.length" class="help-text" data-test="backup-recovery-leftovers">
         这些文件夹旁还留着恢复前的副本或暂存文件：{{ backupStatus.recovery_leftovers.join('、') }}。
       </p>
-      <div>
-        <button type="button" class="btn-secondary btn-danger-outline" data-test="backup-discard-recovery" :disabled="backupBusy" @click="discardInterruptedFilesRestore">放弃收拾，允许恢复</button>
-      </div>
     </div>
     <div class="setting-item">
       <label>备份目录</label>
       <div class="directory-dialog-row">
         <input type="text" v-model.trim="form.backup_directory" class="text-input" placeholder="留空使用应用数据目录" />
-        <button type="button" class="btn-secondary" @click="selectBackupDirectory">选择</button>
+        <button type="button" class="btn btn--secondary" @click="selectBackupDirectory">选择</button>
       </div>
       <p class="help-text">留空时保存到应用数据目录下的 backups 文件夹。</p>
       <!-- 实际解析后的位置（APP-01）：留空、相对路径都会被解析成这里显示的目录。 -->
       <div v-if="backupStatus?.backup_directory" class="backup-directory-actual" data-test="backup-directory-actual">
         <span>当前备份位置：<code>{{ backupStatus.backup_directory }}</code></span>
-        <button type="button" class="btn-secondary btn-compact" data-test="backup-reveal" :disabled="databaseLocked" @click="revealBackupDirectory">在访达中显示</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="backup-reveal" :disabled="databaseLocked" @click="revealBackupDirectory">在访达中显示</button>
       </div>
     </div>
     <div class="setting-grid backup-setting-grid">
@@ -150,19 +156,28 @@
       </div>
     </div>
     <div class="backup-actions">
-      <button type="button" class="btn-primary" data-test="backup-now" :disabled="backupBusy || databaseLocked || !backupStatus?.backup_available" @click="createBackupNow">
-        {{ backupBusy ? '处理中...' : '立即备份' }}
+      <button type="button" class="btn btn--primary" data-test="backup-now" :disabled="backupBusy || databaseLocked || !backupStatus?.backup_available" @click="createBackupNow">
+        {{ backupBusy ? '处理中…' : '立即备份' }}
       </button>
-      <button type="button" class="btn-secondary" data-test="backup-restore-open" :disabled="backupBusy || databaseLocked || !backupStatus?.restore_available" @click="openBackupDialog">从备份恢复</button>
-      <button type="button" class="btn-secondary" :disabled="backupBusy" @click="loadBackupStatus">刷新状态</button>
+      <button type="button" class="btn btn--secondary" data-test="backup-restore-open" :disabled="backupBusy || databaseLocked || !backupStatus?.restore_available" @click="openBackupDialog">从备份恢复</button>
+      <button type="button" class="btn btn--secondary" :disabled="backupBusy" @click="loadBackupStatus">刷新状态</button>
     </div>
     <p v-if="switchRunning" class="help-text" data-test="backup-maintenance-hint">数据库正在迁移，迁移结束前不能备份或恢复。</p>
     <p v-if="backupMessage" class="help-text" data-test="backup-message" :class="{ 'backup-message--error': backupMessageIsError }">{{ backupMessage }}</p>
   </div>
 
-  <BaseModal v-if="showBackupDialog" stop-modal-clicks @close="closeBackupDialog">
+  <!-- 选择备份与确认恢复是同一个对话框的两步；恢复属于「要确认」一级（D-UD-07），第二步写清恢复到哪一刻与影响。 -->
+  <DialogShell
+    v-if="showBackupDialog"
+    :title="selectedBackup ? '确认恢复数据库' : '选择数据库备份'"
+    class="database-dialog"
+    size="lg"
+    :busy="backupBusy || Boolean(verifyingBackup)"
+    stop-modal-clicks
+    data-test="backup-dialog"
+    @close="closeBackupDialog"
+  >
     <template v-if="!selectedBackup">
-      <h2>选择数据库备份</h2>
       <p class="help-text">恢复会替换当前数据库与整理过的文件。执行前系统会先自动创建一份安全备份（同样包含整理过的文件）。</p>
       <div v-if="backupFiles.length" class="backup-file-list">
         <div v-for="backup in backupFiles" :key="backup.name" class="backup-file-item" data-test="backup-file-item">
@@ -174,30 +189,36 @@
             <small v-else-if="backup.manifest_error" class="backup-danger-text" data-test="backup-manifest-error">清单有问题：{{ backup.manifest_error }}，不能恢复</small>
             <small v-if="backup.unavailable_roots && backup.unavailable_roots.length" class="backup-file-note" data-test="backup-unavailable-roots">备份时 {{ backup.unavailable_roots.join('、') }} 不可用，这部分整理文件不在这份备份里</small>
             <template v-if="verificationOf(backup)">
-              <span
-                :class="['backup-verify-badge', verificationOf(backup).ok ? 'backup-verify-badge--ok' : 'backup-verify-badge--fail']"
+              <AppBadge
+                class="backup-verify-badge"
+                :tone="verificationOf(backup).ok ? 'success' : 'danger'"
                 data-test="backup-verify-badge"
-              >{{ verificationText(verificationOf(backup)) }}</span>
+              >{{ verificationText(verificationOf(backup)) }}</AppBadge>
               <small v-for="problem in (verificationOf(backup).ok ? [] : verificationOf(backup).problems || [])" :key="problem" class="backup-danger-text" data-test="backup-verify-problem">{{ problem }}</small>
             </template>
           </div>
           <div class="backup-file-actions">
             <button
               type="button"
-              class="btn-secondary"
+              class="btn btn--secondary"
               :disabled="backupBusy || Boolean(verifyingBackup)"
               data-test="backup-verify"
               @click="verifyBackup(backup)"
-            >{{ verifyingBackup === backup.name ? '校验中...' : '校验' }}</button>
-            <button type="button" class="btn-secondary btn-danger-outline" :disabled="Boolean(verifyingBackup) || Boolean(backup.manifest_error)" @click="selectedBackup = backup">恢复</button>
+            >{{ verifyingBackup === backup.name ? '校验中…' : '校验' }}</button>
+            <button type="button" class="btn btn--danger" :disabled="Boolean(verifyingBackup) || Boolean(backup.manifest_error)" @click="selectedBackup = backup">恢复</button>
           </div>
         </div>
       </div>
-      <p v-else class="empty-hint">当前目录没有可用备份。</p>
-      <div class="modal-actions"><button type="button" class="btn-secondary" @click="closeBackupDialog">关闭</button></div>
+      <EmptyState
+        v-else
+        class="backup-empty"
+        icon="database"
+        title="当前目录没有可用备份"
+        message="关掉这个窗口，点「立即备份」先做一份；或者换一个备份目录、保存设置后再来。"
+        data-test="backup-list-empty"
+      />
     </template>
     <template v-else>
-      <h2>确认恢复数据库</h2>
       <p>将恢复到 <strong>{{ formatBackupTime(selectedBackup.created_at) }}</strong> 的数据状态。</p>
       <!-- D-DH-03：带清单的备份连同整理过的文件一起还原；旧格式备份只恢复数据库。 -->
       <p v-if="selectedBackup.legacy" class="help-text" data-test="backup-restore-files-note">这是旧格式备份，只恢复数据库；人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份保持现状。</p>
@@ -217,18 +238,30 @@
       </p>
       <p v-else class="help-text" data-test="backup-restore-verify-note">这份备份还没有校验过，可以先返回点「校验」。</p>
       <p class="backup-danger-text">这是破坏性操作。当前数据库与整理过的文件会先自动备份；恢复完成后应用会自动退出，重新打开即可使用恢复的数据。恢复期间请勿关闭应用。</p>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" :disabled="backupBusy" @click="selectedBackup = null">返回</button>
-        <button type="button" class="btn-primary btn-danger" :disabled="backupBusy" @click="confirmRestoreBackup">
-          {{ backupBusy ? '正在恢复...' : '确认恢复' }}
-        </button>
-      </div>
     </template>
-  </BaseModal>
+    <template #footer>
+      <button v-if="!selectedBackup" type="button" class="btn btn--secondary" @click="closeBackupDialog">关闭</button>
+      <template v-else>
+        <button type="button" class="btn btn--secondary" :disabled="backupBusy" @click="selectedBackup = null">返回</button>
+        <button type="button" class="btn btn--danger" :disabled="backupBusy" @click="confirmRestoreBackup">
+          {{ backupBusy ? '正在恢复…' : '确认恢复' }}
+        </button>
+      </template>
+    </template>
+  </DialogShell>
 
-  <!-- 清空目标库（D-PC55）：必须手输「清空」才放行，输入框不预填。 -->
-  <BaseModal v-if="clearDialog.show" stop-modal-clicks data-test="db-clear-dialog" @close="closeClearDialog">
-    <h2>清空目标库</h2>
+  <!-- 清空目标库（D-PC55）：不可逆一级（D-UD-07），要原样输入按钮上的「清空目标库」才放行，输入框不预填；
+       「清空」一词只留在输入框外的说明里（用词表 §4）。不走 confirmAction：清空要在对话框里等后端结果，
+       被拒绝时原因留在对话框里（db-clear-error），确认框做不到；输入规则与它共用 confirmTextMatches。 -->
+  <DialogShell
+    v-if="clearDialog.show"
+    class="database-dialog"
+    :title="CLEAR_BUTTON_TEXT"
+    :busy="clearDialog.busy"
+    stop-modal-clicks
+    data-test="db-clear-dialog"
+    @close="closeClearDialog"
+  >
     <p>将清空 <strong>{{ backendLabel(clearDialog.target) }}</strong> 目标库：</p>
     <p><code class="database-clear-location">{{ clearDialog.location || '—' }}</code></p>
     <!-- 目标是完整的非空库（预检 not_empty）时换成更重的警告（m1）：它很可能就是「切回之前的后端」
@@ -241,28 +274,30 @@
       {{ clearDialog.target === 'sqlite' ? '会删除这个库文件（只限应用数据目录里的库文件）。' : '会删除这个库里本应用建的全部表，库里的其他表不动。' }}
       目标库里现有的数据会全部丢失，无法撤销。<template v-if="!clearDialog.completeLibrary">如果这是你以前用过的片库，请改用「切回之前的后端」。</template>当前正在使用的库不受影响。
     </p>
-    <label class="database-clear-label" for="db-clear-confirm-input">输入「清空」确认</label>
+    <label class="database-clear-label" for="db-clear-confirm-input">输入「{{ CLEAR_BUTTON_TEXT }}」以确认，此操作无法撤销</label>
     <input
       id="db-clear-confirm-input"
+      ref="clearConfirmInput"
       v-model="clearDialog.confirmText"
       type="text"
       class="text-input"
       autocomplete="off"
+      spellcheck="false"
       data-test="db-clear-confirm-input"
       :disabled="clearDialog.busy"
     />
     <p v-if="clearDialog.error" class="backup-danger-text" role="alert" data-test="db-clear-error">{{ clearDialog.error }}</p>
-    <div class="modal-actions">
-      <button type="button" class="btn-secondary" :disabled="clearDialog.busy" @click="closeClearDialog">取消</button>
+    <template #footer>
+      <button type="button" class="btn btn--secondary" :disabled="clearDialog.busy" @click="closeClearDialog">取消</button>
       <button
         type="button"
-        class="btn-primary btn-danger"
+        class="btn btn--danger"
         data-test="db-clear-confirm"
-        :disabled="clearDialog.busy || clearDialog.confirmText.trim() !== CLEAR_CONFIRM_TEXT"
+        :disabled="clearDialog.busy || !clearConfirmMatches"
         @click="confirmClearTarget"
-      >{{ clearDialog.busy ? '正在清空...' : '清空目标库' }}</button>
-    </div>
-  </BaseModal>
+      >{{ clearDialog.busy ? '正在清空…' : CLEAR_BUTTON_TEXT }}</button>
+    </template>
+  </DialogShell>
 
 </template>
 
@@ -272,12 +307,17 @@ import {
   ListDatabaseBackups, ListDownloadTasks, PreflightDatabaseSwitch, RelaunchApp, RestoreDatabaseBackup, RevealBackupDirectory,
   SelectDirectory, StartDatabaseSwitch, SwitchBackendConfigOnly, VerifyDatabaseBackup, DiscardInterruptedFilesRestore
 } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
-import { confirmAction } from '../../utils/feedback.js';
+import AppBadge from '../ui/AppBadge.vue';
+import AppBanner from '../ui/AppBanner.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import EmptyState from '../ui/EmptyState.vue';
+import { confirmAction, confirmTextMatches } from '../../utils/feedback.js';
 import { formatBytes } from '../../utils/mediaDetails.js';
 
-// 与后端 services.ClearMigrationTargetConfirmText 一致。
+// 与后端 services.ClearMigrationTargetConfirmText 一致：这是接口自己的防误调口令，用户确认后原样传给后端。
 const CLEAR_CONFIRM_TEXT = '清空';
+// 「清空目标库」按钮上的字，也是对话框里要原样输入的确认词（D-UD-07 不可逆一级：输入的就是按钮上的文字）。
+const CLEAR_BUTTON_TEXT = '清空目标库';
 
 const RELAUNCH_PENDING = 'relaunch_pending';
 const BACKEND_ENV_LOCKED = 'backend_env_locked';
@@ -334,7 +374,7 @@ function hasActiveDownloads(tasks) {
 // 依赖这些字段的即时动作先经 ensureSaved 提示保存（D-PC57）。
 export default {
   name: 'DatabaseSection',
-  components: { BaseModal },
+  components: { AppBadge, AppBanner, DialogShell, EmptyState },
   props: {
     form: { type: Object, required: true },
     // (fields, actionLabel) => Promise<boolean>：相关字段有未保存修改时提示先保存。
@@ -345,7 +385,7 @@ export default {
   emits: ['relaunch-required'],
   data() {
     return {
-      CLEAR_CONFIRM_TEXT,
+      CLEAR_BUTTON_TEXT,
       databaseStatus: { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false, next_backend: '' },
       switchTarget: 'sqlite',
       switchPreflight: null,
@@ -446,6 +486,14 @@ export default {
     pendingRestartBackend() {
       return this.databaseStatus?.next_backend || this.switchStatus?.target || '';
     },
+    pendingRestartText() {
+      const switched = this.pendingRestartBackend ? `已切换到 ${this.backendLabel(this.pendingRestartBackend)}，` : '数据库后端已切换，';
+      return `${switched}但当前仍在使用切换前的库。`;
+    },
+    // 与 confirmAction 的不可逆确认同一条规则：首尾空白不算，其余要和按钮上的字一字不差。
+    clearConfirmMatches() {
+      return confirmTextMatches({ requiredText: CLEAR_BUTTON_TEXT }, this.clearDialog.confirmText);
+    },
     preflightText() {
       if (!this.switchPreflight) return '';
       if (this.envLocked) return BACKEND_ENV_LOCKED_TEXT;
@@ -461,7 +509,7 @@ export default {
       return `${status.message}${scope}`;
     },
     backupStatusText() {
-      if (!this.backupStatus) return '正在读取备份状态...';
+      if (!this.backupStatus) return '正在读取备份状态…';
       if (this.backupStatus.running) return '备份任务运行中';
       return this.backupStatus.available ? '备份功能可用' : '备份功能不可用';
     },
@@ -617,6 +665,8 @@ export default {
       // 本次迁移失败、或目标库残留半迁移时照常；检查结果说它是一份完整的片库时换成更重的确认（m1）。
       const completeLibrary = !this.failedTarget && this.targetHasData && (this.switchPreflight?.target || this.switchTarget) === target;
       this.clearDialog = { show: true, target, location, completeLibrary, confirmText: '', busy: false, error: '' };
+      // 与不可逆确认框一样，打开就把焦点放进输入框。
+      this.$nextTick(() => this.$refs.clearConfirmInput?.focus());
     },
     closeClearDialog() {
       if (this.clearDialog.busy) return;
@@ -624,10 +674,10 @@ export default {
     },
     async confirmClearTarget() {
       const dialog = this.clearDialog;
-      if (dialog.busy || dialog.confirmText.trim() !== CLEAR_CONFIRM_TEXT) return;
+      if (dialog.busy || !this.clearConfirmMatches) return;
       this.clearDialog = { ...dialog, busy: true, error: '' };
       try {
-        const result = await ClearMigrationTarget(dialog.target, dialog.confirmText.trim());
+        const result = await ClearMigrationTarget(dialog.target, CLEAR_CONFIRM_TEXT);
         if (result?.cleared) {
           this.clearDialog = { ...this.clearDialog, show: false, busy: false };
           this.halfMigratedTarget = '';
@@ -685,7 +735,7 @@ export default {
       if (this.backupBusy || this.databaseLocked) return;
       if (!await this.gate(['backup_directory', 'backup_retention_count'], '立即备份')) return;
       this.backupBusy = true;
-      this.backupMessage = '正在创建并校验数据库备份...';
+      this.backupMessage = '正在创建并校验数据库备份…';
       this.backupMessageIsError = false;
       try {
         const backup = await CreateDatabaseBackup();
@@ -824,43 +874,33 @@ export default {
 .database-status {
   display: grid;
   gap: 6px;
+  margin-bottom: var(--space-4);
   padding: 12px 14px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   background: var(--panel-subtle-bg);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .database-status__row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.database-status__row > span:first-child { min-width: 72px; color: var(--text-muted); font-size: 12px; }
-.database-status__row code { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); word-break: break-all; }
-.database-status__row small { color: var(--text-muted); font-size: 11.5px; }
+.database-status__row > span:first-child { min-width: 72px; color: var(--text-muted); font-size: var(--fs-caption); }
+.database-status__row code { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary); word-break: break-all; }
+.database-status__row small { color: var(--text-muted); font-size: var(--fs-caption); }
 .database-status__off { color: var(--warning-text); }
 
-.database-restart-notice {
-  margin: 10px 0 0;
-  padding: 8px 12px;
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius);
-  background: var(--warning-soft);
-  color: var(--warning-text);
-  font-size: 12.5px;
-}
+.database-banner { margin: 0 0 var(--space-4); }
+/* 两个对话框的正文是几段说明，段与段之间留出间距。 */
+.database-dialog p + p { margin-top: var(--space-2); }
 
 .database-switch-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .database-switch-row .select-input { width: auto; min-width: 240px; }
 .database-switch-row--secondary { margin-top: 10px; }
 
+/* 「待重启」终态：横幅（标题、原因、立即重启）+ 下面几行补充说明。 */
 .database-relaunch {
   display: grid;
   gap: 6px;
-  margin: 10px 0 0;
-  padding: 12px 14px;
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius);
-  background: var(--warning-soft);
-  color: var(--warning-text);
-  font-size: 13px;
+  margin: 0 0 var(--space-4);
 }
 .database-relaunch p { margin: 0; }
 .database-switch-running { color: var(--warning-text); }
@@ -871,8 +911,8 @@ export default {
 .database-switch-notice--error { color: var(--danger-color); }
 
 .database-clear-location,
-.backup-directory-actual code { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
-.database-clear-label { display: block; margin: 12px 0 6px; font-size: 13px; font-weight: 600; }
+.backup-directory-actual code { font-family: var(--font-mono); font-size: var(--fs-caption); word-break: break-all; }
+.database-clear-label { display: block; margin: 12px 0 6px; font-size: var(--fs-secondary); font-weight: var(--fw-semibold); }
 
 .backup-directory-actual {
   display: flex;
@@ -881,7 +921,7 @@ export default {
   gap: 8px;
   margin-top: 8px;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
 }
 
 .backup-settings-section {
@@ -928,13 +968,13 @@ export default {
   white-space: nowrap;
 }
 
-.backup-recovery-pending { display: grid; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--danger-border); border-radius: var(--radius-md); }
+.backup-recovery-pending { display: grid; gap: 6px; margin: 10px 0 var(--space-4); }
+.backup-recovery-pending .help-text { margin: 0; }
+.backup-empty { margin-top: 16px; }
 
 /* 校验（D-DH-03）：按钮与恢复并排；标记只占自身宽度。 */
 .backup-file-item .backup-file-actions { display: flex; flex-shrink: 0; gap: 8px; }
-.backup-file-note { color: var(--warning-text); font-size: 12px; }
-.backup-verify-badge { justify-self: start; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; }
-.backup-verify-badge--ok { background: var(--accent-soft); color: var(--accent-text); }
-.backup-verify-badge--fail { background: var(--danger-soft); color: var(--danger-text); }
+.backup-file-note { color: var(--warning-text); font-size: var(--fs-caption); }
+.backup-verify-badge { justify-self: start; }
 
 </style>

@@ -8,7 +8,7 @@
       <select v-model="prepareSource" class="select-input" data-test="apple-translation-source"><option v-for="language in translationLanguages" :key="language.code" :value="language.code">{{ language.name }}</option></select>
       <span> → </span>
       <select v-model="prepareTarget" class="select-input" data-test="apple-translation-target"><option v-for="language in translationLanguages" :key="language.code" :value="language.code">{{ language.name }}</option></select>
-      <button type="button" class="btn-secondary btn-compact" data-test="apple-translation-prepare" :disabled="preparing || !prepareSource || !prepareTarget || prepareSource === prepareTarget" @click="prepareLanguage(true)">准备系统翻译语言</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="apple-translation-prepare" :disabled="preparing || !prepareSource || !prepareTarget || prepareSource === prepareTarget" @click="prepareLanguage(true)">准备系统翻译语言</button>
     </div>
     <div class="setting-item">
       <label class="switch">
@@ -58,7 +58,7 @@
           <button
             v-if="engine.supported && engine.needs_prepare"
             type="button"
-            class="btn-secondary btn-compact"
+            class="btn btn--secondary btn--sm"
             :disabled="preparing"
             :data-test="`subtitle-engine-prepare-${engine.engine}`"
             @click="prepareEngine(engine)"
@@ -67,15 +67,15 @@
       </div>
       <div v-if="preparing" class="subtitle-engine-progress" data-test="subtitle-engine-progress" role="status">
         <span>{{ prepareProgressText }}</span>
-        <button type="button" class="btn-secondary btn-compact" data-test="subtitle-engine-cancel" @click="cancelPrepare">取消准备</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="subtitle-engine-cancel" @click="cancelPrepare">取消准备</button>
       </div>
       <p v-if="prepareMessage" class="help-text" :class="{ 'settings-error': prepareMessageIsError }" data-test="subtitle-engine-message">{{ prepareMessage }}</p>
-      <button type="button" class="btn-secondary btn-compact" data-test="subtitle-engine-refresh" :disabled="preparing" @click="loadEngineStatuses">刷新状态</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="subtitle-engine-refresh" :disabled="preparing" @click="loadEngineStatuses">刷新状态</button>
     </div>
     <div class="setting-item">
       <label>系统识别语言</label>
       <select v-model="speechLanguage" class="select-input" data-test="apple-speech-language"><option v-for="language in speechLanguages" :key="language.code" :value="language.code">{{ language.name }}{{ language.installed ? '（已准备）' : '' }}</option></select>
-      <button type="button" class="btn-secondary btn-compact" data-test="apple-speech-prepare" :disabled="preparing || !speechLanguage" @click="prepareLanguage(false)">准备系统识别语言</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="apple-speech-prepare" :disabled="preparing || !speechLanguage" @click="prepareLanguage(false)">准备系统识别语言</button>
       <p class="help-text">需要 macOS 15 或更新版本。macOS 15 使用较早的系统识别引擎，识别质量较低，识别语言需先在「系统设置 › 键盘 › 听写」中下载。自动检测只覆盖已安装的系统识别语种，结果可手动修改。首次准备可能需要下载苹果语言资源。</p>
     </div>
   </div>
@@ -220,6 +220,8 @@ export default {
 </script>
 
 <style scoped>
+/* 下拉框占满一行，紧跟其后的「准备…」按钮另起一行，留出间距。 */
+.select-input + .btn { margin-top: var(--space-2); }
 .subtitle-engine-list { display: grid; gap: 8px; margin-bottom: 10px; }
 .subtitle-engine-row {
   display: flex;
@@ -232,6 +234,6 @@ export default {
   background: var(--control-bg);
 }
 .subtitle-engine-main { display: grid; gap: 2px; min-width: 0; }
-.subtitle-engine-main span { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.subtitle-engine-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--text-secondary); font-size: 12.5px; }
+.subtitle-engine-main span { color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.subtitle-engine-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--text-secondary); font-size: var(--fs-secondary); }
 </style>

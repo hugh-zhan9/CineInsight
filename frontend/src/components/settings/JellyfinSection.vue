@@ -5,11 +5,11 @@
     <p class="help-text">让 Fileball 等客户端浏览视频、标签、作品集和保存视图，收藏与观看进度同步到主库。仅局域网、原片直播放，不支持图片库或实时转码；编码是否能播放取决于客户端。</p>
     <!-- 会话已持久化（D-PC47）：应用重启后令牌仍有效；关掉服务、改账号或重新应用配置才会让客户端重新登录。 -->
     <p class="help-text">电脑需保持应用运行且不休眠。使用独立账号密码；应用重启后客户端不用重新登录，关闭服务、修改账号或重新应用配置后需要重新登录。</p>
-    <p role="status" data-test="jellyfin-status">{{ statusText }}</p>
+    <p class="jellyfin-status" role="status" data-test="jellyfin-status">{{ statusText }}</p>
     <p v-if="error" class="settings-error" role="alert">{{ error }}</p>
     <p v-if="status?.startup_error" class="settings-error" role="alert">{{ status.startup_error }}</p>
     <div v-if="status?.running" class="jellyfin-addresses">
-      <p v-for="url in status.lan_urls" :key="url" data-test="jellyfin-address">{{ url }}</p>
+      <p v-for="url in status.lan_urls" :key="url" class="jellyfin-address" data-test="jellyfin-address">{{ url }}</p>
       <p v-if="!status.lan_urls?.length" class="help-text">没有找到局域网地址，请检查电脑的网络连接。</p>
       <p class="help-text">在 Fileball 中添加 Jellyfin 服务器，填写上述地址和下方账号密码。</p>
     </div>
@@ -33,11 +33,11 @@
     </div>
     <div class="setting-item">
       <label for="jellyfin-username">登录账号</label>
-      <input id="jellyfin-username" v-model="username" type="text" maxlength="64" autocomplete="off" :disabled="busy || !loaded" />
+      <input id="jellyfin-username" v-model="username" class="text-input" type="text" maxlength="64" autocomplete="off" :disabled="busy || !loaded" />
     </div>
     <div class="setting-item">
       <label for="jellyfin-password">{{ status?.password_set ? '修改密码（留空保持）' : '登录密码' }}</label>
-      <input id="jellyfin-password" v-model="password" type="password" autocomplete="new-password" :disabled="busy || !loaded" />
+      <input id="jellyfin-password" v-model="password" class="text-input" type="password" autocomplete="new-password" :disabled="busy || !loaded" />
       <p class="help-text">密码为 8–72 字节，仅用于此服务。局域网 HTTP 连接不加密，请使用独立密码。</p>
     </div>
     <div class="setting-item">
@@ -45,8 +45,8 @@
       <input id="jellyfin-port" v-model.number="port" class="number-input" type="number" min="1024" max="65535" :disabled="busy || !loaded" />
     </div>
     <div class="jellyfin-actions">
-      <button type="button" class="btn-primary" data-test="jellyfin-apply" :disabled="busy || !loaded" @click="apply">{{ busy ? '应用中…' : '应用 Jellyfin 配置' }}</button>
-      <button type="button" class="btn-secondary" :disabled="busy" @click="load">刷新状态</button>
+      <button type="button" class="btn btn--primary" data-test="jellyfin-apply" :disabled="busy || !loaded" @click="apply">{{ busy ? '应用中…' : '应用 Jellyfin 配置' }}</button>
+      <button type="button" class="btn btn--secondary" :disabled="busy" @click="load">刷新状态</button>
     </div>
     <p class="help-text">本区通过「应用 Jellyfin 配置」独立保存并立即生效，不随页面底部的「保存所有设置」提交。</p>
   </div>
@@ -142,7 +142,9 @@ export default {
 </script>
 
 <style scoped>
+.jellyfin-status { margin: var(--space-2) 0 var(--space-1); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .jellyfin-addresses { overflow-wrap: anywhere; }
+.jellyfin-address { font-family: var(--font-mono); font-size: var(--fs-secondary); }
 .jellyfin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .jellyfin-diagnostics {
   display: grid;
@@ -153,7 +155,7 @@ export default {
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-secondary);
   overflow-wrap: anywhere;
 }
 </style>

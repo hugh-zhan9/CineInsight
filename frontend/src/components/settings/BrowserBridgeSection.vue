@@ -16,7 +16,7 @@
         </span>
       </div>
       <div class="bridge-actions">
-        <button type="button" class="btn-secondary" @click="loadStatus">刷新</button>
+        <button type="button" class="btn btn--secondary" @click="loadStatus">刷新</button>
       </div>
     </div>
 
@@ -33,18 +33,18 @@
       <div class="bridge-token-row">
         <input
           data-test="bridge-token"
-          class="bridge-token"
+          class="text-input bridge-token"
           :type="tokenVisible ? 'text' : 'password'"
           :value="form.browser_bridge_token"
           readonly
         />
-        <button type="button" class="btn-secondary" @click="tokenVisible = !tokenVisible">
+        <button type="button" class="btn btn--secondary" @click="tokenVisible = !tokenVisible">
           {{ tokenVisible ? '隐藏' : '显示' }}
         </button>
-        <button type="button" class="btn-secondary" :disabled="!form.browser_bridge_token" @click="copyToken">
+        <button type="button" class="btn btn--secondary" :disabled="!form.browser_bridge_token" @click="copyToken">
           复制
         </button>
-        <button type="button" class="btn-secondary" data-test="bridge-regenerate" @click="regenerate">
+        <button type="button" class="btn btn--secondary" data-test="bridge-regenerate" @click="regenerate">
           {{ form.browser_bridge_token ? '重新生成' : '生成令牌' }}
         </button>
       </div>
@@ -59,14 +59,14 @@
       <label>下载目录</label>
       <div class="bridge-token-row">
         <input
-          class="bridge-token"
+          class="text-input bridge-token"
           type="text"
           v-model="form.browser_download_directory"
           placeholder="尚未选择"
           data-test="bridge-download-directory"
           @change="validateDownloadDirectory"
         />
-        <button type="button" class="btn-secondary" @click="chooseDirectory">选择目录</button>
+        <button type="button" class="btn btn--secondary" @click="chooseDirectory">选择目录</button>
       </div>
       <!-- 选完目录就告诉用户它在不在扫描范围里（D-PC25）：不在的话下载照常，但不会自动进片库。 -->
       <p
@@ -233,7 +233,8 @@ export default {
 .bridge-actions { flex: none; }
 
 .bridge-url {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
+  font-size: var(--fs-secondary);
   color: var(--text-secondary);
 }
 
@@ -248,7 +249,7 @@ export default {
 
 .bridge-token { flex: 1; min-width: 0; }
 
-.bridge-directory-check { margin: 8px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.bridge-directory-check { margin: 8px 0 0; font-size: var(--fs-secondary); overflow-wrap: anywhere; }
 .bridge-directory-check--ok { color: var(--success-color); }
 .bridge-directory-check--warn { color: var(--warning-text); }
 

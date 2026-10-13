@@ -64,7 +64,7 @@
         />
         <button
           type="button"
-          class="btn-secondary btn-compact"
+          class="btn btn--secondary btn--sm"
           data-test="idle-window-clear"
           :disabled="!form.idle_scheduling_enabled || (!form.idle_window_start && !form.idle_window_end)"
           @click="clearWindow"
@@ -87,14 +87,14 @@
             {{ taskLabel(item.task_key) }}：{{ reasonLabel(item.reason) }}
             <button
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :data-test="`idle-run-now-${item.task_key}`"
               @click="runNow(item.task_key)"
             >忽略空闲立即运行</button>
           </li>
         </ul>
       </template>
-      <button type="button" class="btn-secondary btn-compact" data-test="idle-status-refresh" @click="loadStatus">刷新</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="idle-status-refresh" @click="loadStatus">刷新</button>
     </div>
   </div>
 </template>
@@ -205,13 +205,14 @@ export default {
 </script>
 
 <style scoped>
-.idle-scheduling-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.idle-scheduling-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: var(--space-5); }
 .idle-window-row { display: flex; align-items: center; gap: 8px; }
 .idle-window-input { width: 120px; }
-.idle-window-sep { color: var(--text-secondary); font-size: 13px; }
+.idle-window-sep { color: var(--text-secondary); font-size: var(--fs-secondary); }
 .idle-scheduler-status {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 16px;
   padding: 10px 12px;
@@ -219,9 +220,8 @@ export default {
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 .idle-waiting-list { display: grid; gap: 6px; margin: 0; padding-left: 18px; }
 .idle-waiting-list li { display: flex; align-items: center; gap: 8px; }
-.btn-compact { height: 28px; padding: 0 10px; font-size: 12px; }
 </style>
