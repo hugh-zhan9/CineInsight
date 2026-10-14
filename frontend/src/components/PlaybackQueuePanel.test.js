@@ -80,3 +80,18 @@ it('shows each entry and the current item with its video thumbnail, and a placeh
   expect(wrapper.find('[data-test="queue-item-2"] .queue-thumb').exists()).toBe(true);
   expect(wrapper.find('[data-test="queue-item-thumb-1"]').exists()).toBe(true);
 });
+it('clicking an entry thumbnail or title opens its video detail and closes the list; the current item opens it too', async () => {
+  api.GetPlaybackQueue.mockResolvedValue(snapshot({ items: [{ id: 1, title: '第一集', video_id: 7, source_available: true }, { id: 2, title: '第二集', video_id: 8, source_available: false }], current: { id: 1, title: '第一集', video_id: 7 } }));
+  await panel();
+  const open = wrapper.get('[data-test="queue-item-open-2"]');
+  expect(open.element.tagName).toBe('BUTTON');
+  expect(open.find('[data-test="queue-item-thumb-2"]').exists()).toBe(true);
+  expect(open.text()).toContain('第二集');
+  await open.trigger('click');
+  expect(wrapper.emitted('open-video')).toEqual([[8]]);
+  expect(wrapper.emitted('close')).toHaveLength(1);
+  await wrapper.get('[data-test="queue-current-open"]').trigger('click');
+  expect(wrapper.emitted('open-video')).toEqual([[8], [7]]);
+  expect(wrapper.emitted('close')).toHaveLength(1);
+  expect(api.PlayPlaybackQueue).not.toHaveBeenCalled();
+});

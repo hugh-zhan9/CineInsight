@@ -1054,6 +1054,18 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('产物视频不在片库中');
   });
 
+  it('待播队列里的视频已不在片库中时用队列自己的说法', async () => {
+    const wrapper = await mountApp();
+    api.GetVideosByIDs.mockResolvedValue([]);
+
+    wrapper.findComponent({ name: 'PlaybackQueuePanel' }).vm.$emit('open-video', 42);
+    await flushPromises();
+
+    const messages = feedbackState.toasts.map(toast => toast.message).join('\n');
+    expect(messages).toContain('这部视频已不在片库中');
+    expect(messages).not.toContain('产物视频');
+  });
+
   it('MEDIA-10 退出确认对话框常挂载；数据库连不上时顶栏不显示任务与待处理入口', async () => {
     api.GetStartupError.mockResolvedValue('数据库连接失败');
     const wrapper = await mountApp();

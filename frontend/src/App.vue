@@ -52,7 +52,7 @@
     </div>
 
     <WallpaperStatusBar v-if="appReady" />
-    <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue' })" />
+    <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue', missingMessage: '这部视频已不在片库中，可能已删除或不在扫描目录内。' })" />
 
     <div v-if="startupError" class="startup-error-view">
       <!-- 回落保护（D-DBG-03..05）：上次用的是 PostgreSQL（或按数据目录推断如此）、这次没读到它的配置，没有打开本机库。
@@ -1135,8 +1135,8 @@ export default {
       return this.openEntityFromCommand(type, Number(id), name || '');
     },
     // 按 ID 打开一部片（任务中心产物、回顾、待播队列…）：取回视频后按调用方区域分流。
-    openVideoByID(videoID, { from, startAtMs = null } = {}) {
-      return this.openVideoResolved(videoID, '产物视频不在片库中，可能不在扫描目录内或已被删除。', { from, startAtMs });
+    openVideoByID(videoID, { from, startAtMs = null, missingMessage = '产物视频不在片库中，可能不在扫描目录内或已被删除。' } = {}) {
+      return this.openVideoResolved(videoID, missingMessage, { from, startAtMs });
     },
     // 取回视频再打开（M-1）：取的这段时间里又有新的打开或切了页，这一次就作废——只有最新的那次生效，
     // 也不会把已经去了别处（比如进了管理区）的用户拽回来。
