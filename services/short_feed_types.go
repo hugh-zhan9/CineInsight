@@ -95,8 +95,11 @@ type ShortFeedItemDTO struct {
 	// 图片没有观看状态，Watched 恒为 false。
 	PersonalRating *float64 `json:"personal_rating"`
 	Watched        bool     `json:"watched"`
-	ReasonCode     string   `json:"reason_code,omitempty"`
-	ReasonMessage  string   `json:"reason_message,omitempty"`
+	// TakenAt 只给图片：信息行的日期。EXIF 拍摄时间优先，没有就用入库时间（created_at），
+	// 与照片流 taken 排序同一口径（imageTakenSortKey）；视频不带。
+	TakenAt       *time.Time `json:"taken_at,omitempty"`
+	ReasonCode    string     `json:"reason_code,omitempty"`
+	ReasonMessage string     `json:"reason_message,omitempty"`
 }
 
 // Ref 返回这一条的类型化标识。

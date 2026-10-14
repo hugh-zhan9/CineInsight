@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -623,6 +624,75 @@ func TestShortFeedFavoritesIncludeImages(t *testing.T) {
 	}
 	if !seen[ShortFeedMediaVideo] || !seen[ShortFeedMediaImage] {
 		t.Fatalf("收藏页应同时含视频与图片，实际 %+v", items)
+	}
+}
+
+// 手机端图片信息行写日期（设计稿「图片 · 4032 × 3024 · 2026-09-18」）：有 EXIF 拍摄时间用它，
+// 没有就用入库时间（与照片流 taken 排序同一口径）；视频的信息行不写日期，JSON 里也不带这个键。
+func TestShortFeedImageDTOCarriesTakenAtOrAddedTime(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	taken := time.Date(2026, 9, 18, 10, 20, 30, 0, time.Local)
+	added := time.Date(2025, 3, 4, 5, 6, 7, 0, time.Local)
+	withExif := createShortFeedImage(t, root, "exif.jpg", "jpg", false)
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", withExif.ID).Updates(map[string]any{"taken_at": taken, "created_at": added}).Error; err != nil {
+		t.Fatalf("写入拍摄时间失败: %v", err)
+	}
+	noExif := createShortFeedImage(t, root, "plain.jpg", "jpg", false)
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", noExif.ID).Update("created_at", added).Error; err != nil {
+		t.Fatalf("写入入库时间失败: %v", err)
+	}
+	video := createShortFeedVideo(t, root, "clip.mp4", 30, false)
+
+	for _, tc := range []struct {
+		name string
+		ref  ShortFeedMediaRef
+		want time.Time
+	}{
+		{name: "有拍摄时间", ref: imageRef(withExif.ID), want: taken},
+		{name: "没有拍摄时间用入库时间", ref: imageRef(noExif.ID), want: added},
+	} {
+		dto, err := svc.reloadItem(tc.ref)
+		if err != nil {
+			t.Fatalf("%s：组装图片条目失败: %v", tc.name, err)
+		}
+		if dto.TakenAt == nil || !dto.TakenAt.Equal(tc.want) {
+			t.Fatalf("%s：taken_at 应为 %v，实际 %v", tc.name, tc.want, dto.TakenAt)
+		}
+		payload, err := json.Marshal(dto)
+		if err != nil {
+			t.Fatalf("%s：序列化失败: %v", tc.name, err)
+		}
+		if !strings.Contains(string(payload), `"taken_at":`) {
+			t.Fatalf("%s：图片 JSON 应带 taken_at: %s", tc.name, payload)
+		}
+	}
+
+	videoDTO, err := svc.reloadItem(videoRef(video.ID))
+	if err != nil {
+		t.Fatalf("组装视频条目失败: %v", err)
+	}
+	if videoDTO.TakenAt != nil {
+		t.Fatalf("视频不该带日期，实际 %v", videoDTO.TakenAt)
+	}
+	payload, err := json.Marshal(videoDTO)
+	if err != nil {
+		t.Fatalf("序列化视频失败: %v", err)
+	}
+	if strings.Contains(string(payload), "taken_at") {
+		t.Fatalf("视频 JSON 不该出现 taken_at: %s", payload)
+	}
+
+	// 没入库的空壳（两个时间都是零值）不编一个 0001-01-01 出来。
+	empty, err := svc.imageDTO(&models.Image{ID: 99, Name: "ghost.jpg"})
+	if err != nil {
+		t.Fatalf("组装空图片条目失败: %v", err)
+	}
+	if empty.TakenAt != nil {
+		t.Fatalf("两个时间都没有时不该带日期，实际 %v", empty.TakenAt)
 	}
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createSwipeTracker, keyboardDirection, wheelDirection } from '../src/short-feed/gesture.js';
 import { isScopeExhaustedHint, unsupportedStatusText } from '../src/short-feed/videoState.js';
-import { formatClock, formatCount, formatRating, kindLine, metaLine, starFill } from '../src/short-feed/format.js';
+import { formatClock, formatCount, formatDate, formatRating, kindLine, metaLine, starFill } from '../src/short-feed/format.js';
 
 // 组件已拆分，源码断言跟着搬到各自的文件，而不是放宽或删掉。
 // 2026-10-14 手机网页重做（D-MW-01..07）：全屏、已看、删除、评分进了「更多」面板（MoreSheet），标签页换成 FeedTabs，
@@ -280,6 +280,22 @@ assert.match(shortHTML, /viewport-fit=cover/, 'standalone mode must keep drawing
   assert.equal(formatRating(null), '');
   assert.equal(formatRating(7), '7.0');
   assert.match(meta, /＋ 标签/, 'the tag row ends with ＋ 标签');
+  // 图片信息行带日期（设计稿「图片 · 4032 × 3024 · 2026-09-18」）：后端 taken_at（拍摄时间，没有用入库时间），
+  // 按本地时区写 YYYY-MM-DD；本地 0:30 与 23:30 的 UTC 日期分别在前一天 / 后一天，截 ISO 串会写错。
+  const localTaken = (hour, minute) => new Date(2026, 8, 18, hour, minute).toISOString();
+  assert.equal(formatDate(localTaken(0, 30)), '2026-09-18');
+  assert.equal(formatDate(localTaken(23, 30)), '2026-09-18');
+  assert.equal(formatDate('2026-09-18T10:20:30+08:00'), formatDate(new Date('2026-09-18T10:20:30+08:00').toISOString()));
+  assert.equal(formatDate(''), '');
+  assert.equal(formatDate(undefined), '');
+  assert.equal(formatDate('not a date'), '');
+  assert.equal(metaLine({ media_kind: 'image', width: 4032, height: 3024, taken_at: localTaken(12, 0) }), '图片 · 4032 × 3024 · 2026-09-18');
+  assert.equal(metaLine({ media_kind: 'image', width: 4032, height: 3024, taken_at: localTaken(12, 0), personal_rating: 9 }), '图片 · 4032 × 3024 · 2026-09-18 · 评分 9.0');
+  assert.equal(metaLine({ media_kind: 'image', taken_at: localTaken(12, 0) }), '图片 · 2026-09-18');
+  assert.equal(metaLine({ media_kind: 'image', width: 4032, height: 3024, taken_at: 'bad' }), '图片 · 4032 × 3024');
+  // 视频行照设计稿不写日期；「更多」的副标题（kindLine）也不带日期。
+  assert.equal(metaLine({ media_kind: 'video', duration: 161, taken_at: localTaken(12, 0) }), '视频 · 02:41');
+  assert.equal(kindLine({ media_kind: 'image', width: 4032, height: 3024, taken_at: localTaken(12, 0) }), '图片 · 4032 × 3024');
 
   // D-MW-04：第 n 颗星满、半、空的口径与电脑端 10 星半分一致。
   assert.deepEqual([1, 8, 9, 10].map(star => starFill(8.5, star)), ['full', 'full', 'half', 'empty']);
