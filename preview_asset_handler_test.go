@@ -3,18 +3,24 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 	"video-master/database"
 	"video-master/models"
 	"video-master/services"
+
+	wailsassetserver "github.com/wailsapp/wails/v2/pkg/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
 func imageHandlerTestCreateImage(t *testing.T, path, format string) *models.Image {
@@ -578,5 +584,105 @@ func TestDoubanChartPosterRouteLogsOnlyRealFailures(t *testing.T) {
 	// 调用方塞进来的查询串不得进日志。
 	if strings.Contains(line, "url=") || strings.Contains(line, "127.0.0.1") {
 		t.Fatalf("日志泄露了调用方查询串: %q", line)
+	}
+}
+
+// wailsRuntimeStub 只用来把 Wails 的资源服务搭起来，运行时脚本的内容与这里的断言无关。
+type wailsRuntimeStub struct{}
+
+func (wailsRuntimeStub) DesktopIPC() []byte       { return nil }
+func (wailsRuntimeStub) WebsocketIPC() []byte     { return nil }
+func (wailsRuntimeStub) RuntimeDesktopJS() []byte { return nil }
+
+// 首页带上启动状态（G2，D-UD-02）：走 Wails 的整条资源链（内嵌资源 → startupStateMiddleware → 运行时脚本注入），
+// WebView 拿到的 index.html 的 <html> 上有 data-startup：正常启动 ready，启动失败与回落保护拦下 error。
+// 其余资源原样送出。
+func TestIndexPageCarriesStartupState(t *testing.T) {
+	const page = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<title>析微影策</title>\n</head>\n<body>\n<div id=\"app\"></div>\n</body>\n</html>\n"
+	const script = "document.title = '<html lang=\"en\">';\n"
+	files := fstest.MapFS{
+		"index.html":    {Data: []byte(page)},
+		"assets/app.js": {Data: []byte(script)},
+	}
+	cases := []struct {
+		name  string
+		err   error
+		state string
+	}{
+		{"正常启动", nil, "ready"},
+		{"启动失败", errors.New("打开数据库失败: connection refused"), "error"},
+		{"回落保护拦下", fmt.Errorf("%w: 上次用的是 PostgreSQL", database.ErrBackendFallbackBlocked), "error"},
+	}
+	for _, tc := range cases {
+		app := &App{}
+		app.setStartupError(tc.err)
+		server, err := wailsassetserver.NewAssetServer("", assetserver.Options{
+			Assets:     files,
+			Handler:    newAssetHandler(app),
+			Middleware: startupStateMiddleware(app),
+		}, false, nil, wailsRuntimeStub{})
+		if err != nil {
+			t.Fatalf("%s: 搭资源服务失败: %v", tc.name, err)
+		}
+		want := `<html data-startup="` + tc.state + `" lang="en">`
+		for _, path := range []string{"/", "/index.html"} {
+			rec := httptest.NewRecorder()
+			server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			body := rec.Body.String()
+			if rec.Code != http.StatusOK || !strings.Contains(body, want) || strings.Count(body, "data-startup") != 1 {
+				t.Fatalf("%s %s: 期望 200 且只在 <html> 上有 data-startup=%q，实际 %d:\n%s", tc.name, path, tc.state, rec.Code, body)
+			}
+			if !strings.Contains(body, `<script src="/wails/runtime.js">`) {
+				t.Fatalf("%s %s: Wails 运行时脚本注入不该受影响:\n%s", tc.name, path, body)
+			}
+		}
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
+		if rec.Code != http.StatusOK || rec.Body.String() != script {
+			t.Fatalf("%s: 其他资源应原样送出，实际 %d %q", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// 中间件自己的边界：改了首页就按新长度写 Content-Length；首页不是 200（例如 304）、不是 GET、
+// 不是首页路径时原样转交，不加属性。
+func TestStartupStateMiddlewareOnlyRewritesIndexPage(t *testing.T) {
+	const page = "<!DOCTYPE html>\n<HTML lang=\"en\"><head></head><body></body></HTML>\n"
+	status := http.StatusOK
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(page)))
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(page))
+	})
+	handler := startupStateMiddleware(&App{})(next)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `<HTML data-startup="ready" lang="en">`) {
+		t.Fatalf("首页 <html> 标签不分大小写都该带上 data-startup，实际:\n%s", body)
+	}
+	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(len(body)) {
+		t.Fatalf("Content-Length 应是改后的长度 %d，实际 %q", len(body), got)
+	}
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodHead, "/", nil),
+		httptest.NewRequest(http.MethodGet, "/short.html", nil),
+		httptest.NewRequest(http.MethodGet, "/preview/thumbnail/1", nil),
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Body.String() != page {
+			t.Fatalf("%s %s 应原样转交，实际:\n%s", req.Method, req.URL.Path, rec.Body.String())
+		}
+	}
+
+	status = http.StatusNotModified
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusNotModified || strings.Contains(rec.Body.String(), "data-startup") {
+		t.Fatalf("首页不是 200 时应原样转交，实际 %d:\n%s", rec.Code, rec.Body.String())
 	}
 }
