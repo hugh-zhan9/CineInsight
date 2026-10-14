@@ -685,6 +685,40 @@ describe('PhotoBrowsePage 别处改了图片后原地刷新', () => {
     }
   });
 
+  it('没经过 App 的改动（后台扫描新增）：切回时核对各月张数，变了才原地重取；没变、读失败都不重取', async () => {
+    installLibrary(photos(120));
+    const wrapper = await mountPage();
+    expect(wrapper.vm.list.items).toHaveLength(60);
+
+    // 张数没变：切走切回只核对一次张数，不重取照片。
+    api.SearchImagePage.mockClear();
+    api.ListImageTimelineBuckets.mockClear();
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(api.ListImageTimelineBuckets).toHaveBeenCalledTimes(1);
+    expect(api.SearchImagePage).not.toHaveBeenCalled();
+
+    // 核对读失败：不重取，照片照旧。
+    api.ListImageTimelineBuckets.mockRejectedValueOnce(new Error('数据库繁忙'));
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(api.SearchImagePage).not.toHaveBeenCalled();
+    expect(wrapper.vm.list.items).toHaveLength(60);
+
+    // 后台扫描进来两张更新的照片（不经过 imagesVersion）：切回时张数变了，按同一条件原地重取已加载的张数。
+    library = [photo(0, { id: 1001, name: 'IMG_NEW1.jpg', taken_at: '2026-11-02T10:00:00', created_at: '2026-11-02T10:00:00' }),
+      photo(0, { id: 1002, name: 'IMG_NEW2.jpg', taken_at: '2026-11-01T10:00:00', created_at: '2026-11-01T10:00:00' }), ...library];
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(searchCalls().map(request => [request.limit, request.cursor?.id ?? null])).toEqual([[60, null]]);
+    expect(wrapper.vm.list.items.slice(0, 2).map(image => image.id)).toEqual([1001, 1002]);
+    expect(wrapper.vm.list.items).toHaveLength(60);
+    expect(monthHeaders(wrapper)[0]).toContain('2026 年 11 月');
+  });
+
   it('只有还没加载过（或什么也没加载到）时才从头取；取的途中换了条件就作废', async () => {
     installLibrary(photos(100));
     const wrapper = await mountPage();

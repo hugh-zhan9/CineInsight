@@ -221,6 +221,7 @@
 // - navigationRequest：App 的 navigateTo('photos', { personId, personName? }) 带来的一次新浏览——筛选回到默认、只按这个人，回到顶部。
 // - locateImage(image)：回顾、人物 / 作品集页点图片进来，打开那一张（找不到就清空筛选按文件名找，仍找不到提示已不在图片库中）。
 // - imagesVersion：别处（图片管理、清理中心、数据维护…）改了图片时 App 递增；本页下次显示时按同一条件原地重取，滚动位置不动。
+//   没经过 App 的改动（后台扫描新增、「最近操作」里撤销删除…）靠切回本页时核对一次各月张数发现，变了同样原地重取。
 // 事件：navigate(key)、open-person({ id, name })、open-in-manage({ id, name })（「在图片管理中打开」）、image-changed(fields)（看图里存成功的收藏 / 评分）。
 import { ListImageFolderGroups, ListImageTimelineBuckets, ListPeople, SearchImagePage } from '../../../wailsjs/go/main/App';
 import PhotoLightbox from './PhotoLightbox.vue';
@@ -288,6 +289,13 @@ export function photoBucketCounts(buckets) {
     counts[`${bucket.year}-${String(bucket.month).padStart(2, '0')}`] = Number(bucket.count || 0);
   }
   return counts;
+}
+
+// 两份 photoBucketCounts 是否一样：月份与每月张数都相同。
+export function sameBucketCounts(a, b) {
+  const keysA = Object.keys(a || {});
+  const keysB = Object.keys(b || {});
+  return keysA.length === keysB.length && keysA.every(key => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key]);
 }
 
 export function photoThumbnailURL(id) {
@@ -424,6 +432,7 @@ export default {
         }
         this.syncWindow(true);
         if (this.imagesStale) this.refreshInPlace();
+        else this.checkForOutsideChanges();
       });
     },
     // 翻页、换条件都整个替换 items；长度变了窗口要跟着重算（翻页后的新行、清空后的空网格）。
@@ -586,6 +595,21 @@ export default {
       } catch (_err) {
         if (token === this._tokens.buckets && !keep) this.buckets = null;
       }
+    },
+    // 切回本页时核对一次各月张数：后台扫描新增、「最近操作」里撤销删除这类改动不经过 App 的 imagesVersion，
+    // 张数变了就按同一条件原地重取。读失败、取的途中换了条件或又切走了，就等下次显示再核对。
+    async checkForOutsideChanges() {
+      if (this.list.loading || this._refreshing) return;
+      const token = this._tokens.list;
+      let latest;
+      try {
+        latest = photoBucketCounts(await ListImageTimelineBuckets(this.currentFilter()));
+      } catch (_err) {
+        return;
+      }
+      if (token !== this._tokens.list || !this.pageActive || this.imagesStale || this._refreshing) return;
+      if (sameBucketCounts(latest, this.buckets)) return;
+      this.refreshInPlace();
     },
     // 同一条件原地重取（别处改了图片）：列表不清空、不出「加载中」，从头按已加载的张数重取，取齐后整体替换，
     // 再把视口顶部那张放回原位（它被删了就放它原来位置上的那张）。取的途中条件变了作废；失败留着原来的列表，下次显示再取。

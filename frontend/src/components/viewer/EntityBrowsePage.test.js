@@ -347,8 +347,10 @@ describe('人物观看页', () => {
     api.GetPersonImages.mockResolvedValue({ images: [], next_image_id: 0 });
     const wrapper = await mountPage({ kind: 'person', focusEntity: { id: 8, name: '某人' } });
     expect(wrapper.get('[data-test="entity-person-works-empty"]').text()).toContain('还没有关联的视频');
+    // 照片流的看图不能标人物，空状态的下一步是去图片管理。
+    expect(wrapper.get('[data-test="entity-person-images-empty"]').text()).toContain('图片管理');
     await wrapper.get('[data-test="entity-person-images-go-photos"]').trigger('click');
-    expect(wrapper.emitted('navigate')).toEqual([['photos']]);
+    expect(wrapper.emitted('navigate')).toEqual([['photos-manage']]);
   });
 
   // D-P2-08：相关图片的「去图片」去观看侧照片流并带上这个人（App 的 navigateTo('photos', { personId })）。

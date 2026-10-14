@@ -137,7 +137,8 @@ const PAGE_FILES = {
   'library-manage': 'components/VideoListPage.vue',
   people: 'components/viewer/EntityBrowsePage.vue',
   collections: 'components/viewer/EntityBrowsePage.vue',
-  photos: 'components/PhotoLibraryPage.vue',
+  // 观看侧照片流（D-P2-08）：与图片管理各自一个实例。
+  photos: 'components/viewer/PhotoBrowsePage.vue',
   'photos-manage': 'components/PhotoLibraryPage.vue',
   // 片单（D-P2-04）：想看、榜单、观影记录、观看笔记四页嵌在它的标签里，不再是顶层页面。
   lists: 'components/viewer/ListsPage.vue',

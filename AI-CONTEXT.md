@@ -603,7 +603,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **照片流:** `SearchImagePage`（`sort_mode: 'taken'`，每批 60）按 `utils/photoGrid.js` 按月切行、窗口化（方形格子最小列宽 200、间隙 6，组头 52），组头张数与页头总数来自 `ListImageTimelineBuckets`（同一筛选，读失败只是不写数字）。筛选只有文件名关键字（300 ms 去抖）、全部 / 收藏、人物（`ListPeople`，多选）、文件夹（`ListImageFolderGroups`，按其余筛选列、单选，浮层最多 200 个可按名称找）。接近底部 800px 自动取下一批。实测 5000 张（1440×900，6 列）：顶部 35 张、中间 60 张、底部 30 张格子在 DOM 里。
 - **看图 `viewer/PhotoLightbox.vue`:** `DialogShell size="full"` teleport 到 body（BaseModal 栈，Esc 只关最上层；← → 与 F 只在本层最上面、焦点不在输入框时接）。到已加载末尾「下一张」先续载再前进，首尾禁用；收藏 / 评分先改后存，失败改回并在信息面板 `AppBanner` 说原因；显示满 `VIEW_RECORD_DELAY_MS` 记 `RecordImageView`。信息面板：拍摄时间、相机、镜头、参数、尺寸、文件夹、人物（点了 `open-person` → App `openPerson`）、`WallpaperButton`、「在图片管理中打开」（App `openImageInManage` → `photos-manage` + `PhotoLibraryPage.locateImage`）。没有删除、标签、AI、批量、目录操作。存成功的改动经 `image-changed` → App 并到图片管理（`PhotoLibraryPage.patchImage`）。
 - **进入:** 回顾、人物 / 作品集页的 `open-image` → App `openPhotoImage` → `PhotoBrowsePage.locateImage`（已加载就打开；否则清空筛选按文件名找；仍找不到提示「这张图片已不在图片库中…」）。人物页相关图片的「去图片」→ `navigateTo('photos', { personId, personName })` → `pageRequests.photos` → 筛选回默认、只按这个人（空状态里那个「去图片」不带人，人物没有图片时带上只会是空结果）。
-- **刷新:** App 的 `photoImagesVersion` 在离开 `photos-manage`、清理中心 `images-changed`、数据维护撤销图片批量编辑、标签转人物时递增（prop `images-version`）。照片流记为过期，下次显示（或正显示时下一拍）按同一筛选从头重取已加载的张数（每批 ≤200，取齐后整体替换，不出骨架），组头计数一并重取；替换后把视口顶部那张放回原来的视口位置（它被删了就用它原位置上的那张）。途中换条件作废；失败留着原列表、下次显示再取。换条件一律回顶。
+- **刷新:** App 的 `photoImagesVersion` 在离开 `photos-manage`、清理中心 `images-changed`、数据维护撤销图片批量编辑、标签转人物时递增（prop `images-version`）。照片流记为过期，下次显示（或正显示时下一拍）按同一筛选从头重取已加载的张数（每批 ≤200，取齐后整体替换，不出骨架），组头计数一并重取；替换后把视口顶部那张放回原来的视口位置（它被删了就用它原位置上的那张）。途中换条件作废；失败留着原列表、下次显示再取。换条件一律回顶。没经过 App 的改动（后台扫描新增、「最近操作」撤销删除）靠每次切回时核对一次 `ListImageTimelineBuckets`（`sameBucketCounts`），各月张数变了同样原地重取；核对失败不重取。人物页空状态的下一步是「去图片管理」（照片流的看图不能标人物）。
 
 ### 2.38 统一交互与视觉（第 0 步，2026-10-13）
 设计：`docs/loopx/design/2026-10-13-unified-design/`（D-UD-01..15，含各条「实施修订」）。用户裁决：先统一基础再做 UI 二三期；观看侧始终影院深色；⌘K 命令面板、⌘⇧K 清理中心；「废纸篓」只指 macOS 系统，「回收站」只指应用内可恢复记录。
@@ -615,7 +615,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **确认三级（D-UD-07）**：可撤销的不确认、完成后全局提示带「撤销」（8 秒）；要确认的写清数量与影响；不可逆的要输入按钮上的文字（`confirmAction({ level: 'irreversible' })`）。既有设置「删除前确认」（默认开）优先：开着时「移到废纸篓」仍先确认。人物页/抽屉的人物媒体删除总是先确认（按钮「从片库移除… / 从图片库移除…」）。删除作品集输入「删除作品集」。删除只用三个词：移到废纸篓 / 从片库移除 / 永久删除。
 - **撤销（D-UD-09）**：`utils/feedback.js` 的 `notifyUndoable(message, undo)` 同时出撤销提示并记进任务中心「最近操作」（`utils/recentOperations.js`，内存里最近 20 条，重启清空），两处共用一条、只执行一次；部分失败抛错、条目留着可重试；已在别处撤销/恢复过的会提示并移除。片库的 `TrashUndoBanner` 不再有页内撤销条，`runDelete` / `showDeleteNotice` / `openTrashDialog` 契约不变。宿主刷新回调声明成 prop（`onRestored` / `onDeleted` / `onVideosChanged` / `onUndone` / `onMediaRestored`），对话框或抽屉关掉后撤销也能通知到宿主。
 - **选择（D-UD-10）**：`SelectionBar` 有选中才浮出，「全选当前结果（N）」写出会选中的数量；语义搜索、相似片、随机这些没有总数的模式只选已显示的；需要往下加载时显示「正在选择…」，期间改动选择即取消，筛选/页签变了什么也不选；宿主隐藏时不响应 Esc，清理审阅的勾选不被 Esc 清空。失联页目录里有勾选时，该目录行的整目录按钮禁用。
-- **后台任务（D-UD-11）**：顶栏任务指示 + 任务中心（页签：任务 / 最近操作 / 运行状态与诊断）。片库页的后台任务状态条第 0 步暂留（任务中心缺跳过数、「无需补全」、导出 NFO 取消等，需改后端适配，并入三期）。
+- **后台任务（D-UD-11）**：顶栏任务指示 + 任务中心（页签：任务 / 最近操作 / 运行状态与诊断）。片库页的后台任务状态条三期已删除，内容全部收进任务中心（§2.37.7、§2.37.10）。
 - **守卫**：`frontend/scripts/design-system.test.mjs`（不许写死颜色/字号/层级、只用已定义变量、对话框用 DialogShell、顶层页面有页头、用词表）与 `unstyledControls` 的按钮规则；待迁移清单 `scripts/design-system-pending/*.json` 是「每文件违规条数」棘轮，多了少了都报错。data-test 基线守卫 `scripts/data-test-set.test.mjs` 2026-10-14 起不认注释里的钩子（模板 `<!-- -->`、脚本 `//` 与 `/* */`、样式 `/* */`；字符串、模板字符串与正则里的不算注释），带自检。前端全量测试用 `npm test`（裸 `npx vitest run` 会误收 `scripts/*.test.mjs`）。
 
 ### 2.39 UI 二期后端（P2-A，2026-10-13）

@@ -190,10 +190,11 @@
             v-else-if="images.loaded && !images.error && !images.items.length"
             icon="images"
             title="还没有关联的图片"
-            message="在图片的单图详情里标出人物，图片就会出现在这里。"
+            message="在图片管理的单图详情里标出人物，图片就会出现在这里。"
             data-test="entity-person-images-empty"
           >
-            <template #actions><button type="button" class="btn btn--secondary" data-test="entity-person-images-go-photos" @click="$emit('navigate', 'photos')">去图片</button></template>
+            <!-- 观看侧照片流的看图不能改人物（D-P2-08），标人物要去图片管理。 -->
+            <template #actions><button type="button" class="btn btn--secondary" data-test="entity-person-images-go-photos" @click="$emit('navigate', 'photos-manage')">去图片管理</button></template>
           </EmptyState>
           <div v-if="images.items.length" class="recap-strip recap-strip--images">
             <RecapMediaCard
