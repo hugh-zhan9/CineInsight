@@ -348,3 +348,47 @@ func TestSceneExternalCaptionSearchIsLiteralAndOffline(t *testing.T) {
 		t.Fatalf("覆盖率应按外部模型计数: %+v", result.Coverage)
 	}
 }
+
+// 命中多于 limit 时如实标 truncated（截掉了），恰好全部列出时不标；对白、画面、合并三种模式各自判断。
+func TestSceneSearchReportsTruncation(t *testing.T) {
+	setupSceneDB(t, SceneProviderLocal)
+	video := seedSceneVideo(t, "many-lines.mp4", []byte("lines"), 7200)
+	writeSceneSRT(t, video, nil) // 200 条「普通台词 N」
+	service := newTestSceneSearch(nil, false)
+	for _, tc := range []struct {
+		limit     int
+		hits      int
+		truncated bool
+	}{{50, 50, true}, {199, 199, true}, {200, 200, false}} {
+		result, err := service.Search(context.Background(), SceneSearchRequest{Query: "普通台词", Mode: SceneModeDialogue, Limit: tc.limit})
+		if err != nil {
+			t.Fatalf("检索失败(%s): %v", dbtest.Backend(), err)
+		}
+		if len(result.Hits) != tc.hits || result.Truncated != tc.truncated {
+			t.Fatalf("对白 limit=%d：应 %d 条 truncated=%v，实际 %d 条 truncated=%v", tc.limit, tc.hits, tc.truncated, len(result.Hits), result.Truncated)
+		}
+	}
+
+	query, near, mid, far := sceneTestVectors(43)
+	a := seedSceneVideo(t, "a.mp4", []byte("aaaa"), 60)
+	seedSceneIndex(t, a, SceneLocalModelID, 5000, []sceneSegmentFixture{
+		{StartMS: 0, EndMS: 5000, Vector: near},
+		{StartMS: 20000, EndMS: 25000, Vector: mid},
+		{StartMS: 40000, EndMS: 45000, Vector: far},
+	})
+	visual := newTestSceneSearch(&fakeSceneVectors{texts: map[string][]float32{"普通台词": query}}, true)
+	for _, tc := range []struct {
+		limit     int
+		truncated bool
+	}{{2, true}, {3, false}} {
+		result, err := visual.Search(context.Background(), SceneSearchRequest{Query: "普通台词", Mode: SceneModeVisual, Limit: tc.limit})
+		if err != nil || len(result.Hits) != tc.limit || result.Truncated != tc.truncated {
+			t.Fatalf("画面 limit=%d：%d 条 truncated=%v err=%v", tc.limit, len(result.Hits), result.Truncated, err)
+		}
+	}
+	// 合并模式：两路合起来多于 limit 就算截掉了。
+	result, err := visual.Search(context.Background(), SceneSearchRequest{Query: "普通台词", Mode: SceneModeAll, Limit: 200})
+	if err != nil || len(result.Hits) != 200 || !result.Truncated {
+		t.Fatalf("合并 limit=200：%d 条 truncated=%v err=%v", len(result.Hits), result.Truncated, err)
+	}
+}

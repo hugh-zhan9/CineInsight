@@ -480,6 +480,8 @@ export function ListCleanupDismissals(arg1:string,arg2:number,arg3:number):Promi
 
 export function ListCollectionProgress(arg1:services.CollectionProgressRequest):Promise<Array<services.CollectionProgress>>;
 
+export function ListCollectionProgressPage(arg1:services.CollectionProgressRequest):Promise<services.CollectionProgressPage>;
+
 export function ListCollectionSuggestions():Promise<Array<services.CollectionSuggestionView>>;
 
 export function ListCollections(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.CollectionListItem>>;
@@ -553,6 +555,8 @@ export function ListWatchlist(arg1:string,arg2:number,arg3:number):Promise<servi
 export function ListWatchlistCandidates(arg1:number):Promise<Array<services.WatchlistCandidateView>>;
 
 export function ListWatchlistInLibrary(arg1:number):Promise<Array<services.WatchlistInLibraryItem>>;
+
+export function ListWatchlistInLibraryPage(arg1:number,arg2:number):Promise<services.WatchlistInLibraryPage>;
 
 export function ListWatchlistLibraryState(arg1:Array<number>):Promise<Record<number, services.WatchlistLibraryState>>;
 

@@ -27,7 +27,9 @@
     </RecapBackdrop>
 
     <section v-if="blockVisible(continueBlock)" class="recap-section" data-test="home-continue">
-      <header class="recap-section__head"><h3><RecapIcon name="play" /> 继续观看</h3><small>从上次停下的地方接着看</small></header>
+      <header class="recap-section__head"><h3><RecapIcon name="play" /> 继续观看</h3><small>从上次停下的地方接着看</small>
+        <button v-if="continueBlock.more" type="button" class="btn btn--secondary btn--sm viewer-home__reroll" data-test="home-continue-all" @click="$emit('navigate', 'videos', { watch: 'continue_watching' })">查看全部 <AppIcon name="arrow" /></button>
+      </header>
       <p v-if="continueBlock.error" class="viewer-home__error" role="alert" data-test="home-continue-error">{{ continueBlock.error }}</p>
       <div v-else-if="skeletonVisible(continueBlock)" class="viewer-home__skeletons" aria-busy="true" data-test="home-continue-loading">
         <SkeletonBlock v-for="n in 4" :key="n" shape="card" :lines="2" />
@@ -47,7 +49,9 @@
 
     <!-- 追到哪了（D-P2-02、D-P2-07）：作品集看到第几部，卡片与「视频」页同一套（collectionProgressCard），点开进下一部的整页详情。 -->
     <section v-if="blockVisible(progressBlock, progressCards)" class="recap-section" data-test="home-progress">
-      <header class="recap-section__head"><h3><RecapIcon name="collection" /> 追到哪了</h3><small>作品集看到第几部，点开接着看下一部</small></header>
+      <header class="recap-section__head"><h3><RecapIcon name="collection" /> 追到哪了</h3><small>作品集看到第几部，点开接着看下一部</small>
+        <button v-if="progressBlock.more" type="button" class="btn btn--secondary btn--sm viewer-home__reroll" data-test="home-progress-all" @click="viewAll = 'progress'">查看全部 <AppIcon name="arrow" /></button>
+      </header>
       <AppBanner v-if="progressBlock.error" tone="danger" :title="progressBlock.error" data-test="home-progress-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="home-progress-retry" @click="loadProgress">重试</button></template>
       </AppBanner>
@@ -95,7 +99,9 @@
     </section>
 
     <section v-if="blockVisible(recentBlock)" class="recap-section" data-test="home-recent">
-      <header class="recap-section__head"><h3><RecapIcon name="videos" /> 最近添加</h3><small>最近 30 天收进片库的视频</small></header>
+      <header class="recap-section__head"><h3><RecapIcon name="videos" /> 最近添加</h3><small>最近 30 天收进片库的视频</small>
+        <button v-if="recentBlock.more" type="button" class="btn btn--secondary btn--sm viewer-home__reroll" data-test="home-recent-all" @click="$emit('navigate', 'videos', { watch: 'recently_added' })">查看全部 <AppIcon name="arrow" /></button>
+      </header>
       <p v-if="recentBlock.error" class="viewer-home__error" role="alert" data-test="home-recent-error">{{ recentBlock.error }}</p>
       <div v-else-if="skeletonVisible(recentBlock)" class="viewer-home__posters" aria-busy="true" data-test="home-recent-loading">
         <SkeletonBlock v-for="n in 7" :key="n" shape="poster" :lines="1" />
@@ -116,7 +122,9 @@
 
     <!-- 想看的片片库里已有（D-P2-03、D-P2-07）：想看条目已关联到片库、代表视频还没看过；「播放」进那部片的整页详情。 -->
     <section v-if="blockVisible(watchlistBlock)" class="recap-section" data-test="home-watchlist">
-      <header class="recap-section__head"><h3><RecapIcon name="star" /> 想看的片片库里已有</h3><small>想看片单里已经在片库的，还没看过</small></header>
+      <header class="recap-section__head"><h3><RecapIcon name="star" /> 想看的片片库里已有</h3><small>想看片单里已经在片库的，还没看过</small>
+        <button v-if="watchlistBlock.more" type="button" class="btn btn--secondary btn--sm viewer-home__reroll" data-test="home-watchlist-all" @click="viewAll = 'watchlist'">查看全部 <AppIcon name="arrow" /></button>
+      </header>
       <AppBanner v-if="watchlistBlock.error" tone="danger" :title="watchlistBlock.error" data-test="home-watchlist-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="home-watchlist-retry" @click="loadWatchlist">重试</button></template>
       </AppBanner>
@@ -185,6 +193,7 @@
         </div>
       </div>
     </section>
+    <ViewAllDialog v-if="viewAllDialog" :key="viewAll" v-bind="viewAllDialog" @close="viewAll = ''" @open-video="openFromViewAll" />
   </section>
 </template>
 
@@ -192,12 +201,13 @@
 // 观看首页（D-UI-04，详细设计「观看首页」）：一期只用现有接口——
 //   继续观看 ListContinueWatchingWithFilter({}, '', 0, 10)；今晚看什么 SuggestTonightVideos(默认条件, 3)；
 //   最近添加 SearchLibraryVideoPage 的 recently_added 智能视图（14 部，海报走 /preview/video-artwork）；
+//   （有「查看全部」的几块都多取一条判断有没有放全，见 homeTake。）
 //   本月常看的人物与本月回顾亮点共用一次 GetRecap（本月）。
 // 每块各自的代次，晚到的旧响应丢掉；一块失败只在那一块写一行。卡片点开发 open-video（宿主进整页详情）。
 // 大图的背景：有背景图（详情里的 has_fanart）用背景图，否则用画面帧；减少动态效果由 RecapBackdrop 处理。
 import {
-  GetRecap, GetVideoDetails, ListCollectionProgress, ListContinueWatchingWithFilter, ListWatchlistInLibrary, SearchLibraryVideoPage,
-  SuggestTonightVideos
+  GetRecap, GetVideoDetails, ListCollectionProgress, ListCollectionProgressPage, ListContinueWatchingWithFilter, ListWatchlistInLibrary,
+  ListWatchlistInLibraryPage, SearchLibraryVideoPage, SuggestTonightVideos
 } from '../../../wailsjs/go/main/App';
 import RecapBackdrop from '../recap/RecapBackdrop.vue';
 import RecapCountUp from '../recap/RecapCountUp.vue';
@@ -213,6 +223,7 @@ import { formatDuration } from '../../utils/mediaDetails.js';
 import { DEFAULT_RANDOM_CONDITIONS, randomConditionFields } from '../../utils/randomPlayback.js';
 import { currentCursor, heroFrameURLs, recapRequest, videoArtwork, videoThumbnail } from '../../utils/recap.js';
 import { collectionProgressCard } from './VideoBrowsePage.vue';
+import ViewAllDialog from './ViewAllDialog.vue';
 
 export const HOME_CONTINUE_LIMIT = 10;
 export const HOME_TONIGHT_LIMIT = 3;
@@ -221,6 +232,32 @@ export const HOME_PEOPLE_LIMIT = 8;
 // 二期两栏（D-P2-07）：追到哪了 ListCollectionProgress({ continue_only, limit })；想看已在库 ListWatchlistInLibrary(limit)。
 export const HOME_PROGRESS_LIMIT = 12;
 export const HOME_WATCHLIST_LIMIT = 12;
+// 「查看全部」（2026-10-14）：各块多取一条，取到了就说明没放全，标题右边给「查看全部」——继续观看、最近添加去「视频」页的
+// 同一个视图（{ watch: 'continue_watching' | 'recently_added' }），追到哪了、想看已在库开 ViewAllDialog 按页取全。
+export function homeTake(list, limit) {
+  const items = Array.isArray(list) ? list : [];
+  return { items: items.slice(0, limit), more: items.length > limit };
+}
+
+// 想看条目自己有海报就用它，否则用片库那部片的海报（服务端没有海报时回落缩略图）。
+export function homeWatchlistPoster(item) {
+  return item?.has_poster ? `/preview/watchlist-poster/${Number(item.entry_id)}` : videoArtwork(Number(item?.video_id), 'poster');
+}
+
+export function homeWatchlistSubtitle(item) {
+  const year = Number(item?.year || 0);
+  return [year > 0 ? String(year) : '', item?.origin === 'auto' ? '自动匹配' : ''].filter(Boolean).join(' · ');
+}
+
+// 「查看全部」弹窗里想看已在库的一张卡（与区块同一套海报、片名、副标题）。
+export function homeWatchlistCard(item) {
+  const videoID = Number(item?.video_id || 0);
+  if (!videoID) return null;
+  return {
+    key: Number(item.entry_id), videoID, cover: homeWatchlistPoster(item),
+    title: item.entry_title || item.video_title || '未命名', subtitle: homeWatchlistSubtitle(item), badge: ''
+  };
+}
 
 // 大图选哪一部：继续观看的第一条优先（它还在读时先等它），没有再取今晚看什么的第一条。
 // 两块都读成功又都为空时给一句引导；有一块失败又挑不出时不出大图，失败写在各自区块里。
@@ -249,20 +286,24 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
-  components: { AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile },
+  components: { AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、追到哪了、最近添加、想看已在库、本月回顾；期间可能看过片），
   // 取回之前保留现有内容。今晚看什么只在「换一批」时重抽，大图定下后不再换。
   props: { pageActive: { type: Boolean, default: true } },
-  // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey)：回顾页、片库、设置。
+  // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey, params?)：回顾页、片库、设置，
+  // 「查看全部」带 { watch } 去「视频」页。
   emits: ['open-video', 'navigate', 'open-person'],
   data() {
     return {
       // 各块的 loaded：上一次取成功了，块里显示的就是结果（空就是不显示）；重取期间保持这个样子（见 runBlock）。
-      continueBlock: { loading: true, loaded: false, error: '', items: [] },
-      progressBlock: { loading: true, loaded: false, error: '', items: [] },
-      watchlistBlock: { loading: true, loaded: false, error: '', items: [] },
+      // more：这一块没放全（多取的那一条取到了），标题右边给「查看全部」。
+      continueBlock: { loading: true, loaded: false, error: '', items: [], more: false },
+      progressBlock: { loading: true, loaded: false, error: '', items: [], more: false },
+      watchlistBlock: { loading: true, loaded: false, error: '', items: [], more: false },
       tonightBlock: { loading: true, loaded: false, error: '', items: [], first: null, notice: '' },
-      recentBlock: { loading: true, loaded: false, error: '', items: [] },
+      recentBlock: { loading: true, loaded: false, error: '', items: [], more: false },
+      // 开着的「查看全部」弹窗：'' | 'progress' | 'watchlist'。
+      viewAll: '',
       recapBlock: { loading: true, loaded: false, error: '', result: null },
       heroArtwork: { id: 0, hasFanart: null },
       // 第一次挑出来的大图（ready 的那一份）：之后回到首页、换一批都不换它。
@@ -300,6 +341,21 @@ export default {
       };
     },
     progressCards() { return (this.progressBlock.items || []).map(collectionProgressCard).filter(Boolean); },
+    viewAllDialog() {
+      if (this.viewAll === 'progress') {
+        return {
+          title: '追到哪了', unit: '个', dataTest: 'home-progress-dialog', toCard: collectionProgressCard,
+          fetchPage: (offset, limit) => ListCollectionProgressPage({ collection_ids: [], continue_only: true, offset, limit })
+        };
+      }
+      if (this.viewAll === 'watchlist') {
+        return {
+          title: '想看的片片库里已有', unit: '部', dataTest: 'home-watchlist-dialog', toCard: homeWatchlistCard,
+          fetchPage: (offset, limit) => ListWatchlistInLibraryPage(offset, limit)
+        };
+      }
+      return null;
+    },
     // 会改变本页排版的状态（各块与大图）：layoutState 侦听据此在 DOM 更新后检查视口顶部那一块。
     layoutState() {
       return [this.hero.state, this.continueBlock, this.progressBlock, this.tonightBlock, this.recentBlock, this.watchlistBlock, this.recapBlock];
@@ -370,32 +426,29 @@ export default {
       return Promise.all([this.loadContinue(), this.loadProgress(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
     },
     loadContinue() {
-      return this.runBlock('continueBlock', '继续观看', async () => ({
-        items: (await ListContinueWatchingWithFilter({}, '', 0, HOME_CONTINUE_LIMIT))?.videos || []
-      }));
+      return this.runBlock('continueBlock', '继续观看', async () =>
+        homeTake((await ListContinueWatchingWithFilter({}, '', 0, HOME_CONTINUE_LIMIT + 1))?.videos, HOME_CONTINUE_LIMIT));
     },
     loadProgress() {
-      return this.runBlock('progressBlock', '追到哪了', async () => ({
-        items: (await ListCollectionProgress({ collection_ids: [], continue_only: true, limit: HOME_PROGRESS_LIMIT })) || []
-      }));
+      return this.runBlock('progressBlock', '追到哪了', async () =>
+        homeTake(await ListCollectionProgress({ collection_ids: [], continue_only: true, limit: HOME_PROGRESS_LIMIT + 1 }), HOME_PROGRESS_LIMIT));
     },
     loadWatchlist() {
-      return this.runBlock('watchlistBlock', '想看片单', async () => ({
-        items: ((await ListWatchlistInLibrary(HOME_WATCHLIST_LIMIT)) || []).filter(item => Number(item?.video_id) > 0)
-      }));
+      return this.runBlock('watchlistBlock', '想看片单', async () => {
+        const { items, more } = homeTake(await ListWatchlistInLibrary(HOME_WATCHLIST_LIMIT + 1), HOME_WATCHLIST_LIMIT);
+        return { items: items.filter(item => Number(item?.video_id) > 0), more };
+      });
     },
-    // 想看条目自己有海报就用它，否则用片库那部片的海报（服务端没有海报时回落缩略图）。
-    watchlistPoster(item) {
-      return item?.has_poster ? `/preview/watchlist-poster/${Number(item.entry_id)}` : videoArtwork(Number(item?.video_id), 'poster');
-    },
-    watchlistSubtitle(item) {
-      const year = Number(item?.year || 0);
-      return [year > 0 ? String(year) : '', item?.origin === 'auto' ? '自动匹配' : ''].filter(Boolean).join(' · ');
+    watchlistPoster: homeWatchlistPoster,
+    watchlistSubtitle: homeWatchlistSubtitle,
+    // 「查看全部」弹窗里点了一部：先关弹窗再进整页详情。
+    openFromViewAll(id) {
+      this.viewAll = '';
+      this.openVideo({ id });
     },
     loadRecent() {
-      return this.runBlock('recentBlock', '最近添加', async () => ({
-        items: (await SearchLibraryVideoPage({ filter: { smart_view: 'recently_added' }, limit: HOME_RECENT_LIMIT }))?.videos || []
-      }));
+      return this.runBlock('recentBlock', '最近添加', async () =>
+        homeTake((await SearchLibraryVideoPage({ filter: { smart_view: 'recently_added' }, limit: HOME_RECENT_LIMIT + 1 }))?.videos, HOME_RECENT_LIMIT));
     },
     loadRecap() {
       return this.runBlock('recapBlock', '本月回顾', async () => ({ result: await GetRecap(recapRequest('month', currentCursor())) }));

@@ -950,6 +950,10 @@ export function ListCollectionProgress(arg1) {
   return window['go']['main']['App']['ListCollectionProgress'](arg1);
 }
 
+export function ListCollectionProgressPage(arg1) {
+  return window['go']['main']['App']['ListCollectionProgressPage'](arg1);
+}
+
 export function ListCollectionSuggestions() {
   return window['go']['main']['App']['ListCollectionSuggestions']();
 }
@@ -1096,6 +1100,10 @@ export function ListWatchlistCandidates(arg1) {
 
 export function ListWatchlistInLibrary(arg1) {
   return window['go']['main']['App']['ListWatchlistInLibrary'](arg1);
+}
+
+export function ListWatchlistInLibraryPage(arg1, arg2) {
+  return window['go']['main']['App']['ListWatchlistInLibraryPage'](arg1, arg2);
 }
 
 export function ListWatchlistLibraryState(arg1) {

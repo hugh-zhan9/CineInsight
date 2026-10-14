@@ -340,3 +340,9 @@ func (a *App) DismissCollectionSuggestion(suggestionID uint) error {
 func (a *App) ListCollectionProgress(request services.CollectionProgressRequest) ([]services.CollectionProgress, error) {
 	return a.collectionService.ListCollectionProgress(request)
 }
+
+// ListCollectionProgressPage 是「追到哪了」的分页版（首页与「视频」页的「查看全部」）：只认 continue_only，
+// 按 offset / limit 取一页并带上全部在追的个数（total、has_more）。
+func (a *App) ListCollectionProgressPage(request services.CollectionProgressRequest) (*services.CollectionProgressPage, error) {
+	return a.collectionService.ListCollectionProgressPage(request)
+}

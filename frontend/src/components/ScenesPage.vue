@@ -82,7 +82,7 @@
 
     <div v-else class="scenes-results" data-test="scenes-results">
       <section v-for="group in groups" :key="group.videoID" class="scenes-group" :data-test="`scenes-group-${group.videoID}`">
-        <h3 class="scenes-group__title">{{ group.title }} <small>{{ group.hits.length }} 处</small></h3>
+        <h3 class="scenes-group__title">{{ group.title }} <small :data-test="`scenes-count-${group.videoID}`">{{ truncated ? `已列出 ${group.hits.length} 处` : `${group.hits.length} 处` }}</small></h3>
         <div v-for="(hit, index) in group.hits" :key="`${hit.source}-${hit.start_ms}-${index}`" class="scenes-hit-row">
         <button
           type="button"
@@ -121,6 +121,11 @@
         </div>
         </div>
       </section>
+      <!-- 还有没列出的命中（后端 truncated）：能多取就给「加载更多」，到了单次上限如实说只列出了这些。 -->
+      <div v-if="truncated" class="scenes-more" data-test="scenes-more">
+        <button v-if="canLoadMore" type="button" class="btn btn--secondary" :disabled="loadingMore" data-test="scenes-load-more" @click="loadMoreHits">{{ loadingMore ? '正在加载…' : '加载更多' }}</button>
+        <p v-else class="help-text" data-test="scenes-cap-note">{{ capNote }}</p>
+      </div>
     </div>
     <QuoteCardDialog v-if="quoteCard" v-bind="quoteCard" @close="quoteCard = null" />
   </section>
@@ -165,6 +170,9 @@ import SegmentedControl from './ui/SegmentedControl.vue';
 import ProgressBar from './ui/ProgressBar.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 
+// 一次取多少条命中；「加载更多」每次多取一批，后端单次最多 200（sceneMaxLimit）。后端如实标 truncated（还有没列出的）。
+export const SCENE_PAGE_LIMIT = 50;
+export const SCENE_MAX_LIMIT = 200;
 const PREPARABLE_STATES = ['missing_python', 'missing_venv', 'missing_model', 'download_failed'];
 const RUNTIME_STATE_TEXT = {
   available: '本地画面模型已就绪',
@@ -202,6 +210,10 @@ export default {
       result: null,
       searching: false,
       searched: false,
+      // 当前这次检索：limit 是已取到的条数上限，lastSearch(limit) 用同样的条件再查一次（「加载更多」）。
+      limit: SCENE_PAGE_LIMIT,
+      lastSearch: null,
+      loadingMore: false,
       errorMessage: '',
       // 以图搜片：上传的图 { dataURL, name }；相似画面：{ videoID, atMS, title }。两者互斥，检索结果都是画面命中。
       imageQuery: null,
@@ -221,6 +233,14 @@ export default {
     },
     groups() {
       return groupSceneHits(this.result?.hits || []);
+    },
+    // 还有没列出的命中：每部的「N 处」只是已列出的，写成「已列出 N 处」。
+    truncated() { return Boolean(this.result?.truncated); },
+    canLoadMore() { return this.truncated && this.limit < SCENE_MAX_LIMIT && typeof this.lastSearch === 'function'; },
+    capNote() {
+      if (!this.truncated || this.canLoadMore) return '';
+      const count = (this.result?.hits || []).length;
+      return this.imageSearch ? `只显示最相似的前 ${count} 条。` : `只显示前 ${count} 条，换个更具体的说法缩小范围。`;
     },
     notices() {
       return this.result?.notices || [];
@@ -362,6 +382,8 @@ export default {
       this.result = null;
       this.searched = false;
       this.searching = false;
+      this.loadingMore = false;
+      this.lastSearch = null;
       this.errorMessage = '';
     },
     clearScope() {
@@ -385,19 +407,22 @@ export default {
       if (!this.canSearch) return;
       this.imageQuery = null;
       this.similarSource = null;
-      return this.runSearch(() => SearchScenes({ query: this.query.trim(), mode: this.mode, filter: this.scopeFilter, limit: 50 }));
+      const request = { query: this.query.trim(), mode: this.mode, filter: this.scopeFilter };
+      return this.startSearch(limit => SearchScenes({ ...request, limit }));
     },
     searchImage(image) {
       this.imageQuery = image;
       this.similarSource = null;
       const encoded = image.dataURL.slice(image.dataURL.indexOf(',') + 1);
-      return this.runSearch(() => SearchScenesByImage({ image_base64: encoded, video_id: 0, at_ms: 0, filter: this.scopeFilter, limit: 50 }));
+      const filter = this.scopeFilter;
+      return this.startSearch(limit => SearchScenesByImage({ image_base64: encoded, video_id: 0, at_ms: 0, filter, limit }));
     },
     searchSimilar(source) {
       this.imageQuery = null;
       this.similarSource = { videoID: Number(source.videoID), atMS: Math.max(0, Math.round(Number(source.atMS) || 0)), title: source.title || '' };
       const { videoID, atMS } = this.similarSource;
-      return this.runSearch(() => SearchScenesByImage({ image_base64: '', video_id: videoID, at_ms: atMS, filter: this.scopeFilter, limit: 50 }));
+      const filter = this.scopeFilter;
+      return this.startSearch(limit => SearchScenesByImage({ image_base64: '', video_id: videoID, at_ms: atMS, filter, limit }));
     },
     clearImageQuery() {
       this.imageQuery = null;
@@ -438,22 +463,35 @@ export default {
       event.preventDefault();
       return this.useImageFile(file);
     },
-    async runSearch(request) {
+    // 一次新的检索：记下条件（「加载更多」用同样的条件多取），从第一批取起。
+    startSearch(fetch) {
+      this.lastSearch = fetch;
+      return this.runSearch(fetch, SCENE_PAGE_LIMIT);
+    },
+    // 加载更多：同样的条件多取一批（最多 200），已列出的留在原处，新的结果到了整份换上（前面那些不变，滚动位置不动）。
+    loadMoreHits() {
+      if (!this.canLoadMore || this.loadingMore || this.searching) return null;
+      return this.runSearch(this.lastSearch, Math.min(this.limit + SCENE_PAGE_LIMIT, SCENE_MAX_LIMIT), { more: true });
+    },
+    async runSearch(fetch, limit, { more = false } = {}) {
       const generation = this.searchGeneration.next();
-      this.searching = true;
+      this[more ? 'loadingMore' : 'searching'] = true;
       this.errorMessage = '';
       try {
-        const result = await request();
+        const result = await fetch(limit);
         if (!this.searchGeneration.isCurrent(generation)) return;
         this.result = result || { hits: [], notices: [] };
+        this.limit = limit;
         if (result?.coverage) this.coverage = result.coverage;
       } catch (err) {
         if (!this.searchGeneration.isCurrent(generation)) return;
-        this.result = null;
+        // 加载更多失败：已列出的留着，只写原因。
+        if (!more) this.result = null;
         this.errorMessage = sceneErrorText(err);
       } finally {
         if (this.searchGeneration.isCurrent(generation)) {
           this.searching = false;
+          this.loadingMore = false;
           this.searched = true;
         }
       }
@@ -563,6 +601,8 @@ export default {
 .scenes-results { display: grid; gap: 18px; margin-top: 18px; }
 .scenes-group__title { margin: 0 0 8px; font-size: var(--fs-section); }
 .scenes-group__title small { color: var(--text-secondary); font-weight: var(--fw-regular); margin-left: 6px; }
+.scenes-more { display: flex; justify-content: center; }
+.scenes-more .help-text { margin: 0; }
 .scenes-page--dropping { outline: 2px dashed var(--accent-color); outline-offset: -6px; }
 .scenes-image-query { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--accent-color); border-radius: var(--radius); background: var(--accent-soft); font-size: var(--fs-secondary); }
 .scenes-image-query__thumb { width: 96px; height: 54px; border-radius: 4px; object-fit: cover; background: var(--control-bg); }

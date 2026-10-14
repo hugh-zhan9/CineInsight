@@ -90,6 +90,8 @@ type SceneSearchResult struct {
 	Hits     []SceneHit    `json:"hits"`
 	Coverage SceneCoverage `json:"coverage"`
 	Notices  []string      `json:"notices"`
+	// Truncated：符合的命中多于这次的 limit、截掉了一部分；加大 limit（最多 200）或缩小范围才看得到其余的。
+	Truncated bool `json:"truncated"`
 }
 
 // SceneSearchService 执行场景检索；与建索引共用运行时可用性判定与常驻 worker。
@@ -166,8 +168,13 @@ func (s *SceneSearchService) Search(ctx context.Context, request SceneSearchRequ
 		if s.syncSubtitles != nil {
 			s.syncSubtitles()
 		}
-		if dialogue, err = searchSceneDialogue(ctx, request.Query, request.Filter, request.Limit); err != nil {
+		// 多取一条判断 limit 之外还有没有（对白按视频、时间排，截掉多出来的那条与直接按 limit 取一样）。
+		if dialogue, err = searchSceneDialogue(ctx, request.Query, request.Filter, request.Limit+1); err != nil {
 			return SceneSearchResult{}, err
+		}
+		if len(dialogue) > request.Limit {
+			dialogue = dialogue[:request.Limit]
+			result.Truncated = true
 		}
 		if coverage.SubtitleIndexed == 0 {
 			result.Notices = append(result.Notices, SceneNoticeSubtitleIndexEmpty)
@@ -175,10 +182,12 @@ func (s *SceneSearchService) Search(ctx context.Context, request SceneSearchRequ
 	}
 	if request.Mode != SceneModeDialogue {
 		var notice string
-		visual, notice, err = s.searchVisual(ctx, request, provider, modelID, intervalMS, coverage)
+		var visualTruncated bool
+		visual, notice, visualTruncated, err = s.searchVisual(ctx, request, provider, modelID, intervalMS, coverage)
 		if err != nil {
 			return SceneSearchResult{}, err
 		}
+		result.Truncated = result.Truncated || visualTruncated
 		if notice != "" {
 			result.Notices = append(result.Notices, notice)
 		}
@@ -190,6 +199,7 @@ func (s *SceneSearchService) Search(ctx context.Context, request SceneSearchRequ
 		result.Hits = visual
 	default:
 		result.Hits = fuseSceneHits(dialogue, visual, request.Limit)
+		result.Truncated = result.Truncated || len(dialogue)+len(visual) > request.Limit
 	}
 	if err := fillSceneHitTitles(ctx, result.Hits); err != nil {
 		return SceneSearchResult{}, err
@@ -358,35 +368,53 @@ func loadSceneDialogueContext(ctx context.Context, rows []sceneDialogueRow) (map
 }
 
 // searchVisual 执行画面部分。本地运行时不可用或推理出错时只给提示、不改用任何其他提供方（TC-18）。
-func (s *SceneSearchService) searchVisual(ctx context.Context, request SceneSearchRequest, provider, modelID string, intervalMS int64, coverage SceneCoverage) ([]SceneHit, string, error) {
+func (s *SceneSearchService) searchVisual(ctx context.Context, request SceneSearchRequest, provider, modelID string, intervalMS int64, coverage SceneCoverage) ([]SceneHit, string, bool, error) {
 	if provider == SceneProviderExternal {
 		if modelID == "" {
-			return []SceneHit{}, SceneNoticeExternalNotConfigured, nil
+			return []SceneHit{}, SceneNoticeExternalNotConfigured, false, nil
 		}
 		if coverage.VisualIndexed == 0 {
-			return []SceneHit{}, SceneNoticeVisualIndexEmpty, nil
+			return []SceneHit{}, SceneNoticeVisualIndexEmpty, false, nil
 		}
-		hits, err := searchSceneCaptions(ctx, request.Query, request.Filter, modelID, intervalMS, request.Limit)
-		return hits, "", err
+		hits, err := searchSceneCaptions(ctx, request.Query, request.Filter, modelID, intervalMS, request.Limit+1)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if len(hits) > request.Limit {
+			return hits[:request.Limit], "", true, nil
+		}
+		return hits, "", false, nil
 	}
 	if s.vectors == nil || s.runtimeAvailable == nil || !s.runtimeAvailable() {
-		return []SceneHit{}, SceneNoticeRuntimeUnavailable, nil
+		return []SceneHit{}, SceneNoticeRuntimeUnavailable, false, nil
 	}
 	if coverage.VisualIndexed == 0 {
-		return []SceneHit{}, SceneNoticeVisualIndexEmpty, nil
+		return []SceneHit{}, SceneNoticeVisualIndexEmpty, false, nil
 	}
 	vectors, err := s.vectors.EmbedTexts(ctx, []string{request.Query})
 	if err != nil || len(vectors) != 1 {
 		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+			return nil, "", false, ctx.Err()
 		}
-		return []SceneHit{}, SceneNoticeVisualFailed, nil
+		return []SceneHit{}, SceneNoticeVisualFailed, false, nil
 	}
-	candidates, err := scanSceneVisualSegments(ctx, request.Filter, modelID, intervalMS, vectors[0], request.Limit)
+	candidates, truncated, err := scanSceneVisualSegmentsCapped(ctx, request.Filter, modelID, intervalMS, vectors[0], request.Limit)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
-	return sceneVisualHits(mergeAdjacentSceneCandidates(candidates)), "", nil
+	return sceneVisualHits(mergeAdjacentSceneCandidates(candidates)), "", truncated, nil
+}
+
+// scanSceneVisualSegmentsCapped 多取一个候选判断 limit 之外还有没有：返回最好的 limit 个与「截掉了」。
+func scanSceneVisualSegmentsCapped(ctx context.Context, filter *LibraryFilter, modelID string, intervalMS int64, query []float32, limit int) ([]sceneVisualCandidate, bool, error) {
+	candidates, err := scanSceneVisualSegments(ctx, filter, modelID, intervalMS, query, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(candidates) > limit {
+		return candidates[:limit], true, nil
+	}
+	return candidates, false, nil
 }
 
 type sceneSegmentScanRow struct {

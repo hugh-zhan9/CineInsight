@@ -123,7 +123,7 @@ func (s *SceneSearchService) SearchByImage(ctx context.Context, request SceneIma
 	if !hasImage {
 		scanLimit += sceneSimilarExtraCandidates
 	}
-	candidates, err := scanSceneVisualSegments(ctx, request.Filter, modelID, intervalMS, query, scanLimit)
+	candidates, truncated, err := scanSceneVisualSegmentsCapped(ctx, request.Filter, modelID, intervalMS, query, scanLimit)
 	if err != nil {
 		return SceneSearchResult{}, err
 	}
@@ -131,6 +131,7 @@ func (s *SceneSearchService) SearchByImage(ctx context.Context, request SceneIma
 		candidates = excludeSceneSource(candidates, request.VideoID, request.AtMS)
 	}
 	result.Hits = sceneVisualHits(mergeAdjacentSceneCandidates(candidates))
+	result.Truncated = truncated || len(result.Hits) > request.Limit
 	if len(result.Hits) > request.Limit {
 		result.Hits = result.Hits[:request.Limit]
 	}

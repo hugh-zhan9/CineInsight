@@ -8,13 +8,17 @@ const api = vi.hoisted(() => ({
   GetRecap: vi.fn(),
   GetVideoDetails: vi.fn(),
   ListCollectionProgress: vi.fn(),
+  ListCollectionProgressPage: vi.fn(),
   ListContinueWatchingWithFilter: vi.fn(),
   ListWatchlistInLibrary: vi.fn(),
+  ListWatchlistInLibraryPage: vi.fn(),
   SearchLibraryVideoPage: vi.fn(),
   SuggestTonightVideos: vi.fn()
 }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
-import HomePage, { HOME_PEOPLE_LIMIT, HOME_PROGRESS_LIMIT, HOME_WATCHLIST_LIMIT, homeProgressText, pickHomeHero } from './HomePage.vue';
+import HomePage, {
+  HOME_CONTINUE_LIMIT, HOME_PEOPLE_LIMIT, HOME_PROGRESS_LIMIT, HOME_RECENT_LIMIT, HOME_WATCHLIST_LIMIT, homeProgressText, pickHomeHero
+} from './HomePage.vue';
 import RecapBackdrop from '../recap/RecapBackdrop.vue';
 
 enableAutoUnmount(afterEach);
@@ -40,6 +44,8 @@ beforeEach(() => {
   api.GetVideoDetails.mockReset().mockResolvedValue({ artwork: { has_poster: false, has_fanart: false } });
   api.ListCollectionProgress.mockReset().mockResolvedValue([]);
   api.ListWatchlistInLibrary.mockReset().mockResolvedValue([]);
+  api.ListCollectionProgressPage.mockReset().mockResolvedValue({ items: [], total: 0, has_more: false });
+  api.ListWatchlistInLibraryPage.mockReset().mockResolvedValue({ items: [], total: 0, has_more: false });
 });
 
 async function mountPage(props = {}) {
@@ -53,9 +59,9 @@ const heroBackdrop = wrapper => wrapper.findAllComponents(RecapBackdrop).find(it
 describe('HomePage blocks', () => {
   it('loads every block from its existing API with the documented arguments', async () => {
     const wrapper = await mountPage();
-    expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledWith({}, '', 0, 10);
+    expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledWith({}, '', 0, 11); // 多取一条判断有没有放全
     expect(api.SuggestTonightVideos).toHaveBeenCalledWith({ filter: {}, watch_state: 'any', favorites_only: false, max_duration_seconds: 0, exclude_ids: [] }, 3);
-    expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith({ filter: { smart_view: 'recently_added' }, limit: 14 });
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith({ filter: { smart_view: 'recently_added' }, limit: 15 });
     expect(api.GetRecap).toHaveBeenCalledTimes(1);
     expect(api.GetRecap).toHaveBeenCalledWith(thisMonth);
 
@@ -281,9 +287,9 @@ describe('HomePage phase-2 sections', () => {
     api.ListCollectionProgress.mockResolvedValue([progress(1, { has_cover: true }), progress(2, { next: null, complete: true }), progress(3, { next: { video_id: 203, title: '续', work_index: 3, resume: true } })]);
     api.ListWatchlistInLibrary.mockResolvedValue([wish(1, { has_poster: true }), wish(2, { origin: 'auto' }), wish(3, { video_id: 0 })]);
     const wrapper = await mountPage();
-    expect(api.ListCollectionProgress).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, limit: HOME_PROGRESS_LIMIT });
+    expect(api.ListCollectionProgress).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, limit: HOME_PROGRESS_LIMIT + 1 });
     expect(HOME_PROGRESS_LIMIT).toBe(12);
-    expect(api.ListWatchlistInLibrary).toHaveBeenCalledWith(HOME_WATCHLIST_LIMIT);
+    expect(api.ListWatchlistInLibrary).toHaveBeenCalledWith(HOME_WATCHLIST_LIMIT + 1);
     expect(HOME_WATCHLIST_LIMIT).toBe(12);
     expect(sectionOrder(wrapper)).toEqual(['home-continue', 'home-progress', 'home-tonight', 'home-recent', 'home-watchlist', 'home-people', 'home-highlight']);
 
@@ -558,5 +564,66 @@ describe('HomePage keeps its place when coming back from the full-page detail', 
     retry([]);
     await flushPromises();
     expect(wrapper.find('[data-test="home-watchlist"]').exists()).toBe(false);
+  });
+});
+
+// 「查看全部」（2026-10-14）：只有没放全（多取的那一条取到了）的块才有；继续观看、最近添加去「视频」页的同一视图，
+// 追到哪了、想看已在库开弹窗按页取全（与区块同一口径）。
+describe('HomePage view-all', () => {
+  const many = (count, make) => Array.from({ length: count }, (_, index) => make(index + 1));
+  const progress = id => ({ collection_id: id, name: `作品集${id}`, has_cover: false, total_works: 3, watched_works: 1, next: { video_id: 500 + id, title: `下一部${id}`, work_index: 2 } });
+  const wish = id => ({ entry_id: id, entry_title: `想看${id}`, year: 2000, has_poster: false, video_id: 600 + id, origin: 'manual' });
+
+  it('shows no 查看全部 when every block fits', async () => {
+    const wrapper = await mountPage();
+    for (const key of ['continue', 'progress', 'recent', 'watchlist']) expect(wrapper.find(`[data-test="home-${key}-all"]`).exists()).toBe(false);
+  });
+
+  it('continue / recent: trims the extra item and navigates to the same view on 视频', async () => {
+    api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: many(HOME_CONTINUE_LIMIT + 1, id => video(id, { watch_position_seconds: 30 })) });
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: many(HOME_RECENT_LIMIT + 1, id => video(100 + id)) });
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="home-continue"] .recap-strip__item')).toHaveLength(HOME_CONTINUE_LIMIT);
+    expect(wrapper.findAll('[data-test="home-recent-item"]')).toHaveLength(HOME_RECENT_LIMIT);
+    await wrapper.get('[data-test="home-continue-all"]').trigger('click');
+    await wrapper.get('[data-test="home-recent-all"]').trigger('click');
+    expect(wrapper.emitted('navigate')).toEqual([['videos', { watch: 'continue_watching' }], ['videos', { watch: 'recently_added' }]]);
+  });
+
+  it('追到哪了: opens a paged dialog with the same set and opens the picked video', async () => {
+    api.ListCollectionProgress.mockResolvedValue(many(HOME_PROGRESS_LIMIT + 1, progress));
+    api.ListCollectionProgressPage
+      .mockResolvedValueOnce({ items: many(50, progress), total: 51, has_more: true })
+      .mockResolvedValueOnce({ items: [progress(51)], total: 51, has_more: false });
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="home-progress-item"]')).toHaveLength(HOME_PROGRESS_LIMIT);
+    await wrapper.get('[data-test="home-progress-all"]').trigger('click');
+    await flushPromises();
+    expect(api.ListCollectionProgressPage).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, offset: 0, limit: 50 });
+    const dialog = wrapper.get('[data-test="home-progress-dialog"]');
+    expect(dialog.get('[data-test="view-all-count"]').text()).toBe('共 51 个');
+    expect(dialog.findAll('[data-test="view-all-item"]')).toHaveLength(50);
+    await dialog.get('[data-test="view-all-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListCollectionProgressPage).toHaveBeenLastCalledWith({ collection_ids: [], continue_only: true, offset: 50, limit: 50 });
+    expect(wrapper.findAll('[data-test="view-all-item"]')).toHaveLength(51);
+    expect(wrapper.find('[data-test="view-all-more"]').exists()).toBe(false);
+    await wrapper.findAll('[data-test="view-all-item"]')[50].trigger('click');
+    expect(wrapper.emitted('open-video')).toEqual([[551]]);
+    expect(wrapper.find('[data-test="home-progress-dialog"]').exists()).toBe(false);
+  });
+
+  it('想看已在库: opens a paged dialog from ListWatchlistInLibraryPage', async () => {
+    api.ListWatchlistInLibrary.mockResolvedValue(many(HOME_WATCHLIST_LIMIT + 1, wish));
+    api.ListWatchlistInLibraryPage.mockResolvedValue({ items: many(13, wish), total: 13, has_more: false });
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="home-watchlist-item"]')).toHaveLength(HOME_WATCHLIST_LIMIT);
+    await wrapper.get('[data-test="home-watchlist-all"]').trigger('click');
+    await flushPromises();
+    expect(api.ListWatchlistInLibraryPage).toHaveBeenCalledWith(0, 50);
+    const dialog = wrapper.get('[data-test="home-watchlist-dialog"]');
+    expect(dialog.get('[data-test="view-all-count"]').text()).toBe('共 13 部');
+    expect(dialog.findAll('[data-test="view-all-item"]')).toHaveLength(13);
+    expect(dialog.find('[data-test="view-all-more"]').exists()).toBe(false);
   });
 });
