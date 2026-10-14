@@ -1,5 +1,5 @@
 <template>
-  <div v-if="visible" class="ui-selection-bar" role="toolbar" aria-label="已选条目的批量操作">
+  <div v-if="visible" :ref="setBarElement" class="ui-selection-bar" role="toolbar" aria-label="已选条目的批量操作">
     <span class="ui-selection-bar__count" aria-live="polite" data-test="selection-bar-count">{{ countText }}</span>
     <button
       v-if="canSelectAllMatching"
@@ -40,6 +40,18 @@ function isRendered(element) {
   return true;
 }
 
+// 吸底的操作条从窗口底边往上占多高（自身高度 + 吸底的下边距），写在根节点的 --selection-bar-inset 上：
+// 浮在右下 / 左下角的全局提示据此抬到它上面（AppFeedback），操作条折成几行都跟着变。片库、图片管理、清理中心
+// 切走时只隐藏（v-show）不卸载，各自的操作条还挂着：藏起来的尺寸是 0（ResizeObserver 也会报这一下），不算；
+// 看得见的有几条取最高的。没有看得见的操作条时去掉这个变量。
+const barInsets = new Map();
+function publishBarInset() {
+  const inset = Math.max(0, ...barInsets.values());
+  const style = document.documentElement.style;
+  if (inset > 0) style.setProperty('--selection-bar-inset', `${inset}px`);
+  else style.removeProperty('--selection-bar-inset');
+}
+
 export default {
   name: 'SelectionBar',
   props: {
@@ -71,6 +83,26 @@ export default {
   mounted() { document.addEventListener('keydown', this.handleKeydown); },
   beforeUnmount() { document.removeEventListener('keydown', this.handleKeydown); },
   methods: {
+    // 操作条节点随 v-if 出现 / 消失（组件卸载时也会以 null 再调一次）：出现时开始量它的高度，消失时撤掉它占的位置。
+    setBarElement(element) {
+      if (element === this._barElement) return;
+      this._barResize?.disconnect();
+      this._barResize = null;
+      this._barElement = element;
+      barInsets.delete(this);
+      if (element && typeof ResizeObserver === 'function') {
+        this._barResize = new ResizeObserver(() => this.measureBar());
+        this._barResize.observe(element);
+      }
+      publishBarInset();
+    },
+    measureBar() {
+      const element = this._barElement;
+      const height = element ? element.getBoundingClientRect().height : 0;
+      if (height > 0) barInsets.set(this, height + (parseFloat(getComputedStyle(element).bottom) || 0));
+      else barInsets.delete(this);
+      publishBarInset();
+    },
     handleKeydown(event) {
       if (event.key !== 'Escape' || !this.clearOnEscape || !this.visible || event.defaultPrevented) return;
       if (!this.isShown() || [...document.querySelectorAll('[role="dialog"]')].some(dialog => isRendered(dialog))) return;

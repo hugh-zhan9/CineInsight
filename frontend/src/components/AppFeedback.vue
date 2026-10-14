@@ -115,17 +115,21 @@ export default {
 <style scoped>
 /* 层级（tokens.css「层级」）：确认框与其他对话框同在 --z-modal，靠打开时 teleport 排到最上面；提示条在
    --z-toast，压在所有对话框与确认框之上——删除后「撤销」提示和随后弹出的确认框同时在时，提示也点得到，
-   点它不会落到确认框的遮罩上把确认框关掉。平时在右下角，有对话框、全窗口层或抽屉开着时挪开（见下面几条）。 */
+   点它不会落到确认框的遮罩上把确认框关掉。平时在右下角，有对话框、全窗口层或抽屉开着时挪开（见下面几条）。
+   下沿（--toast-bottom）：平时离窗口底边 16。吸底的选择操作条看得见时（SelectionBar 把它从窗口底边往上占的高度写在
+   根节点的 --selection-bar-inset 上，折成几行都量实际高度），抬到操作条上沿再往上 8。右下角与抽屉开着时的左下角都用它；
+   贴顶的几种位置（对话框、看图层、字幕工作台）与版本对比不受影响。 */
 .app-toasts {
+  --toast-bottom: max(var(--space-4), calc(var(--selection-bar-inset, 0px) + var(--space-2)));
   position: fixed;
   z-index: var(--z-toast);
   right: var(--space-4);
-  bottom: var(--space-4);
+  bottom: var(--toast-bottom);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   max-width: min(420px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
+  max-height: calc(100vh - var(--toast-bottom) - var(--space-4));
   overflow-y: auto;
 }
 
@@ -145,9 +149,9 @@ body:has(.preview-drawer:where(:not([style*="display: none"] *))) .app-toasts,
 body:has(.task-center-overlay:where(:not([style*="display: none"] *))) .app-toasts {
   top: auto;
   right: auto;
-  bottom: var(--space-4);
+  bottom: var(--toast-bottom);
   left: var(--space-4);
-  max-height: calc(100vh - 32px);
+  max-height: calc(100vh - var(--toast-bottom) - var(--space-4));
 }
 
 /* 版本对比：顶栏一排控件、两侧画面左上 / 右上角的标注（含「生成播放代理」）在上，底部是一行播放条（45px），
