@@ -115,7 +115,7 @@ export default {
 <style scoped>
 /* 层级（tokens.css「层级」）：确认框与其他对话框同在 --z-modal，靠打开时 teleport 排到最上面；提示条在
    --z-toast，压在所有对话框与确认框之上——删除后「撤销」提示和随后弹出的确认框同时在时，提示也点得到，
-   点它不会落到确认框的遮罩上把确认框关掉。平时在右下角，有对话框开着时挪到左上角（见下一条）。 */
+   点它不会落到确认框的遮罩上把确认框关掉。平时在右下角，有对话框、全窗口层或抽屉开着时挪开（见下面几条）。 */
 .app-toasts {
   position: fixed;
   z-index: var(--z-toast);
@@ -129,6 +129,36 @@ export default {
   overflow-y: auto;
 }
 
+/* 全窗口层与抽屉开着时（2026-10-14 G1）：每种层按自己的布局挑一块没有控件的地方，1024×768 与 1440×900 下都量过。
+   条件统一写成 body:has(<层的类>:where(:not([style*="display: none"] *)))：
+   - 层的类是各层根节点上本来就有的类（字幕工作台用编辑布局的类，见那一条），不另加状态；
+   - :where(:not(…)) 排除挂在 v-show 隐藏的页面里的层：片库、图片管理、清理中心切走时只隐藏不卸载，详情抽屉、
+     字幕工作台、查看器可能还开着，别的页面上的提示不能跟着挪。:where 不计特异性，各条与对话框那条一样重，谁生效只看先后；
+   - 先后：抽屉与版本对比写在对话框那条之前，在它们上面再开对话框时让给对话框那条；看图层与字幕工作台写在之后，
+     它们的位置都在对话框那条的范围（左边、中线以上）以内，上面再开对话框也让得开对话框的动作，所以照旧按自己的。
+   每条都把 top / right / bottom / left / max-height 写全，几条同时命中时不会混着生效。 */
+
+/* 抽屉（详情抽屉、任务中心）靠右停靠，里面从上到下都是控件：提示挪到另一边的左下角。
+   人脸来源的「查看视频片段」也是这个抽屉，但加宽到 900：窗口 1024 宽时左边只剩 124，提示仍会压到抽屉左下角。 */
+body:has(.preview-drawer:where(:not([style*="display: none"] *))) .app-toasts,
+body:has(.task-center-overlay:where(:not([style*="display: none"] *))) .app-toasts {
+  top: auto;
+  right: auto;
+  bottom: var(--space-4);
+  left: var(--space-4);
+  max-height: calc(100vh - 32px);
+}
+
+/* 版本对比：顶栏一排控件、两侧画面左上 / 右上角的标注（含「生成播放代理」）在上，底部是一行播放条（45px），
+   滑动分界线的把手在舞台正中。提示抬到播放条之上的右下角、只占下半截：下沿离底 64，上沿在中线以下 32。 */
+body:has(.version-compare:where(:not([style*="display: none"] *))) .app-toasts {
+  top: auto;
+  right: var(--space-4);
+  bottom: calc(var(--space-7) + var(--space-4));
+  left: auto;
+  max-height: calc(50vh - 96px);
+}
+
 /* 有对话框开着时（BaseModal 的遮罩 .modal-overlay 在页面里），提示挪到左上角、只占窗口上半截，让开对话框的动作。
    对话框都居中，DialogShell 的动作是底部一排（「取消」在左、主操作在右）和右上角 ×：底部那一排总在窗口中线以下
    （带按钮的对话框最矮也比两倍底栏高），× 总在右半边，所以左上角的上半截最多压到标题或正文开头。
@@ -140,6 +170,43 @@ body:has(.modal-overlay) .app-toasts {
   bottom: auto;
   left: var(--space-4);
   max-height: calc(50vh - 24px);
+}
+
+/* 图片管理查看器、清理查看器：× 在右上角，右边是信息栏（图片管理）或「下一张」，「上一张」贴左边、在竖直正中
+   （上沿在中线以上 20 / 32），清理查看器底部一行是文件名与路径。提示贴左上角，下沿在中线以上 48。 */
+body:has(.photo-viewer:where(:not([style*="display: none"] *))) .app-toasts,
+body:has(.cleanup-viewer:where(:not([style*="display: none"] *))) .app-toasts {
+  top: var(--space-4);
+  right: auto;
+  bottom: auto;
+  left: var(--space-4);
+  max-height: calc(50vh - 64px);
+}
+
+/* 观看侧看图（DialogShell 全窗口，本身也有 .modal-overlay）：标题栏横贯顶部（文件名与 ×，一行高 53），舞台在左、
+   信息栏在右，「上一张」在舞台竖直正中（上沿在中线以下约 4）。对话框那条会压住文件名：提示从标题栏下面 72 起，
+   下沿在中线以上 8。 */
+body:has(.photo-lightbox:where(:not([style*="display: none"] *))) .app-toasts {
+  top: calc(var(--space-7) + var(--space-5));
+  right: auto;
+  bottom: auto;
+  left: var(--space-4);
+  max-height: calc(50vh - 80px);
+}
+
+/* 字幕工作台铺满窗口（四周只留 16）。编辑布局（.subtitle-workbench__layout）在时哪儿都有控件：右下角是「保存字幕」，
+   标题栏右端是「刷新」与 ×，编辑区顶上是撤销 / 重做，左栏是视频与一列工具。唯一不压控件的是左栏顶上：标题与视频画面
+   的上部。提示放在那里，宽不出左栏（390），下沿 172 不到视频的控制条（左栏视频最矮是 2.39:1 的片子，画面在 94–245，
+   播放键约从 180 起）：三条提示（其中一条折成两行）放得下，再多在框里滚动。
+   读取中、还没有字幕、编码待转换、读取失败这几种状态页只有顶上一块（选项与按钮居中排在上面），右下角是空的，
+   所以条件是编辑布局而不是工作台本身，状态页上提示照常在右下角。 */
+body:has(.subtitle-workbench__layout:where(:not([style*="display: none"] *))) .app-toasts {
+  top: var(--space-2);
+  right: auto;
+  bottom: auto;
+  left: var(--space-5);
+  max-width: 360px;
+  max-height: 164px;
 }
 
 .app-toast {
