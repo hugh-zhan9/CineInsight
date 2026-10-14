@@ -13,7 +13,7 @@
         </span>
         <span class="recap-feed__text">
           <strong>{{ item.title || '已删除的项' }}</strong>
-          <small>{{ item.kind === 'image' ? '看图' : '播放' }} · {{ sourceLabel(item.kind, item.source) }}</small>
+          <small>{{ item.available ? '' : '已不在库中 · ' }}{{ item.kind === 'image' ? '看图' : '播放' }} · {{ sourceLabel(item.kind, item.source) }}</small>
         </span>
         <time class="recap-feed__time" :datetime="item.at" :title="formatClock(item.at)">{{ relativeTime(item.at, now) }}</time>
       </button>
@@ -23,6 +23,7 @@
 
 <script>
 // 实时页的今日流水：最新的在上，新条目从上方滑入（TransitionGroup），减少动态效果时不做动画。
+// 「查看全部」对话框也用它列全天流水：那里含已不在库中的项，灰显、标「已不在库中」、不可点。
 import { formatClock, imageThumbnail, relativeTime, sourceLabel, videoThumbnail } from '../../utils/recap.js';
 
 export default {

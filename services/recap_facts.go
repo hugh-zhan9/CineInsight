@@ -70,29 +70,34 @@ type recapNewFavoriteRow struct {
 	Name         string
 	DisplayTitle string
 	FavoritedAt  time.Time
+	IsStale      bool
 }
 
-// recapNewFavoriteSamples 取本期新收藏里仍可展示（未失效）的视频与图片，按收藏时间从近到远合并后取前 limit 个；
-// 同一时刻视频在前、再按 ID 大的在前。两边各取前 limit 个再合并，结果与整体排序取前 limit 个相同。
-func recapNewFavoriteSamples(db *gorm.DB, start, end time.Time, limit int, loc *time.Location) ([]RecapNewFavorite, error) {
+// recapNewFavoriteList 取本期新收藏的视频与图片，按收藏时间从近到远合并后取 [offset, offset+limit)；
+// 同一时刻视频在前、再按 ID 大的在前。两边各取前 offset+limit 个再合并，结果与整体排序后取同一段相同。
+// onlyAvailable 时只取未失效的（页面样本）；否则含已失效的、Available=false（「查看全部」，与计数同口径）。
+func recapNewFavoriteList(db *gorm.DB, start, end time.Time, offset, limit int, onlyAvailable bool, loc *time.Location) ([]RecapNewFavorite, error) {
 	var videos, images []recapNewFavoriteRow
 	recent := func(model any, columns string, rows *[]recapNewFavoriteRow) error {
-		return recapNewFavorites(db, model, start, end).Where("is_stale = ?", false).Select(columns).
-			Order("favorited_at DESC").Order("id DESC").Limit(limit).Scan(rows).Error
+		query := recapNewFavorites(db, model, start, end)
+		if onlyAvailable {
+			query = query.Where("is_stale = ?", false)
+		}
+		return query.Select(columns).Order("favorited_at DESC").Order("id DESC").Limit(offset + limit).Scan(rows).Error
 	}
-	if err := recent(&models.Video{}, "id, name, display_title, favorited_at", &videos); err != nil {
+	if err := recent(&models.Video{}, "id, name, display_title, favorited_at, is_stale", &videos); err != nil {
 		return nil, err
 	}
-	if err := recent(&models.Image{}, "id, name, favorited_at", &images); err != nil {
+	if err := recent(&models.Image{}, "id, name, favorited_at, is_stale", &images); err != nil {
 		return nil, err
 	}
 	samples := make([]RecapNewFavorite, 0, len(videos)+len(images))
 	for _, row := range videos {
 		samples = append(samples, RecapNewFavorite{Kind: RecapActivityVideo, ID: row.ID, Title: recapVideoTitle(row.DisplayTitle, row.Name),
-			FavoritedAt: row.FavoritedAt.In(loc), Available: true})
+			FavoritedAt: row.FavoritedAt.In(loc), Available: !row.IsStale})
 	}
 	for _, row := range images {
-		samples = append(samples, RecapNewFavorite{Kind: RecapActivityImage, ID: row.ID, Title: row.Name, FavoritedAt: row.FavoritedAt.In(loc), Available: true})
+		samples = append(samples, RecapNewFavorite{Kind: RecapActivityImage, ID: row.ID, Title: row.Name, FavoritedAt: row.FavoritedAt.In(loc), Available: !row.IsStale})
 	}
 	sort.SliceStable(samples, func(i, j int) bool {
 		a, b := samples[i], samples[j]
@@ -104,7 +109,7 @@ func recapNewFavoriteSamples(db *gorm.DB, start, end time.Time, limit int, loc *
 		}
 		return a.ID > b.ID
 	})
-	return samples[:min(limit, len(samples))], nil
+	return samples[min(offset, len(samples)):min(offset+limit, len(samples))], nil
 }
 
 // recapDiaryRatedEntries 是观看日期落在期内且带评分的观影日记条目（watched_on 是本地日期串，按字符串区间比较）。
@@ -120,9 +125,9 @@ func recapDiaryRated(db *gorm.DB, start, end time.Time) (int64, error) {
 	return count, err
 }
 
-// recapDiaryRatedSamples 取本期带评分的观影日记，按观看日期从近到远、同一天 ID 大的在前（走 idx_diary_day），
-// 并标出关联的视频还能不能打开。
-func recapDiaryRatedSamples(db *gorm.DB, start, end time.Time, limit int) ([]RecapDiaryRated, error) {
+// recapDiaryRatedList 取本期带评分的观影日记 [offset, offset+limit)，按观看日期从近到远、同一天 ID 大的在前
+// （走 idx_diary_day），并标出关联的视频还能不能打开。
+func recapDiaryRatedList(db *gorm.DB, start, end time.Time, offset, limit int) ([]RecapDiaryRated, error) {
 	var rows []struct {
 		ID        uint
 		Title     string
@@ -131,7 +136,7 @@ func recapDiaryRatedSamples(db *gorm.DB, start, end time.Time, limit int) ([]Rec
 		VideoID   *uint
 	}
 	if err := recapDiaryRatedEntries(db, start, end).Select("id, title, rating, watched_on, video_id").
-		Order("watched_on DESC").Order("id DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		Order("watched_on DESC").Order("id DESC").Offset(offset).Limit(limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	videoIDs := make([]uint, 0, len(rows))

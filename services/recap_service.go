@@ -103,23 +103,8 @@ func (b *recapBuilder) build() error {
 	if b.w.period == RecapPeriodLive {
 		fetchStart = b.w.start.AddDate(0, 0, -(recapWeekDays - 1))
 	}
-	var err error
-	if b.plays, err = loadRecapPlayEvents(b.db, fetchStart, b.w.end); err != nil {
+	if err := b.loadEvents(fetchStart); err != nil {
 		return err
-	}
-	if b.views, err = loadRecapViewEvents(b.db, fetchStart, b.w.end); err != nil {
-		return err
-	}
-	b.tally = newRecapTally(b.loc)
-	for _, event := range b.plays {
-		if !event.PlayedAt.Before(b.w.start) {
-			b.tally.addPlay(event)
-		}
-	}
-	for _, event := range b.views {
-		if !event.ViewedAt.Before(b.w.start) {
-			b.tally.addView(event)
-		}
 	}
 	b.videoIDs, b.imageIDs = map[uint]bool{}, map[uint]bool{}
 	if err := b.loadAvailability(); err != nil {
@@ -160,5 +145,28 @@ func (b *recapBuilder) build() error {
 	b.result.Titles = recapTitles(recapTitleFacts{plays: b.tally.plays, views: b.tally.views, lateNight: b.tally.lateNight,
 		weekend: b.tally.weekend, newVideos: b.result.Freshness.NewVideos, rewatched: b.result.Freshness.RewatchedVideos,
 		longestStreak: b.result.Overview.LongestStreak, topTagName: b.topTagName, topTagWeight: b.topTagWeight})
+	return nil
+}
+
+// loadEvents 读 [from, end) 的播放与查看事件（实时页要多读近 7 天），只把落在本期内的计入 tally。
+func (b *recapBuilder) loadEvents(from time.Time) error {
+	var err error
+	if b.plays, err = loadRecapPlayEvents(b.db, from, b.w.end); err != nil {
+		return err
+	}
+	if b.views, err = loadRecapViewEvents(b.db, from, b.w.end); err != nil {
+		return err
+	}
+	b.tally = newRecapTally(b.loc)
+	for _, event := range b.plays {
+		if !event.PlayedAt.Before(b.w.start) {
+			b.tally.addPlay(event)
+		}
+	}
+	for _, event := range b.views {
+		if !event.ViewedAt.Before(b.w.start) {
+			b.tally.addView(event)
+		}
+	}
 	return nil
 }

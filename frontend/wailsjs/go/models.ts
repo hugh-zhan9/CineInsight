@@ -11078,6 +11078,40 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class RecapTagRank {
+	    tag: RecapTag;
+	    weight: number;
+	    videos: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapTagRank(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag = this.convertValues(source["tag"], RecapTag);
+	        this.weight = source["weight"];
+	        this.videos = source["videos"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RecapVideoRank {
 	    video: RecapVideo;
 	    count: number;
@@ -11111,6 +11145,80 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class RecapListPage {
+	    kind: string;
+	    total: number;
+	    offset: number;
+	    has_more: boolean;
+	    videos: RecapVideo[];
+	    video_ranks: RecapVideoRank[];
+	    image_ranks: RecapImageRank[];
+	    favorites: RecapNewFavorite[];
+	    diary: RecapDiaryRated[];
+	    feed: RecapFeedItem[];
+	    tags: RecapTagRank[];
+	    entities: RecapEntityRank[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapListPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.total = source["total"];
+	        this.offset = source["offset"];
+	        this.has_more = source["has_more"];
+	        this.videos = this.convertValues(source["videos"], RecapVideo);
+	        this.video_ranks = this.convertValues(source["video_ranks"], RecapVideoRank);
+	        this.image_ranks = this.convertValues(source["image_ranks"], RecapImageRank);
+	        this.favorites = this.convertValues(source["favorites"], RecapNewFavorite);
+	        this.diary = this.convertValues(source["diary"], RecapDiaryRated);
+	        this.feed = this.convertValues(source["feed"], RecapFeedItem);
+	        this.tags = this.convertValues(source["tags"], RecapTagRank);
+	        this.entities = this.convertValues(source["entities"], RecapEntityRank);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapListRequest {
+	    period: string;
+	    year: number;
+	    month: number;
+	    kind: string;
+	    offset: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapListRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.period = source["period"];
+	        this.year = source["year"];
+	        this.month = source["month"];
+	        this.kind = source["kind"];
+	        this.offset = source["offset"];
+	        this.limit = source["limit"];
+	    }
 	}
 	export class RecapMonthBest {
 	    month: number;
@@ -11241,40 +11349,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class RecapTagRank {
-	    tag: RecapTag;
-	    weight: number;
-	    videos: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new RecapTagRank(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.tag = this.convertValues(source["tag"], RecapTag);
-	        this.weight = source["weight"];
-	        this.videos = source["videos"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class RecapQuarterTags {
 	    quarter: number;
 	    tags: RecapTagRank[];
@@ -11368,6 +11442,9 @@ export namespace services {
 	    feed: RecapFeedItem[];
 	    week: RecapDayBucket[];
 	    now_playing?: RecapNowPlaying;
+	    top_tags_total: number;
+	    top_people_total: number;
+	    top_collections_total: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new RecapResult(source);
@@ -11401,6 +11478,9 @@ export namespace services {
 	        this.feed = this.convertValues(source["feed"], RecapFeedItem);
 	        this.week = this.convertValues(source["week"], RecapDayBucket);
 	        this.now_playing = this.convertValues(source["now_playing"], RecapNowPlaying);
+	        this.top_tags_total = source["top_tags_total"];
+	        this.top_people_total = source["top_people_total"];
+	        this.top_collections_total = source["top_collections_total"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
