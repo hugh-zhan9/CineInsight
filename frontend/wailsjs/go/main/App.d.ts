@@ -520,6 +520,8 @@ export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Prom
 
 export function ListPeopleByCount(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number):Promise<Array<services.PersonListItem>>;
 
+export function ListRecapItems(arg1:services.RecapListRequest):Promise<services.RecapListPage>;
+
 export function ListRecentlyPlayedWithFilter(arg1:services.LibraryFilter,arg2:string,arg3:number,arg4:number):Promise<Array<models.Video>>;
 
 export function ListSameSourceRelations(arg1:string,arg2:boolean):Promise<Array<services.VideoSameSourceReviewItem>>;

@@ -20,7 +20,7 @@ func (b *recapBuilder) yearExtras() error {
 	}
 	for quarter := 0; quarter < 4; quarter++ {
 		start := b.w.start.AddDate(0, 3*quarter, 0)
-		tags, err := recapTagRanks(b.db, start, start.AddDate(0, 3, 0), recapQuarterTags)
+		tags, _, err := recapTagRanks(b.db, start, start.AddDate(0, 3, 0), 0, recapQuarterTags)
 		if err != nil {
 			return err
 		}
@@ -49,31 +49,18 @@ func (b *recapBuilder) live(weekStart time.Time) error {
 	for _, date := range days {
 		b.result.Week = append(b.result.Week, *week[date])
 	}
-	// 事件是按时间升序读入的：从尾部各取最多 30 条今日事件再合并。
-	for i := len(b.plays) - 1; i >= 0 && len(b.feed) < recapFeedLimit; i-- {
-		event := b.plays[i]
-		if event.PlayedAt.Before(b.w.start) {
+	// 今日流水只取仍可展示的媒体，最新的 30 条。
+	for _, item := range recapFeedEvents(b.plays, b.views, b.w.start, b.loc) {
+		if len(b.feed) == recapFeedLimit {
 			break
 		}
-		if !b.availableVideos[event.VideoID] {
-			continue
+		available := b.availableVideos
+		if item.Kind == RecapActivityImage {
+			available = b.availableImages
 		}
-		b.feed = append(b.feed, RecapFeedItem{Kind: RecapActivityVideo, ID: event.VideoID, Source: event.Source, At: event.PlayedAt.In(b.loc)})
-	}
-	videoItems := len(b.feed)
-	for i := len(b.views) - 1; i >= 0 && len(b.feed)-videoItems < recapFeedLimit; i-- {
-		event := b.views[i]
-		if event.ViewedAt.Before(b.w.start) {
-			break
+		if available[item.ID] {
+			b.feed = append(b.feed, item)
 		}
-		if !b.availableImages[event.ImageID] {
-			continue
-		}
-		b.feed = append(b.feed, RecapFeedItem{Kind: RecapActivityImage, ID: event.ImageID, Source: event.Source, At: event.ViewedAt.In(b.loc)})
-	}
-	sort.SliceStable(b.feed, func(i, j int) bool { return b.feed[i].At.After(b.feed[j].At) })
-	if len(b.feed) > recapFeedLimit {
-		b.feed = b.feed[:recapFeedLimit]
 	}
 	for _, item := range b.feed {
 		if item.Kind == RecapActivityVideo {
@@ -116,4 +103,32 @@ func recapNowPlaying(db *gorm.DB, now time.Time) (*RecapNowPlaying, error) {
 		return nil, err
 	}
 	return &RecapNowPlaying{Video: RecapVideo{ID: events[0].VideoID}, Basis: "recent_play", Source: events[0].Source, At: events[0].PlayedAt.In(now.Location())}, nil
+}
+
+// recapFeedEvents 把 start 起（事件已按时间升序读入）的播放与查看合并成流水，最新的在前；
+// 同一时刻视频在前，同类里事件 ID 大的在前。Title / Available 留给水合后填。
+func recapFeedEvents(plays []recapPlayEvent, views []recapViewEvent, start time.Time, loc *time.Location) []RecapFeedItem {
+	items := []RecapFeedItem{}
+	for i := len(plays) - 1; i >= 0 && !plays[i].PlayedAt.Before(start); i-- {
+		event := plays[i]
+		items = append(items, RecapFeedItem{Kind: RecapActivityVideo, ID: event.VideoID, Source: event.Source, At: event.PlayedAt.In(loc)})
+	}
+	for i := len(views) - 1; i >= 0 && !views[i].ViewedAt.Before(start); i-- {
+		event := views[i]
+		items = append(items, RecapFeedItem{Kind: RecapActivityImage, ID: event.ImageID, Source: event.Source, At: event.ViewedAt.In(loc)})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].At.After(items[j].At) })
+	return items
+}
+
+// recapFeedTitled 用水合结果给一条流水补上标题与可展示性（水合不到的只剩 ID，Available=false）。
+func recapFeedTitled(item RecapFeedItem, videos map[uint]RecapVideo, images map[uint]RecapImage) RecapFeedItem {
+	if item.Kind == RecapActivityVideo {
+		video := recapVideoOf(videos, item.ID)
+		item.Title, item.Available = video.Title, video.Available
+	} else {
+		image := recapImageOf(images, item.ID)
+		item.Title, item.Available = image.Name, image.Available
+	}
+	return item
 }

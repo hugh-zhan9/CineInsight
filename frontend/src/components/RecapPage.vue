@@ -58,7 +58,7 @@
 
       <div class="recap-split">
         <section v-reveal class="recap-panel">
-          <header class="recap-section__head"><h3><RecapIcon name="live" /> 今日流水</h3><small>最近 {{ result.feed.length }} 条</small></header>
+          <header class="recap-section__head"><h3><RecapIcon name="live" /> 今日流水</h3><small>最近 {{ result.feed.length }} 条</small><button v-if="canListAll('feed')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-feed" @click="openList('feed')">{{ listAllText('feed') }}</button></header>
           <RecapLiveFeed v-if="result.feed.length" :items="result.feed" :now="nowTick" @open="openFeedItem" />
           <p v-else class="recap-muted">今天还没有记录。</p>
         </section>
@@ -151,7 +151,7 @@
 
         <div v-if="result.top_videos.length" class="recap-split recap-split--wide">
           <section v-reveal class="recap-panel">
-            <header class="recap-section__head"><h3><RecapIcon name="videos" /> 本期 Top {{ result.top_videos.length }}</h3><small>按播放次数，并列看最近一次</small></header>
+            <header class="recap-section__head"><h3><RecapIcon name="videos" /> 本期 Top {{ result.top_videos.length }}</h3><small>按播放次数，并列看最近一次</small><button v-if="canListAll('videos')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-videos" @click="openList('videos')">{{ listAllText('videos') }}</button></header>
             <div class="recap-posters" data-test="recap-top-videos">
               <RecapMediaCard
                 v-for="(item, index) in result.top_videos"
@@ -168,7 +168,7 @@
           </section>
           <aside class="recap-side">
             <section v-if="result.top_tags.length" v-reveal="1" class="recap-panel">
-              <header class="recap-section__head"><h3><RecapIcon name="tag_loyal" /> 标签</h3><small>按播放加权</small></header>
+              <header class="recap-section__head"><h3><RecapIcon name="tag_loyal" /> 标签</h3><small>按播放加权</small><button v-if="canListAll('tags')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-tags" @click="openList('tags')">{{ listAllText('tags') }}</button></header>
               <div class="recap-cloud" data-test="recap-tag-cloud">
                 <button
                   v-for="item in result.top_tags"
@@ -190,6 +190,7 @@
                   <strong>{{ item.entity.name }}</strong><small>{{ item.weight }} 次</small>
                 </button>
               </div>
+              <p v-if="canListAll('people')" class="recap-side__more"><button type="button" class="btn btn--secondary btn--sm" data-test="recap-all-people" @click="openList('people')">{{ listAllText('people', '人物') }}</button></p>
               <ul v-if="result.top_collections.length" class="recap-collections">
                 <li v-for="item in result.top_collections" :key="`c${item.entity.id}`">
                   <button type="button" class="btn-plain recap-collection" @click="openEntity('collection', item.entity)">
@@ -198,12 +199,13 @@
                   </button>
                 </li>
               </ul>
+              <p v-if="canListAll('collections')" class="recap-side__more"><button type="button" class="btn btn--secondary btn--sm" data-test="recap-all-collections" @click="openList('collections')">{{ listAllText('collections', '作品集') }}</button></p>
             </section>
           </aside>
         </div>
 
         <section v-if="result.top_images.length" v-reveal class="recap-section">
-          <header class="recap-section__head"><h3><RecapIcon name="images" /> 最常看的图片</h3><small>{{ imageHeadline }}</small></header>
+          <header class="recap-section__head"><h3><RecapIcon name="images" /> 最常看的图片</h3><small>{{ imageHeadline }}</small><button v-if="canListAll('images')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-images" @click="openList('images')">{{ listAllText('images') }}</button></header>
           <div class="recap-mosaic" data-test="recap-top-images">
             <RecapMediaCard
               v-for="item in result.top_images"
@@ -283,6 +285,7 @@
             />
           </div>
           <p v-else class="recap-muted" data-test="recap-fresh-empty">{{ freshEmptyText }}</p>
+          <p v-if="canListAll(freshKey)" class="recap-fresh__more"><button type="button" class="btn btn--secondary btn--sm" :data-test="`recap-all-${freshKey}`" @click="openList(freshKey)">{{ listAllText(freshKey) }}</button></p>
         </section>
 
         <template v-if="result.period === 'year'">
@@ -317,6 +320,9 @@
         </template>
       </template>
     </template>
+
+    <!-- 「查看全部」：页面上的数字比展示出来的多时，按同口径分页列出全部（取当前显示的这一期）。 -->
+    <RecapListDialog v-if="listKind && result" :kind="listKind" :request="listRequest" :total="listCounts[listKind].total" :now="nowTick" @close="listKind = ''" @pick="pickFromList" />
   </main>
 </template>
 
@@ -330,6 +336,7 @@ import RecapCalendar from './recap/RecapCalendar.vue';
 import RecapClock from './recap/RecapClock.vue';
 import RecapCountUp from './recap/RecapCountUp.vue';
 import RecapIcon from './recap/RecapIcon.vue';
+import RecapListDialog, { RECAP_LIST_KINDS } from './recap/RecapListDialog.vue';
 import RecapLiveFeed from './recap/RecapLiveFeed.vue';
 import RecapMediaCard from './recap/RecapMediaCard.vue';
 import RecapMonthStrip from './recap/RecapMonthStrip.vue';
@@ -358,7 +365,7 @@ export default {
   mixins: [runtimeEventsMixin],
   components: {
     AppBanner, AppIcon, EmptyState, HeroHeader, PageHeader, RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon,
-    RecapLiveFeed, RecapMediaCard, RecapMonthStrip, SegmentedControl, SkeletonBlock, StatTile, TagPill
+    RecapListDialog, RecapLiveFeed, RecapMediaCard, RecapMonthStrip, SegmentedControl, SkeletonBlock, StatTile, TagPill
   },
   directives: { reveal },
   props: { pageActive: { type: Boolean, default: true } },
@@ -367,7 +374,9 @@ export default {
     return {
       tabs: RECAP_TABS, tab: 'month', cursor: currentCursor(), result: null, resultKey: '', loading: false, error: '', generation: 0, nowTick: Date.now(),
       // 新鲜度当前选中的一类（new / rewatched / favorites / diary），换期次时保留。
-      freshKey: 'new'
+      freshKey: 'new',
+      // 「查看全部」对话框正在列的那一类（RECAP_LIST_KINDS 的键），空串表示没打开。
+      listKind: ''
     };
   },
   computed: {
@@ -496,6 +505,30 @@ export default {
       if (!option.count) return `这一期没有${option.label}。`;
       return `这 ${option.count} ${option.unit || '项'}都已不在库中，记录仍然保留。`;
     },
+    // 「查看全部」：每一类页面上的数字（total）与实际展示了几个（shown）。样本 / 排行只取前几个且只含还在库的，
+    // total 比 shown 多就给按钮；列表与数字同口径（ListRecapItems），含已不在库中的项。
+    listCounts() {
+      const result = this.result;
+      if (!result) return {};
+      const fresh = result.freshness || {};
+      const overview = result.overview || {};
+      const count = (total, shown) => ({ total: Number(total || 0), shown: (shown || []).length });
+      return {
+        new: count(fresh.new_videos, fresh.new_samples),
+        rewatched: count(fresh.rewatched_videos, fresh.rewatched_samples),
+        favorites: count(Number(fresh.new_favorite_videos || 0) + Number(fresh.new_favorite_images || 0), fresh.new_favorite_samples),
+        diary: count(fresh.diary_rated, fresh.diary_rated_samples),
+        videos: count(overview.videos, result.top_videos),
+        images: count(overview.images, result.top_images),
+        feed: count(Number(overview.plays || 0) + Number(overview.image_views || 0), result.feed),
+        tags: count(result.top_tags_total, result.top_tags),
+        people: count(result.top_people_total, result.top_people),
+        collections: count(result.top_collections_total, result.top_collections)
+      };
+    },
+    listRequest() {
+      return { period: this.result?.period, year: this.result?.year, month: this.result?.month };
+    },
     // 空期（EmptyState）：说明回顾统计什么，再按情况给一句下一步——还没结束就等等，上一期有记录就翻过去。
     emptyHasPrevious() {
       const previous = this.result?.overview?.previous;
@@ -613,6 +646,27 @@ export default {
     openDiaryEntry(entry) {
       if (entry?.video_id && entry.video_available) this.openVideo({ id: entry.video_id });
       else this.$emit('navigate', 'viewing-notes');
+    },
+    canListAll(kind) {
+      const count = this.listCounts[kind];
+      return Boolean(count && count.total > count.shown);
+    },
+    listAllText(kind, noun = '') {
+      return `查看全部 ${this.listCounts[kind]?.total || 0} ${RECAP_LIST_KINDS[kind].unit}${noun}`;
+    },
+    openList(kind) {
+      this.listKind = kind;
+    },
+    // 对话框里点了一项：先关掉对话框，再按页面原来的方式打开（视频进详情、图片开查看器、标签回片库……）。
+    pickFromList({ action, payload }) {
+      const kind = this.listKind;
+      this.listKind = '';
+      if (action === 'video') this.openVideo(payload);
+      else if (action === 'image') this.openImage(payload);
+      else if (action === 'feed') this.openFeedItem(payload);
+      else if (action === 'diary') this.openDiaryEntry(payload);
+      else if (action === 'tag') this.openTag(payload);
+      else if (action === 'entity') this.openEntity(kind === 'people' ? 'person' : 'collection', payload);
     },
     // 新鲜度四张卡的方向键：← ↑ / → ↓ 选上一类 / 下一类（首尾循环），Home / End 到两端，焦点跟着选中项走。
     freshKeydown(event) {
@@ -835,6 +889,9 @@ export default {
 .recap-fresh .recap-fact strong { font-size: var(--fs-display); }
 .recap-fresh__option { width: 100%; cursor: pointer; transition: border-color var(--transition), background var(--transition); }
 .recap-fresh__option:hover:not(.recap-fact--accent) { border-color: var(--border-strong); }
+/* 「查看全部」：区块标题里靠右；新鲜度横排、人物与作品集列表下面单独一行。 */
+.recap-more { margin-left: auto; }
+.recap-fresh__more, .recap-side__more { display: flex; margin: 0; }
 /* 新收藏里视频与图片混排：统一按 16:9 裁切，横排才整齐。 */
 .recap-fresh__strip :deep(.recap-card__media) { aspect-ratio: 16 / 9; }
 

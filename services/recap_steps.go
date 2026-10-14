@@ -44,62 +44,68 @@ func (b *recapBuilder) rankings() error {
 	}
 	var err error
 	r := b.result
-	if r.TopTags, err = recapTagRanks(b.db, b.w.start, b.w.end, recapTopTags); err != nil {
+	if r.TopTags, r.TopTagsTotal, err = recapTagRanks(b.db, b.w.start, b.w.end, 0, recapTopTags); err != nil {
 		return err
 	}
 	if len(r.TopTags) > 0 {
 		b.topTagName, b.topTagWeight = r.TopTags[0].Tag.Name, r.TopTags[0].Weight
 	}
-	if r.TopPeople, err = recapPeopleRanks(b.db, b.w.start, b.w.end, recapTopPeople); err != nil {
+	if r.TopPeople, r.TopPeopleTotal, err = recapPeopleRanks(b.db, b.w.start, b.w.end, 0, recapTopPeople); err != nil {
 		return err
 	}
-	r.TopCollections, err = recapCollectionRanks(b.db, b.w.start, b.w.end, recapTopCollections)
+	r.TopCollections, r.TopCollectionsTotal, err = recapCollectionRanks(b.db, b.w.start, b.w.end, 0, recapTopCollections)
 	return err
 }
 
-// freshness 判新发现 / 重温：只看期内有非 legacy 播放的视频；本期开始前已有任意事件（含 legacy）为重温，
-// 否则若期内最早一条是 legacy 则两边都不算，其余为新发现。新发现样本按排行顺序取前 6；
-// 重温样本按期内最后一次播放从近到远取前 6。两者都只取仍可展示的视频。
+// recapFreshnessGroups 判新发现 / 重温：只看期内有非 legacy 播放的视频；本期开始前已有任意事件（含 legacy）为重温，
+// 否则若期内最早一条是 legacy 则两边都不算，其余为新发现。两组都保持 ranked 的顺序，含已不可展示的视频。
+func recapFreshnessGroups(ranked []*recapMediaTally, prior map[uint]bool) (fresh, rewatched []*recapMediaTally) {
+	for _, item := range ranked {
+		if !item.nonLegacy {
+			continue
+		}
+		switch {
+		case prior[item.id]:
+			rewatched = append(rewatched, item)
+		case item.firstSource == models.PlayEventSourceLegacy:
+		default:
+			fresh = append(fresh, item)
+		}
+	}
+	return fresh, rewatched
+}
+
+// freshness 填新鲜度四类的计数与样本。新发现样本按排行顺序取前 6；重温样本按期内最后一次播放从近到远取前 6；
+// 两者都只取仍可展示的视频（计数含不可展示的）。
 func (b *recapBuilder) freshness() error {
 	prior, err := recapPriorVideoIDs(b.db, b.w.start, b.w.end)
 	if err != nil {
 		return err
 	}
 	f := &b.result.Freshness
-	var rewatched []*recapMediaTally
-	for _, item := range b.allRankedVideos {
-		if !item.nonLegacy {
-			continue
+	fresh, rewatched := recapFreshnessGroups(b.allRankedVideos, prior)
+	f.NewVideos, f.RewatchedVideos = int64(len(fresh)), int64(len(rewatched))
+	for _, item := range recapOnlyAvailable(fresh, b.availableVideos) {
+		if len(b.newSamples) == recapNewSamples {
+			break
 		}
-		switch {
-		case prior[item.id]:
-			f.RewatchedVideos++
-			if b.availableVideos[item.id] {
-				rewatched = append(rewatched, item)
-			}
-		case item.firstSource == models.PlayEventSourceLegacy:
-		default:
-			f.NewVideos++
-			if len(b.newSamples) < recapNewSamples && b.availableVideos[item.id] {
-				b.newSamples = append(b.newSamples, item)
-				b.videoIDs[item.id] = true
-			}
-		}
+		b.newSamples = append(b.newSamples, item)
+		b.videoIDs[item.id] = true
 	}
-	b.rewatchSamples = recapMostRecent(rewatched, recapNewSamples)
+	b.rewatchSamples = recapMostRecent(recapOnlyAvailable(rewatched, b.availableVideos), recapNewSamples)
 	for _, item := range b.rewatchSamples {
 		b.videoIDs[item.id] = true
 	}
 	if f.NewFavoriteVideos, f.NewFavoriteImages, err = recapFavoriteCounts(b.db, b.w.start, b.w.end); err != nil {
 		return err
 	}
-	if f.NewFavoriteSamples, err = recapNewFavoriteSamples(b.db, b.w.start, b.w.end, recapNewSamples, b.loc); err != nil {
+	if f.NewFavoriteSamples, err = recapNewFavoriteList(b.db, b.w.start, b.w.end, 0, recapNewSamples, true, b.loc); err != nil {
 		return err
 	}
 	if f.DiaryRated, err = recapDiaryRated(b.db, b.w.start, b.w.end); err != nil {
 		return err
 	}
-	f.DiaryRatedSamples, err = recapDiaryRatedSamples(b.db, b.w.start, b.w.end, recapNewSamples)
+	f.DiaryRatedSamples, err = recapDiaryRatedList(b.db, b.w.start, b.w.end, 0, recapNewSamples)
 	return err
 }
 

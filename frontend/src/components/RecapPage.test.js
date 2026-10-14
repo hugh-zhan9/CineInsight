@@ -1,7 +1,7 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ GetRecap: vi.fn() }));
+const api = vi.hoisted(() => ({ GetRecap: vi.fn(), ListRecapItems: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 import RecapPage, { RECAP_ACTIVITY_DEBOUNCE_MS, RECAP_POLL_MS } from './RecapPage.vue';
 
@@ -330,5 +330,44 @@ describe('RecapPage live refresh', () => {
     vi.advanceTimersByTime(RECAP_POLL_MS);
     await flushPromises();
     expect(api.GetRecap).toHaveBeenCalledTimes(liveCalls + 3);
+  });
+
+  it('offers 查看全部 only where the number on the page is larger than what it lists', async () => {
+    let wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test^="recap-all-"]')).toHaveLength(0);
+    wrapper.unmount();
+    const fresh = recap().freshness;
+    api.GetRecap.mockResolvedValue(recap({
+      overview: { ...recap().overview, videos: 15, images: 1 },
+      top_tags_total: 12, top_people_total: 1, top_collections_total: 0,
+      freshness: { ...fresh, new_videos: 137, rewatched_videos: 4, rewatched_samples: [] }
+    }));
+    wrapper = await mountPage();
+    expect(wrapper.get('[data-test="recap-all-videos"]').text()).toBe('查看全部 15 部');
+    expect(wrapper.get('[data-test="recap-all-videos"]').classes()).toEqual(expect.arrayContaining(['btn', 'btn--secondary', 'btn--sm']));
+    expect(wrapper.get('[data-test="recap-all-tags"]').text()).toBe('查看全部 12 个');
+    expect(wrapper.get('[data-test="recap-all-new"]').text()).toBe('查看全部 137 部');
+    for (const kind of ['images', 'people', 'collections', 'feed']) expect(wrapper.find(`[data-test="recap-all-${kind}"]`).exists()).toBe(false);
+    // 有计数但样本全都不在库中：空行与按钮同时出现。
+    await wrapper.get('[data-test="recap-fresh-rewatched"]').trigger('click');
+    expect(wrapper.get('[data-test="recap-fresh-empty"]').text()).toBe('这 4 部都已不在库中，记录仍然保留。');
+    expect(wrapper.get('[data-test="recap-all-rewatched"]').text()).toBe('查看全部 4 部');
+    // 计数与样本一样多（重温换成新收藏：0 个）就没有按钮。
+    await wrapper.get('[data-test="recap-fresh-favorites"]').trigger('click');
+    expect(wrapper.find('[data-test^="recap-all-favorites"]').exists()).toBe(false);
+  });
+
+  it('opens the full list for the displayed period and closes it when an item opens', async () => {
+    api.GetRecap.mockResolvedValue(recap({ overview: { ...recap().overview, videos: 15 } }));
+    api.ListRecapItems.mockResolvedValue({ kind: 'videos', offset: 0, total: 15, has_more: false, videos: [], image_ranks: [], favorites: [], diary: [], feed: [],
+      tags: [], entities: [], video_ranks: [{ video: video(7), count: 1, last_at: '2026-10-03T21:00:00+08:00' }] });
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="recap-all-videos"]').trigger('click');
+    await flushPromises();
+    expect(api.ListRecapItems).toHaveBeenCalledWith({ period: 'month', year: thisMonth.year, month: thisMonth.month, kind: 'videos', offset: 0, limit: 60 });
+    expect(wrapper.get('[data-test="recap-list-dialog"]').text()).toContain('本期看过的视频（15 部）');
+    await wrapper.get('[data-test="recap-list-item"]').trigger('click');
+    expect(wrapper.emitted('open-video-id')).toEqual([[7]]);
+    expect(wrapper.find('[data-test="recap-list-dialog"]').exists()).toBe(false);
   });
 });

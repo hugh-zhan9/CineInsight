@@ -277,4 +277,10 @@ type RecapResult struct {
 	Feed           []RecapFeedItem     `json:"feed"`
 	Week           []RecapDayBucket    `json:"week"`
 	NowPlaying     *RecapNowPlaying    `json:"now_playing"`
+
+	// 标签 / 人物 / 作品集排行的全部条数（排行只取前 10 / 5 / 5）；「查看全部」用 ListRecapItems 分页。
+	// 视频与图片的全部条数就是 Overview.Videos / Overview.Images，实时流水的全部条数是 Overview.Plays + ImageViews。
+	TopTagsTotal        int64 `json:"top_tags_total"`
+	TopPeopleTotal      int64 `json:"top_people_total"`
+	TopCollectionsTotal int64 `json:"top_collections_total"`
 }

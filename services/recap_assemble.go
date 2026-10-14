@@ -66,14 +66,7 @@ func (b *recapBuilder) assemble(videos map[uint]RecapVideo, images map[uint]Reca
 		}
 	}
 	for _, item := range b.feed {
-		if item.Kind == RecapActivityVideo {
-			video := recapVideoOf(videos, item.ID)
-			item.Title, item.Available = video.Title, video.Available
-		} else {
-			image := recapImageOf(images, item.ID)
-			item.Title, item.Available = image.Name, image.Available
-		}
-		r.Feed = append(r.Feed, item)
+		r.Feed = append(r.Feed, recapFeedTitled(item, videos, images))
 	}
 	if b.nowPlaying != nil {
 		now := *b.nowPlaying
