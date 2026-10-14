@@ -71,6 +71,21 @@ func TestBuildFolderSuggestionGroupsShapes(t *testing.T) {
 			}}},
 		},
 		{
+			name:  "「序号 + 说明」的子文件夹有两个以上才当章节，并进父目录按序号排",
+			paths: []string{"课程/10-实战/c.mp4", "课程/02-进阶篇/b.mp4", "课程/01-基础篇/a2.mp4", "课程/01-基础篇/a1.mp4", "课程/02-进阶篇/b0.mp4"},
+			want: []wantFolderGroup{{folders: []string{"课程"}, name: "课程", members: []string{
+				"课程/01-基础篇/a1.mp4", "课程/01-基础篇/a2.mp4", "课程/02-进阶篇/b.mp4", "课程/02-进阶篇/b0.mp4", "课程/10-实战/c.mp4",
+			}}},
+		},
+		{
+			name:  "扫描根下按序号排的子文件夹各自成组，不当根的章节",
+			paths: []string{"01-Go/a.mp4", "01-Go/b.mp4", "02-Rust/c.mp4", "02-Rust/d.mp4"},
+			want: []wantFolderGroup{
+				{folders: []string{"01-Go"}, name: "01-Go", members: []string{"01-Go/a.mp4", "01-Go/b.mp4"}},
+				{folders: []string{"02-Rust"}, name: "02-Rust", members: []string{"02-Rust/c.mp4", "02-Rust/d.mp4"}},
+			},
+		},
+		{
 			name:  "一个文件夹里的多集：按序号自然排序",
 			paths: []string{"算法面试通关40讲/10丨递归.mp4", "算法面试通关40讲/01丨开篇.mp4", "算法面试通关40讲/2丨数组.mp4"},
 			want: []wantFolderGroup{{folders: []string{"算法面试通关40讲"}, name: "算法面试通关40讲", members: []string{

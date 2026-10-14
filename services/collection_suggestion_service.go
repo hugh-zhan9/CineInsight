@@ -251,6 +251,8 @@ type suggestionCandidate struct {
 	targetCollectionID *uint
 	// folderOrdered 表示按文件夹成组：成员顺序与位置已由 buildFolderSuggestionGroups 排好，不再按集号重排。
 	folderOrdered bool
+	// filenameSeries 只在文件夹组上有：成员按文件名解析出的系列（规范化名）→ 个数，用来认回按文件名忽略过的系列。
+	filenameSeries map[string]int
 }
 
 // analyzeOnce 跑完一轮分析：解析 → 分组 → 排除 → 与记忆比对 → upsert pending。
@@ -328,6 +330,10 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 		if _, dismissed := dismissedKeys[suggestionDismissKey(group.scanRoot, group.normalizedSeries)]; dismissed {
 			continue
 		}
+		// 文件夹组里多数文件按文件名属于一个已忽略的系列（按文件夹成组之前忽略的）：同样不再提。
+		if group.folderOrdered && folderGroupIsDismissedSeries(group, dismissedKeys) {
+			continue
+		}
 		var targetCollectionID *uint
 		group.members, targetCollectionID = splitSuggestionMembers(group.members, collected)
 		if targetCollectionID == nil && len(group.members) < 2 {
@@ -376,10 +382,20 @@ func groupSuggestionCandidates(perRoot map[string][]folderSuggestionVideo, perso
 	folderOnly := 0
 	for root, videos := range perRoot {
 		claimed := make(map[uint]struct{})
+		parsedSeries := make(map[uint]string, len(videos))
+		for _, video := range videos {
+			if video.Parsed.OK {
+				parsedSeries[video.ID] = video.Parsed.NormalizedSeries
+			}
+		}
 		for _, folder := range buildFolderSuggestionGroups(root, videos, persons) {
-			candidate := &suggestionCandidate{scanRoot: root, seriesName: folder.Name, normalizedSeries: folder.NormalizedKey, folderOrdered: true}
+			candidate := &suggestionCandidate{scanRoot: root, seriesName: folder.Name, normalizedSeries: folder.NormalizedKey,
+				folderOrdered: true, filenameSeries: make(map[string]int)}
 			for _, member := range folder.Members {
 				claimed[member.VideoID] = struct{}{}
+				if series, ok := parsedSeries[member.VideoID]; ok {
+					candidate.filenameSeries[series]++
+				}
 				candidate.members = append(candidate.members, models.CollectionSuggestionMember{
 					VideoID: member.VideoID, Season: member.Season, Episode: member.Episode, Position: member.Position,
 				})
@@ -409,6 +425,19 @@ func groupSuggestionCandidates(perRoot map[string][]folderSuggestionVideo, perso
 		}
 	}
 	return groups, folderOnly
+}
+
+// folderGroupIsDismissedSeries：至少一半成员按文件名属于同一个系列，且这个系列（同一扫描根）被忽略过。
+func folderGroupIsDismissedSeries(group *suggestionCandidate, dismissedKeys map[string]struct{}) bool {
+	for series, count := range group.filenameSeries {
+		if count*2 < len(group.members) {
+			continue
+		}
+		if _, dismissed := dismissedKeys[suggestionDismissKey(group.scanRoot, series)]; dismissed {
+			return true
+		}
+	}
+	return false
 }
 
 // renumberFolderSuggestionPositions 在剔除已入集成员后把位置重新压成稠密排名，顺序与同集共用关系不变。

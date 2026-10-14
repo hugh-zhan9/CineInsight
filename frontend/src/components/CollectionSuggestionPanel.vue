@@ -25,7 +25,7 @@
     <div v-if="status.running" class="suggestion-progress" data-test="collection-suggestion-progress">
       <ProgressBar
         :value="status.total > 0 ? status.scanned / status.total : null"
-        :label="`正在按文件名分析剧集… 已扫 ${status.scanned} / ${status.total}${status.matched ? ` · 命中 ${status.matched} 个文件` : ''}`"
+        :label="`正在按文件夹和文件名分析剧集… 已扫 ${status.scanned} / ${status.total}${status.matched ? ` · 命中 ${status.matched} 个文件` : ''}`"
       />
     </div>
     <p v-else-if="status.last_error" class="suggestion-progress suggestion-progress--error" role="alert" data-test="collection-suggestion-error">
@@ -38,7 +38,7 @@
         v-else-if="!suggestions.length"
         class="suggestion-empty"
         title="还没有可确认的剧集候选"
-        message="候选按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。同一扫描根下同名系列凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。"
+        message="候选先按文件夹认：一个文件夹里的多集、带「第一周 / Season 2 / 01-基础篇」这类章节子文件夹的父文件夹各算一组；只有一部片的文件夹、大分类文件夹、名字没意义或与人物同名的文件夹不算。其余散放的文件按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。"
         data-test="collection-suggestion-empty"
       />
       <template v-else>

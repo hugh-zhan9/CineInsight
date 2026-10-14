@@ -771,3 +771,28 @@ func TestCollectionSuggestionAnalyzeGroupsByFolderAndFileName(t *testing.T) {
 		t.Fatalf("忽略过的文件夹新增一集也不该再提: %#v", views)
 	}
 }
+
+// 按文件夹成组之前用户按文件名忽略过的系列：文件夹组里多数文件还是这个系列（含之后新增的集）时不再提。
+func TestCollectionSuggestionFolderGroupHonoursDismissedFilenameSeries(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := createSuggestionScanRoot(t, t.TempDir())
+	parsed := ParseEpisodeFromFileName("某剧 第1集")
+	if !parsed.OK {
+		t.Fatalf("测试前提：文件名应能解析出系列")
+	}
+	dismissed := models.CollectionSuggestion{ScanRoot: root, SeriesName: parsed.Series, NormalizedSeries: parsed.NormalizedSeries,
+		Status: models.CollectionSuggestionStatusDismissed, Fingerprint: "dismissed-before-folder-grouping",
+		DismissKey: suggestionDismissKey(root, parsed.NormalizedSeries)}
+	if err := database.DB.Create(&dismissed).Error; err != nil {
+		t.Fatalf("写入已忽略候选失败: %v", err)
+	}
+	for _, rel := range []string{"某剧/某剧 第1集.mp4", "某剧/某剧 第2集.mp4", "某剧/某剧 第3集.mp4"} {
+		createNestedSuggestionVideo(t, root, rel)
+	}
+	createNestedSuggestionVideo(t, root, "另一部/片花一.mp4")
+	createNestedSuggestionVideo(t, root, "另一部/片花二.mp4")
+	views := analyzeSuggestionsOnce(t, newSuggestionService(t))
+	if len(views) != 1 || views[0].Folder != "另一部" {
+		t.Fatalf("忽略过的系列不该换成文件夹组再出现，别的文件夹照常: %#v", views)
+	}
+}

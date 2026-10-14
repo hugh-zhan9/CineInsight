@@ -69,7 +69,13 @@ var (
 	folderSuggestionShortSeasonRe = regexp.MustCompile(`(?i)^s(\d{1,2})(?:$|[\s._\-\]])`)
 	// folderSuggestionNumberOnlyRe：纯序号子文件夹（`01`、`2`）当章节。
 	folderSuggestionNumberOnlyRe = regexp.MustCompile(`^(\d{1,3})$`)
+	// folderSuggestionNumberedChapterRe：序号 + 说明（`01-基础篇`、`02 进阶`、`3.高级`）。单个这样的名字可能就是片名
+	// （`3 Idiots`），所以只在扫描根以外、同一层至少 folderSuggestionNumberedChapterMin 个兄弟都这样命名时才当章节。
+	folderSuggestionNumberedChapterRe = regexp.MustCompile(`^(\d{1,3})[\s._\-、．·]+\S`)
 )
+
+// folderSuggestionNumberedChapterMin：同一层至少这么多个「序号 + 说明」的子文件夹，才把它们当章节。
+const folderSuggestionNumberedChapterMin = 2
 
 var (
 	// folderSuggestionBracketRe 是文件夹名里的来源/组名括号（`[字幕组]`、`【公众号】`）。
@@ -135,6 +141,31 @@ func folderChapterNumber(name string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// numberedChapterChildren 找出 node 下「序号 + 说明」命名的子文件夹（不含已按 folderChapterNumber 认出的）；
+// 扫描根下不认（根下按序号排的往往是各自独立的系列），不足 folderSuggestionNumberedChapterMin 个也不认。
+func numberedChapterChildren(node *folderSuggestionNode, isRoot bool) map[string]int {
+	if isRoot {
+		return nil
+	}
+	found := make(map[string]int)
+	for name := range node.children {
+		if _, chapter := folderChapterNumber(name); chapter {
+			continue
+		}
+		match := folderSuggestionNumberedChapterRe.FindStringSubmatch(strings.TrimSpace(suggestionFullWidthDigits.Replace(name)))
+		if match == nil {
+			continue
+		}
+		if number, ok := parseFolderNumber(match[1]); ok {
+			found[name] = number
+		}
+	}
+	if len(found) < folderSuggestionNumberedChapterMin {
+		return nil
+	}
+	return found
 }
 
 // folderSeasonMark 从文件夹名里取季号（`Show.S02.1080p` → 2），没有返回 0。
@@ -358,9 +389,14 @@ func (b *folderSuggestionBuilder) evaluate(node *folderSuggestionNode, isRoot bo
 	all := append([]folderSuggestionEntry(nil), node.files...)
 	pool := append([]folderSuggestionEntry(nil), node.files...)
 	childCandidates, hasChapters := 0, false
+	numbered := numberedChapterChildren(node, isRoot)
 	for _, name := range sortedFolderChildNames(node) {
 		child := node.children[name]
-		if number, chapter := folderChapterNumber(name); chapter {
+		number, chapter := folderChapterNumber(name)
+		if !chapter {
+			number, chapter = numbered[name]
+		}
+		if chapter {
 			hasChapters = true
 			for _, entry := range collectFolderSubtree(child) {
 				chapterNumber := number
