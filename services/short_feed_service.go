@@ -1293,6 +1293,11 @@ func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error
 	for _, tag := range img.Tags {
 		tags = append(tags, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color})
 	}
+	// 信息行的日期：拍摄时间，没有就用入库时间；两者都是零值（没入库的空壳）就不带。
+	var takenAt *time.Time
+	if date := imageTakenSortKey(*img); !date.IsZero() {
+		takenAt = &date
+	}
 	return &ShortFeedItemDTO{
 		MediaKind: ShortFeedMediaImage,
 		ID:        img.ID,
@@ -1306,6 +1311,7 @@ func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error
 		Favorited: img.IsFavorite,
 		// 图片没有观看状态，Watched 保持 false。
 		PersonalRating: img.PersonalRating,
+		TakenAt:        takenAt,
 	}, nil
 }
 

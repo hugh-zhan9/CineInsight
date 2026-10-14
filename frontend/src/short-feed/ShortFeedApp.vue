@@ -140,7 +140,8 @@
         <input v-model="tagKeyword" class="sheet-search__input" type="text" maxlength="64" placeholder="搜索或新建标签" aria-label="搜索或新建标签" />
       </label>
       <!-- 已打上的排在最前、点一下取消；其余按服务端的名字序。自动标签（如「短视频」）只读展示：
-           与桌面端看到同一套标签，但不能手动增删。 -->
+           与桌面端看到同一套标签，但不能手动增删。已打上的普通标签用自己的颜色（与舞台标签行同一份换算），
+           自动标签保持虚线、不上色。 -->
       <div v-if="attachedFeedTags.length" class="tag-group">
         <p class="tag-group__label">已添加 · 点一下取消</p>
         <div class="tag-picker">
@@ -150,6 +151,7 @@
             type="button"
             class="btn-plain tag-option active"
             :class="{ 'tag-option--auto': tag.automatic }"
+            :style="tag.automatic ? null : { backgroundColor: tagBackgroundColor(tag.color) }"
             aria-pressed="true"
             :disabled="tag.automatic"
             :title="tag.automatic ? '自动标签，由系统维护' : null"
@@ -240,6 +242,7 @@
 import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, setAuthRequiredHandler, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
 import { emptyScopeText, feedErrorText, unplayableHintText } from './errors.js';
 import { formatClock, formatCount } from './format.js';
+import { tagBackgroundColor } from '../utils/tagColor.js';
 import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
 
 // 资源类型筛选与播放范围正交，记在本机：手机上选过"只看图片"，下次打开还是。
@@ -488,6 +491,7 @@ export default {
   methods: {
     formatClock,
     formatCount,
+    tagBackgroundColor,
     async nextVideo(direction = 1) {
       if (this.loading || direction === 0 || this.sheet || this.authRequired) return;
       // 收藏墙上没有「下一条」；在收藏里看只在那份列表里走。

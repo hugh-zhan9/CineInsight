@@ -21,6 +21,16 @@ export function formatCount(count) {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)).toLocaleString('en-US') : '0';
 }
 
+// 日期按手机的本地时区写成 YYYY-MM-DD（「2026-09-18」）；空或解析不了返回空串。
+// 不能截 ISO 串的前十位：那是 UTC 的日期，东八区凌晨拍的照片会差一天。
+export function formatDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 // 类型与规格：视频写时长，图片写尺寸；「更多」面板的副标题与左下信息行共用。
 export function kindLine(item) {
   if (!item) return '';
@@ -33,9 +43,12 @@ export function kindLine(item) {
 }
 
 // 左下信息行：类型 · 时长（或尺寸） · 评分 X · 已看，没有的项不写（D-MW-02）。
+// 图片在尺寸后面写日期（taken_at：拍摄时间，没有就是入库时间）；视频行照设计稿不写日期。
 export function metaLine(item) {
   if (!item) return '';
   const parts = [kindLine(item)];
+  const date = item.media_kind === 'image' ? formatDate(item.taken_at) : '';
+  if (date) parts.push(date);
   const rating = formatRating(item.personal_rating);
   if (rating) parts.push(`评分 ${rating}`);
   if (item.media_kind !== 'image' && item.watched) parts.push('已看');

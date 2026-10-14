@@ -12,7 +12,8 @@
     <p v-if="hint" class="feed-meta__hint">{{ hint }}</p>
     <div class="tag-row-wrap">
       <div ref="tagRow" class="tag-row" role="region" aria-label="标签" tabindex="0" @wheel.stop @keydown.stop @scroll.passive="updateOverflow">
-        <span v-for="tag in (item.tags || [])" :key="tag.id" class="feed-tag">{{ tag.name }}</span>
+        <!-- 标签颜色是用户数据：与桌面列表行、详情页同一份换算（35% 透明的底色，字仍是浅色）；没设颜色的保持中性。 -->
+        <span v-for="tag in (item.tags || [])" :key="tag.id" class="feed-tag" :style="{ backgroundColor: tagBackgroundColor(tag.color) }">{{ tag.name }}</span>
         <button type="button" class="btn-plain feed-tag feed-tag--add" @click.stop="$emit('open-tags')">＋ 标签</button>
       </div>
       <!-- 标签行最多占三成屏高，超出可滚；深色背景上没有滚动条，得说一声下面还有。 -->
@@ -22,6 +23,7 @@
 </template>
 
 <script>
+import { tagBackgroundColor } from '../../utils/tagColor.js';
 import { metaLine } from '../format.js';
 
 export default {
@@ -48,6 +50,7 @@ export default {
     }
   },
   methods: {
+    tagBackgroundColor,
     updateOverflow() {
       const row = this.$refs.tagRow;
       if (!row) return;
