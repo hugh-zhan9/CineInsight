@@ -48,7 +48,7 @@ describe('网页标签输入', () => {
     expect(input.element.value).toBe('动作');
     expect(wrapper.vm.toast.message).toContain('标签写入失败');
     await input.setValue('旅');
-    api.setItemTag.mockResolvedValueOnce({ id: 10, tags: [] });
+    api.setItemTag.mockResolvedValueOnce({ id: 10, media_kind: 'video', tags: [] });
     await wrapper.get('.tag-option').trigger('click');
     await flushPromises();
     expect(api.setItemTag.mock.calls.at(-1)[2]).toBe(false);
@@ -59,7 +59,7 @@ describe('网页标签输入', () => {
     const input = open();
     const tag = { id: 3, name: '新标签' };
     api.createFeedTag.mockResolvedValue(tag);
-    api.setItemTag.mockResolvedValue({ id: 10, tags: [tag] });
+    api.setItemTag.mockResolvedValue({ id: 10, media_kind: 'video', tags: [tag] });
     if (outcome === 'create-failed') api.createFeedTag.mockRejectedValue(new Error('创建失败'));
     if (outcome === 'attach-failed') api.setItemTag.mockRejectedValue(new Error('写入失败'));
     await input.setValue('新标签');

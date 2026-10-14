@@ -622,11 +622,12 @@ export default {
     onVideoBuffered() {
       this.prefetchPreload = 'auto';
     },
-    // 改动后的整条 DTO 由后端回来，就地换掉当前这一条，不猜写入结果。推荐流、收藏流与收藏墙里同一条都换掉，
-    // 切回去不显示旧值。
+    // 改动后的整条 DTO 由后端回来，就地换掉同一条，不猜写入结果。推荐流、收藏流与收藏墙里同一条都换掉，
+    // 切回去不显示旧值。按回来的这一条认，不按回包那一刻的当前条目：请求在路上时当前条目可能已经换了
+    // （删除完成后前进），换错就会把别的条目顶掉、把删掉的放回来。
     replaceCurrent(updated) {
-      if (!updated || !this.currentVideo) return;
-      const key = itemKey(this.currentVideo);
+      if (!updated) return;
+      const key = itemKey(updated);
       const swap = list => (list.some(item => itemKey(item) === key) ? list.map(item => (itemKey(item) === key ? updated : item)) : list);
       this.items = swap(this.items);
       this.favoriteStream = { ...this.favoriteStream, items: swap(this.favoriteStream.items) };
@@ -1068,6 +1069,8 @@ export default {
       // 推荐流此刻不在显示（在收藏里删的）：位置落到末尾之外就收回到最后一条，切回推荐时不是一个空舞台。
       if (this.view !== 'feed') this.index = Math.min(this.index, this.items.length - 1);
       if (!wasCurrent) return;
+      // 当前这条没了：开着的更多 / 评分 / 标签面板说的是它，马上收起，不等下一条取回来（取的这段时间里画面已经是前一条）。
+      if (this.sheet && this.sheet !== 'scope') this.sheet = null;
 
       if (this.inFavoriteStream) {
         // 收藏删空了就回到墙上（回墙时重新取一次）。

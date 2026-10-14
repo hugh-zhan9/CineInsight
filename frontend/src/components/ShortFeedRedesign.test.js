@@ -329,6 +329,62 @@ describe('D-MW-03 移到废纸篓：不确认、不撤销', () => {
     wrapper.unmount();
   });
 
+  it('删的是最后一条、下一条还要现取：删完立刻收起面板，取的这段时间里不会对前一条误删', async () => {
+    let finishDelete;
+    let releaseNext;
+    let nextCount = 0;
+    server({ handlers: {
+      '/short-api/feed/next': () => {
+        nextCount += 1;
+        if (nextCount <= 2) return jsonResponse(200, video(nextCount));
+        // 2 之后的预取没取到，删完只能现取，而且取得慢。
+        if (nextCount === 3) return jsonResponse(404, { code: 'no_eligible_videos', message: '没有' });
+        return new Promise(resolve => { releaseNext = () => resolve(jsonResponse(200, video(3))); });
+      },
+      '/short-api/items/video/2/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); })
+    } });
+    const wrapper = await mountApp();
+    await wrapper.vm.nextVideo(1);
+    await flushPromises();
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([1, 2]);
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    await openMore(wrapper);
+    finishDelete();
+    await flushPromises();
+    // 新的一条还在取：面板已经收起，画面停在前一条上。
+    expect(releaseNext).toBeTypeOf('function');
+    expect(body().querySelector('[role="dialog"][aria-label="更多操作"]')).toBeNull();
+    expect(wrapper.vm.sheet).toBe(null);
+    releaseNext();
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(3);
+    expect(callsTo('/delete').map(call => call.url)).toEqual(['/short-api/items/video/2/delete']);
+    wrapper.unmount();
+  });
+
+  it('评分写入在路上时这一条被删了：晚到的回包只换它自己，不顶掉换上来的那一条', async () => {
+    let finishDelete;
+    let releaseRating;
+    server({ handlers: {
+      '/short-api/items/video/1/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); }),
+      '/short-api/items/video/1/rating': call => new Promise(resolve => { releaseRating = () => resolve(jsonResponse(200, video(1, { personal_rating: call.body.rating }))); })
+    } });
+    const wrapper = await mountApp();
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-more-rating"]'));
+    wrapper.vm.applyRating(7);
+    await flushPromises();
+    finishDelete();
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    releaseRating();
+    await flushPromises();
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([2]);
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    expect(wrapper.vm.currentVideo.personal_rating).toBe(null);
+    wrapper.unmount();
+  });
+
   it('同一条在历史里出现两次（范围很小时会重复）：删掉后两处都摘掉，停在后面那一条或取新的', async () => {
     server({ next: [video(1), video(2), video(1), video(3)] });
     const wrapper = await mountApp();
