@@ -51,7 +51,7 @@
         @error="$emit('media-error')"
       />
       <!-- 放大后舞台交给原生平移，双击之外再给一个明确的出口，不然上下滑切换就被卡住。 -->
-      <button v-if="zoomed" type="button" class="photo-zoom-reset" data-test="photo-zoom-reset" @click.stop="$emit('zoom-reset')">恢复适屏</button>
+      <button v-if="zoomed" type="button" class="btn btn--secondary photo-zoom-reset" data-test="photo-zoom-reset" @click.stop="$emit('zoom-reset')">恢复适屏</button>
     </div>
 
     <!-- 预取的下一条不能一上来就整只下载：它会和正在播的这条抢带宽，短视频也会卡。

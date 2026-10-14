@@ -60,6 +60,11 @@ function itemPath(item, action) {
   return `/short-api/items/${item.media_kind}/${item.id}/${action}`;
 }
 
+// 收藏墙用缩略图而不是原图（D-MW-05）：手机上一屏十几张，拉原图又慢又费流量。
+export function thumbnailURL(item) {
+  return `/short-thumb/${item.media_kind}/${item.id}`;
+}
+
 export function getNextItem(excludeKeys = [], scope = 'all', media = 'all') {
   const params = new URLSearchParams();
   if (excludeKeys.length > 0) params.set('exclude', excludeKeys.join(','));
@@ -115,10 +120,6 @@ export function setWatched(item, watched) {
 
 export function setItemTag(item, tagID, attached) {
   return postJSON(itemPath(item, 'tag'), { tag_id: tagID, attached });
-}
-
-export function restoreItem(item) {
-  return postJSON(itemPath(item, 'restore'), {});
 }
 
 // 用 PIN 换会话 Cookie（D-PC45）：成功后服务端 Set-Cookie，之后的数据请求与 <video>/<img> 同源自动带上。

@@ -35,12 +35,14 @@ type ShortFeedScopeCount struct {
 	UnplayableCount int `json:"unplayable_count"`
 }
 
+// shortFeedScopeNames 是范围面板上给人看的名字（手机网页重做 D-MW-07 改成白话）。
+// 只有手机页经 /short-api/feed/scopes 读它，键（scope）才是接口契约，名字可以随界面改。
 var shortFeedScopeNames = map[string]string{
-	ShortFeedScopeAll:       "全部短视频",
-	ShortFeedScopeUnwatched: "未看",
-	ShortFeedScopeFavorites: "收藏",
-	ShortFeedScopeRecent:    "最近添加",
-	ShortFeedScopeUntagged:  "未打标签",
+	ShortFeedScopeAll:       "全部",
+	ShortFeedScopeUnwatched: "没看过",
+	ShortFeedScopeFavorites: "只在收藏里随机",
+	ShortFeedScopeRecent:    "最近 30 天添加",
+	ShortFeedScopeUntagged:  "还没打标签",
 }
 
 var shortFeedScopeOrder = []string{

@@ -48,6 +48,9 @@ async function mountApp() {
   return wrapper;
 }
 
+// 提示 2026-10-14 起 teleport 到 body（面板开着时也要看得见），不在组件的 DOM 里。
+const toastText = () => document.body.querySelector('.feed-toast')?.textContent.trim() ?? null;
+
 function feedRoute(sequence) {
   let next = 0;
   return (call) => {
@@ -193,12 +196,12 @@ describe('PLAY-13 手机端失败提示', () => {
     await wrapper.vm.toggleLike();
     await flushPromises();
     expect(wrapper.vm.currentVideo.liked).toBeFalsy();
-    expect(wrapper.get('.feed-toast').text()).toContain('点赞失败：操作失败');
+    expect(toastText()).toContain('点赞失败：操作失败');
 
     await wrapper.vm.toggleFavorite();
     await flushPromises();
     expect(wrapper.vm.currentVideo.favorited).toBeFalsy();
-    expect(wrapper.get('.feed-toast').text()).toContain('收藏失败：操作失败');
+    expect(toastText()).toContain('收藏失败：操作失败');
     wrapper.unmount();
   });
 
@@ -212,15 +215,17 @@ describe('PLAY-13 手机端失败提示', () => {
       return feed(call) || jsonResponse(200, {});
     };
     const wrapper = await mountApp();
-    await wrapper.vm.confirmDelete();
+    await wrapper.vm.moveCurrentToTrash();
     await flushPromises();
-    expect(wrapper.get('.feed-toast').text()).toBe(text);
+    expect(toastText()).toBe(text);
     expect(wrapper.vm.items.map(entry => entry.id)).toEqual([1]);
-    expect(wrapper.vm.pendingUndo).toBeNull();
+    // D-MW-03：手机端不再有撤销，失败或成功都不会去调 restore。
+    expect(calls.some(call => call.url.endsWith('/restore'))).toBe(false);
     wrapper.unmount();
   });
 
-  it('PLAY-13 收藏页加载失败显示错误态与重试，不再显示成「暂无收藏」', async () => {
+  // D-MW-05：收藏页换成缩略图墙，空态文案改为「还没有收藏」。
+  it('PLAY-13 收藏页加载失败显示错误态与重试，不再显示成「还没有收藏」', async () => {
     const feed = feedRoute([item(1), item(2)]);
     let favoritesOK = false;
     route = (call) => {
@@ -233,23 +238,26 @@ describe('PLAY-13 手机端失败提示', () => {
     await wrapper.vm.openFavorites();
     await flushPromises();
     expect(wrapper.get('[data-test="short-feed-favorites-error"]').text()).toContain('收藏加载失败：获取收藏失败');
-    expect(wrapper.text()).not.toContain('暂无收藏');
+    expect(wrapper.text()).not.toContain('还没有收藏');
 
     favoritesOK = true;
     await wrapper.get('[data-test="short-feed-favorites-retry"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="short-feed-favorites-error"]').exists()).toBe(false);
-    expect(wrapper.get('.favorite-title').text()).toBe('fav.mp4');
+    const tile = wrapper.get('.favorite-tile');
+    expect(tile.attributes('aria-label')).toBe('fav.mp4，视频 00:20');
+    expect(tile.get('img').attributes('src')).toBe('/short-thumb/video/5');
     wrapper.unmount();
   });
 
-  it('PLAY-13 播放范围面板说明「N 条因格式暂不可播」', async () => {
+  // D-MW-07：说明改成设计稿的白话，面板里只有一段，跟着当前选中的范围。
+  it('PLAY-13 播放范围面板说明「另有 N 个视频手机放不了」', async () => {
     const feed = feedRoute([item(1), item(2)]);
     route = (call) => {
       if (call.url.startsWith('/short-api/feed/scopes')) {
         return jsonResponse(200, { scopes: [
-          { scope: 'all', name: '全部短视频', count: 12, unplayable_count: 3 },
-          { scope: 'unwatched', name: '未看', count: 4, unplayable_count: 0 }
+          { scope: 'all', name: '全部', count: 12, unplayable_count: 3 },
+          { scope: 'unwatched', name: '没看过', count: 4, unplayable_count: 0 }
         ] });
       }
       return feed(call) || jsonResponse(200, {});
@@ -257,7 +265,7 @@ describe('PLAY-13 手机端失败提示', () => {
     const wrapper = await mountApp();
     await wrapper.vm.openScopeSheet();
     await flushPromises();
-    expect(document.body.querySelector('[data-test="short-feed-unplayable-all"]')?.textContent).toBe('3 条因格式暂不可播，可在电脑上生成播放代理');
+    expect(document.body.querySelector('[data-test="short-feed-unplayable-all"]')?.textContent).toBe('另有 3 个视频手机放不了（格式不支持）。在电脑端片库里为它们生成兼容副本后就会出现在这里。');
     expect(document.body.querySelector('[data-test="short-feed-unplayable-unwatched"]')).toBeNull();
     wrapper.unmount();
   });
@@ -268,7 +276,7 @@ describe('PLAY-13 手机端失败提示', () => {
     route = call => feed(call) || jsonResponse(200, {});
     const wrapper = await mountApp();
     await wrapper.get('video').trigger('error');
-    expect(wrapper.get('.feed-toast').text()).toBe('「clip-1.mp4」无法在浏览器中播放，已跳过');
+    expect(toastText()).toBe('「clip-1.mp4」无法在浏览器中播放，已跳过');
     await vi.advanceTimersByTimeAsync(400);
     await flushPromises();
     expect(wrapper.vm.currentVideo.id).toBe(2);

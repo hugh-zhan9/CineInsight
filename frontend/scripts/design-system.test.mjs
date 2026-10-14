@@ -30,7 +30,7 @@
 //   tab-panels   8. 用了 AppTabs 的模板要接上面板：AppTabs 传 id-prefix（页签才有 id 与 aria-controls），面板写
 //                   role="tabpanel"、id（前缀-panel-…）与 aria-labelledby（前缀-tab-…）。这条不走待迁移清单：新代码直接
 //                   接好；确实没有面板可接的，写进 TAB_PANEL_EXCEPTIONS 并附上理由
-// 手机端 short-feed/ 不在统一设计范围内（受保护，见概要设计「受保护的旧行为」），整个目录不查。
+// 手机端 short-feed/ 2026-10-14 起同样受查（手机网页重做 D-MW-06）。
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -49,7 +49,7 @@ function walk(dir) {
 }
 
 const ALL_FILES = walk(SRC).map(file => relative(SRC, file));
-const STYLE_FILES = ALL_FILES.filter(file => /\.(vue|css)$/.test(file) && !file.startsWith('short-feed/'));
+const STYLE_FILES = ALL_FILES.filter(file => /\.(vue|css)$/.test(file));
 const read = file => readFileSync(join(SRC, file), 'utf8');
 
 // 注释里提到旧值是允许的（说明「原来写死 #fff」之类），只查真正生效的代码。
