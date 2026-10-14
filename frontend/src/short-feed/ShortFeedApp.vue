@@ -340,8 +340,11 @@ export default {
       favoritesError: '',
       // 收藏列表请求的序号：只认最新一次的结果。
       favoritesSeq: 0,
-      // 这次打开页面以来移到废纸篓的条目（itemKey）：删除请求还在路上时取回的收藏列表里可能还有它，不让它回到墙上。
-      deletedKeys: new Set(),
+      // 移到废纸篓的条目（itemKey）→ 删除完成那一刻已经发出的最后一个收藏请求的序号。序号不大于它的响应是删除提交前取的，
+      // 可能还带着它，不让它回到墙上；之后发出的请求以服务端为准（电脑端恢复后又收藏了，照常显示）。
+      deletedFavoriteMarks: new Map(),
+      // 上一次激活的条目（itemKey）：换了条目才收起面板（见 activateCurrent）。
+      activeKey: '',
       // 「在收藏里看」（D-MW-05）：墙上当时筛出来的列表与位置，上下滑只在这里面走，到两端停住。
       favoriteStream: { items: [], index: -1 },
       favoriteStreamHint: '上下滑只在收藏之间切换；取消收藏后这一条留到你划走为止',
@@ -581,6 +584,11 @@ export default {
     activateCurrent() {
       const video = this.currentVideo;
       if (!video) return;
+      // 更多、评分、标签面板操作的是当前这一条：当前条目换了（删除完成后前进、历史裁掉了正看着的那条…）就收起，
+      // 免得面板里的操作落到换上来的那一条上（D-MW-03 没有确认与撤销兜底）。范围面板与条目无关，留着。
+      const key = itemKey(video);
+      if (this.sheet && this.sheet !== 'scope' && key !== this.activeKey) this.sheet = null;
+      this.activeKey = key;
       this.statusText = unsupportedStatusText(video);
       // 每次划到一条都是一次新的观看：累计播放从零算起，越过阈值才记（D-PC43）。
       this.recordedVideoID = null;
@@ -1035,7 +1043,7 @@ export default {
     async forgetDeleted(target) {
       const key = itemKey(target);
       const matches = item => itemKey(item) === key;
-      this.deletedKeys.add(key);
+      this.deletedFavoriteMarks.set(key, this.favoritesSeq);
       this.recentKeys = this.recentKeys.filter(recent => recent !== key);
       if (this.prefetchedVideo && matches(this.prefetchedVideo)) this.prefetchedVideo = null;
       this.favorites = this.favorites.filter(item => !matches(item));
@@ -1284,7 +1292,11 @@ export default {
       try {
         const payload = await getFavorites();
         if (seq !== this.favoritesSeq) return;
-        this.favorites = (payload?.items || []).filter(item => !this.deletedKeys.has(itemKey(item)));
+        const marks = this.deletedFavoriteMarks;
+        this.favorites = (payload?.items || []).filter(item => !(marks.get(itemKey(item)) >= seq));
+        for (const [key, mark] of marks) {
+          if (mark < seq) marks.delete(key);
+        }
       } catch (err) {
         if (seq !== this.favoritesSeq) return;
         this.favoritesError = `收藏加载失败：${feedErrorText(err)}`;

@@ -313,6 +313,22 @@ describe('D-MW-03 移到废纸篓：不确认、不撤销', () => {
     wrapper.unmount();
   });
 
+  it('删除很慢、删完前又打开了「更多」：删完换到下一条时面板收起，删除不会落到下一条上', async () => {
+    let finishDelete;
+    server({ handlers: { '/short-api/items/video/1/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); }) } });
+    const wrapper = await mountApp();
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    const again = await openMore(wrapper);
+    expect(again.querySelector('h2').textContent).toBe('clip-1.mp4');
+    expect(again.querySelector('[data-test="short-feed-delete"]').disabled).toBe(true);
+    finishDelete();
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    expect(body().querySelector('[role="dialog"][aria-label="更多操作"]')).toBeNull();
+    expect(callsTo('/delete').map(call => call.url)).toEqual(['/short-api/items/video/1/delete']);
+    wrapper.unmount();
+  });
+
   it('同一条在历史里出现两次（范围很小时会重复）：删掉后两处都摘掉，停在后面那一条或取新的', async () => {
     server({ next: [video(1), video(2), video(1), video(3)] });
     const wrapper = await mountApp();
@@ -502,25 +518,42 @@ describe('D-MW-05 收藏墙与「在收藏里看」', () => {
     wrapper.unmount();
   });
 
-  it('删除请求还在路上时回到墙上：先回来的旧收藏列表里有它，也不让它回到墙上', async () => {
+  it('删除请求还在路上时回到墙上：删除提交前发出的收藏请求晚回来、还带着它，也不让它回到墙上；之后的请求以服务端为准', async () => {
     let finishDelete;
-    server({
-      favorites: [video(11, { favorited: true }), video(13, { favorited: true })],
-      handlers: { '/short-api/items/video/11/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); }) }
-    });
+    let releaseFavorites = null;
+    let favoritesNow = [video(11, { favorited: true }), video(13, { favorited: true })];
+    server({ handlers: {
+      '/short-api/items/video/11/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); }),
+      '/short-api/favorites': () => {
+        const snapshot = favoritesNow;
+        if (!releaseFavorites) return jsonResponse(200, { items: snapshot });
+        return new Promise(resolve => { const release = releaseFavorites; releaseFavorites = () => { resolve(jsonResponse(200, { items: snapshot })); release(); }; });
+      }
+    } });
     const wrapper = await mountApp();
+    const tileIDs = () => wrapper.findAll('.favorite-tile').map(tile => tile.get('img').attributes('src'));
     await wrapper.get('[data-test="short-feed-tab-favorites"]').trigger('click');
     await flushPromises();
     await wrapper.findAll('.favorite-tile')[0].trigger('click');
     await flushPromises();
     await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
-    finishDelete();
-    await flushPromises();
-    // 删除提交之前服务端给的那份列表（还有 11）晚一步到。
-    const tileIDs = () => wrapper.findAll('.favorite-tile').map(tile => tile.get('img').attributes('src'));
+    // 删除还没提交就点「‹ 收藏」：这次取到的是删除前的列表（还有 11），而且它比删除晚到。
+    releaseFavorites = () => {};
     await wrapper.get('[data-test="short-feed-favorites-back"]').trigger('click');
     await flushPromises();
+    favoritesNow = [video(13, { favorited: true })];
+    finishDelete();
+    await flushPromises();
+    releaseFavorites();
+    releaseFavorites = null;
+    await flushPromises();
     expect(tileIDs()).toEqual(['/short-thumb/video/13']);
+
+    // 之后在电脑端恢复并重新收藏了 11：删除之后发出的请求照常显示它。
+    favoritesNow = [video(11, { favorited: true }), video(13, { favorited: true })];
+    await wrapper.get('[data-test="short-feed-favorites-refresh"]').trigger('click');
+    await flushPromises();
+    expect(tileIDs()).toEqual(['/short-thumb/video/11', '/short-thumb/video/13']);
     wrapper.unmount();
   });
 
