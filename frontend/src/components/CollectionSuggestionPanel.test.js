@@ -208,6 +208,26 @@ describe('建议作品集面板', () => {
   });
 });
 
+// 2026-10-14 修订 D-023：按文件夹成组的候选标出文件夹；按文件名的候选不显示这一行。
+describe('建议作品集面板的文件夹候选', () => {
+  it('按文件夹的候选显示「按文件夹：<文件夹>」，按文件名的不显示', async () => {
+    api.ListCollectionSuggestions.mockResolvedValue([
+      suggestion({ id: 8, series_name: '训练营', basis: 'folder', folder: '课程/训练营' }),
+      suggestion({ id: 9, basis: 'filename', folder: '' })
+    ]);
+    const wrapper = await mountPanel();
+    expect(wrapper.get('[data-test="collection-suggestion-folder"]').text()).toBe('按文件夹：课程/训练营');
+    await wrapper.findAll('[data-test="collection-suggestion-item"]')[1].trigger('click');
+    expect(wrapper.find('[data-test="collection-suggestion-folder"]').exists()).toBe(false);
+  });
+
+  it('同名分季目录合并在扫描根下时（folder 为空）显示扫描根', async () => {
+    api.ListCollectionSuggestions.mockResolvedValue([suggestion({ basis: 'folder', folder: '' })]);
+    const wrapper = await mountPanel();
+    expect(wrapper.get('[data-test="collection-suggestion-folder"]').text()).toBe('按文件夹：/library');
+  });
+});
+
 // META-15（D-PC38）：已建作品集的系列出现新集时给「追加」候选；忽略按系列记忆，新增集数不再提醒。
 describe('建议作品集 META-15 追加候选', () => {
   const appendSuggestion = (overrides = {}) => suggestion({

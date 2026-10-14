@@ -3605,6 +3605,8 @@ export namespace services {
 	    member_count: number;
 	    members: CollectionSuggestionMemberView[];
 	    created_at: string;
+	    basis: string;
+	    folder: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CollectionSuggestionView(source);
@@ -3622,6 +3624,8 @@ export namespace services {
 	        this.member_count = source["member_count"];
 	        this.members = this.convertValues(source["members"], CollectionSuggestionMemberView);
 	        this.created_at = source["created_at"];
+	        this.basis = source["basis"];
+	        this.folder = source["folder"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
