@@ -373,3 +373,137 @@ func TestDBG04AcceptSQLiteAfterFallbackBlock(t *testing.T) {
 		}
 	})
 }
+
+// D-DBG-05：数据目录下的 .env 不是本版本写出的格式（缺 PREVIOUS_BACKEND）时，只忽略 DB_BACKEND 与
+// PREVIOUS_BACKEND 两个键，其余键（用户自己写的 PG_* 等）照常加载，选库仍按现有规则。
+func TestDBG05NonAdoptableDataDirConfigLoadsEverythingButBackendKeys(t *testing.T) {
+	const pgLines = "PG_HOST=db.local\nPG_PORT=5433\nPG_USER=me\nPG_PASSWORD=pw\nPG_DB=cine\nPG_SSLMODE=require\n"
+	cases := []struct {
+		name    string
+		content string
+		want    Backend
+		pgHost  string
+	}{
+		{"只有 PG_* → postgres", pgLines, BackendPostgres, "db.local"},
+		{"DB_BACKEND=sqlite + PG_* → postgres（DB_BACKEND 被忽略）", "DB_BACKEND=sqlite\n" + pgLines, BackendPostgres, "db.local"},
+		{"DB_BACKEND=postgres、没有 PG_* → sqlite（与以前整份不采用时一样）", "DB_BACKEND=postgres\n", BackendSQLite, ""},
+		{"PREVIOUS_BACKEND 为空值 + PG_* → postgres", "PREVIOUS_BACKEND=\n" + pgLines, BackendPostgres, "db.local"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := guardInitEnv(t)
+			if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			backend, err := resolveStartupBackend(dataDir)
+			if err != nil || backend != tc.want {
+				t.Fatalf("解析结果不对: backend=%s err=%v want %s", backend, err, tc.want)
+			}
+			for _, key := range []string{BackendConfigKey, PreviousBackendConfigKey} {
+				if got, ok := os.LookupEnv(key); ok {
+					t.Fatalf("缺 PREVIOUS_BACKEND 的文件里的 %s 不应进环境: %q", key, got)
+				}
+			}
+			if got := os.Getenv("PG_HOST"); got != tc.pgHost {
+				t.Fatalf("PG_HOST=%q want %q", got, tc.pgHost)
+			}
+			if tc.pgHost != "" && (os.Getenv("PG_PORT") != "5433" || os.Getenv("PG_USER") != "me" || os.Getenv("PG_PASSWORD") != "pw" ||
+				os.Getenv("PG_DB") != "cine" || os.Getenv("PG_SSLMODE") != "require") {
+				t.Fatal("其余 PG_* 应照常加载")
+			}
+		})
+	}
+}
+
+// D-DBG-05：与 godotenv.Load 同一口径，进程环境里已有的变量（空值也算）不被文件覆盖，没有的才补上。
+func TestDBG05ProcessEnvWinsOverNonAdoptableDataDirConfig(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	t.Setenv("PG_HOST", "env-host")
+	t.Setenv("PG_PORT", "")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("PG_HOST=file-host\nPG_PORT=5433\nPG_USER=file-user\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loadEnvConfig(dataDir)
+	if got := os.Getenv("PG_HOST"); got != "env-host" {
+		t.Fatalf("进程环境的 PG_HOST 应优先: %q", got)
+	}
+	if got, ok := os.LookupEnv("PG_PORT"); !ok || got != "" {
+		t.Fatalf("进程环境里的空值也不应被覆盖: %q ok=%v", got, ok)
+	}
+	if got := os.Getenv("PG_USER"); got != "file-user" {
+		t.Fatalf("进程环境里没有的键应由文件补上: %q", got)
+	}
+}
+
+// D-DBG-05：本版本写出的格式（带 PREVIOUS_BACKEND）照旧整份加载，DB_BACKEND 照常生效。
+func TestDBG05AdoptableDataDirConfigStillLoadsWholeFile(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=sqlite\nPREVIOUS_BACKEND=postgres\nPG_HOST=db.local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := resolveStartupBackend(dataDir)
+	if err != nil || backend != BackendSQLite {
+		t.Fatalf("带 PREVIOUS_BACKEND 的文件里的 DB_BACKEND 应生效: backend=%s err=%v", backend, err)
+	}
+	if os.Getenv(BackendConfigKey) != "sqlite" || os.Getenv(PreviousBackendConfigKey) != "postgres" || os.Getenv("PG_HOST") != "db.local" {
+		t.Fatalf("应整份加载: DB_BACKEND=%q PREVIOUS_BACKEND=%q PG_HOST=%q",
+			os.Getenv(BackendConfigKey), os.Getenv(PreviousBackendConfigKey), os.Getenv("PG_HOST"))
+	}
+}
+
+// D-DBG-05：被忽略的 DB_BACKEND 不算显式选择——上次是 PostgreSQL 时照样拦下。
+func TestDBG05IgnoredBackendKeyDoesNotCountAsExplicit(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	writeRecordForTest(t, dataDir, BackendPostgres, "me@db.local:5432/cine")
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=sqlite\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(); !errors.Is(err, ErrBackendFallbackBlocked) {
+		t.Fatalf("被忽略的 DB_BACKEND 不应算显式选择: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, DefaultSQLiteFileName)); !os.IsNotExist(err) {
+		t.Fatalf("被拦下时不应创建 SQLite 库文件: %v", err)
+	}
+}
+
+// D-DBG-03 + D-DBG-05 的出口：被拦下后照出错页的推荐把 PG_* 写进数据目录下的 .env（不带 PREVIOUS_BACKEND），
+// 下次启动不再被拦，按 PostgreSQL 去连（测试里连一个没人监听的端口，得到的是连接错误而不是拦截），
+// 也不建 SQLite 库文件。
+func TestDBG05PGConfigInDataDirConfigUnblocksNextStart(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	writeRecordForTest(t, dataDir, BackendPostgres, "me@127.0.0.1:5432/cine")
+	if err := Init(); !errors.Is(err, ErrBackendFallbackBlocked) {
+		t.Fatalf("应先被拦下: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("PG_HOST=127.0.0.1\nPG_PORT=1\nPG_USER=me\nPG_DB=cine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟「重新打开」：新进程的启动缓存是空的。
+	resetBackendStartupForTest(t)
+	err := Init()
+	if err == nil {
+		t.Fatal("测试端口上没有 PostgreSQL，应得到连接错误")
+	}
+	if errors.Is(err, ErrBackendFallbackBlocked) || StartupGuard().Blocked {
+		t.Fatalf("写好 PG_* 之后不应再被拦: %v", err)
+	}
+	if got := ActiveBackend(); got != BackendPostgres {
+		t.Fatalf("应按 PostgreSQL 去连: %s", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, DefaultSQLiteFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("不应创建 SQLite 库文件: %v", statErr)
+	}
+	if state := readRecordForTest(t, dataDir); state.Backend != BackendPostgres {
+		t.Fatalf("连接失败时记录不应改动: %#v", state)
+	}
+}
