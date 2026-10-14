@@ -330,7 +330,8 @@ describe('工具栏三层重排', () => {
     expect(wrapper.text()).not.toContain('今晚看什么');
     const select = wrapper.get('select[aria-label="智能视图"]');
     expect(select.findAll('option').map(option => [option.element.value, option.text()])).toEqual([
-      ['', '全部视频'], ['untagged', '未打标签'], ['no_subtitle', '无字幕'], ['local_metadata_updated', '本地资料有更新'], ['stale', '路径失效']
+      ['', '全部视频'], ['untagged', '未打标签'], ['no_subtitle', '无字幕'], ['local_metadata_updated', '本地资料有更新'],
+      ['local_metadata_error', '本地资料读取出错'], ['ai_tag_failed', 'AI 打标失败'], ['stale', '路径失效']
     ]);
     for (const removed of ['continue_watching', 'favorites', 'liked', 'recently_played', 'unwatched', 'watched', 'recently_added']) {
       expect(wrapper.vm.smartViewOptions.some(option => option.value === removed), removed).toBe(false);

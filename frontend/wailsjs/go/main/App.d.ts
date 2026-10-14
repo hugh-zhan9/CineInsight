@@ -492,6 +492,8 @@ export function ListDownloadTasks():Promise<Array<services.BrowserDownloadTask>>
 
 export function ListEditProjects(arg1:number):Promise<Array<services.EditProjectSummary>>;
 
+export function ListEditProjectsBefore(arg1:number,arg2:number):Promise<Array<services.EditProjectSummary>>;
+
 export function ListEnhancementTasks(arg1:number):Promise<Array<services.EnhancementTaskView>>;
 
 export function ListFaceClusterPage(arg1:services.FaceClusterFilter,arg2:services.FaceClusterCursorKey,arg3:number):Promise<services.FaceClusterPage>;

@@ -974,6 +974,10 @@ export function ListEditProjects(arg1) {
   return window['go']['main']['App']['ListEditProjects'](arg1);
 }
 
+export function ListEditProjectsBefore(arg1, arg2) {
+  return window['go']['main']['App']['ListEditProjectsBefore'](arg1, arg2);
+}
+
 export function ListEnhancementTasks(arg1) {
   return window['go']['main']['App']['ListEnhancementTasks'](arg1);
 }

@@ -105,7 +105,7 @@ export default {
   },
   computed: {
     scanFailures() {
-      return this.scanErrors.slice(0, 50).map(item => ({
+      return this.scanErrors.map(item => ({
         name: item.path ? directoryBaseName(item.path) : (item.directory ? directoryBaseName(item.directory) : (item.operation || '扫描')),
         error: String(item.error || '扫描失败').slice(0, 1000)
       }));

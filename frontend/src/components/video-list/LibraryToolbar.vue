@@ -385,6 +385,8 @@ export default {
         { label: '未打标签', value: 'untagged' },
         { label: '无字幕', value: 'no_subtitle' },
         { label: '本地资料有更新', value: 'local_metadata_updated' },
+        { label: '本地资料读取出错', value: 'local_metadata_error' },
+        { label: 'AI 打标失败', value: 'ai_tag_failed' },
         { label: '路径失效', value: 'stale' }
       ],
       missingOptions: VIDEO_MISSING_OPTIONS,

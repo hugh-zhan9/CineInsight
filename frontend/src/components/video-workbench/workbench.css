@@ -52,4 +52,5 @@
 .edit-projects__select .edit-progress { width: 100%; }
 .edit-projects__title { max-width: 100%; font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .edit-projects__actions { display: flex; gap: 6px; }
+.edit-projects__more { justify-self: start; }
 .edit-section > button, .edit-section > .edit-inline > button { justify-self: start; }

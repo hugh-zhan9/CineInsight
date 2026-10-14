@@ -73,3 +73,29 @@ func TestVideoEditAppRefusesDuringMaintenance(t *testing.T) {
 	}
 	_ = app.GetVideoEditStatus()
 }
+
+// 工作台「加载更多」：ListEditProjectsBefore 从上一页最后一个 ID 往下翻，页与页不重不漏。
+func TestListEditProjectsBeforePagesByID(t *testing.T) {
+	previous := database.DB
+	database.DB = dbtest.Open(t)
+	t.Cleanup(func() { database.DB = previous })
+	app := &App{videoEdit: services.NewVideoEditService(nil, nil, t.TempDir())}
+	for i := 0; i < 5; i++ {
+		seedAppVideoEditProject(t, models.VideoEditStatusFailed, models.VideoEditStatusFailed)
+	}
+	first, err := app.ListEditProjects(2)
+	if err != nil || len(first) != 2 || first[0].ID != 5 || first[1].ID != 4 {
+		t.Fatalf("第一页应为 5、4: %+v err=%v", first, err)
+	}
+	second, err := app.ListEditProjectsBefore(first[1].ID, 2)
+	if err != nil || len(second) != 2 || second[0].ID != 3 || second[1].ID != 2 {
+		t.Fatalf("第二页应为 3、2: %+v err=%v", second, err)
+	}
+	last, err := app.ListEditProjectsBefore(second[1].ID, 2)
+	if err != nil || len(last) != 1 || last[0].ID != 1 {
+		t.Fatalf("最后一页应只有 1: %+v err=%v", last, err)
+	}
+	if empty, err := app.ListEditProjectsBefore(1, 2); err != nil || len(empty) != 0 {
+		t.Fatalf("翻到底应为空: %+v err=%v", empty, err)
+	}
+}

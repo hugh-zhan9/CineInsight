@@ -44,6 +44,21 @@ describe('增量扫描状态条', () => {
     wrapper.unmount();
   });
 
+  // 后端给了全部失败（不截断），这里也一条不少：展开后能看到第 80 条，不再写「仅展示前 50 条」。
+  it('失败明细全部可展开，不截在 50 条', async () => {
+    const errors = Array.from({ length: 80 }, (_, index) => ({ path: `/lib/f${index + 1}.mkv`, error: 'bad' }));
+    api.SyncScanDirectories.mockResolvedValueOnce({ scanned: 80, errors });
+    const wrapper = mountBar();
+    await wrapper.vm.runIncrementalScan();
+    await flushPromises();
+    const toggle = wrapper.get('[data-test="task-failure-toggle"]');
+    expect(toggle.text()).toBe('展开全部 80 条');
+    await toggle.trigger('click');
+    expect(wrapper.findAll('[data-test="scan-failures"] li')).toHaveLength(80);
+    expect(wrapper.text()).not.toContain('仅展示前 50 条');
+    wrapper.unmount();
+  });
+
   it('有失败项时降级为 warning，整个失败时是 error', async () => {
     api.SyncScanDirectories.mockResolvedValueOnce({ scanned: 1, errors: [{ path: '/x', error: 'permission denied' }] });
     const wrapper = mountBar();

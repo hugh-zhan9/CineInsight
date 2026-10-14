@@ -330,6 +330,74 @@ func TestMETA09LocalMetadataUpdatedSmartView(t *testing.T) {
 	}
 }
 
+// 「本地资料读取出错」与完整度「待处理」的 nfo_error 同口径：只列 error 状态，失效的不列。
+func TestLocalMetadataErrorSmartViewMatchesCompletenessPending(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	bad := libVisVideo(t, "/lib/a/x.mp4", nil)
+	upd := libVisVideo(t, "/lib/b/x.mp4", nil)
+	staleBad := libVisVideo(t, "/lib/c/x.mp4", func(v *models.Video) { v.IsStale = true })
+	libVisVideo(t, "/lib/d/x.mp4", nil)
+	for _, st := range []models.VideoLocalMetadataState{
+		{VideoID: bad.ID, Status: LocalMetadataStateError, LastCheckedAt: time.Now()},
+		{VideoID: upd.ID, Status: LocalMetadataStateUpdateAvailable, LastCheckedAt: time.Now()},
+		{VideoID: staleBad.ID, Status: LocalMetadataStateError, LastCheckedAt: time.Now()},
+	} {
+		st := st
+		if err := database.DB.Create(&st).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := libVisIDs(t, LibraryFilter{SmartView: LibraryViewLocalMetadataError}); !reflect.DeepEqual(got, []uint{bad.ID}) {
+		t.Fatalf("got=%v", got)
+	}
+	report, err := NewMetadataCompletenessService(t.TempDir()).GetMetadataCompleteness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range report.VideoPending {
+		if item.Field == MetadataFieldNFOError {
+			found = true
+			if item.Missing != 1 {
+				t.Fatalf("完整度 nfo_error 应与视图同为 1: %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("完整度里没有 nfo_error: %+v", report.VideoPending)
+	}
+}
+
+// 「AI 打标失败」只列打标状态为 failed 的视频：完成、处理中、没有状态行的与失效的都不列。
+func TestAITagFailedSmartViewListsExactlyFailedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	failedA := libVisVideo(t, "/lib/a/x.mp4", nil)
+	failedB := libVisVideo(t, "/lib/b/x.mp4", nil)
+	done := libVisVideo(t, "/lib/c/x.mp4", nil)
+	busy := libVisVideo(t, "/lib/d/x.mp4", nil)
+	staleFailed := libVisVideo(t, "/lib/e/x.mp4", func(v *models.Video) { v.IsStale = true })
+	libVisVideo(t, "/lib/f/x.mp4", nil)
+	for _, st := range []models.AITaggingState{
+		{VideoID: failedA.ID, Status: models.AITaggingStateStatusFailed},
+		{VideoID: failedB.ID, Status: models.AITaggingStateStatusFailed},
+		{VideoID: done.ID, Status: models.AITaggingStateStatusCompleted},
+		{VideoID: busy.ID, Status: models.AITaggingStateStatusProcessing},
+		{VideoID: staleFailed.ID, Status: models.AITaggingStateStatusFailed},
+	} {
+		st := st
+		if err := database.DB.Create(&st).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []uint{failedA.ID, failedB.ID}
+	if got := libVisIDs(t, LibraryFilter{SmartView: LibraryViewAITagFailed}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+	if count, err := (&VideoService{}).CountLibraryVideos(LibraryFilter{SmartView: LibraryViewAITagFailed}); err != nil || count != 2 {
+		t.Fatalf("计数应与列表一致: %d err=%v", count, err)
+	}
+}
+
 func TestLIB15META07UpdateSavedLibraryViewAndActiveTagIDs(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}

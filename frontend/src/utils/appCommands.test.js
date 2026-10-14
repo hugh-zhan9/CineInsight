@@ -269,7 +269,7 @@ describe('应用级命令注册', () => {
   });
 
   it('D-P3-03 smartViewTarget 逐项落点', () => {
-    expect(LIBRARY_MANAGE_SMART_VIEWS).toEqual(['', 'untagged', 'no_subtitle', 'local_metadata_updated', 'stale']);
+    expect(LIBRARY_MANAGE_SMART_VIEWS).toEqual(['', 'untagged', 'no_subtitle', 'local_metadata_updated', 'local_metadata_error', 'ai_tag_failed', 'stale']);
     for (const view of VIDEO_BROWSE_SMART_VIEWS.filter(Boolean)) {
       expect(smartViewTarget(view, 'manage')).toEqual({ page: 'videos', watch: view });
       expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'videos', watch: view });
@@ -278,7 +278,7 @@ describe('应用级命令注册', () => {
     for (const view of ['recently_added', 'nope']) {
       expect(smartViewTarget(view, 'manage'), view).toEqual({ page: 'videos', watch: '' });
     }
-    for (const view of ['untagged', 'no_subtitle', 'local_metadata_updated', 'stale']) {
+    for (const view of ['untagged', 'no_subtitle', 'local_metadata_updated', 'local_metadata_error', 'ai_tag_failed', 'stale']) {
       expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'library-manage', view });
     }
     expect(smartViewTarget('', 'manage')).toEqual({ page: 'library-manage', view: '' });
@@ -343,8 +343,8 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('downloads');
   });
 
-  // 命令 ID 不变：十二条都还在；海报墙不单列的「最近添加」不在面板里列出（hidden），按 ID 照样能执行（D-P3-03）。
-  // 三期集成：点赞、最近播放回到海报墙，重新列出。
+  // 命令 ID 不变：原来十二条都还在；海报墙不单列的「最近添加」不在面板里列出（hidden），按 ID 照样能执行（D-P3-03）。
+  // 三期集成：点赞、最近播放回到海报墙，重新列出。2026-10-14 加了本地资料读取出错、AI 打标失败两条（共十四条）。
   it('智能视图逐条注册为导航命令（ID 不变），只有最近添加不在面板里列出', () => {
     host();
     const hidden = ['recently_added'];
@@ -356,7 +356,7 @@ describe('应用级命令注册', () => {
       expect(Boolean(command.hidden), id).toBe(hidden.includes(view.value));
       expect(commandByID(id) !== null, id).toBe(!hidden.includes(view.value));
     }
-    expect(COMMAND_PALETTE_SMART_VIEWS).toHaveLength(12);
+    expect(COMMAND_PALETTE_SMART_VIEWS).toHaveLength(14);
   });
 
   it('设置每个分区各有一条动作命令，执行即跳到设置页', async () => {

@@ -335,3 +335,41 @@ describe('VideoWorkbenchPage duplicate', () => {
     }
   });
 });
+
+// 编辑项目一页 50 个：末尾「加载更多」接着往下翻；之后的刷新按翻过的页数重读，翻出来的不被冲掉。
+describe('编辑项目列表翻页', () => {
+  const summary = id => ({ id, kind: 'merge', title: `项目 ${id}`, status: 'completed', revision: 1, item_count: 1, completed_count: 1, progress: 1 });
+  const range = (from, to) => Array.from({ length: from - to + 1 }, (_, index) => summary(from - index));
+
+  it('加载更多接上更早的项目，到底后不再显示；刷新时重读已翻过的页', async () => {
+    api.ListEditProjects.mockResolvedValue(range(60, 11));
+    api.ListEditProjectsBefore.mockResolvedValue(range(10, 1));
+    const wrapper = mount(VideoWorkbenchPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(50);
+
+    await wrapper.get('[data-test="edit-projects-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListEditProjectsBefore).toHaveBeenCalledWith(11, 50);
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(60);
+    expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="edit-projects-more"]').exists()).toBe(false);
+
+    api.ListEditProjectsBefore.mockClear();
+    await wrapper.get('[data-test="edit-projects-refresh"]').trigger('click');
+    await flushPromises();
+    expect(api.ListEditProjectsBefore).toHaveBeenCalledWith(11, 50);
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(60);
+  });
+
+  it('不满一页时没有加载更多', async () => {
+    api.ListEditProjects.mockResolvedValue(range(3, 1));
+    const wrapper = mount(VideoWorkbenchPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(3);
+    expect(wrapper.find('[data-test="edit-projects-more"]').exists()).toBe(false);
+    expect(api.ListEditProjectsBefore).not.toHaveBeenCalled();
+  });
+});

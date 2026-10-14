@@ -13,14 +13,16 @@
       class="btn-link task-failure-list__toggle"
       data-test="task-failure-toggle"
       @click="expanded = !expanded"
-    >{{ expanded ? '收起' : `展开全部 ${items.length} 条` }}</button>
+    >{{ toggleText }}</button>
+    <p v-if="truncated" class="task-failure-list__capped" data-test="task-failure-capped">共 {{ total }} 条失败，只保留了前 {{ items.length }} 条明细。</p>
   </div>
 </template>
 
 <script>
 // 后台任务的失败明细：后端每轮最多带 50 条、每条最长 500 字符的错误文本。
 // 直接平铺会把整条状态条撑成一屏，所以默认只露前几条、每条一行截断（悬停看全文），
-// 其余折进"展开全部"，展开后也只在固定高度内滚动。
+// 其余折进"展开"，展开后也只在固定高度内滚动。total 是这一轮的失败总数：比带来的明细多时（后端截在 50 条）
+// 照实说只保留了前几条，展开按钮也不说「全部」。
 export default {
   name: 'TaskFailureList',
   props: {
@@ -29,6 +31,7 @@ export default {
     keyPrefix: { type: String, default: '' },
     dataTest: { type: String, default: undefined },
     fallbackLabel: { type: String, default: '视频' },
+    total: { type: Number, default: 0 },
   },
   data() {
     return { expanded: false };
@@ -37,6 +40,13 @@ export default {
     // Go 的 nil 切片会序列化成 null，别让它把整条状态条炸掉。
     items() {
       return Array.isArray(this.failures) ? this.failures : [];
+    },
+    truncated() {
+      return Number(this.total) > this.items.length;
+    },
+    toggleText() {
+      if (this.expanded) return '收起';
+      return this.truncated ? `展开已保留的 ${this.items.length} 条` : `展开全部 ${this.items.length} 条`;
     },
     visibleFailures() {
       return this.expanded ? this.items : this.items.slice(0, this.limit);
@@ -86,6 +96,10 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-failure-list__capped {
+  margin: 0;
 }
 
 .task-failure-list__toggle {

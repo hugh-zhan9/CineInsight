@@ -15,6 +15,7 @@ import TaskCenterDrawer, { relativeTimeText } from './TaskCenterDrawer.vue';
 import { BACKGROUND_TASK_LABELS } from '../utils/idleScheduling.js';
 import { feedbackState, notifyUndoable, resetFeedback, resolveConfirm, runToastAction } from '../utils/feedback.js';
 import * as recentOperations from '../utils/recentOperations.js';
+import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
 const KEYS = Object.keys(BACKGROUND_TASK_LABELS);
 
@@ -122,6 +123,38 @@ describe('任务中心快照展示（APP-03）', () => {
     expect(wrapper.get('[data-test="task-item-last-backup"]').text()).toContain('成功 0 · 失败 1');
     expect(wrapper.get('[data-test="task-item-failures-backup"]').text()).toContain('数据库备份：磁盘已满');
     expect(wrapper.find('[data-test="task-item-last-subtitle"]').exists()).toBe(false);
+  });
+
+  // 明细后端只留 50 条，失败数是全部：多出来的照实说；AI 打标与技术信息给片库管理的入口看全部失败对象。
+  it('失败明细被截断时写明只保留了前几条；AI 打标与技术信息给片库管理入口', async () => {
+    const failures = Array.from({ length: 50 }, (_, index) => `f${index + 1}.mp4：解码失败`);
+    api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({
+      overrides: {
+        technical: { last_run: { finished_at: '2026-09-29T08:05:00Z', succeeded: 3, failed: 143, failures } },
+        backup: { last_run: { finished_at: '2026-09-29T08:05:00Z', succeeded: 0, failed: 1, failures: ['数据库备份：磁盘已满'] } },
+        ai_tagging: { last_run: { succeeded: 10, failed: 4, failures: [] } }
+      }
+    }));
+    const run = vi.fn();
+    registerCommands('test-ai-failed', [{ id: 'nav:smart:ai_tag_failed', group: 'navigate', label: 'AI 打标失败', run }]);
+    try {
+      const wrapper = mountDrawer();
+      await flushPromises();
+      expect(wrapper.get('[data-test="task-item-failures-technical"] summary').text())
+        .toBe('失败明细 50 条（共 143 条失败，只保留了前 50 条明细）');
+      expect(wrapper.get('[data-test="task-item-failures-backup"] summary').text()).toBe('失败明细 1 条');
+      expect(wrapper.find('[data-test="task-item-failure-link-backup"]').exists()).toBe(false);
+
+      await wrapper.get('[data-test="task-item-failure-link-technical"]').trigger('click');
+      expect(wrapper.emitted('open-library-missing')).toEqual([[{ kind: 'video', field: 'technical' }]]);
+
+      await wrapper.get('[data-test="task-item-failure-link-ai_tagging"]').trigger('click');
+      await flushPromises();
+      expect(run).toHaveBeenCalledOnce();
+      expect(wrapper.emitted('close')).toHaveLength(2);
+    } finally {
+      unregisterCommands('test-ai-failed');
+    }
   });
 
   it('APP-03 角标：运行中数量，有一项上一轮失败就标红点', async () => {

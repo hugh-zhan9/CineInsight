@@ -12,7 +12,10 @@
         <p>下面 {{ items.length }} {{ unit }}所在的磁盘（例如网络共享盘、部分 exFAT 移动硬盘）不支持移到废纸篓。它们仍在{{ libraryName }}里，没有做任何改动。请选择如何处理：</p>
         <ul class="trash-unsupported-names" data-test="trash-unsupported-names">
           <li v-for="item in previewItems" :key="item.id">{{ item.name }}</li>
-          <li v-if="items.length > previewItems.length">等 {{ items.length }} 项</li>
+          <li v-if="items.length > previewItems.length">
+            还有 {{ items.length - previewItems.length }} 项
+            <button type="button" class="btn-link" data-test="trash-unsupported-show-all" @click="showAll = true">显示全部 {{ items.length }} 项</button>
+          </li>
         </ul>
         <div class="trash-unsupported-options">
           <div class="trash-unsupported-option">
@@ -30,7 +33,10 @@
         <p class="trash-unsupported-warning">将永久删除以下 {{ items.length }} 个文件及其记录。它们不会进入废纸篓，删除后无法恢复。</p>
         <ul class="trash-unsupported-names" data-test="trash-unsupported-confirm-names">
           <li v-for="item in confirmItems" :key="item.id">{{ item.name }}</li>
-          <li v-if="items.length > confirmItems.length">等 {{ items.length }} 项</li>
+          <li v-if="items.length > confirmItems.length">
+            还有 {{ items.length - confirmItems.length }} 项
+            <button type="button" class="btn-link" data-test="trash-unsupported-confirm-show-all" @click="showAll = true">显示全部 {{ items.length }} 项</button>
+          </li>
         </ul>
         <!-- 不可逆（D-UD-07 第 3 级）：输入的就是按钮上的文字。 -->
         <label class="trash-unsupported-typed">
@@ -85,7 +91,8 @@ export default {
   },
   emits: ['permanent-delete', 'record-only', 'cancel'],
   data() {
-    return { step: 'choose', typed: '', confirmWord: PERMANENT_CONFIRM_WORD };
+    // showAll：名单默认只列前几项（选择页 10、确认页 30），永久删除前能展开看全每一项。
+    return { step: 'choose', typed: '', confirmWord: PERMANENT_CONFIRM_WORD, showAll: false };
   },
   computed: {
     unit() {
@@ -95,10 +102,10 @@ export default {
       return this.kind === 'image' ? '图片库' : '片库';
     },
     previewItems() {
-      return this.items.slice(0, 10);
+      return this.showAll ? this.items : this.items.slice(0, 10);
     },
     confirmItems() {
-      return this.items.slice(0, 30);
+      return this.showAll ? this.items : this.items.slice(0, 30);
     },
     typedMatches() {
       return confirmTextMatches({ requiredText: this.confirmWord }, this.typed);
@@ -106,7 +113,10 @@ export default {
   },
   watch: {
     visible(value) {
-      if (value) this.step = 'choose';
+      if (value) {
+        this.step = 'choose';
+        this.showAll = false;
+      }
     },
     // 每次进确认页都从空的输入框开始。
     step() {

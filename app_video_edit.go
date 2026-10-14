@@ -81,6 +81,17 @@ func (a *App) ListEditProjects(limit int) ([]services.EditProjectSummary, error)
 	return videoEditResult("ListEditProjects", list, err)
 }
 
+// ListEditProjectsBefore 列出 ID 小于 beforeID 的编辑项目（翻页用；limit 规则同 ListEditProjects）。
+func (a *App) ListEditProjectsBefore(beforeID uint, limit int) ([]services.EditProjectSummary, error) {
+	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	list, err := service.ListProjectsBefore(ctx, beforeID, limit)
+	return videoEditResult("ListEditProjectsBefore", list, err)
+}
+
 // GetEditProject 返回项目详情（配方、分析结果、导出项）。
 func (a *App) GetEditProject(projectID uint) (*services.EditProjectView, error) {
 	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)

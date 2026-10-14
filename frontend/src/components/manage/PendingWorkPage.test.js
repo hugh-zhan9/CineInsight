@@ -328,6 +328,9 @@ describe('进入专门工具（D-P3-01）', () => {
     expect(footer.text()).toContain('3 个视频 AI 打标失败（不计入待处理）');
     await footer.get('[data-test="pending-open-task-center"]').trigger('click');
     expect(wrapper.emitted('open-task-center')).toHaveLength(1);
+    // 失败的视频列在片库管理「AI 打标失败」视图里（脚注的数字与它同口径）。
+    await footer.get('[data-test="pending-open-ai-failed"]').trigger('click');
+    expect(wrapper.emitted('run-command')).toContainEqual(['nav:smart:ai_tag_failed', 'AI 打标失败的视频']);
   });
 });
 

@@ -178,8 +178,12 @@ func TestMETA08PendingWorkSummaryMatchesServiceCounts(t *testing.T) {
 
 	// 与各面板背后的服务接口逐项核对口径。
 	aiSummary, err := app.GetAITaggingStatusSummary()
-	if err != nil || int(aiSummary.Pending) != summary.AIVideoCandidates || int(aiSummary.Failed) != summary.AIVideoFailedRuns {
-		t.Fatalf("视频 AI 口径应与 StatusSummary 一致: %+v err=%v", aiSummary, err)
+	if err != nil || int(aiSummary.Pending) != summary.AIVideoCandidates {
+		t.Fatalf("视频 AI 候选口径应与 StatusSummary 一致: %+v err=%v", aiSummary, err)
+	}
+	failedViewCount, err := app.CountLibraryVideos(services.LibraryFilter{SmartView: services.LibraryViewAITagFailed})
+	if err != nil || int(failedViewCount) != summary.AIVideoFailedRuns {
+		t.Fatalf("AI 打标失败数应与「AI 打标失败」视图同口径: %d err=%v", failedViewCount, err)
 	}
 	imageSummary, err := app.GetImageAITaggingSummary()
 	if err != nil || int(imageSummary.Pending) != summary.AIImageCandidates {

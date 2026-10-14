@@ -27,6 +27,14 @@
         </div>
       </li>
     </ul>
+    <button
+      v-if="hasMore"
+      type="button"
+      class="btn btn--secondary btn--sm edit-projects__more"
+      data-test="edit-projects-more"
+      :disabled="loadingMore"
+      @click="$emit('load-more')"
+    >{{ loadingMore ? '正在加载…' : '加载更多' }}</button>
   </aside>
 </template>
 
@@ -42,9 +50,12 @@ export default {
     projects: { type: Array, default: () => [] },
     selectedId: { type: Number, default: 0 },
     busy: { type: Object, default: () => ({}) },
-    error: { type: String, default: '' }
+    error: { type: String, default: '' },
+    // 一页 50 个，按 ID 倒序；还有更早的项目时末尾给「加载更多」。
+    hasMore: { type: Boolean, default: false },
+    loadingMore: { type: Boolean, default: false }
   },
-  emits: ['select', 'cancel', 'requeue', 'delete', 'refresh'],
+  emits: ['select', 'cancel', 'requeue', 'delete', 'refresh', 'load-more'],
   methods: {
     kindLabel: editKindLabel,
     statusLabel: editStatusLabel,
