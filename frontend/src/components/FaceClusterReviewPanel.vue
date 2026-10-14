@@ -15,12 +15,14 @@
 
     <!-- 三个视图（D-PC30）：待处理 = 追加候选 + 未命名；已命名可解除关联、改派；
          已忽略可恢复。未命名与已忽略按服务端游标分页（D-PC29），不再一次拉全部。
-         页签是 D-UD-06 AppTabs：条数原样写（还有下一页时带「+」），已忽略打开过才有条数。 -->
-    <AppTabs class="face-review__views" :tabs="viewTabs" :model-value="view" aria-label="人脸组视图" @update:model-value="switchView" />
+         页签是 D-UD-06 AppTabs：条数原样写（还有下一页时带「+」），已忽略打开过才有条数。
+         卡片列表是当前视图的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）。 -->
+    <AppTabs class="face-review__views" :tabs="viewTabs" :model-value="view" :id-prefix="tabIdPrefix" aria-label="人脸组视图" @update:model-value="switchView" />
 
     <p v-if="error" class="face-review__error" role="alert" data-test="face-cluster-review-error">{{ error }}</p>
     <p v-if="notice" class="face-review__notice" role="status" data-test="face-cluster-review-notice">{{ notice }}</p>
 
+    <div :id="`${tabIdPrefix}-panel-${view}`" class="face-review__panel" role="tabpanel" :aria-labelledby="`${tabIdPrefix}-tab-${view}`">
     <template v-if="view !== 'ignored'">
       <p v-if="initialLoading" class="face-review__status" role="status">正在加载人物候选…</p>
       <p
@@ -363,6 +365,7 @@
         @click="loadIgnored({ reset: false })"
       >{{ ignored.loading ? '加载中…' : '加载更多' }}</button>
     </template>
+    </div>
 
     <FaceClusterDetailDialog v-if="detailCluster" :cluster="detailCluster" @close="detailCluster = null" @removed="refresh()" @name="card => { detailCluster = null; openNameForm(card); }" @link="card => { detailCluster = null; openLinkForm(card); }" />
   </section>
@@ -401,6 +404,9 @@ const MAX_PAGE_LIMIT = 200;
 // 取全已命名簇、逐条确认追加时翻页的上限，防止异常数据让循环停不下来。
 const MAX_PAGES = 50;
 
+// 页签与面板 id 的前缀：这个面板会同时挂在几处（人物与作品集、待处理、两个审阅对话框），每个实例各用一个，id 不重复。
+let panelSeq = 0;
+
 const FIRST_CURSOR = () => ({ count: 0, id: 0 });
 const EMPTY_RELINK_FORM = () => ({ clusterID: 0, mode: 'unlink', loading: false, error: '', items: [], applyRelations: true, target: null, keyword: '', personID: 0 });
 
@@ -413,7 +419,9 @@ export default {
   // 还有下一页时 unnamedHasMore 为真（宿主据此写「N+ 组」）。
   emits: ['changed', 'loaded'],
   data() {
+    panelSeq += 1;
     return {
+      tabIdPrefix: `face-review-${panelSeq}`,
       view: 'pending',
       detailCluster: null,
       unnamed: { items: [], next: FIRST_CURSOR(), hasMore: false, loadingMore: false },
@@ -701,6 +709,8 @@ export default {
     handleLinkKeydown(event) {
       if (event.key === 'Escape') {
         event.preventDefault();
+        // 下拉开着时它是最上面一层：Esc 只收起下拉，不再传到外面的对话框（AI 标签管理 / 审阅）；收起之后的 Esc 照常往外走。
+        if (this.linkForm.menuOpen) event.stopPropagation();
         this.linkForm.menuOpen = false;
         return;
       }
@@ -954,7 +964,8 @@ export default {
 </script>
 
 <style scoped>
-.face-review {
+.face-review,
+.face-review__panel {
   display: flex;
   flex-direction: column;
   gap: 10px;

@@ -5,8 +5,10 @@
     </p>
 
     <!-- 人物候选与 AI 标签是两批不同的候选，但都是"确认后才写库"的审阅动作，
-         放在同一个面板的两个页签下，和视频侧待审工作台同一套形状。 -->
-    <AppTabs v-model="section" class="image-ai-tag-review__tabs" :tabs="sectionTabs" aria-label="图片审阅类型" />
+         放在同一个面板的两个页签下，和视频侧待审工作台同一套形状。
+         页签下面整块是当前页签的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）。 -->
+    <AppTabs v-model="section" class="image-ai-tag-review__tabs" :tabs="sectionTabs" id-prefix="image-ai-review" aria-label="图片审阅类型" />
+    <div :id="`image-ai-review-panel-${section}`" class="image-ai-tag-review__panel" role="tabpanel" :aria-labelledby="`image-ai-review-tab-${section}`">
 
     <div v-if="section === 'tags'" class="image-ai-tag-review__toolbar">
       <input v-model="keyword" type="search" class="search-input image-ai-tag-review__search" data-test="image-ai-tag-search" aria-label="搜索全部图片待审候选" placeholder="搜索文件名、路径、标签或理由" />
@@ -116,6 +118,7 @@
           <span>已加载 {{ candidates.length }} 条，还有更多</span>
         </div>
       </template>
+    </div>
     </div>
     <template #footer>
       <button type="button" class="btn btn--secondary" data-test="image-ai-tag-review-close" @click="$emit('close')">关闭</button>
@@ -423,6 +426,14 @@ export default {
 }
 
 .image-ai-tag-review__tabs { margin-bottom: var(--space-3); }
+
+/* 面板接着排成纵向、占满页签下面的高度：滚动仍交给里面的候选区。 */
+.image-ai-tag-review__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
 
 .image-ai-tag-review__toolbar {
   display: flex;

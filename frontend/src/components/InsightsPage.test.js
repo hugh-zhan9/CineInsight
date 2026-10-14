@@ -264,6 +264,30 @@ describe('InsightsPage 存储体检页签（2026-10-12）', () => {
   });
 });
 
+describe('InsightsPage 页签与面板', () => {
+  // 面板写 role=tabpanel、id 与 aria-labelledby，和页签的 id / aria-controls 互相指向；← → 切页签时面板跟着换。
+  it('当前页签与面板互相指向，← → 切换后面板换成另一页', async () => {
+    GetLibraryInsights.mockResolvedValue(baseStats);
+    const wrapper = mountWith(baseStats);
+    await flushPromises();
+    const expectPanel = key => {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id')).toBe(`insights-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`insights-tab-${key}`);
+      expect(wrapper.get(`#insights-tab-${key}`).attributes('aria-controls')).toBe(`insights-panel-${key}`);
+      expect(wrapper.get(`#insights-tab-${key}`).attributes('aria-selected')).toBe('true');
+      return panel;
+    };
+    expect(expectPanel('overview').find('[data-test="insights-viewed-coverage"]').exists()).toBe(true);
+    await wrapper.get('[role="tablist"]').trigger('keydown', { key: 'ArrowRight' });
+    expect(expectPanel('storage').find('storage-health-panel-stub').exists()).toBe(true);
+    await wrapper.get('[role="tablist"]').trigger('keydown', { key: 'ArrowLeft' });
+    expectPanel('overview');
+    wrapper.unmount();
+    GetLibraryInsights.mockResolvedValue(null);
+  });
+});
+
 describe('InsightsPage 概览重取（2026-10-12 复审）', () => {
   it('正在取时又要求重取：这一轮结束后再取一次，不留删除前的数', async () => {
     let finishFirst;

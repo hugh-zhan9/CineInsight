@@ -55,6 +55,26 @@ it('reactivation during pending pagination reads only its last committed cursor'
   expect(wrapper.vm.items[0].id).toBe(51); expect(wrapper.vm.cursor).toBeNull(); expect(wrapper.vm.cursors).toEqual([]);
 });
 
+// 两种页签行（独立页的页头里、嵌在片单页时的一行里）都和面板互相指向：role=tabpanel、id、aria-labelledby 对上
+// 页签的 id 与 aria-controls；← → 切分区时面板跟着换。
+it('分区页签与面板互相指向，独立与嵌入两种写法都一样，← → 切换后面板跟着换', async () => {
+  for (const embedded of [false, true]) {
+    const wrapper = shallowMount(ViewingNotesPage, { props: { embedded }, global: { stubs: { PageHeader: false, AppTabs: false } } });
+    await flushPromises();
+    for (const [key, next] of [['diary', 'ArrowRight'], ['bookmarks', 'ArrowRight'], ['history', null]]) {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id'), `${embedded} ${key}`).toBe(`viewing-notes-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`viewing-notes-tab-${key}`);
+      expect(wrapper.get(`#viewing-notes-tab-${key}`).attributes('aria-controls')).toBe(`viewing-notes-panel-${key}`);
+      expect(wrapper.get(`#viewing-notes-tab-${key}`).attributes('aria-selected')).toBe('true');
+      if (key === 'bookmarks') expect(panel.find('bookmark-panel-stub').exists()).toBe(true);
+      else expect(panel.find('.notes-pager').exists()).toBe(true);
+      if (next) { await wrapper.get('[role="tablist"]').trigger('keydown', { key: next }); await flushPromises(); }
+    }
+    wrapper.unmount();
+  }
+});
+
 it('embedded（嵌在片单页里）不显示自己的页头，分区页签与「手动补记」留在本页一行里', async () => {
   const wrapper = shallowMount(ViewingNotesPage, { props: { embedded: true }, global: { stubs: { AppTabs: false } } });
   await flushPromises();

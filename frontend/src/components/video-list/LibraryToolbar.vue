@@ -699,6 +699,8 @@ export default {
         const option = options[this.personActiveIndex] || options[0];
         if (option) this.addPersonFilter(option);
       } else if (event.key === 'Escape') {
+        // 下拉开着时它是最上面一层：Esc 只收起下拉，不再传到片库页（那里的 Esc 会清空多选）；收起之后的 Esc 照常往外走。
+        if (this.personMenuOpen) event.stopPropagation();
         this.personMenuOpen = false;
       }
     },

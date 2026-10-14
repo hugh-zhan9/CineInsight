@@ -40,7 +40,7 @@ import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import { GetFaceClusterObservations, RemoveFaceClusterObservation, PreviewExternally } from '../../wailsjs/go/main/App';
 import { formatBytes } from '../utils/mediaDetails.js';
-import { feedbackState, resolveConfirm } from '../utils/feedback.js';
+import { closeModalLayer, isTopModalLayer, openModalLayer } from './ui/modalSignals.js';
 // 移除来源的错误码（META-04）：已忽略的簇不能移除来源，要先恢复；来源已不在簇里说明别处刚处理过。
 const REMOVE_ERROR_TEXT = {
   cluster_ignored: '这一簇已被忽略，请先在「已忽略」中恢复后再移除来源。',
@@ -59,8 +59,10 @@ export default {
   // D-PC30：未命名与已命名簇都能逐条移除来源（已命名簇移除不动人物关系）；已忽略的要先恢复。
   computed: { canRemoveSources() { return this.cluster.status === 'unnamed' || this.cluster.status === 'named'; } },
   watch: { 'cluster.id': { immediate: true, handler() { this.reset(); } } },
+  // 进模态层栈（ui/modalSignals.js），排在自己的来源列表、原图这些子对话框下面，也排在后来叠上来的对话框下面。
+  beforeMount() { openModalLayer(this); },
   mounted() { window.addEventListener('keydown', this.escape, true); },
-  beforeUnmount() { this._request = null; this._sourceSession = null; window.removeEventListener('keydown', this.escape, true); },
+  beforeUnmount() { this._request = null; this._sourceSession = null; window.removeEventListener('keydown', this.escape, true); closeModalLayer(this); },
   methods: {
     formatBytes,
     timestamp(ms) { const seconds = Math.floor(ms / 1000); return `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds / 60 % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`; },
@@ -95,11 +97,11 @@ export default {
       if (source.media_kind === 'video') { this.videoError = ''; this.videoSource = source; }
       else this.imageSource = { ...source, id: source.media_id };
     },
+    // 上面叠着对话框（来源列表、原图、确认框、删除媒体，视频片段里详情抽屉点开的原图与台词卡，退出确认…）时让给它；
+    // 只在自己是最上面一层（正看着视频片段）时接手：关掉片段，回到来源列表。
     escape(event) {
-      if (event.key !== 'Escape' || this.imageSource) return;
-      if (document.querySelector('[data-test="person-media-delete-dialog"]')) return;
+      if (event.key !== 'Escape' || !isTopModalLayer(this)) return;
       event.preventDefault(); event.stopImmediatePropagation();
-      if (feedbackState.confirm) { resolveConfirm(false); return; }
       if (this.videoSource) this.videoSource = null; else this.$emit('close');
     },
     async previewExternally(video) {

@@ -70,6 +70,20 @@ describe('VersionGroupPanel', () => {
     expect(wrapper.emitted('changed')).toBeUndefined();
   });
 
+  // 两个分区的面板写 role=tabpanel、id 与 aria-labelledby，和页签的 id / aria-controls 互相指向；← → 切换时跟着换。
+  it('分区页签与面板互相指向，← → 切换后面板跟着换', async () => {
+    const wrapper = await mountPanel();
+    for (const [key, next] of [['suggestions', 'ArrowRight'], ['groups', 'ArrowLeft'], ['suggestions', null]]) {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id')).toBe(`version-groups-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`version-groups-tab-${key}`);
+      expect(wrapper.get(`#version-groups-tab-${key}`).attributes('aria-controls')).toBe(`version-groups-panel-${key}`);
+      expect(wrapper.get(`#version-groups-tab-${key}`).attributes('aria-selected')).toBe('true');
+      expect(panel.find(key === 'groups' ? '[data-test="version-panel-group-9"]' : '[data-test="version-panel-suggestion"]').exists()).toBe(true);
+      if (next) await wrapper.get('[role="tablist"]').trigger('keydown', { key: next });
+    }
+  });
+
   it('已有的组：显示软删版本数，管理打开嵌套弹窗，Esc 先关它', async () => {
     const wrapper = await mountPanel();
     await wrapper.get('[data-test="version-panel-tab-groups"]').trigger('click');

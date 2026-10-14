@@ -423,4 +423,23 @@ describe('ImageAITagReviewPanel face cluster section', () => {
     expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="image-ai-tag-review-empty"]').exists()).toBe(true);
   });
+
+  // 页签下面整块是当前页签的面板：role=tabpanel、id、aria-labelledby 与页签的 id / aria-controls 互相指向；
+  // ← → 切换时面板跟着换，标签侧的工具条与候选区都在面板里。
+  it('页签与面板互相指向，← → 切换后面板跟着换', async () => {
+    api.ListImageAITagCandidatePage.mockResolvedValue(page([]));
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
+    await flushPromises();
+    for (const [key, next] of [['tags', 'ArrowRight'], ['face', 'ArrowLeft'], ['tags', null]]) {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id')).toBe(`image-ai-review-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`image-ai-review-tab-${key}`);
+      expect(wrapper.get(`#image-ai-review-tab-${key}`).attributes('aria-controls')).toBe(`image-ai-review-panel-${key}`);
+      expect(wrapper.get(`#image-ai-review-tab-${key}`).attributes('aria-selected')).toBe('true');
+      expect(panel.find('[data-test="image-ai-tag-review-scroll-area"]').exists()).toBe(true);
+      expect(panel.find('[data-test="face-panel-stub"]').exists()).toBe(key === 'face');
+      expect(panel.find('[data-test="image-ai-tag-search"]').exists()).toBe(key === 'tags');
+      if (next) await wrapper.get('[role="tablist"]').trigger('keydown', { key: next });
+    }
+  });
 });

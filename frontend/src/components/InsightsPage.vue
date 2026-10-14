@@ -21,9 +21,11 @@
       <!-- 「存储体检」（2026-10-12）：空间都去哪了、哪些能回收，列出的久未观看大文件可以直接移到废纸篓。
            页签（D-UD-06 AppTabs）带 insights-tab-* 钩子；体检正在删除时锁住，不让切走。 -->
       <template #below>
-        <AppTabs v-model="tab" :tabs="pageTabs" aria-label="洞察内容" />
+        <AppTabs v-model="tab" :tabs="pageTabs" id-prefix="insights" aria-label="洞察内容" />
       </template>
     </PageHeader>
+    <!-- 当前页签的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）。 -->
+    <div :id="`insights-panel-${tab}`" class="insights-page__panel" role="tabpanel" :aria-labelledby="`insights-tab-${tab}`">
     <StorageHealthPanel
       v-if="tab === 'storage'"
       ref="storagePanel"
@@ -133,6 +135,7 @@
       </div>
     </template>
     </template>
+    </div>
   </section>
 </template>
 
@@ -414,7 +417,9 @@ export default {
 <style scoped>
 .insights-play-events-note { color: var(--text-muted); font-size: var(--fs-caption); margin: 6px 0 var(--space-3); }
 .insights-page { display: grid; gap: var(--space-4); }
-.insights-page > :deep(.ui-page-header) { margin-bottom: 0; }
+/* 面板里的各块照旧按页面的间距排（「图片」小节页头同样不要下边距）。 */
+.insights-page__panel { display: grid; gap: var(--space-4); }
+.insights-page > :deep(.ui-page-header), .insights-page__panel > :deep(.ui-page-header) { margin-bottom: 0; }
 .insights-section-head { margin-top: 6px; }
 .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
 .insights-loading { padding: var(--space-4) 0; }

@@ -14,6 +14,7 @@ const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(() => Promise.resolve(
 vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
 
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
 import * as recentOperations from '../utils/recentOperations.js';
 
@@ -77,6 +78,30 @@ describe('FaceClusterReviewPanel', () => {
     const wrapper = mount(FaceClusterReviewPanel);
     await flushPromises();
     expect(wrapper.find('[data-test="face-cluster-review-empty"]').exists()).toBe(true);
+  });
+
+  // 视图页签与卡片列表互相指向（role=tabpanel、id、aria-labelledby 对上页签的 id 与 aria-controls），← → 切换时跟着换。
+  // 这个面板会同时挂在几处（人物与作品集、待处理、两个审阅对话框），每个实例的 id 各不相同。
+  it('view tabs and the card list point at each other, follow ← / →, and stay unique per instance', async () => {
+    setClusters({ unnamed: [cluster()] });
+    const wrapper = mount(FaceClusterReviewPanel, { attachTo: document.body });
+    const other = mount(FaceClusterReviewPanel, { attachTo: document.body });
+    await flushPromises();
+    for (const [key, next] of [['pending', 'ArrowRight'], ['named', 'ArrowRight'], ['ignored', null]]) {
+      const tab = wrapper.get(`[data-test="face-cluster-view-${key}"]`);
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(tab.attributes('aria-selected')).toBe('true');
+      expect(tab.attributes('aria-controls')).toBe(panel.attributes('id'));
+      expect(panel.attributes('aria-labelledby')).toBe(tab.attributes('id'));
+      expect(panel.attributes('id')).toMatch(new RegExp(`-panel-${key}$`));
+      expect(document.querySelectorAll(`[id="${panel.attributes('id')}"]`)).toHaveLength(1);
+      expect(document.querySelectorAll(`[id="${tab.attributes('id')}"]`)).toHaveLength(1);
+      if (key === 'pending') expect(panel.find('[data-test="face-cluster-card-1"]').exists()).toBe(true);
+      if (next) { await wrapper.get('[role="tablist"]').trigger('keydown', { key: next }); await flushPromises(); }
+    }
+    expect(wrapper.get('[role="tabpanel"]').find('[data-test="face-cluster-ignored-empty"]').exists()).toBe(true);
+    other.unmount();
+    wrapper.unmount();
   });
 
   it('renders the representative crop, media counts and person candidates', async () => {
@@ -158,6 +183,32 @@ describe('FaceClusterReviewPanel', () => {
     await flushPromises();
     expect(api.LinkFaceCluster).toHaveBeenCalledWith(1, 5);
     expect(wrapper.find('[data-test="face-cluster-review-notice"]').text()).toContain('周迅');
+  });
+
+  // Esc 只关最上面一层：面板嵌在视频侧「AI 标签管理」与图片侧「AI 标签审阅」对话框里，关联人物的候选下拉开着时
+  // 按 Esc 曾连对话框一起关掉。下拉开着时 Esc 只收起下拉，收起之后再按才轮到对话框。
+  it('Escape in the link search closes only its open option list; the next Escape reaches the dialog around the panel', async () => {
+    setClusters({ unnamed: [cluster()] });
+    const Host = {
+      components: { DialogShell, FaceClusterReviewPanel },
+      emits: ['close'],
+      template: '<DialogShell title="AI 标签管理" @close="$emit(\'close\')"><FaceClusterReviewPanel /></DialogShell>'
+    };
+    const wrapper = mount(Host, { attachTo: document.body });
+    await flushPromises();
+    await wrapper.get('[data-test="face-cluster-link-open-1"]').trigger('click');
+    await flushPromises();
+    const search = wrapper.get('[data-test="face-cluster-link-search"]');
+    const escape = () => search.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    escape();
+    await flushPromises();
+    expect(wrapper.find('[data-test="face-cluster-link-options"]').exists()).toBe(false);
+    expect(wrapper.emitted('close')).toBeUndefined();
+
+    escape();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    wrapper.unmount();
   });
 
   // META-04：忽略前二次确认，文案说清被忽略的组还会吸走同一个人的新人脸、可以恢复。

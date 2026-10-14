@@ -19,6 +19,8 @@ const okResult = (ids, batchID = 'b1') => ({ batch_id: batchID, items: ids.map(i
 const mountLive = async (props = {}) => { const w = mount(PersonMediaDeleteDialog, { props: { target, ...props } }); await flushPromises(); return w; };
 const body = () => new DOMWrapper(document.body);
 const undoToast = () => feedbackState.toasts.find(toast => toast.action?.label === '撤销');
+// 从页面里的元素按下 Esc：先经过 window 的捕获阶段，再冒泡到 document（对话框的 BaseModal 在那里接）。
+const pressEscape = () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
 beforeEach(() => {
   vi.resetAllMocks(); clearToasts(); recentOperations.clear();
   api.GetSettings.mockResolvedValue({ confirm_before_delete: true, delete_original_file: false });
@@ -28,7 +30,7 @@ describe('PersonMediaDeleteDialog', () => {
     const w = await mountLive();
     expect(body().get('[data-test="person-media-delete-dialog"]').text()).toContain('photo.jpg');
     expect(body().text()).not.toContain('/photos/photo.jpg');
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await flushPromises();
+    pressEscape(); await flushPromises();
     expect(w.emitted('close')).toHaveLength(1);
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled(); expect(api.DeleteVideosWithResult).not.toHaveBeenCalled(); w.unmount();
   });
@@ -38,7 +40,7 @@ describe('PersonMediaDeleteDialog', () => {
     const w = await mountLive();
     await body().get('[data-test="person-media-delete-confirm"]').trigger('click');
     await w.vm.confirm();
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    pressEscape();
     expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1); expect(w.emitted('close')).toBeUndefined();
     reject('磁盘不可用'); await flushPromises();
     expect(body().get('[data-test="person-media-delete-dialog"] [role="alert"]').text()).toContain('磁盘不可用'); expect(w.emitted('deleted')).toBeUndefined();
@@ -166,7 +168,7 @@ describe('PersonMediaDeleteDialog', () => {
     const w = await mountLive({ target: video });
     expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(false);
     expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('从片库移除');
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await flushPromises();
+    pressEscape(); await flushPromises();
     expect(w.emitted('close')).toHaveLength(1);
     expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
@@ -192,6 +194,27 @@ describe('PersonMediaDeleteDialog', () => {
     expect(api.PermanentlyDeleteVideos).not.toHaveBeenCalled();
     expect(w.emitted('deleted')).toBeUndefined();
     expect(body().get('[data-test="person-media-delete-dialog"] [role="alert"]').text()).toContain('不支持废纸篓');
+    w.unmount();
+  });
+
+  // Esc 只关最上面一层：确认框曾在 window 捕获阶段拦下全部 Esc（删除进行中 close 又是空操作），叠在它上面的
+  // 「该磁盘不支持废纸篓」二选一永远收不到 Esc。现在 Esc 交给最上面那层：先回到确认框（按「暂不处理」），再关确认框。
+  it('「不支持废纸篓」二选一叠在确认框上时，Esc 先关二选一（暂不处理），下一次 Esc 才关确认框', async () => {
+    const video = { kind: 'video', personID: 7, media: { id: 21, name: 'clip.mp4', path: '/Volumes/SMB/clip.mp4', size: 10 } };
+    api.DeleteVideosWithResult.mockResolvedValueOnce({ batch_id: 'b2', items: [{ id: 21, code: 'trash_unsupported' }] });
+    const w = await mountLive({ target: video });
+    await body().get('[data-test="person-media-delete-file"]').setValue(true);
+    await body().get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    expect(body().find('[data-test="trash-unsupported-names"]').exists()).toBe(true);
+
+    pressEscape(); await flushPromises();
+    expect(body().find('[data-test="trash-unsupported-names"]').exists()).toBe(false);
+    expect(api.PermanentlyDeleteVideos).not.toHaveBeenCalled();
+    expect(body().get('[data-test="person-media-delete-dialog"] [role="alert"]').text()).toContain('不支持废纸篓');
+    expect(w.emitted('close')).toBeUndefined();
+
+    pressEscape(); await flushPromises();
+    expect(w.emitted('close')).toHaveLength(1);
     w.unmount();
   });
 

@@ -104,6 +104,7 @@
 import { GetPreviewSession, GetVideoDetails } from '../../wailsjs/go/main/App';
 import AppIcon from './ui/AppIcon.vue';
 import SegmentedControl from './ui/SegmentedControl.vue';
+import { closeModalLayer, isTopModalLayer, openModalLayer } from './ui/modalSignals.js';
 import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import {
   COMPARE_SYNC_INTERVAL_MS, applyCompareOffset, compareClipPath, compareDriftSeek, compareFollowerTarget, compareMediaErrorText,
@@ -194,6 +195,11 @@ export default {
       onReady: videoID => this.loadSide(side, videoID, { follow: false })
     })]));
   },
+  // 进模态层栈（ui/modalSignals.js）：叠在它上面的对话框（退出确认、应用内确认框…）先收 Esc，
+  // 它从对话框里打开时又排在那个对话框上面。
+  beforeMount() {
+    openModalLayer(this);
+  },
   mounted() {
     window.addEventListener('keydown', this.onKeydown, true);
     this._syncTimer = setInterval(() => this.syncTick(), COMPARE_SYNC_INTERVAL_MS);
@@ -202,6 +208,7 @@ export default {
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onKeydown, true);
+    closeModalLayer(this);
     this.release();
   },
   methods: {
@@ -243,8 +250,8 @@ export default {
       this._proxyFollowers[side].generate(side === 'left' ? this.leftVideoId : this.rightVideoId);
     },
     onKeydown(event) {
-      if (event.key !== 'Escape') return;
-      // 最上层的就是对比播放器：Esc 只关它，不让下面的弹窗、抽屉与片库再处理一次。
+      // 上面叠着对话框时让给它；自己在最上面时 Esc 只关它，不让下面的弹窗、抽屉与片库再处理一次。
+      if (event.key !== 'Escape' || !isTopModalLayer(this)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       this.close();

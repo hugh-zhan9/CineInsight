@@ -10,6 +10,7 @@ const api = vi.hoisted(() => new Proxy({}, {
 }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 
+import AppFeedback from './AppFeedback.vue';
 import TaskCenterDrawer, { relativeTimeText } from './TaskCenterDrawer.vue';
 import { BACKGROUND_TASK_LABELS } from '../utils/idleScheduling.js';
 import { feedbackState, notifyUndoable, resetFeedback, resolveConfirm, runToastAction } from '../utils/feedback.js';
@@ -350,6 +351,21 @@ describe('事件刷新（APP-03）', () => {
     expect(api.GetTaskCenterSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  // 三个分区的面板写 role=tabpanel、id 与 aria-labelledby，和页签的 id / aria-controls 互相指向；← → 切换时跟着换。
+  it('分区页签与面板互相指向，← → 切换后面板跟着换', async () => {
+    const wrapper = mountDrawer();
+    await flushPromises();
+    for (const [key, next] of [['tasks', 'ArrowRight'], ['recent', 'ArrowRight'], ['health', 'ArrowRight'], ['tasks', null]]) {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id')).toBe(`task-center-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`task-center-tab-${key}`);
+      expect(wrapper.get(`#task-center-tab-${key}`).attributes('aria-controls')).toBe(`task-center-panel-${key}`);
+      expect(wrapper.get(`#task-center-tab-${key}`).attributes('aria-selected')).toBe('true');
+      if (next) { await wrapper.get('[role="tablist"]').trigger('keydown', { key: next }); await flushPromises(); }
+    }
+    expect(wrapper.get('[role="tabpanel"]').find('[data-test="task-center-recent"]').exists()).toBe(true);
+  });
+
   it('打开抽屉时主动拉一次，Esc 关闭', async () => {
     const wrapper = mountDrawer({ open: false });
     await flushPromises();
@@ -417,6 +433,28 @@ describe('最近任务四类（APP-03）', () => {
     resolveConfirm(true);
     await flushPromises();
     expect(api.ResolveSubtitleJob).toHaveBeenCalledWith(13, 'discard');
+  });
+
+  // Esc 只关最上面一层（D-UD-13）：抽屉常挂载，比之后弹出的确认框（BaseModal）先在 document 上登记 keydown，
+  // 曾经一下 Esc 先关了抽屉、再关确认框。确认框开着时抽屉让出 Esc：第一下只关确认框，第二下才关抽屉。
+  it('抽屉里弹出的确认框：第一下 Esc 只关确认框（按取消处理），第二下关抽屉', async () => {
+    const feedback = mount(AppFeedback, { attachTo: document.body });
+    const wrapper = await mountWithRecent();
+    const pressEscape = () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    await wrapper.get('[data-test="task-recent-action-subtitle-13-discard"]').trigger('click');
+    await flushPromises();
+    expect(document.querySelector('[data-test="app-confirm"]')).not.toBeNull();
+
+    pressEscape();
+    await flushPromises();
+    expect(document.querySelector('[data-test="app-confirm"]')).toBeNull();
+    expect(api.ResolveSubtitleJob).not.toHaveBeenCalled();
+    expect(wrapper.emitted('close')).toBeUndefined();
+
+    pressEscape();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    feedback.unmount();
   });
 
   it('APP-03 超分完成的产物可在访达中显示、在片库中打开；失败的可重试', async () => {

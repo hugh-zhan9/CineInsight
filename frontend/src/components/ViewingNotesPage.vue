@@ -3,13 +3,15 @@
     <PageHeader v-if="!embedded" title="观看笔记" subtitle="观影日记、片段书签，以及无法确认观看的播放记录。">
       <template #actions><button type="button" class="btn btn--primary" data-test="diary-add" @click="editor = {}">手动补记</button></template>
       <!-- 三个分区（D-UD-06 AppTabs），每个页签带 notes-tab-* 钩子。 -->
-      <template #below><AppTabs v-model="tab" :tabs="tabs" aria-label="观看笔记分类" /></template>
+      <template #below><AppTabs v-model="tab" :tabs="tabs" id-prefix="viewing-notes" aria-label="观看笔记分类" /></template>
     </PageHeader>
     <!-- embedded：嵌在片单页的「观看笔记」标签里（D-P2-04），标题与说明由片单页提供，三个分区与「手动补记」留在这一行。 -->
     <div v-else class="notes-embedded-bar">
-      <AppTabs v-model="tab" :tabs="tabs" aria-label="观看笔记分类" />
+      <AppTabs v-model="tab" :tabs="tabs" id-prefix="viewing-notes" aria-label="观看笔记分类" />
       <button type="button" class="btn btn--primary" data-test="diary-add" @click="editor = {}">手动补记</button>
     </div>
+    <!-- 当前分区的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）；两种页签行只出现一种，id 相同。 -->
+    <div :id="`viewing-notes-panel-${tab}`" class="viewing-notes-page__panel" role="tabpanel" :aria-labelledby="`viewing-notes-tab-${tab}`">
     <BookmarkPanel v-if="tab === 'bookmarks'" :page-active="pageActive" @open-bookmark="$emit('open-bookmark', $event)" @open-video="$emit('open-video', $event)" />
     <template v-else>
       <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reset">刷新</button></div>
@@ -48,6 +50,7 @@
       </template>
       <nav class="notes-toolbar notes-pager" aria-label="记录分页"><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
     </template>
+    </div>
     <DiaryEditor v-if="editor" :key="editor.id || 'new'" :entry="editor" :active="pageActive" @close="editor = null" @saved="saved" />
   </main>
 </template>
@@ -109,7 +112,9 @@ export default {
 .notes-filters { margin-bottom: 0; }
 .notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--fs-secondary); white-space: nowrap; }
 .notes-year .number-input { width: 96px; }
-.viewing-notes-page > .help-text { margin: 0; }
+/* 面板里的各块照旧按页面的间距排。 */
+.viewing-notes-page__panel { display: grid; gap: 12px; align-content: start; }
+.viewing-notes-page__panel > .help-text { margin: 0; }
 .diary-recap { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
 .diary-recap p { margin: 0; }
 .diary-recap__summary { font-weight: var(--fw-semibold); }

@@ -29,7 +29,7 @@ import { badgeCountText } from './AppBadge.vue';
 // （首尾循环、跳过 disabled），Home / End 到两端，焦点跟着走，切到即生效。宿主没接住 update:modelValue 时，
 // 焦点照样一路往后走，不会卡在选中项上。
 // 传 idPrefix 时每个页签带 id `${idPrefix}-tab-${key}` 与 aria-controls `${idPrefix}-panel-${key}`，
-// 宿主给对应面板写 role="tabpanel"、同名 id 与 aria-labelledby。
+// 宿主给对应面板写 role="tabpanel"、同名 id 与 aria-labelledby。宿主都要传、都要接面板（守卫规则 8 tab-panels）。
 // 页签 { key, label, count?, disabled?, dataTest? }：dataTest 落在这个页签按钮上（data-test，宿主保留测试钩子用）；
 // count 是数字时按 AppBadge 的口径显示（超过 99 写 99+），是字符串时原样显示（「21+」这类还有下一页的数，
 // 或者必须写全的总数）。
