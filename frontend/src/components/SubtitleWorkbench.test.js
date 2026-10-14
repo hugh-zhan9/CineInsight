@@ -518,3 +518,81 @@ describe('SubtitleWorkbench Esc', () => {
     wrapper.unmount();
   });
 });
+
+// 状态页（读取中、没有字幕、编码待转换、只有内嵌字幕、读取失败）里没有可编辑的字幕，不算「有未保存修改」：
+// 以前未保存标记只在读到字幕时才设，状态页上标题栏写着「有未保存修改」，关闭、刷新都要先确认丢弃并不存在的修改。
+describe('SubtitleWorkbench 状态页不算有未保存修改', () => {
+  const dirtyLabel = wrapper => wrapper.find('.subtitle-workbench__dirty');
+  async function expectUnchanged(wrapper, label) {
+    expect(dirtyLabel(wrapper).text(), label).toBe('已保存');
+    expect(dirtyLabel(wrapper).classes(), label).not.toContain('subtitle-workbench__dirty--active');
+    const unload = new Event('beforeunload', { cancelable: true });
+    wrapper.vm.handleBeforeUnload(unload);
+    expect(unload.defaultPrevented, label).toBe(false);
+    await wrapper.find('[data-test="close-workbench"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction, label).not.toHaveBeenCalled();
+    expect(wrapper.emitted('close'), label).toHaveLength(1);
+  }
+
+  it.each([
+    ['没有字幕', { video_id: 7, entries: [], issues: [], error_code: 'subtitle_missing', message: '该视频还没有外挂字幕，请先生成字幕' }],
+    ['编码待转换', { video_id: 7, entries: [], issues: [], error_code: 'subtitle_encoding_not_utf8', detected_encoding: 'gb18030' }],
+    ['编码有歧义', { video_id: 7, entries: [], issues: [], error_code: 'subtitle_encoding_not_utf8', candidates: [{ encoding: 'gb18030', preview: '一' }, { encoding: 'big5', preview: '二' }] }],
+    ['只有内嵌字幕', { video_id: 7, entries: [], issues: [], error_code: 'subtitle_not_sidecar_srt', message: '该视频只有内嵌/其他格式字幕' }]
+  ])('%s：标题栏写「已保存」，关闭不问', async (label, document) => {
+    const wrapper = await mountWithDocument(document);
+    await expectUnchanged(wrapper, label);
+  });
+
+  it('读取失败与还在读取时同样不问', async () => {
+    api.GetSubtitleEditDocument.mockRejectedValue(new Error('permission denied'));
+    api.GetPreviewSession.mockResolvedValue({ video_id: 7, mode: 'unavailable' });
+    const failed = mount(SubtitleWorkbench, { props: { video: { id: 7, name: 'movie.mp4' } } });
+    await flushPromises();
+    expect(failed.find('[data-test="workbench-load-error"]').exists()).toBe(true);
+    await expectUnchanged(failed, '读取失败');
+    failed.unmount();
+
+    api.GetSubtitleEditDocument.mockReturnValue(new Promise(() => {}));
+    const loading = mount(SubtitleWorkbench, { props: { video: { id: 7, name: 'movie.mp4' } } });
+    await flushPromises();
+    expect(loading.text()).toContain('正在读取外置 SRT');
+    await expectUnchanged(loading, '读取中');
+    loading.unmount();
+  });
+
+  it('状态页上「刷新」不问；新建空白字幕后要真改了才算未保存', async () => {
+    const wrapper = await mountWithDocument({ video_id: 7, entries: [], issues: [], error_code: 'subtitle_missing', message: '该视频还没有外挂字幕' });
+    await wrapper.findAll('button').find(button => button.text() === '刷新').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.GetSubtitleEditDocument).toHaveBeenCalledTimes(2);
+
+    api.CreateBlankSubtitleDocument.mockResolvedValue({ video_id: 7, fingerprint: { size: 0, mod_time_ns: 0, sha256: '' }, entries: [], issues: [] });
+    await wrapper.find('[data-test="workbench-create-blank"]').trigger('click');
+    await flushPromises();
+    expect(dirtyLabel(wrapper).text()).toBe('已保存');
+    wrapper.vm.insertEntry();
+    await flushPromises();
+    expect(dirtyLabel(wrapper).text()).toBe('有未保存修改');
+    feedback.confirmAction.mockResolvedValue(false);
+    await wrapper.find('[data-test="close-workbench"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '关闭字幕工作台' }));
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('丢弃修改后刷新、而文件已经读不出来：状态页上不再问第二次', async () => {
+    const wrapper = await mountWorkbench();
+    await wrapper.find('[data-test="entry-text-cue-1"]').setValue('changed');
+    expect(dirtyLabel(wrapper).text()).toBe('有未保存修改');
+    api.GetSubtitleEditDocument.mockResolvedValue({ video_id: 7, entries: [], issues: [], error_code: 'subtitle_missing', message: '字幕文件不见了' });
+    await wrapper.findAll('button').find(button => button.text() === '刷新').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="workbench-missing"]').exists()).toBe(true);
+    feedback.confirmAction.mockClear();
+    await expectUnchanged(wrapper, '刷新后没有字幕');
+  });
+});

@@ -195,7 +195,8 @@ describe('层级刻度（D-UD-05）', () => {
 describe('对话框开着时全局提示让开对话框的动作', () => {
   const SRC = join(process.cwd(), 'src');
   const read = file => readFileSync(join(SRC, file), 'utf8');
-  const MODAL_OPEN = 'body:has(.modal-overlay)';
+  // 2026-10-14 G1 起条件带上「不在 v-show 隐藏的页面里」（见下一组），开着的对话框照旧命中。
+  const MODAL_OPEN = 'body:has(.modal-overlay:where(:not([style*="display: none"] *)))';
   // 取「selector {」那一块的声明，{ 属性: 值 }。
   function declarations(file, selector) {
     const source = read(file);
@@ -264,7 +265,7 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
   const VISIBLE = ':where(:not([style*="display: none"] *))';
   const openCondition = root => `body:has(${root}${VISIBLE})`;
   const toastsWhen = root => `${openCondition(root)} .app-toasts`;
-  const DIALOG = 'body:has(.modal-overlay) .app-toasts';
+  const DIALOG = toastsWhen('.modal-overlay');
   // 写在对话框那条之前、对话框开着时让给它的；写在之后、在对话框那条范围以内的（字幕工作台按编辑布局判断，见下）。
   const YIELDING = ['.preview-drawer', '.task-center-overlay', '.version-compare'];
   const INSIDE_DIALOG_AREA = ['.photo-viewer', '.cleanup-viewer', '.photo-lightbox', '.subtitle-workbench__layout'];
@@ -355,10 +356,10 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
     for (const root of INSIDE_DIALOG_AREA) expect(indexOf(toastsWhen(root)), root).toBeGreaterThan(dialog);
     // 版本对比全窗口盖住抽屉，写在抽屉之后。
     expect(indexOf(toastsWhen('.version-compare'))).toBeGreaterThan(indexOf(toastsWhen('.preview-drawer')));
-    // 提示的位置规则只有这几条，条件都是「一个类 + 可见」的写法：特异性与对话框那条相同。
+    // 提示的位置规则只有这几条（含对话框那条），条件都是「一个类 + 可见」的写法：一样重。
     const placements = rules.flatMap(rule => rule.selectors).filter(selector => selector.endsWith(' .app-toasts'));
     expect(placements.sort()).toEqual([DIALOG, ...[...YIELDING, ...INSIDE_DIALOG_AREA].map(toastsWhen)].sort());
-    for (const selector of placements.filter(item => item !== DIALOG)) {
+    for (const selector of placements) {
       expect(selector).toMatch(/^body:has\(\.[\w-]+:where\(:not\(\[style\*="display: none"\] \*\)\)\) \.app-toasts$/);
     }
   });
@@ -385,6 +386,19 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
       expect(area.right + 8, `${size.w}`).toBeLessThanOrEqual(size.w - 520);
       expect(area.bottom).toBe(size.h - 16);
     }
+  });
+
+  // 人脸来源的「查看视频片段」把同一个抽屉加宽看画面；以前固定 900，窗口 1024 宽时左边只剩 124，提示压住播放器控制条。
+  it('人脸来源的视频片段：加宽的抽屉给左下角的提示留出一列，又不比一般的详情抽屉窄', () => {
+    const wide = declarationsOf('components/FaceClusterDetailDialog.vue', '.face-source-video :deep(.preview-drawer)');
+    for (const size of SIZES) {
+      const area = toastArea(toastsWhen('.preview-drawer'), size);
+      const width = Math.min(px(wide.width, size), px(wide['max-width'], size));
+      expect(area.right + 8, `${size.w}`).toBeLessThanOrEqual(size.w - width);
+      expect(width, `${size.w}`).toBeGreaterThanOrEqual(520);
+    }
+    // 窗口够宽时照旧 900。
+    expect(px(wide.width, { w: 1440, h: 900 })).toBe(900);
   });
 
   it('版本对比：提示在一行播放条之上、整条在下半截，够不着顶栏、两侧标注与舞台正中的分界线把手', () => {
@@ -465,17 +479,25 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
     }
   });
 
+  // 页面切走时只隐藏（v-show）不卸载，里面开着的层与对话框还在 DOM 里。
+  const Page = {
+    props: { show: { type: Boolean, default: true }, layer: { type: String, default: '' } },
+    render() {
+      return withDirectives(h('section', [this.layer ? h('div', { class: this.layer }) : null]), [[vShow, this.show]]);
+    }
+  };
+  // AppFeedback 里写着的条件（「body:has(…)」那一段），拿来在 jsdom 里比对。
+  const conditionInStyle = root => {
+    const selector = styleRules(FEEDBACK).flatMap(rule => rule.selectors).find(item => item.startsWith(`body:has(${root}`) && item.endsWith(' .app-toasts'));
+    expect(selector, `AppFeedback 里找不到 ${root} 的条件`).toBeTruthy();
+    return selector.slice(0, -' .app-toasts'.length);
+  };
+
   it('选择器只在层开着、且所在页面没有被 v-show 藏起来时命中', async () => {
     const roots = [...YIELDING, ...INSIDE_DIALOG_AREA].map(root => root.slice(1));
-    // 页面切走时只隐藏（v-show）不卸载，里面开着的层还在 DOM 里。
-    const Page = {
-      props: { show: { type: Boolean, default: true }, layer: { type: String, default: '' } },
-      render() {
-        return withDirectives(h('section', [this.layer ? h('div', { class: this.layer }) : null]), [[vShow, this.show]]);
-      }
-    };
     for (const root of roots) {
-      const open = () => document.body.matches(openCondition(`.${root}`));
+      const condition = conditionInStyle(`.${root}`);
+      const open = () => document.body.matches(condition);
       expect(open(), root).toBe(false);
       const page = mountIn(mainView, Page, { props: { layer: root } });
       await flushPromises();
@@ -487,6 +509,37 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
       await page.setProps({ layer: '' });
       expect(open(), `${root} 关上`).toBe(false);
     }
+  });
+
+  // 片库、图片管理、清理中心里的对话框不 teleport，页面切走时跟着页面藏起来但还开着：以前对话框那条照样命中，
+  // 别的页面上的提示也挪到左上角。可见的对话框（含 teleport 到 body 的确认框）照旧命中。
+  it('对话框那条同样不算 v-show 隐藏的页面里开着的对话框', async () => {
+    const condition = conditionInStyle('.modal-overlay');
+    const dialogOpen = () => document.body.matches(condition);
+    const DialogPage = {
+      props: { show: { type: Boolean, default: true } },
+      render() {
+        return withDirectives(h('section', [h(DialogShell, { title: '批量编辑' }, () => '正文')]), [[vShow, this.show]]);
+      }
+    };
+    const page = mountIn(mainView, DialogPage);
+    await flushPromises();
+    expect(document.querySelector('.modal-overlay')).toBeTruthy();
+    expect(dialogOpen()).toBe(true);
+    await page.setProps({ show: false });
+    expect(document.querySelector('.modal-overlay')).toBeTruthy();
+    expect(dialogOpen(), '对话框所在页面隐藏').toBe(false);
+    // 隐藏页面里的对话框还在，可见的确认框照旧让提示挪开。
+    mountIn(appLayer, AppFeedback);
+    const answer = confirmAction({ title: '离开设置页', message: '放弃未保存的设置修改？' });
+    await flushPromises();
+    expect(dialogOpen(), '可见的确认框').toBe(true);
+    resetFeedback();
+    await flushPromises();
+    expect(dialogOpen()).toBe(false);
+    await page.setProps({ show: true });
+    expect(dialogOpen(), '页面回来').toBe(true);
+    void answer;
   });
 
   it('条件用的类就在各层的根节点上（抽屉、任务中心、版本对比、两个查看器、看图），层关上时整个不渲染', () => {
