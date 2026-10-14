@@ -223,6 +223,7 @@ type taskCenterKeyState struct {
 	running   bool
 	preparing bool
 	progress  *TaskProgress
+	runCounts *TaskRunCounts
 	lastRun   *TaskLastRun
 	canStart  bool
 	canCancel bool
@@ -294,6 +295,14 @@ type batchRun struct {
 // progress 是运行中的进度；准备阶段（总数还不知道）为 nil。
 func (run batchRun) progress() *TaskProgress {
 	return runningProgress(run.running, run.processed, run.total)
+}
+
+// runCounts 是运行中这一轮到目前为止的计数；不在跑时为 nil（这一轮的数在 lastRun 里）。
+func (run batchRun) runCounts() *TaskRunCounts {
+	if !run.running {
+		return nil
+	}
+	return &TaskRunCounts{Succeeded: run.succeeded, Reused: run.reused, Failed: run.failed, OutOfScope: run.outOfScope}
 }
 
 // lastRun 是上一轮的结果；还在跑、或从没跑过时为 nil。总数为 0、没被取消也没有失败的一轮是
@@ -541,11 +550,13 @@ func (a *App) taskCenterPerceptualHash(src *taskCenterSources) taskCenterKeyStat
 		canStart:  true,
 		canCancel: run.running,
 		progress:  run.progress(),
+		runCounts: run.runCounts(),
 		lastRun:   run.lastRun(),
 	}
 }
 
 // perceptualHashRun：近重复指纹另有「已有指纹复用」与「已移出处理范围」两项（片库页状态条原有的口径）。
+// 服务逐项累计这几个数，在跑时也经 runCounts 给出（状态条原来在跑时就列）。
 func perceptualHashRun(status services.PerceptualHashStatus) batchRun {
 	failures := make([]string, 0, len(status.Failures))
 	for _, failure := range status.Failures {

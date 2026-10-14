@@ -714,3 +714,186 @@ func TestP3ATaskCenterSplitsNFOExportFromLocalMetadataBackfill(t *testing.T) {
 		t.Fatalf("写出在跑时补全那一项仍是空闲: %+v", item)
 	}
 }
+
+// ===== 2026-10-14：近重复指纹在跑时就给出本轮计数（片库页状态条原来在跑时就列）=====
+
+// 跑着的近重复指纹把服务逐项累计的四个数原样放进 runCounts（含本轮新生成）；不在跑时没有，
+// 这一轮的数只在上一轮里。
+func TestPerceptualHashRunCountsOnlyWhileRunning(t *testing.T) {
+	running := perceptualHashRun(services.PerceptualHashStatus{Running: true, Total: 10, Processed: 7, Succeeded: 2, Skipped: 4, Reused: 3, OutOfScope: 1, Failed: 1})
+	if got, want := running.runCounts(), (&TaskRunCounts{Succeeded: 2, Reused: 3, Failed: 1, OutOfScope: 1}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("运行中的计数不对: got %+v want %+v", got, want)
+	}
+	if running.lastRun() != nil {
+		t.Fatalf("运行中不报上一轮: %+v", running.lastRun())
+	}
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	for name, run := range map[string]batchRun{
+		"完成":   perceptualHashRun(services.PerceptualHashStatus{Completed: true, Total: 2, Processed: 2, Succeeded: 1, Reused: 1, Skipped: 1, UpdatedAt: &at}),
+		"取消":   perceptualHashRun(services.PerceptualHashStatus{Completed: true, Cancelled: true, Total: 2, Processed: 1, Failed: 1, UpdatedAt: &at}),
+		"从没跑过": perceptualHashRun(services.PerceptualHashStatus{}),
+	} {
+		if run.runCounts() != nil {
+			t.Fatalf("%s 时不该有本轮计数: %+v", name, run.runCounts())
+		}
+	}
+
+	src := &taskCenterSources{running: map[string]bool{}, waiting: map[string]string{}}
+	counts := &TaskRunCounts{Reused: 1}
+	if item := buildTaskCenterItem("phash", taskCenterKeyState{running: true, canCancel: true, progress: &TaskProgress{Done: 1, Total: 3}, runCounts: counts}, src); item.RunCounts != counts {
+		t.Fatalf("运行中的项应带本轮计数: %+v", item)
+	}
+	src.waiting["phash"] = services.IdleWaitReasonUserActive
+	if item := buildTaskCenterItem("phash", taskCenterKeyState{canStart: true, runCounts: counts}, src); item.State != TaskCenterStateWaitingIdle || item.RunCounts != nil {
+		t.Fatalf("没在跑的项不带本轮计数: %+v", item)
+	}
+}
+
+// steppedPauseHook 是测试用的项间检查点：第 at 里的那几次 Wait（即处理第 N 项之前）停住，把 N 发到
+// paused，等 release（或这一轮被取消）再放行；其余各次直接放行。calls 只在 worker 协程里读写。
+type steppedPauseHook struct {
+	at      map[int]bool
+	calls   int
+	paused  chan int
+	release chan struct{}
+}
+
+func (h *steppedPauseHook) Wait(ctx context.Context, _ func(services.TaskGateState)) error {
+	h.calls++
+	if !h.at[h.calls] {
+		return nil
+	}
+	select {
+	case h.paused <- h.calls:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-h.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *steppedPauseHook) Release() {}
+
+// startPausedPerceptualHashRun 起一轮真实的近重复指纹补全，停在第 4 项之前：前三项依次是移出处理范围
+// （开跑后才标失效）、已有指纹复用、处理失败（文件不在），所以此刻服务里各有 1 个，本轮新生成为 0
+// （生成指纹要真解码，上面的纯函数用例覆盖它）。第 4 项也是不在的文件。
+func startPausedPerceptualHashRun(t *testing.T) (*App, *steppedPauseHook) {
+	t.Helper()
+	setupAppTestDB(t)
+	root := t.TempDir()
+	seed := func(name string, onDisk bool) models.Video {
+		path := filepath.Join(root, name)
+		if onDisk {
+			if err := os.WriteFile(path, []byte(name), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		video := models.Video{Name: name, Path: path, Directory: root, Duration: 100}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+		return video
+	}
+	removed := seed("removed.mp4", true)
+	cached := seed("cached.mp4", true)
+	seed("missing.mp4", false)
+	seed("tail.mp4", false)
+	info, err := os.Stat(cached.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.VideoPerceptualHash{VideoID: cached.ID, SourceSize: info.Size(), SourceModTimeNS: info.ModTime().UnixNano(),
+		HashEarly: "0f0f0f0f0f0f0f0f", HashMiddle: "0f0f0f0f0f0f0f0f", HashLate: "0f0f0f0f0f0f0f0f", ComputedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	t.Cleanup(app.perceptualHash.StopAndWait)
+	hook := &steppedPauseHook{at: map[int]bool{1: true, 4: true}, paused: make(chan int), release: make(chan struct{})}
+	if _, err := app.perceptualHash.StartWithPauseHook(context.Background(), hook); err != nil {
+		t.Fatalf("启动近重复指纹失败: %v", err)
+	}
+	waitPaused := func(want int) {
+		t.Helper()
+		select {
+		case got := <-hook.paused:
+			if got != want {
+				t.Fatalf("停在第 %d 项之前，期望第 %d 项", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("等第 %d 项之前的检查点超时: %+v", want, app.perceptualHash.Status())
+		}
+	}
+	waitPaused(1)
+	if err := database.DB.Model(&removed).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	hook.release <- struct{}{}
+	waitPaused(4)
+	return app, hook
+}
+
+// 一轮跑到一半时任务中心的近重复指纹带着本轮计数，没有上一轮；放行跑完与中途取消后计数收起，
+// 上一轮照旧给出（取消的那一轮就是取消时的计数）。
+func TestPerceptualHashTaskCenterShowsRunCountsMidRun(t *testing.T) {
+	assertMidRun := func(t *testing.T, app *App) {
+		t.Helper()
+		item := taskCenterItemByKey(t, app.GetTaskCenterSnapshot(), string(services.BackgroundTaskPerceptualHash))
+		if item.State != TaskCenterStateRunning || item.LastRun != nil || !reflect.DeepEqual(item.Progress, &TaskProgress{Done: 3, Total: 4}) ||
+			!reflect.DeepEqual(item.Actions, []string{TaskCenterActionCancel}) {
+			t.Fatalf("跑到一半应为运行中、进度 3/4、没有上一轮: %+v", item)
+		}
+		if want := (&TaskRunCounts{Reused: 1, Failed: 1, OutOfScope: 1}); !reflect.DeepEqual(item.RunCounts, want) {
+			t.Fatalf("跑到一半的本轮计数不对: got %+v want %+v", item.RunCounts, want)
+		}
+	}
+	finishedItem := func(t *testing.T, app *App) TaskCenterItem {
+		t.Helper()
+		waitForPerceptualHashIdle(t, app)
+		app.perceptualHash.StopAndWait() // 等 worker 退出（登记表随之收起），快照才是空闲
+		item := taskCenterItemByKey(t, app.GetTaskCenterSnapshot(), string(services.BackgroundTaskPerceptualHash))
+		if item.State != TaskCenterStateIdle || item.RunCounts != nil || item.Progress != nil || item.LastRun == nil ||
+			!reflect.DeepEqual(item.Actions, []string{TaskCenterActionStart}) {
+			t.Fatalf("结束后应为空闲、不带本轮计数、有上一轮: %+v", item)
+		}
+		return item
+	}
+	assertLastRun := func(t *testing.T, got *TaskLastRun, want TaskLastRun) {
+		t.Helper()
+		if got.FinishedAt == nil || len(got.Failures) != want.Failed {
+			t.Fatalf("上一轮应有结束时间与 %d 条失败明细: %+v", want.Failed, got)
+		}
+		for _, failure := range got.Failures {
+			if !strings.HasPrefix(failure, "missing.mp4：") && !strings.HasPrefix(failure, "tail.mp4：") {
+				t.Fatalf("失败明细应是不在的那两个文件: %q", failure)
+			}
+		}
+		trimmed := *got
+		trimmed.FinishedAt, trimmed.Failures = nil, nil
+		if !reflect.DeepEqual(trimmed, want) {
+			t.Fatalf("上一轮不对:\n got %+v\nwant %+v", trimmed, want)
+		}
+	}
+
+	t.Run("跑完", func(t *testing.T) {
+		app, hook := startPausedPerceptualHashRun(t)
+		assertMidRun(t, app)
+		hook.release <- struct{}{}
+		item := finishedItem(t, app)
+		assertLastRun(t, item.LastRun, TaskLastRun{Skipped: 2, Reused: 1, OutOfScope: 1, Failed: 2})
+	})
+
+	t.Run("中途取消", func(t *testing.T) {
+		app, _ := startPausedPerceptualHashRun(t)
+		assertMidRun(t, app)
+		if err := app.CancelPerceptualHashBackfill(); err != nil {
+			t.Fatalf("取消失败: %v", err)
+		}
+		item := finishedItem(t, app)
+		assertLastRun(t, item.LastRun, TaskLastRun{Skipped: 2, Reused: 1, OutOfScope: 1, Failed: 1, Cancelled: true})
+	})
+}

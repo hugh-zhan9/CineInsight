@@ -173,6 +173,24 @@ export namespace main {
 	        this.nothing_to_do = source["nothing_to_do"];
 	    }
 	}
+	export class TaskRunCounts {
+	    succeeded: number;
+	    reused: number;
+	    failed: number;
+	    out_of_scope: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskRunCounts(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.succeeded = source["succeeded"];
+	        this.reused = source["reused"];
+	        this.failed = source["failed"];
+	        this.out_of_scope = source["out_of_scope"];
+	    }
+	}
 	export class TaskProgress {
 	    done: number;
 	    total: number;
@@ -193,6 +211,7 @@ export namespace main {
 	    gate_reason: string;
 	    preparing: boolean;
 	    progress?: TaskProgress;
+	    run_counts?: TaskRunCounts;
 	    last_run?: TaskLastRun;
 	    actions: string[];
 	
@@ -207,6 +226,7 @@ export namespace main {
 	        this.gate_reason = source["gate_reason"];
 	        this.preparing = source["preparing"];
 	        this.progress = this.convertValues(source["progress"], TaskProgress);
+	        this.run_counts = this.convertValues(source["run_counts"], TaskRunCounts);
 	        this.last_run = this.convertValues(source["last_run"], TaskLastRun);
 	        this.actions = source["actions"];
 	    }
@@ -293,6 +313,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	
 	
 
