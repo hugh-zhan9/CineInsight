@@ -137,7 +137,7 @@
       </div>
     </section>
 
-    <section class="video-browse__wall" :aria-busy="list.loading ? 'true' : 'false'" aria-label="视频海报墙">
+    <section ref="wall" class="video-browse__wall" :aria-busy="list.loading ? 'true' : 'false'" aria-label="视频海报墙">
       <AppBanner v-if="list.error && !list.items.length" tone="danger" title="读取视频失败" :message="list.error" data-test="browse-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="browse-retry" @click="reloadNow">重试</button></template>
       </AppBanner>
@@ -156,27 +156,42 @@
           <button v-else type="button" class="btn btn--secondary" data-test="browse-empty-scan" @click="$emit('navigate', 'settings')">去添加扫描目录</button>
         </template>
       </EmptyState>
-      <div v-else class="video-browse__grid" data-test="browse-grid">
-        <button
-          v-for="video in list.items"
-          :key="video.id"
-          type="button"
-          class="btn-plain video-browse__card"
-          :title="cardTitle(video)"
-          data-test="browse-card"
-          @click="openVideoID(video.id)"
-        >
-          <span class="video-browse__poster">
-            <img v-if="!posterFailed[video.id]" :src="posterURL(video.id)" alt="" loading="lazy" decoding="async" @error="markPosterFailed(video.id)" />
-            <span v-else class="video-browse__poster-fallback"><AppIcon name="videos" :size="24" /></span>
-            <span v-if="cardMark(video)" :class="['video-browse__mark', `video-browse__mark--${cardMark(video).kind}`]" data-test="browse-card-mark">{{ cardMark(video).label }}</span>
-            <span v-if="versionCount(video) > 1" class="video-browse__versions">{{ versionCount(video) }} 个版本</span>
-          </span>
-          <span class="video-browse__card-text">
-            <strong>{{ cardTitle(video) }}</strong>
-            <small>{{ cardYear(video) }}</small>
-          </span>
-        </button>
+      <!-- 按行窗口化：只渲染视口附近的行，上下占位撑住总高（见脚本里「海报墙窗口化」）。焦点所在的卡滚出窗口时
+           焦点暂放在这一层（tabindex -1），方向键 / Tab 从那张卡接着走。 -->
+      <div
+        v-else
+        ref="wallWindow"
+        class="video-browse__window"
+        tabindex="-1"
+        data-test="browse-window"
+        @keydown="onWallKeydown"
+        @focusin="onWallFocusin"
+      >
+        <div v-if="wallWindowed && wallWindow.topSpacer > 0" :style="{ height: `${wallWindow.topSpacer}px` }" aria-hidden="true" data-test="browse-window-top"></div>
+        <div ref="grid" class="video-browse__grid" :style="wallGridStyle" data-test="browse-grid">
+          <button
+            v-for="(video, offset) in renderedVideos"
+            :key="video.id"
+            type="button"
+            class="btn-plain video-browse__card"
+            :title="cardTitle(video)"
+            :data-index="renderStart + offset"
+            data-test="browse-card"
+            @click="openVideoID(video.id)"
+          >
+            <span class="video-browse__poster">
+              <img v-if="!posterFailed[video.id]" :src="posterURL(video.id)" alt="" loading="lazy" decoding="async" @error="markPosterFailed(video.id)" />
+              <span v-else class="video-browse__poster-fallback"><AppIcon name="videos" :size="24" /></span>
+              <span v-if="cardMark(video)" :class="['video-browse__mark', `video-browse__mark--${cardMark(video).kind}`]" data-test="browse-card-mark">{{ cardMark(video).label }}</span>
+              <span v-if="versionCount(video) > 1" class="video-browse__versions">{{ versionCount(video) }} 个版本</span>
+            </span>
+            <span class="video-browse__card-text">
+              <strong>{{ cardTitle(video) }}</strong>
+              <small>{{ cardYear(video) }}</small>
+            </span>
+          </button>
+        </div>
+        <div v-if="wallWindowed && wallWindow.bottomSpacer > 0" :style="{ height: `${wallWindow.bottomSpacer}px` }" aria-hidden="true" data-test="browse-window-bottom"></div>
       </div>
 
       <div ref="sentinel" class="video-browse__sentinel" aria-hidden="true"></div>
@@ -270,6 +285,8 @@
 //   页面常挂载（App 里 v-show），切走再回来筛选、已加载的卡片和滚动位置都在。
 // - 列表：SearchLibraryVideoPage，collapse_versions 恒为 true（版本组一张卡），每批 60，接近底部自动加载下一批；
 //   总数另取 CountLibraryVideos（按卡片计），失败只是不显示数字。每次换条件换代，晚到的旧结果丢掉。
+// - 海报墙按行窗口化（2026-10-14，utils/photoGrid.js 的行布局，与图片库同一套）：只渲染视口附近的行，上下占位撑住
+//   总高；列数跟墙宽走，宽度变了、同一次浏览里卡片增删，视口顶部那张卡都留在原处；方向键挪焦点，目标行没渲染时先滚进视口。
 // - 「追到哪了」：ListCollectionProgress({ continue_only: true })，独立加载、独立失败，没有数据不显示；页面切回来时重取。
 // - 随机播放与今晚看什么：randomPlaybackMixin（与片库管理同一套流程、条件与排除表）。
 // - navigationRequest：App 的 navigateTo('videos', { keyword | watch | tagId }) 带来的一次新浏览——筛选回到默认再套上参数
@@ -294,6 +311,10 @@ import SegmentedControl from '../ui/SegmentedControl.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
 import { notifyError, translateBackendError } from '../../utils/feedback.js';
 import { scrubAbsolutePaths } from '../../utils/pathText.js';
+import {
+  buildPhotoLayout, calculatePhotoRevealScrollTop, calculatePhotoViewportAnchorScrollTop, calculatePhotoWindow,
+  capturePhotoViewportAnchor, resolvePhotoColumns, stepPhotoGridItem
+} from '../../utils/photoGrid.js';
 import { randomConditionMenuItems, randomConditionTags, randomPlaybackMixin } from '../../utils/randomPlayback.js';
 import { videoArtwork } from '../../utils/recap.js';
 import { restoreScrollWhenReachable } from '../../utils/viewerNavigation.js';
@@ -325,8 +346,23 @@ export const VIDEO_BROWSE_SORT_OPTIONS = Object.freeze([
 ]);
 const PERSON_OPTION_LIMIT = 20;
 const SEARCH_DEBOUNCE_MS = 300;
-// 哨兵离可视区还有这么远就开始取下一批，滚到底时下一批多半已经在了。
+// 哨兵离可视区还有这么远就开始取下一批，滚到底时下一批多半已经在了。窗口化后哨兵仍在下占位之后，即已加载内容的真实末尾。
 const LOAD_AHEAD_MARGIN = '800px 0px';
+// 海报墙几何：必须与样式里 .video-browse__grid 的 minmax(150px, 1fr) 和 gap: var(--space-5) var(--space-4) 一致（测试钉住）。
+// 海报 2:3（border-box，边框算在内），卡片高 = 列宽 × 1.5 + 海报下面片名、年份那一块；那一块量到真卡片之前用估计值。
+// 视口上下各多渲染 overscanRows 行：Tab 挪到下一张时它已经在 DOM 里，快速滚动也少露白。
+export const VIDEO_BROWSE_GRID = Object.freeze({ minColumnWidth: 150, columnGap: 16, rowGap: 24, posterRatio: 1.5, captionEstimate: 45, overscanRows: 3 });
+const WALL_ARROW_KEYS = Object.freeze({ ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' });
+// 键盘把卡滚进视口时上下留的余量：焦点框（2px 描边 + 2px 间距）不贴着视口边被切掉。
+const WALL_REVEAL_MARGIN = 8;
+
+// 墙宽 → 列数（与 CSS 的 auto-fill 同一算法）与卡片高度。caption 是海报下面片名、年份那一块的高度。
+export function videoBrowseCellSize(width, caption = VIDEO_BROWSE_GRID.captionEstimate) {
+  const { minColumnWidth, columnGap, posterRatio } = VIDEO_BROWSE_GRID;
+  const columns = resolvePhotoColumns(width, { minColumnWidth, gap: columnGap });
+  const cardWidth = Math.max(0, ((Number(width) || 0) - columnGap * (columns - 1)) / columns);
+  return { columns, cellHeight: cardWidth * posterRatio + caption };
+}
 
 // 本页的筛选状态 → LibraryFilter。只用片名（file）搜索，版本组合并成一张卡——「最近播放」除外：
 // ListRecentlyPlayedWithFilter 不认 collapse_versions（每个播放过的文件各占一张卡），这里如实写 false，
@@ -419,7 +455,10 @@ export default {
       tonightOpen: false,
       tonightFilter: {},
       inactiveRandomPick: Object.freeze({ active: false, ids: [], reason: '', loading: false }),
-      savedScrollTop: 0
+      savedScrollTop: 0,
+      // 海报墙窗口：墙宽量到之前（width 为 0：没有滚动宿主、页面从没显示过）整墙渲染。
+      wallGeometry: { width: 0, columns: 1, cellHeight: 0 },
+      wallWindow: { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 }
     };
   },
   computed: {
@@ -474,6 +513,28 @@ export default {
     },
     progressVisible() {
       return Boolean(this.progressBlock.error || (this.progressBlock.loading && !this.progressCards.length) || this.progressCards.length);
+    },
+    wallWindowed() { return this.wallGeometry.width > 0; },
+    // 行布局只看条数与几何（卡片等高、不分组）：翻页追加、拿掉失效卡时重建，O(行数)；滚动时只做二分。
+    wallLayout() {
+      return buildPhotoLayout({
+        items: this.list.items,
+        columns: this.wallGeometry.columns,
+        cellHeight: this.wallGeometry.cellHeight,
+        gap: VIDEO_BROWSE_GRID.rowGap
+      });
+    },
+    renderStart() {
+      return this.wallWindowed ? this.wallLayout.rows[this.wallWindow.startRow]?.startIndex ?? 0 : 0;
+    },
+    renderedVideos() {
+      if (!this.wallWindowed) return this.list.items;
+      const last = this.wallLayout.rows[this.wallWindow.endRow - 1];
+      return last ? this.list.items.slice(this.renderStart, last.endIndex) : [];
+    },
+    // 窗口化时列数由脚本定（与行布局同一个数），不交给 auto-fill 自己排。
+    wallGridStyle() {
+      return this.wallWindowed ? { gridTemplateColumns: `repeat(${this.wallGeometry.columns}, minmax(0, 1fr))` } : null;
     }
   },
   watch: {
@@ -481,11 +542,14 @@ export default {
       if (this.applyNavigationRequest(request)) this.reloadNow();
     },
     // 滚动宿主（.main-view）是各页共用的：离开前记下位置，切回来等内容够高再放回去（与图片页同一做法）。
+    // 隐藏期间不跟滚动与宽度（滚的是别的页面，宽度报 0）；离开时视口顶部那张卡（_wallAnchor）留着，
+    // 回来时窗口宽度变了、或整页详情里把它前面的卡标成失效拿掉了，就按那张卡放回，否则原样放回离开时的位置。
     pageActive(active) {
       if (!active) {
         this.closeMenu();
         this.cancelScrollRestore();
         this.savedScrollTop = this.scrollOwner()?.scrollTop || 0;
+        this.detachWall();
         return;
       }
       this.loadProgress();
@@ -493,16 +557,33 @@ export default {
         const owner = this.scrollOwner();
         if (!owner) return;
         this.cancelScrollRestore();
-        this._cancelScrollRestore = restoreScrollWhenReachable(owner, this.savedScrollTop);
+        this.attachWall();
+        const target = this.wallAnchorTarget(this._wallAnchor, this.measureWall()) ?? this.savedScrollTop;
+        this.syncWindow(target);
+        this._cancelScrollRestore = restoreScrollWhenReachable(owner, target);
       });
+    },
+    // 同一次浏览里卡片增删（翻页追加、失效的卡拿掉）：渲染前就按新的行布局定好窗口，视口顶部那张卡挪了位置就把它放回原处；
+    // 渲染后再量一次（第一批卡片出来时才量得到片名那一块的真实高度）。换条件（reloadNow 换代）不放回。
+    'list.items'() {
+      if (!this.wallWindowed || !this._wallOwner) return;
+      const target = this.wallAnchorTarget(this._wallAnchor, false);
+      if (target === null) this.syncWindow();
+      else this.scrollWallTo(target);
+      this.$nextTick(() => this.refreshWallGeometry());
     }
   },
   created() {
     this._tokens = { list: 0, count: 0, progress: 0, person: 0 };
+    this._wallCaption = VIDEO_BROWSE_GRID.captionEstimate;
     this.applyNavigationRequest(this.navigationRequest);
   },
   mounted() {
     window.addEventListener('keydown', this.handleShortcut);
+    if (this.pageActive) {
+      this.attachWall();
+      this.measureWall();
+    }
     this.reloadNow();
     this.loadProgress();
     this.observeSentinel();
@@ -513,6 +594,7 @@ export default {
     clearTimeout(this._personTimer);
     this.cancelScrollRestore();
     this._observer?.disconnect();
+    this.detachWall();
     for (const key of Object.keys(this._tokens)) this._tokens[key] += 1;
   },
   methods: {
@@ -562,6 +644,7 @@ export default {
       this.closeMenu();
       this.cancelScrollRestore();
       this.savedScrollTop = 0;
+      this._wallAnchor = null;
       this.$nextTick(() => {
         const owner = this.scrollOwner();
         if (owner && this.pageActive) owner.scrollTop = 0;
@@ -609,6 +692,7 @@ export default {
     reloadNow() {
       clearTimeout(this._searchTimer);
       const token = ++this._tokens.list;
+      this._focusedVideoID = null;
       this.list = { ...emptyList(), loading: true };
       this.versionGroups = {};
       this.loadCount();
@@ -696,6 +780,160 @@ export default {
     },
     scrollOwner() {
       return this.$el?.closest?.('.main-view') || null;
+    },
+    // ===== 海报墙窗口化 =====
+    // 跟着滚动宿主的滚动与墙宽走；页面隐藏时摘掉（pageActive 侦听）。ResizeObserver 一挂上就报一次当前尺寸。
+    attachWall() {
+      const owner = this.scrollOwner();
+      if (!owner || owner === this._wallOwner) return;
+      this.detachWall();
+      this._wallOwner = owner;
+      owner.addEventListener('scroll', this.syncWindow, { passive: true });
+      if (typeof ResizeObserver === 'function' && this.$refs.wall) {
+        this._wallResizeObserver = new ResizeObserver(() => this.refreshWallGeometry());
+        this._wallResizeObserver.observe(this.$refs.wall);
+      }
+    },
+    detachWall() {
+      this._wallOwner?.removeEventListener('scroll', this.syncWindow);
+      this._wallOwner = null;
+      this._wallResizeObserver?.disconnect();
+      this._wallResizeObserver = null;
+    },
+    // 墙顶在滚动宿主内容里的位置（墙上面是页头、工具条与「追到哪了」）。
+    wallListTop() {
+      const owner = this._wallOwner;
+      const wall = this.$refs.wall;
+      if (!owner || !wall) return 0;
+      return owner.scrollTop + wall.getBoundingClientRect().top - owner.getBoundingClientRect().top;
+    },
+    // 量墙宽，再量一张卡的片名、年份那一块（与列宽无关），定出列数与卡片高度。墙宽为 0（隐藏）时保留上一次的值。
+    // 返回几何是否变了。
+    measureWall() {
+      const width = this.$refs.wall?.getBoundingClientRect().width || 0;
+      if (!this._wallOwner || width <= 0) return false;
+      const card = this.$refs.grid?.querySelector('.video-browse__card')?.getBoundingClientRect();
+      if (card?.width > 0 && card.height > 0) this._wallCaption = card.height - card.width * VIDEO_BROWSE_GRID.posterRatio;
+      const { columns, cellHeight } = videoBrowseCellSize(width, this._wallCaption);
+      const current = this.wallGeometry;
+      if (columns === current.columns && Math.abs(width - current.width) < 0.5 && Math.abs(cellHeight - current.cellHeight) < 0.5) return false;
+      this.wallGeometry = { width, columns, cellHeight };
+      return true;
+    },
+    // 按滚动位置算出要渲染的行（滚动事件直接调它）；给了 targetTop 就按那个位置算——要先把那几行渲染出来再滚过去。
+    // 顺带记下视口顶部那张卡（_wallAnchor，带上这次浏览的代次），宽度变化、卡片增删、离开再回来时按它放回。
+    syncWindow(targetTop) {
+      const owner = this._wallOwner;
+      if (!owner || !this.pageActive || !this.wallWindowed) return;
+      const listTop = this.wallListTop();
+      const scrollTop = typeof targetTop === 'number' ? targetTop : owner.scrollTop;
+      const next = calculatePhotoWindow({
+        layout: this.wallLayout,
+        scrollTop,
+        viewportHeight: owner.clientHeight,
+        listTop,
+        overscan: VIDEO_BROWSE_GRID.overscanRows
+      });
+      const current = this.wallWindow;
+      // 绝大多数滚动帧窗口没变，原样赋值会白白重渲染一次。
+      if (next.startRow !== current.startRow || next.endRow !== current.endRow
+        || next.topSpacer !== current.topSpacer || next.bottomSpacer !== current.bottomSpacer) {
+        this.parkFocusOutside(next);
+        this.wallWindow = next;
+      }
+      const anchor = capturePhotoViewportAnchor({ layout: this.wallLayout, scrollTop, listTop });
+      const video = anchor && this.list.items[anchor.itemIndex];
+      this._wallAnchor = video ? { ...anchor, id: video.id, token: this._tokens.list } : null;
+    },
+    // 锚点那张卡要放回的 scrollTop：几何变了，或它在列表里挪了位置（前面有卡被拿掉）时才需要；
+    // 用不着、它已不在列表里、或是上一次浏览（换过条件）的锚点时返回 null。
+    wallAnchorTarget(anchor, geometryChanged) {
+      if (!anchor || anchor.token !== this._tokens.list || !this.wallWindowed) return null;
+      const itemIndex = this.list.items.findIndex(video => video.id === anchor.id);
+      if (itemIndex < 0 || (!geometryChanged && itemIndex === anchor.itemIndex)) return null;
+      return calculatePhotoViewportAnchorScrollTop({ layout: this.wallLayout, listTop: this.wallListTop(), anchor: { ...anchor, itemIndex } });
+    },
+    // 先按目标位置渲染出那几行与占位，等 DOM 更新完再改 scrollTop（否则会被旧的总高夹住）。
+    scrollWallTo(top) {
+      const token = this._tokens.list;
+      this.syncWindow(top);
+      this.$nextTick(() => {
+        const owner = this._wallOwner;
+        if (!owner || !this.pageActive || token !== this._tokens.list) return;
+        owner.scrollTop = top;
+        this.syncWindow();
+      });
+    },
+    // 墙宽变了（窗口缩放），或第一次量到真卡片：重定列数与卡片高度，视口顶部那张卡留在原处。
+    refreshWallGeometry() {
+      if (!this.pageActive || !this._wallOwner) return;
+      const anchor = this._wallAnchor;
+      const target = this.wallAnchorTarget(anchor, this.measureWall());
+      if (target === null) this.syncWindow();
+      else this.scrollWallTo(target);
+    },
+    // 正聚焦的卡要随窗口移出 DOM 时，先把焦点放到墙上（不滚动），免得掉到 body；记着的那张卡（_focusedVideoID）
+    // 之后由 onWallKeydown 接着走。
+    parkFocusOutside(next) {
+      const active = document.activeElement;
+      if (!active || !this.$refs.grid?.contains(active)) return;
+      const rows = this.wallLayout.rows;
+      const index = Number(active.dataset.index);
+      const start = rows[next.startRow]?.startIndex ?? 0;
+      const end = rows[next.endRow - 1]?.endIndex ?? 0;
+      if (index < start || index >= end) this.$refs.wallWindow?.focus({ preventScroll: true });
+    },
+    onWallFocusin(event) {
+      const video = this.list.items[Number(event.target?.dataset?.index)];
+      if (video) this._focusedVideoID = video.id;
+    },
+    // 方向键在海报间挪焦点（上下按列），Home / End 到第一张 / 最后一张已加载的卡。焦点暂放在墙上时（那张卡滚出了窗口），
+    // 方向键从记着的那张起算，Tab / Shift+Tab 从它接着往后 / 往前走——与没窗口化时 Tab 的顺序一样。
+    onWallKeydown(event) {
+      if (!this.wallWindowed || event.altKey || event.ctrlKey || event.metaKey) return;
+      const parked = event.target === this.$refs.wallWindow;
+      const from = parked
+        ? this.list.items.findIndex(video => video.id === this._focusedVideoID)
+        : Number(event.target?.dataset?.index);
+      if (!Number.isInteger(from) || from < 0) return;
+      const last = this.list.items.length - 1;
+      let target = -1;
+      if (event.key === 'Tab') {
+        if (!parked) return;
+        target = Math.min(last, Math.max(0, from + (event.shiftKey ? -1 : 1)));
+      } else if (event.shiftKey) {
+        return;
+      } else if (event.key === 'Home') {
+        target = 0;
+      } else if (event.key === 'End') {
+        target = last;
+      } else {
+        target = stepPhotoGridItem(this.wallLayout, from, WALL_ARROW_KEYS[event.key]);
+      }
+      if (target < 0) return;
+      event.preventDefault();
+      return this.focusWallCard(target);
+    },
+    // 把焦点挪到第 index 张卡：那一行不在视口里（可能还没渲染）就先把它滚进视口、渲染出来，再聚焦。
+    async focusWallCard(index) {
+      const owner = this._wallOwner;
+      if (owner && this.wallWindowed) {
+        const top = calculatePhotoRevealScrollTop({
+          layout: this.wallLayout,
+          listTop: this.wallListTop(),
+          itemIndex: index,
+          scrollTop: owner.scrollTop,
+          viewportHeight: owner.clientHeight,
+          margin: WALL_REVEAL_MARGIN
+        });
+        if (top !== owner.scrollTop) {
+          this.syncWindow(top);
+          await this.$nextTick();
+          owner.scrollTop = top;
+          this.syncWindow();
+        }
+      }
+      this.$refs.grid?.querySelector(`[data-index="${index}"]`)?.focus();
     },
     cancelScrollRestore() {
       this._cancelScrollRestore?.();
@@ -827,9 +1065,16 @@ export default {
 .video-browse__section-head small { color: var(--text-muted); font-size: var(--fs-caption); }
 /* 条带里的卡与海报墙的卡一样大，不压过下面的主体。 */
 .video-browse__progress-strip { grid-auto-columns: minmax(140px, 156px); }
-.video-browse__wall { display: grid; gap: var(--space-4); }
+/* 窗口化的墙：上下占位随滚动、翻页改高，浏览器自带的滚动锚定会跟着去改 scrollTop——锚到墙下面的「正在加载更多」时
+   每追加一批就把视口推回底部、哨兵一直可见、一路翻完整个库；也会与本页按卡放回打架。整面墙（含哨兵）都不参与锚定
+   （同 VirtualVideoList 的 overflow-anchor: none）。 */
+.video-browse__wall { display: grid; gap: var(--space-4); overflow-anchor: none; }
+/* 列宽下限与两向间隙同脚本里的 VIDEO_BROWSE_GRID（行布局按它算占位）；窗口化时列数由脚本经内联样式给出。 */
 .video-browse__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-5) var(--space-4); }
-/* 每张卡离开可视区就跳过渲染（几千张的海报墙不做窗口化，详细设计 §3.1）；占位高度近似一张卡。 */
+/* 焦点暂放在这一层时那张卡已滚出视口，不画焦点框。 */
+.video-browse__window:focus { outline: none; }
+/* 卡片等高：海报 2:3 + 单行片名 + 年份。原先的 content-visibility 已由按行窗口化取代——视口外的卡不在 DOM 里，
+   而留着它会让视口外几行按占位高度排，与行布局对不上。 */
 .video-browse__card {
   display: flex;
   flex-direction: column;
@@ -837,8 +1082,6 @@ export default {
   min-width: 0;
   color: var(--text-primary);
   text-align: left;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 290px;
 }
 .video-browse__poster {
   position: relative;
