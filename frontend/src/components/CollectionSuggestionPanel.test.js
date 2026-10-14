@@ -1,5 +1,7 @@
 // 建议作品集面板（D-023..D-025）：候选列表、成员预览、去成员、改名、确认、
 // 忽略、分析进度与空态。面板只发指令，作品集写入与忽略记忆都在后端。
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -253,5 +255,169 @@ describe('建议作品集 META-15 追加候选', () => {
     const message = feedback.confirmAction.mock.calls[0][0].message;
     expect(message).toContain('新增集数也不会再提醒');
     expect(message).not.toContain('成员有增减时会重新提醒');
+  });
+});
+
+// 两种用法：默认对话框（片库管理「管理」菜单，自己读候选）；embedded 嵌在待处理页「建议作品集」区块里
+// （D-P3-01），不套对话框，候选由宿主经 items 给，候选变了发 changed 让宿主重读。
+describe('建议作品集面板的对话框与嵌入两种用法', () => {
+  async function mountEmbedded(items = [suggestion()]) {
+    const wrapper = mount(CollectionSuggestionPanel, { props: { embedded: true, items }, attachTo: document.body });
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('默认是对话框：标题「建议作品集」、操作在对话框页脚、× 关闭；自己读一次候选', async () => {
+    const wrapper = await mountPanel();
+    expect(wrapper.find('.modal-overlay').exists()).toBe(true);
+    const dialog = wrapper.get('[role="dialog"]');
+    expect(dialog.classes()).toEqual(expect.arrayContaining(['ui-dialog', 'ui-dialog--xl', 'suggestion-modal']));
+    expect(dialog.get('.ui-dialog__title').text()).toBe('建议作品集');
+    const footer = dialog.get('.ui-dialog__footer');
+    expect(footer.find('[data-test="collection-suggestion-confirm"]').exists()).toBe(true);
+    expect(footer.find('[data-test="collection-suggestion-dismiss"]').exists()).toBe(true);
+    expect(footer.find('[data-test="collection-suggestion-selection"]').exists()).toBe(true);
+    expect(wrapper.find('.suggestion-inline').exists()).toBe(false);
+    expect(api.ListCollectionSuggestions).toHaveBeenCalledTimes(1);
+
+    await wrapper.get('[data-test="dialog-shell-close"]').trigger('click');
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('片库管理工具栏照旧用对话框（不传 embedded）；只有待处理页用嵌入模式', () => {
+    const src = join(process.cwd(), 'src');
+    const listVue = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return listVue(full);
+      return entry.name.endsWith('.vue') ? [full] : [];
+    });
+    const usages = listVue(src).flatMap(file => [...readFileSync(file, 'utf8').matchAll(/<CollectionSuggestionPanel\b[^>]*>/g)]
+      .map(match => [relative(src, file), /\sembedded\b/.test(match[0])]));
+    expect(usages).toEqual([
+      ['components/manage/PendingWorkPage.vue', true],
+      ['components/video-list/LibraryToolbar.vue', false]
+    ]);
+  });
+
+  it('嵌入模式不套对话框：没有遮罩、标题栏与 ×，操作行接在两栏下面；候选用宿主给的，不自己读', async () => {
+    const wrapper = await mountEmbedded();
+    expect(wrapper.find('.modal-overlay').exists()).toBe(false);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.find('.ui-dialog__head').exists()).toBe(false);
+    expect(wrapper.find('[data-test="dialog-shell-close"]').exists()).toBe(false);
+    expect(wrapper.classes()).toContain('suggestion-inline');
+    const footer = wrapper.get('.suggestion-inline__footer');
+    expect(footer.find('[data-test="collection-suggestion-selection"]').text()).toContain('3 / 3');
+    expect(footer.find('[data-test="collection-suggestion-dismiss"]').exists()).toBe(true);
+    expect(footer.find('[data-test="collection-suggestion-confirm"]').exists()).toBe(true);
+    expect(api.ListCollectionSuggestions).not.toHaveBeenCalled();
+    // 状态（分析进度）照旧自己读：那是面板自己的后台任务。
+    expect(api.GetCollectionSuggestionStatus).toHaveBeenCalledTimes(1);
+    expect(wrapper.findAll('[data-test="collection-suggestion-member"]')).toHaveLength(3);
+    expect(wrapper.find('[data-test="collection-suggestion-analyze"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('嵌入模式：改名、去掉成员后确认，发回后端并发 changed（宿主重读这一块）', async () => {
+    const wrapper = await mountEmbedded([suggestion(), suggestion({ id: 8, series_name: 'Other', members: [member(31, 1), member(32, 2)] })]);
+    await wrapper.get('[data-test="collection-suggestion-name"]').setValue('我的剧集');
+    await wrapper.findAll('[data-test="collection-suggestion-remove-member"]')[2].trigger('click');
+    await wrapper.get('[data-test="collection-suggestion-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.ConfirmCollectionSuggestion).toHaveBeenCalledWith(7, '我的剧集', [11, 12]);
+    expect(wrapper.emitted('confirmed')).toHaveLength(1);
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+    // 确认过的一组立刻收起，接着处理下一组。
+    expect(wrapper.findAll('[data-test="collection-suggestion-item"]')).toHaveLength(1);
+    expect(wrapper.get('[data-test="collection-suggestion-name"]').element.value).toBe('Other');
+    wrapper.unmount();
+  });
+
+  it('嵌入模式：忽略先确认，确认后发 changed；取消就什么都不发', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    const wrapper = await mountEmbedded();
+    await wrapper.get('[data-test="collection-suggestion-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(api.DismissCollectionSuggestion).not.toHaveBeenCalled();
+    expect(wrapper.emitted('changed')).toBeUndefined();
+
+    feedback.confirmAction.mockResolvedValue(true);
+    await wrapper.get('[data-test="collection-suggestion-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(api.DismissCollectionSuggestion).toHaveBeenCalledWith(7);
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('嵌入模式：确认失败不发 changed，这一组留着', async () => {
+    api.ConfirmCollectionSuggestion.mockRejectedValue(new Error('boom'));
+    const wrapper = await mountEmbedded();
+    await wrapper.get('[data-test="collection-suggestion-confirm"]').trigger('click');
+    await flushPromises();
+    expect(feedback.notifyError).toHaveBeenCalledWith('确认作品集失败：boom');
+    expect(wrapper.emitted('changed')).toBeUndefined();
+    expect(wrapper.findAll('[data-test="collection-suggestion-item"]')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('嵌入模式：宿主重读换上新候选，改过的名称与去掉的成员按候选留着，没了的那组收起', async () => {
+    const other = suggestion({ id: 8, series_name: 'Other', members: [member(31, 1), member(32, 2)] });
+    const wrapper = await mountEmbedded([suggestion(), other]);
+    await wrapper.get('[data-test="collection-suggestion-name"]').setValue('改过的名字');
+    await wrapper.findAll('[data-test="collection-suggestion-remove-member"]')[0].trigger('click');
+
+    await wrapper.setProps({ items: [suggestion(), other, suggestion({ id: 9, series_name: 'New' })] });
+    expect(wrapper.findAll('[data-test="collection-suggestion-item"]')).toHaveLength(3);
+    expect(wrapper.get('[data-test="collection-suggestion-name"]').element.value).toBe('改过的名字');
+    expect(wrapper.get('[data-test="collection-suggestion-selection"]').text()).toContain('2 / 3');
+
+    await wrapper.setProps({ items: [other] });
+    expect(wrapper.findAll('[data-test="collection-suggestion-item"]').map(item => item.text())).toEqual([expect.stringContaining('Other')]);
+    expect(wrapper.get('[data-test="collection-suggestion-name"]').element.value).toBe('Other');
+    expect(api.ListCollectionSuggestions).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('嵌入模式：分析跑完发 changed 交宿主重读，不自己读候选；对话框照旧自己读', async () => {
+    const handlers = {};
+    window.runtime = {
+      EventsOn: (event, handler) => {
+        handlers[event] = handler;
+        return () => { delete handlers[event]; };
+      }
+    };
+    const wrapper = await mountEmbedded();
+    handlers['collection-suggestion-state']({ running: true, scanned: 1, total: 4 });
+    await flushPromises();
+    expect(wrapper.emitted('changed')).toBeUndefined();
+    handlers['collection-suggestion-state']({ running: false, completed: true, scanned: 4, total: 4, matched: 2, pending: 2 });
+    await flushPromises();
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+    expect(api.ListCollectionSuggestions).not.toHaveBeenCalled();
+    wrapper.unmount();
+
+    const dialog = await mountPanel();
+    api.ListCollectionSuggestions.mockClear();
+    handlers['collection-suggestion-state']({ running: false, completed: true, scanned: 4, total: 4, matched: 2, pending: 2 });
+    await flushPromises();
+    expect(api.ListCollectionSuggestions).toHaveBeenCalledTimes(1);
+    dialog.unmount();
+  });
+
+  it('嵌入模式：最后一组处理掉后先显示空态，等宿主收起这一块', async () => {
+    const wrapper = await mountEmbedded();
+    await wrapper.get('[data-test="collection-suggestion-confirm"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="collection-suggestion-empty"]').exists()).toBe(true);
+    expect(wrapper.find('.suggestion-inline__footer').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('嵌入模式：上一轮分析失败照样说明原因', async () => {
+    api.GetCollectionSuggestionStatus.mockResolvedValue(suggestionStatus({ completed: false, last_error: '读取视频失败' }));
+    const wrapper = await mountEmbedded();
+    expect(wrapper.get('[data-test="collection-suggestion-error"]').text()).toContain('读取视频失败');
+    wrapper.unmount();
   });
 });

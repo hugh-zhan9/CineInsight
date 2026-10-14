@@ -8,6 +8,12 @@ const api = vi.hoisted(() => ({
   SearchLibraryVideoPage: vi.fn(),
   PreviewLocalMetadataBatch: vi.fn(),
   ApplyLocalMetadataBatch: vi.fn(),
+  // 建议作品集面板（嵌入模式）自己的接口：分析状态、确认、忽略、开始 / 取消分析。
+  GetCollectionSuggestionStatus: vi.fn(),
+  ConfirmCollectionSuggestion: vi.fn(),
+  DismissCollectionSuggestion: vi.fn(),
+  StartCollectionSuggestionAnalysis: vi.fn(),
+  CancelCollectionSuggestionAnalysis: vi.fn(),
   LogFrontend: vi.fn()
 }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
@@ -30,9 +36,16 @@ const SUMMARY = {
   total: 35
 };
 
+const episode = (videoID, number) => ({
+  video_id: videoID, name: `Show.S01E${String(number).padStart(2, '0')}.mkv`, path: `/Volumes/A/Show.S01E${number}.mkv`,
+  season: 1, episode: number, position: number, thumbnail_url: `/preview/thumbnail/${videoID}`, size: 0, multiple_versions: false
+});
 const SUGGESTIONS = [
-  { id: 11, series_name: '漫长的季节', member_count: 12, scan_root: '/Volumes/A' },
-  { id: 12, series_name: '繁花', member_count: 3, kind: 'append', target_collection_id: 4, target_collection_name: '繁花', scan_root: '/Volumes/A' }
+  { id: 11, series_name: '漫长的季节', member_count: 3, scan_root: '/Volumes/A', members: [episode(101, 1), episode(102, 2), episode(103, 3)] },
+  {
+    id: 12, series_name: '繁花', member_count: 2, kind: 'append', target_collection_id: 4, target_collection_name: '繁花', scan_root: '/Volumes/A',
+    members: [episode(201, 29), episode(202, 30)]
+  }
 ];
 
 const scalar = (change, extra = {}) => ({
@@ -82,14 +95,14 @@ const VIDEOS = [
 ];
 
 const FaceStub = { name: 'FaceClusterReviewPanel', emits: ['changed', 'loaded'], methods: { refresh: vi.fn() }, template: '<div data-test="face-panel-stub" />' };
-const SuggestionStub = { name: 'CollectionSuggestionPanel', emits: ['close', 'confirmed'], template: '<div data-test="suggestion-panel-stub" />' };
+// 建议作品集用真的面板（嵌入模式）：页内的确认 / 忽略要一路走到这一页的重读。
 const LocalDialogStub = { name: 'LocalMetadataDialog', props: ['visible', 'videoIds'], emits: ['close', 'applied'], template: '<div />' };
 
 const wrappers = [];
 
 async function mountPage() {
   const wrapper = mount(PendingWorkPage, {
-    global: { stubs: { FaceClusterReviewPanel: FaceStub, CollectionSuggestionPanel: SuggestionStub, LocalMetadataDialog: LocalDialogStub } }
+    global: { stubs: { FaceClusterReviewPanel: FaceStub, LocalMetadataDialog: LocalDialogStub } }
   });
   wrappers.push(wrapper);
   await flushPromises();
@@ -113,11 +126,15 @@ beforeEach(() => {
     people_decisions: []
   }));
   api.ApplyLocalMetadataBatch.mockResolvedValue({ requested: 1, succeeded: 1, failed: 0, results: [], failures: [] });
+  api.GetCollectionSuggestionStatus.mockResolvedValue({ running: false, scanned: 0, total: 0, matched: 0, pending: 0, last_error: '' });
+  api.ConfirmCollectionSuggestion.mockResolvedValue({ collection: { collection: { id: 3, name: '漫长的季节' } }, videos: [] });
+  api.DismissCollectionSuggestion.mockResolvedValue(null);
 });
 
 afterEach(() => {
   while (wrappers.length) wrappers.pop().unmount();
   resetFeedback();
+  delete window.runtime;
 });
 
 describe('待处理页的区块（D-P3-01）', () => {
@@ -172,7 +189,7 @@ describe('待处理页的区块（D-P3-01）', () => {
       expect(wrapper.find(`[data-test="pending-count-${key}"]`).exists()).toBe(false);
     }
     expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="pending-suggestions-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="pending-suggestion-list"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="pending-go-cleanup_candidates"]').exists()).toBe(false);
     expect(section(wrapper, 'ai_video_candidates').classes()).not.toContain('pending-section--done');
   });
@@ -251,15 +268,20 @@ describe('待处理页的区块（D-P3-01）', () => {
     expect(api.GetPendingWorkSummary).not.toHaveBeenCalled();
   });
 
-  it('建议作品集读失败只影响这一块', async () => {
+  it('建议作品集读失败只影响这一块：横幅 + 重试，面板不出来；重试读到了才嵌上面板', async () => {
     api.ListCollectionSuggestions.mockRejectedValueOnce('boom');
     const wrapper = await mountPage();
 
     expect(wrapper.get('[data-test="pending-error-collection_suggestions"]').text()).toContain('建议作品集没读到');
-    expect(wrapper.get('[data-test="pending-suggestions-open"]').attributes('disabled')).toBeDefined();
+    expect(section(wrapper, 'collection_suggestions').find('[data-test="pending-suggestion-list"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="pending-count-cleanup_candidates"]').text()).toBe('7');
+
+    api.GetPendingWorkSummary.mockClear();
     await wrapper.get('[data-test="pending-retry-collection_suggestions"]').trigger('click');
     await flushPromises();
-    expect(wrapper.findAll('[data-test="pending-suggestion-item"]')).toHaveLength(2);
+    expect(wrapper.find('[data-test="pending-error-collection_suggestions"]').exists()).toBe(false);
+    expect(section(wrapper, 'collection_suggestions').findAll('[data-test="collection-suggestion-item"]')).toHaveLength(2);
+    expect(api.GetPendingWorkSummary).not.toHaveBeenCalled();
   });
 
   it('晚到的旧摘要不覆盖新摘要', async () => {
@@ -326,28 +348,111 @@ describe('页内处理：人脸与建议作品集', () => {
     expect(wrapper.emitted('badge-change').at(-1)).toEqual([29]);
   });
 
-  it('建议作品集列出前几组；「逐条处理…」打开现有面板，关掉后只重读这一块与摘要', async () => {
+  // 建议作品集嵌在页内（D-P3-01，详细设计 §3.6）：不再是「逐条处理…」打开对话框。
+  it('建议作品集嵌在这一块里：不套对话框，全部候选、成员与操作都在页内；候选只由这一页读一次', async () => {
     const wrapper = await mountPage();
-    expect(wrapper.findAll('[data-test="pending-suggestion-item"]').map(item => item.text())).toEqual([
-      '漫长的季节12 集',
-      '繁花新增 3 集 → 「繁花」'
+    const block = section(wrapper, 'collection_suggestions');
+    const panel = block.get('[data-test="pending-suggestion-list"]');
+
+    expect(wrapper.getComponent({ name: 'CollectionSuggestionPanel' }).props()).toMatchObject({ embedded: true, items: SUGGESTIONS });
+    expect(wrapper.find('.modal-overlay').exists()).toBe(false);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="pending-suggestions-open"]').exists()).toBe(false);
+    expect(panel.findAll('[data-test="collection-suggestion-item"]').map(item => item.text())).toEqual([
+      expect.stringContaining('漫长的季节'),
+      expect.stringContaining('新增 2 集 → 「繁花」')
     ]);
-    expect(wrapper.find('[data-test="suggestion-panel-stub"]').exists()).toBe(false);
+    expect(panel.findAll('[data-test="collection-suggestion-member"]')).toHaveLength(3);
+    expect(panel.get('[data-test="collection-suggestion-name"]').element.value).toBe('漫长的季节');
+    for (const hook of ['collection-suggestion-selection', 'collection-suggestion-dismiss', 'collection-suggestion-confirm', 'collection-suggestion-analyze']) {
+      expect(panel.find(`[data-test="${hook}"]`).exists(), hook).toBe(true);
+    }
+    expect(api.ListCollectionSuggestions).toHaveBeenCalledTimes(1);
+  });
 
-    await wrapper.get('[data-test="pending-suggestions-open"]').trigger('click');
-    expect(wrapper.find('[data-test="suggestion-panel-stub"]').exists()).toBe(true);
+  it('页内确认一组：发回后端，之后只重读这一块与摘要（数量与角标跟上）', async () => {
+    const wrapper = await mountPage();
     vi.clearAllMocks();
-    api.ListCollectionSuggestions.mockResolvedValue([]);
-    api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY, collection_suggestions: 0, total: 33 });
+    api.ConfirmCollectionSuggestion.mockResolvedValue({ collection: { collection: { id: 3, name: '漫长的季节' } }, videos: [] });
+    api.ListCollectionSuggestions.mockResolvedValue([{ ...SUGGESTIONS[1] }]);
+    api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY, collection_suggestions: 1, total: 34 });
 
-    wrapper.getComponent({ name: 'CollectionSuggestionPanel' }).vm.$emit('close');
+    const block = section(wrapper, 'collection_suggestions');
+    await block.findAll('[data-test="collection-suggestion-remove-member"]')[2].trigger('click');
+    await block.get('[data-test="collection-suggestion-confirm"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.find('[data-test="suggestion-panel-stub"]').exists()).toBe(false);
+    expect(api.ConfirmCollectionSuggestion).toHaveBeenCalledWith(11, '漫长的季节', [101, 102]);
     expect(api.ListCollectionSuggestions).toHaveBeenCalledTimes(1);
     expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
     expect(api.CountLibraryVideos).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="pending-count-collection_suggestions"]').text()).toBe('1');
+    expect(wrapper.emitted('badge-change').at(-1)).toEqual([34]);
+    expect(wrapper.getComponent({ name: 'PageHeader' }).props('subtitle')).toBe('共 34 项');
+    expect(block.findAll('[data-test="collection-suggestion-item"]').map(item => item.text())).toEqual([expect.stringContaining('繁花')]);
+    expect(toasts()).toContain('success:已把 2 集写入作品集「漫长的季节」');
+  });
+
+  it('页内忽略一组：先确认，确认后只重读这一块与摘要；取消就什么都不重读', async () => {
+    const wrapper = await mountPage();
+    vi.clearAllMocks();
+    const block = section(wrapper, 'collection_suggestions');
+
+    await block.get('[data-test="collection-suggestion-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(feedbackState.confirm).toMatchObject({ title: '忽略这一组', confirmText: '忽略' });
+    resolveConfirm(false);
+    await flushPromises();
+    expect(api.DismissCollectionSuggestion).not.toHaveBeenCalled();
+    expect(api.ListCollectionSuggestions).not.toHaveBeenCalled();
+    expect(api.GetPendingWorkSummary).not.toHaveBeenCalled();
+
+    api.DismissCollectionSuggestion.mockResolvedValue(null);
+    api.ListCollectionSuggestions.mockResolvedValue([{ ...SUGGESTIONS[1] }]);
+    api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY, collection_suggestions: 1, total: 34 });
+    await block.get('[data-test="collection-suggestion-dismiss"]').trigger('click');
+    await flushPromises();
+    resolveConfirm(true);
+    await flushPromises();
+
+    expect(api.DismissCollectionSuggestion).toHaveBeenCalledWith(11);
+    expect(api.ListCollectionSuggestions).toHaveBeenCalledTimes(1);
+    expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
+    expect(api.CountLibraryVideos).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="pending-count-collection_suggestions"]').text()).toBe('1');
+    expect(wrapper.emitted('badge-change').at(-1)).toEqual([34]);
+  });
+
+  it('最后一组处理掉：这一块收成「已处理完」，面板拿掉', async () => {
+    api.ListCollectionSuggestions.mockResolvedValue([{ ...SUGGESTIONS[1] }]);
+    const wrapper = await mountPage();
+    api.ListCollectionSuggestions.mockResolvedValue([]);
+    api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY, collection_suggestions: 0, total: 33 });
+
+    await section(wrapper, 'collection_suggestions').get('[data-test="collection-suggestion-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(api.ConfirmCollectionSuggestion).toHaveBeenCalledWith(12, '繁花', [201, 202]);
     expect(wrapper.get('[data-test="pending-done-collection_suggestions"]').text()).toBe('已处理完');
+    expect(wrapper.find('[data-test="pending-suggestion-list"]').exists()).toBe(false);
+    expect(wrapper.emitted('badge-change').at(-1)).toEqual([33]);
+  });
+
+  it('剧集分析跑完：页内面板请这一页重读这一块与摘要，面板换上新候选', async () => {
+    const handlers = {};
+    window.runtime = { EventsOn: (event, handler) => { handlers[event] = handler; return () => { delete handlers[event]; }; } };
+    const wrapper = await mountPage();
+    vi.clearAllMocks();
+    api.ListCollectionSuggestions.mockResolvedValue([...SUGGESTIONS, { ...SUGGESTIONS[0], id: 13, series_name: '新剧' }]);
+    api.GetPendingWorkSummary.mockResolvedValue({ ...SUMMARY, collection_suggestions: 3, total: 36 });
+
+    handlers['collection-suggestion-state']({ running: false, completed: true, scanned: 9, total: 9, matched: 4, pending: 3 });
+    await flushPromises();
+
+    expect(api.ListCollectionSuggestions).toHaveBeenCalledTimes(1);
+    expect(api.GetPendingWorkSummary).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-test="pending-count-collection_suggestions"]').text()).toBe('3');
+    expect(section(wrapper, 'collection_suggestions').findAll('[data-test="collection-suggestion-item"]')).toHaveLength(3);
   });
 
   it('页头「刷新」三处都重读，人脸面板也自己重取', async () => {

@@ -65,14 +65,6 @@
               >{{ section.action }}</button>
             </template>
             <button
-              v-else-if="section.key === 'collection_suggestions'"
-              type="button"
-              class="btn btn--secondary btn--sm"
-              data-test="pending-suggestions-open"
-              :disabled="!section.ready"
-              @click="suggestionPanelOpen = true"
-            >逐条处理…</button>
-            <button
               v-else-if="section.key === 'local_metadata_updates'"
               type="button"
               class="btn btn--primary btn--sm"
@@ -111,16 +103,16 @@
               <FaceClusterReviewPanel ref="facePanel" class="pending-section__panel" @changed="refreshSummary" />
             </template>
 
-            <!-- 建议作品集：列出前几组，「逐条处理…」打开现有的建议作品集面板（对话框），逐组采纳或忽略。 -->
-            <template v-else-if="section.key === 'collection_suggestions' && section.ready">
-              <ul class="pending-list" data-test="pending-suggestion-list">
-                <li v-for="item in suggestionPreview" :key="item.id" class="pending-list__row" data-test="pending-suggestion-item">
-                  <span class="pending-list__title">{{ item.series_name }}</span>
-                  <span class="pending-list__meta">{{ suggestionMeta(item) }}</span>
-                </li>
-              </ul>
-              <p v-if="suggestionRest > 0" class="pending-section__lead">还有 {{ formatCount(suggestionRest) }} 组，在「逐条处理…」里看。</p>
-            </template>
+            <!-- 建议作品集：嵌建议作品集面板（嵌入模式，不套对话框），在这里逐组改名、去掉成员、确认或忽略。
+                 候选就是这一块读到的那份（items）；面板说候选变了（changed）就只重读这一块与摘要。 -->
+            <CollectionSuggestionPanel
+              v-else-if="section.key === 'collection_suggestions' && section.ready"
+              embedded
+              :items="suggestions.items"
+              class="pending-section__panel"
+              data-test="pending-suggestion-list"
+              @changed="refreshSuggestionSection"
+            />
 
             <!-- 本地资料有更新：逐条看会改什么。只补空着的字段的可以直接「应用」；要覆盖现有资料或人物有重名要选的，
                  打开导入本地资料对话框逐项确认（与片库管理同一个对话框）。 -->
@@ -172,7 +164,6 @@
       </section>
     </div>
 
-    <CollectionSuggestionPanel v-if="suggestionPanelOpen" @close="closeSuggestionPanel" />
     <LocalMetadataDialog :visible="localReviewIDs.length > 0" :video-ids="localReviewIDs" @close="closeLocalReview" @applied="notifyLibraryChanged" />
   </section>
 </template>
@@ -233,7 +224,6 @@ const LOCAL_PAGE_SIZE = 20;
 // 后端批量预览 / 应用一次最多 500 个视频（localMetadataBatchMaxItems）；列表单页最多 200（SearchLibraryVideoPage）。
 export const LOCAL_BATCH_LIMIT = 500;
 const SEARCH_PAGE_LIMIT = 200;
-const SUGGESTION_PREVIEW_COUNT = 5;
 
 // 导入本地资料的字段（与 LocalMetadataDialog 同一套名字）。relation 的两项还要给每个来源名一个映射。
 const LOCAL_FIELDS = [
@@ -379,7 +369,6 @@ export default {
         // applying：'' | 'preview'（核对中）| 'confirm'（等用户确认）| 'apply'（应用中）；busyID：正在单独应用的那一行。
         applying: '', busyID: 0
       },
-      suggestionPanelOpen: false,
       localReviewIDs: []
     };
   },
@@ -419,12 +408,6 @@ export default {
       if (Number(value.face_unnamed) > 0) parts.push(`待命名 ${this.formatCount(value.face_unnamed)} 组`);
       if (Number(value.face_append_pending) > 0) parts.push(`待确认追加 ${this.formatCount(value.face_append_pending)} 组`);
       return parts.join(' · ');
-    },
-    suggestionPreview() {
-      return (this.suggestions.items || []).slice(0, SUGGESTION_PREVIEW_COUNT);
-    },
-    suggestionRest() {
-      return Math.max(0, (this.suggestions.items || []).length - SUGGESTION_PREVIEW_COUNT);
     },
     applyAllLabel() {
       return { preview: '正在核对…', confirm: '等待确认…', apply: '正在应用…' }[this.local.applying] || '全部应用';
@@ -615,10 +598,6 @@ export default {
     notifyLibraryChanged() {
       this.$emit('videos-changed', {});
     },
-    closeSuggestionPanel() {
-      this.suggestionPanelOpen = false;
-      this.refreshSuggestionSection();
-    },
     openTool(section) {
       this.$emit('run-command', section.command, section.label);
     },
@@ -633,11 +612,6 @@ export default {
         return `${parts.join('；')}，需逐项确认`;
       }
       return plan.fill.length ? `补全：${plan.fill.join('、')}` : '与片库一致，应用后不再提示';
-    },
-    suggestionMeta(item) {
-      const count = `${this.formatCount(item.member_count)} 集`;
-      const append = item?.kind === 'append' || Boolean(item?.target_collection_id);
-      return append ? `新增 ${count} → 「${item.target_collection_name || '现有作品集'}」` : count;
     },
     clock(date) {
       return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
