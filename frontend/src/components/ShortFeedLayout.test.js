@@ -59,7 +59,8 @@ describe('手机标签布局', () => {
   it.each([0, 1, 80])('保留 %i 个标签及最后的添加入口', async count => {
     const tags = Array.from({ length: count }, (_, id) => ({ id, name: `标签${id}${'长'.repeat(64)}` }));
     const wrapper = mount(FeedMeta, { props: { item: { name: '视频', tags } } });
-    expect(wrapper.findAll('span.tag-chip').map(tag => tag.text())).toEqual(tags.map(tag => tag.name));
+    // 2026-10-14 手机网页重做：标签胶囊改名 .feed-tag（.tag-chip 是桌面公共样式里的类，手机页现在也引入了它）。
+    expect(wrapper.findAll('span.feed-tag').map(tag => tag.text())).toEqual(tags.map(tag => tag.name));
     await wrapper.get('button').trigger('click');
     expect(wrapper.emitted('open-tags')).toHaveLength(1);
     const target = wrapper.get('.tag-row').element;

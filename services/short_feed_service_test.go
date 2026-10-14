@@ -985,6 +985,14 @@ func TestShortFeedScopeNarrowsCandidatesWithoutChangingSelection(t *testing.T) {
 	if byScope[ShortFeedScopeFavorites] != 0 {
 		t.Fatalf("尚未收藏时收藏范围应为 0: %+v", byScope)
 	}
+	// 范围面板的名字是白话（D-MW-07），顺序与 shortFeedScopeOrder 一致。
+	names := make([]string, 0, len(counts))
+	for _, item := range counts {
+		names = append(names, item.Scope+"="+item.Name)
+	}
+	if got, want := strings.Join(names, ","), "all=全部,unwatched=没看过,favorites=只在收藏里随机,recent=最近 30 天添加,untagged=还没打标签"; got != want {
+		t.Fatalf("范围名称错误: got %s want %s", got, want)
+	}
 
 	if _, err := svc.NextItemInScope(nil, "nope"); err == nil {
 		t.Fatalf("非法播放范围应被拒绝")

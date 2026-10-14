@@ -1,4 +1,5 @@
 <template>
+  <!-- 底部进度：平时只是一条细线；控件出来时线上带圆点、右上角写「已播 / 总长」（设计稿「推荐 · 视频」）。 -->
   <div
     class="progress-dock"
     :class="{ visible }"
@@ -7,6 +8,7 @@
     @touchend.stop
     @wheel.stop
   >
+    <span v-if="visible" class="progress-dock__time" aria-hidden="true">{{ valueText }}</span>
     <div
       class="progress-scrubber"
       role="slider"

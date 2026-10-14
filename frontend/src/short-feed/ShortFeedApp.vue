@@ -13,11 +13,25 @@
     <!-- 服务端设了 PIN 而没有会话：任何数据请求都回 401 pin_required，先登录（D-PC45）。 -->
     <PinGate v-if="authRequired" @authenticated="onAuthenticated" />
 
-    <section v-else-if="view === 'feed'" class="feed-stage">
+    <!-- 收藏墙（D-MW-05）：与推荐流各自保存状态，切过来再回去推荐流的历史与位置不变。 -->
+    <FavoritesView
+      v-else-if="view === 'favorites'"
+      :items="favorites"
+      :kind="favoritesKind"
+      :loading="favoritesLoading"
+      :error="favoritesError"
+      @switch-view="switchView"
+      @update:kind="favoritesKind = $event"
+      @refresh="loadFavorites"
+      @select="openFavoriteStream"
+    />
+
+    <!-- 推荐流与「在收藏里看」共用一个舞台、一套右侧按钮与「更多」。 -->
+    <section v-else class="feed-stage" :class="{ 'feed-stage--notice': !!toast || !!loadError }">
       <FeedStage
         ref="stage"
         :item="currentVideo"
-        :prefetched="prefetchedVideo"
+        :prefetched="stagePrefetched"
         :muted="muted"
         :zoomed="photoZoomed"
         :status-text="statusText"
@@ -40,167 +54,201 @@
       <FeedTopBar
         :visible="chromeVisible"
         :muted="muted"
-        :counter="counterText"
+        :mode="inFavoriteStream ? 'favorites' : 'feed'"
         :scope-label="scopeLabel"
-        :fullscreen-available="fullscreenAvailable"
-        :fullscreen="isFullscreen"
-        @open-favorites="openFavorites"
+        :scope-description="scopeDescription"
+        :position="favoritePositionText"
+        @switch-view="switchView"
         @toggle-muted="muted = !muted"
         @open-scope="openScopeSheet"
-        @toggle-fullscreen="toggleFullscreen"
+        @back="closeFavoriteStream"
       />
-      <FeedMeta :visible="chromeVisible" :item="currentVideo" @open-tags="openTagSheet" />
+      <FeedMeta :visible="chromeVisible" :item="currentVideo" :hint="inFavoriteStream ? favoriteStreamHint : ''" @open-tags="openTagSheet" />
+      <span v-if="chromeVisible && isImageItem && currentVideo.media_url && !photoZoomed" class="photo-hint" aria-hidden="true">双击放大 · 再双击还原</span>
       <FeedActionRail
+        v-if="currentVideo"
         :visible="chromeVisible"
         :item="currentVideo"
         :rail-label="isImageItem ? '图片操作' : '视频操作'"
         @toggle-like="toggleLike"
         @toggle-favorite="toggleFavorite"
-        @toggle-watched="toggleWatched"
-        @open-rating="openRatingSheet"
-        @open-tags="openTagSheet"
-        @request-delete="deleteDialogOpen = true"
+        @open-more="openMoreSheet"
       />
-      <FeedDots v-if="items.length > 1" :total="items.length" :index="index" />
       <FeedProgress
         v-if="!isImageItem && currentVideo && currentVideo.media_url"
         :visible="chromeVisible"
         :value="progressValue"
-        :value-text="`${formatTime(videoCurrentTime)} / ${formatTime(videoDuration)}`"
+        :value-text="`${formatClock(videoCurrentTime)} / ${formatClock(videoDuration)}`"
         @seek-start="startSeeking"
         @seek-move="moveSeeking"
         @seek-end="finishSeeking"
         @seek-cancel="cancelSeeking"
         @seek-key="seekByKeyboard"
       />
+      <!-- 空范围（D-MW-07）：一条能播的都没有时整屏说明原因，给「换个范围」。 -->
+      <EmptyState
+        v-if="emptyScope"
+        class="feed-empty-scope"
+        icon="plays"
+        title="这个范围里没有能播的"
+        :message="emptyScopeMessage"
+        data-test="short-feed-empty-scope"
+      >
+        <template #actions>
+          <button type="button" class="btn btn--primary" data-test="short-feed-change-scope" @click="openScopeSheet">换个范围</button>
+        </template>
+      </EmptyState>
       <!-- 取下一条失败（D-PC46、PLAY-13）：浏览历史原样保留，停在当前条目，给一个重试。 -->
-      <div v-if="loadError" class="feed-retry" role="alert" data-test="short-feed-retry-bar">
-        <span class="feed-retry__text">{{ loadError }}</span>
-        <button type="button" class="feed-retry__btn" data-test="short-feed-retry" :disabled="loading" @click="retryLoad">重试</button>
-      </div>
+      <AppBanner v-if="loadError" class="feed-retry" tone="danger" role="alert" title="没取到下一条" :message="loadError" data-test="short-feed-retry-bar">
+        <template #actions>
+          <button type="button" class="btn btn--secondary feed-retry__btn" data-test="short-feed-retry" :disabled="loading" @click="retryLoad">重试</button>
+        </template>
+      </AppBanner>
     </section>
 
-    <FavoritesView
-      v-else
-      :items="favorites"
-      :loading="favoritesLoading"
-      :error="favoritesError"
-      @close="view = 'feed'"
-      @refresh="loadFavorites"
-      @select="selectFavorite"
+    <MoreSheet
+      v-if="sheet === 'more' && currentVideo"
+      :item="currentVideo"
+      :fullscreen-available="fullscreenAvailable"
+      :fullscreen="isFullscreen"
+      :deleting="deleting"
+      @close="sheet = null"
+      @open-rating="openRatingSheet"
+      @open-tags="openTagSheet"
+      @toggle-watched="toggleWatched"
+      @toggle-fullscreen="toggleFullscreenFromSheet"
+      @delete="moveCurrentToTrash"
     />
 
     <FeedSheet
       v-if="sheet === 'rating'"
       title="个人评分"
-      hint="0–10，半分制，可清空"
+      hint="0–10 分，可以打半分"
+      close-style="none"
       @close="sheet = null"
     >
-      <template #head>
-        <strong class="sheet__value">{{ currentRatingText }}</strong>
-      </template>
-      <div class="rating-grid">
-        <button
-          v-for="option in ratingOptions"
-          :key="option"
-          type="button"
-          class="rating-cell"
-          :class="{ active: currentVideo && currentVideo.personal_rating === option }"
-          @click="applyRating(option)"
-        >{{ option.toFixed(1) }}</button>
-      </div>
+      <RatingPicker :value="displayRating" @preview="previewRating" @commit="applyRating" />
       <template #footer>
-        <button type="button" class="sheet-btn" @click="applyRating(null)">清空评分</button>
-        <button type="button" class="sheet-btn sheet-btn--primary sheet-btn--wide" @click="sheet = null">完成</button>
+        <button type="button" class="btn btn--secondary" data-test="short-feed-rating-clear" @click="applyRating(null)">清空评分</button>
+        <button type="button" class="btn btn--primary sheet-btn--wide" data-test="short-feed-rating-done" @click="sheet = null">完成</button>
       </template>
     </FeedSheet>
 
-    <FeedSheet v-if="sheet === 'tags'" title="标签" hint="点击切换，改动即时写入本地库" tall @close="sheet = null">
-      <input v-model="tagKeyword" class="sheet-input" type="text" maxlength="64" placeholder="搜索或新建标签…" aria-label="搜索或新建标签" />
-      <div class="tag-picker">
-        <!-- 自动标签（如「短视频」）只读展示：与桌面端看到同一套标签，但不能手动增删。 -->
-        <button
-          v-for="tag in visibleFeedTags"
-          :key="tag.id"
-          type="button"
-          class="tag-option"
-          :class="{ active: isTagAttached(tag.id), 'tag-option--auto': tag.automatic }"
-          :style="isTagAttached(tag.id) ? { backgroundColor: `${tag.color}44`, borderColor: `${tag.color}aa` } : null"
-          :disabled="tag.automatic"
-          :title="tag.automatic ? '自动标签，由系统维护' : null"
-          @click="toggleTag(tag)"
-        >
-          <span class="tag-option__dot" :style="{ backgroundColor: tag.color || '#8fa0a5' }"></span>{{ tag.name }}<span v-if="tag.automatic" class="tag-option__auto">自动</span>
-        </button>
-        <!-- 搜不到就地新建：手机上不该为一个新标签回到桌面端。 -->
-        <button
-          v-if="canCreateTag"
-          type="button"
-          class="tag-option tag-option--create"
-          data-test="short-feed-create-tag"
-          :disabled="creatingTag"
-          @click="createTagFromKeyword"
-        >{{ creatingTag ? '新建中…' : `＋ 新建「${tagKeyword.trim()}」并添加` }}</button>
-        <p v-if="visibleFeedTags.length === 0 && !canCreateTag" class="sheet__empty">还没有标签，输入名称即可新建。</p>
+    <FeedSheet v-if="sheet === 'tags'" title="标签" close-style="done" tall @close="sheet = null">
+      <label class="sheet-search">
+        <AppIcon name="search" :size="16" />
+        <input v-model="tagKeyword" class="sheet-search__input" type="text" maxlength="64" placeholder="搜索或新建标签" aria-label="搜索或新建标签" />
+      </label>
+      <!-- 已打上的排在最前、点一下取消；其余按服务端的名字序。自动标签（如「短视频」）只读展示：
+           与桌面端看到同一套标签，但不能手动增删。 -->
+      <div v-if="attachedFeedTags.length" class="tag-group">
+        <p class="tag-group__label">已添加 · 点一下取消</p>
+        <div class="tag-picker">
+          <button
+            v-for="tag in attachedFeedTags"
+            :key="tag.id"
+            type="button"
+            class="btn-plain tag-option active"
+            :class="{ 'tag-option--auto': tag.automatic }"
+            aria-pressed="true"
+            :disabled="tag.automatic"
+            :title="tag.automatic ? '自动标签，由系统维护' : null"
+            @click="toggleTag(tag)"
+          >
+            <AppIcon class="tag-option__check" name="check" :size="16" />{{ tag.name }}<span v-if="tag.automatic" class="tag-option__auto">自动</span>
+          </button>
+        </div>
       </div>
+      <div v-if="otherFeedTags.length" class="tag-group">
+        <p class="tag-group__label">{{ tagKeyword.trim() ? `匹配「${tagKeyword.trim()}」的标签` : '点一下添加' }}</p>
+        <div class="tag-picker">
+          <button
+            v-for="tag in otherFeedTags"
+            :key="tag.id"
+            type="button"
+            class="btn-plain tag-option"
+            :class="{ 'tag-option--auto': tag.automatic }"
+            aria-pressed="false"
+            :disabled="tag.automatic"
+            :title="tag.automatic ? '自动标签，由系统维护' : null"
+            @click="toggleTag(tag)"
+          >{{ tag.name }}<span v-if="tag.automatic" class="tag-option__auto">自动</span></button>
+        </div>
+      </div>
+      <!-- 搜不到就地新建：手机上不该为一个新标签回到桌面端。 -->
+      <button
+        v-if="canCreateTag"
+        type="button"
+        class="btn-plain tag-create"
+        data-test="short-feed-create-tag"
+        :disabled="creatingTag"
+        @click="createTagFromKeyword"
+      >{{ creatingTag ? '新建中…' : `＋ 新建「${tagKeyword.trim()}」并添加` }}</button>
+      <p v-if="visibleFeedTags.length === 0 && !canCreateTag" class="sheet__empty">还没有标签，输入名称即可新建。</p>
       <template #footer>
-        <button type="button" class="sheet-btn sheet-btn--primary sheet-btn--wide" @click="sheet = null">完成</button>
+        <p class="sheet__note">改动立即写回电脑上的库；自动标签只能看，不能改。</p>
       </template>
     </FeedSheet>
 
-    <FeedSheet v-if="sheet === 'scope'" title="播放范围" @close="sheet = null">
-      <div class="media-kind-switch" role="group" aria-label="资源类型" data-test="short-feed-media-kind">
+    <!-- 范围面板（D-MW-07）：「刷什么」= 类型 × 五个范围，选了就关面板、按新范围取一条。 -->
+    <FeedSheet v-if="sheet === 'scope'" title="刷什么" label="播放范围" @close="sheet = null">
+      <SegmentedControl
+        class="media-kind-switch"
+        label="类型"
+        :options="mediaKindSegments"
+        :model-value="mediaKind"
+        data-test="short-feed-media-kind"
+        @update:model-value="applyMediaKind"
+      />
+      <div class="sheet-rows" role="radiogroup" aria-label="范围">
         <button
-          v-for="option in mediaKindOptions"
-          :key="option.kind"
+          v-for="option in scopes"
+          :key="option.scope"
           type="button"
-          :class="{ active: option.kind === mediaKind }"
-          @click="applyMediaKind(option.kind)"
-        >{{ option.name }}</button>
-      </div>
-      <template v-for="option in scopes" :key="option.scope">
-        <button
-          type="button"
-          class="scope-option"
+          role="radio"
+          class="btn-plain scope-option"
           :class="{ active: option.scope === scope }"
+          :aria-checked="option.scope === scope ? 'true' : 'false'"
+          :data-test="`short-feed-scope-${option.scope}`"
           @click="applyScope(option.scope)"
         >
-          {{ option.name }}<span class="scope-option__count">{{ option.count }}</span>
+          <span class="scope-option__name">{{ option.name }}</span>
+          <span class="scope-option__count">{{ formatCount(option.count) }}</span>
+          <AppIcon v-if="option.scope === scope" class="scope-option__check" name="check" :size="20" />
+          <span v-else class="scope-option__check" aria-hidden="true"></span>
         </button>
-        <!-- 被格式门排除的视频不再无声消失（D-PC46、PLAY-13）：说清有几条、怎么让它能播。 -->
-        <p v-if="unplayableHintText(option.unplayable_count)" class="scope-option__hint" :data-test="`short-feed-unplayable-${option.scope}`">{{ unplayableHintText(option.unplayable_count) }}</p>
-      </template>
+      </div>
+      <!-- 被格式门排除的视频不再无声消失（D-PC46、PLAY-13）：说清有几条、怎么让它能播。 -->
+      <p v-if="unplayableHint" class="scope-note" role="note" :data-test="`short-feed-unplayable-${scope}`">{{ unplayableHint }}</p>
       <p v-if="scopesError" class="sheet__empty" role="alert" data-test="short-feed-scopes-error">{{ scopesError }}</p>
     </FeedSheet>
 
-    <DeleteDialog
-      v-if="deleteDialogOpen"
-      :title="isImageItem ? '删除图片' : '删除视频'"
-      :message="isImageItem
-        ? '图片会移到废纸篓，可在电脑端回收站恢复，并从图片库与手机 Feed 中移除。'
-        : '视频会移到废纸篓，可在电脑端回收站恢复，并从片库与手机 Feed 中移除。'"
-      @cancel="deleteDialogOpen = false"
-      @confirm="confirmDelete"
-    />
-
-    <div v-if="toast" class="feed-toast" role="status">
-      <span class="feed-toast__text">{{ toast.message }}</span>
-      <button v-if="toast.undo" type="button" class="feed-toast__undo" @click="undoDelete">撤销</button>
-    </div>
+    <!-- 全局提示挂到 body：面板（同在 body 上的 --z-modal 层）开着时也看得见。 -->
+    <Teleport to="body">
+      <div v-if="toast" class="feed-toast" :class="{ 'feed-toast--raised': view !== 'favorites' && !!loadError }" role="status" data-test="short-feed-toast">
+        <AppIcon v-if="toast.icon" class="feed-toast__icon" :name="toast.icon" :size="20" />
+        <span class="feed-toast__text">
+          <span class="feed-toast__message">{{ toast.message }}</span>
+          <span v-if="toast.detail" class="feed-toast__detail">{{ toast.detail }}</span>
+        </span>
+      </div>
+    </Teleport>
   </main>
 </template>
 
 <script>
-import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, restoreItem, setAuthRequiredHandler, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
-import { feedErrorText, unplayableHintText } from './errors.js';
+import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, setAuthRequiredHandler, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
+import { emptyScopeText, feedErrorText, unplayableHintText } from './errors.js';
+import { formatClock, formatCount } from './format.js';
 import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
 
-// 资源类型筛选与播放范围正交，记在本机：手机上选过"仅图片"，下次打开还是。
+// 资源类型筛选与播放范围正交，记在本机：手机上选过"只看图片"，下次打开还是。
+// short 是范围按钮上跟在范围名后面的那一截（D-MW-01：类型不是「视频和图片」时加「· 视频 / · 图片」）。
 const MEDIA_KIND_STORAGE_KEY = 'short-feed-media-kind';
 const MEDIA_KIND_OPTIONS = [
-  { kind: 'all', name: '全部资源' },
-  { kind: 'video', name: '仅视频' },
-  { kind: 'image', name: '仅图片' }
+  { kind: 'all', name: '视频和图片', short: '' },
+  { kind: 'video', name: '只看视频', short: '视频' },
+  { kind: 'image', name: '只看图片', short: '图片' }
 ];
 function readStoredMediaKind() {
   try {
@@ -216,17 +264,21 @@ function storeMediaKind(kind) {
   } catch (_err) {}
 }
 import { createSwipeTracker, keyboardDirection, wheelDirection } from './gesture.js';
-import { unsupportedStatusText } from './videoState.js';
+import { isScopeExhaustedHint, unsupportedStatusText } from './videoState.js';
 import { createWakeLock } from './useWakeLock.js';
+import AppBanner from '../components/ui/AppBanner.vue';
+import AppIcon from '../components/ui/AppIcon.vue';
+import EmptyState from '../components/ui/EmptyState.vue';
+import SegmentedControl from '../components/ui/SegmentedControl.vue';
 import FeedStage from './components/FeedStage.vue';
 import FeedTopBar from './components/FeedTopBar.vue';
 import FeedMeta from './components/FeedMeta.vue';
 import FeedActionRail from './components/FeedActionRail.vue';
 import FeedProgress from './components/FeedProgress.vue';
 import FavoritesView from './components/FavoritesView.vue';
-import DeleteDialog from './components/DeleteDialog.vue';
 import FeedSheet from './components/FeedSheet.vue';
-import FeedDots from './components/FeedDots.vue';
+import MoreSheet from './components/MoreSheet.vue';
+import RatingPicker from './components/RatingPicker.vue';
 import PinGate from './components/PinGate.vue';
 
 const swipeTracker = createSwipeTracker();
@@ -235,10 +287,12 @@ const wakeLock = createWakeLock();
 const PHOTO_CONTROLS_HIDE_MS = 2600;
 // 浏览历史的上限：一路划下去不能把整库都留在内存里。
 const FEED_HISTORY_LIMIT = 40;
+// 提示停留时长：删除后的说明与失败原因都要来得及读完。
+const TOAST_MS = 5000;
 
 export default {
   name: 'ShortFeedApp',
-  components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog, FeedSheet, FeedDots, PinGate },
+  components: { AppBanner, AppIcon, EmptyState, SegmentedControl, FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, FeedSheet, MoreSheet, RatingPicker, PinGate },
   watch: {
     // 标签搜索实时查服务端：每次输入变化都重新拉一次（100ms 内的连续按键合并成一次）。
     tagKeyword(value) {
@@ -249,13 +303,15 @@ export default {
   },
   data() {
     return {
-      // 保留浏览历史而不是只留当前一条：能往回划，右侧圆点的位置才是个真实的东西。
+      // 保留浏览历史而不是只留当前一条：往回划走的是历史，不重新抽签。
       items: [],
       index: -1,
       scope: 'all',
       scopes: [],
       mediaKind: readStoredMediaKind(),
-      mediaKindOptions: MEDIA_KIND_OPTIONS,
+      mediaKindSegments: MEDIA_KIND_OPTIONS.map(option => ({ value: option.kind, label: option.name })),
+      // 范围里一条能播的都没有（D-MW-07）：整屏空态，不当作取下一条失败。
+      emptyScope: false,
       feedTags: [],
       tagKeyword: '',
       // 标签搜索实时查服务端：序号丢弃过期响应，定时器合并连续按键。
@@ -268,17 +324,25 @@ export default {
       sheet: null,
       toast: null,
       toastTimer: null,
-      pendingUndo: null,
+      // 移到废纸篓的请求还没回来：「更多」里的这一项禁用，防止连点（D-MW-03）。
+      deleting: false,
+      // 评分面板里正在拖或正在写的分（{ value }）；写完或失败后清掉，显示回到条目上的分（D-MW-04）。
+      ratingDraft: null,
       prefetchedVideo: null,
       // 预取视频的下载档位：换到新的一条先回到 metadata，当前条缓冲够了再放开。
       prefetchPreload: 'metadata',
       prefetching: false,
       recentKeys: [],
       favorites: [],
+      favoritesKind: 'all',
       favoritesLoading: false,
-      // 收藏页加载失败的说明（D-PC46）：不再显示成「暂无收藏」。
+      // 收藏页加载失败的说明（D-PC46）：不再显示成「还没有收藏」。
       favoritesError: '',
+      // 「在收藏里看」（D-MW-05）：墙上当时筛出来的列表与位置，上下滑只在这里面走，到两端停住。
+      favoriteStream: { items: [], index: -1 },
+      favoriteStreamHint: '上下滑只在收藏之间切换；取消收藏后这一条留到你划走为止',
       scopesError: '',
+      // feed：推荐流；favorites：收藏墙；favorites-feed：在收藏里看。
       view: 'feed',
       loading: false,
       // 取下一条失败的说明（网络异常等），配「重试」；为空表示没有待重试的失败。
@@ -289,7 +353,6 @@ export default {
       muted: true,
       playbackRate: 1,
       recordedVideoID: null,
-      deleteDialogOpen: false,
       wheelState: { lastWheelAt: 0 },
       controlsVisible: false,
       controlsHideTimer: null,
@@ -313,24 +376,55 @@ export default {
     };
   },
   computed: {
+    inFavoriteStream() {
+      return this.view === 'favorites-feed';
+    },
     currentVideo() {
+      if (this.inFavoriteStream) return this.favoriteStream.items[this.favoriteStream.index] || null;
       return this.items[this.index] || null;
     },
-    counterText() {
-      if (this.items.length === 0) return '';
-      return `${this.index + 1} / ${this.items.length}`;
+    // 舞台预取的下一条：推荐流是后台抽好的那一条，收藏流就是列表里的下一张。
+    stagePrefetched() {
+      if (this.inFavoriteStream) return this.favoriteStream.items[this.favoriteStream.index + 1] || null;
+      return this.prefetchedVideo;
+    },
+    favoritePositionText() {
+      const { items, index } = this.favoriteStream;
+      return items.length ? `${index + 1} / ${items.length}` : '';
+    },
+    currentScopeEntry() {
+      return this.scopes.find(item => item.scope === this.scope) || null;
+    },
+    // 范围名来自服务端（白话名，D-MW-07）；还没读过范围时只可能是默认的「全部」。
+    scopeName() {
+      return this.currentScopeEntry?.name || '全部';
+    },
+    mediaKindOption() {
+      return MEDIA_KIND_OPTIONS.find(option => option.kind === this.mediaKind) || MEDIA_KIND_OPTIONS[0];
     },
     scopeLabel() {
-      const scopeName = this.scopes.find(item => item.scope === this.scope)?.name || '全部短视频';
-      const kindName = this.mediaKind === 'all' ? '' : (MEDIA_KIND_OPTIONS.find(option => option.kind === this.mediaKind)?.name || '');
-      return kindName ? `${scopeName} · ${kindName}` : scopeName;
+      const short = this.mediaKindOption.short;
+      return short ? `${this.scopeName} · ${short}` : this.scopeName;
     },
-    currentRatingText() {
+    scopeDescription() {
+      return `播放范围：${this.scopeName}，${this.mediaKindOption.name}`;
+    },
+    unplayableHint() {
+      return unplayableHintText(this.currentScopeEntry?.unplayable_count);
+    },
+    emptyScopeMessage() {
+      return emptyScopeText(this.scopeName, this.mediaKind, this.currentScopeEntry?.unplayable_count);
+    },
+    displayRating() {
+      if (this.ratingDraft) return this.ratingDraft.value;
       const rating = this.currentVideo?.personal_rating;
-      return rating === null || rating === undefined ? '未评分' : Number(rating).toFixed(1);
+      return rating === null || rating === undefined ? null : Number(rating);
     },
-    ratingOptions() {
-      return Array.from({ length: 21 }, (_, step) => step * 0.5);
+    attachedFeedTags() {
+      return this.visibleFeedTags.filter(tag => this.isTagAttached(tag.id));
+    },
+    otherFeedTags() {
+      return this.visibleFeedTags.filter(tag => !this.isTagAttached(tag.id));
     },
     visibleFeedTags() {
       // 服务端已按关键词筛过；这里再做一次即时预筛（等待响应期间不闪旧结果），
@@ -385,9 +479,16 @@ export default {
     this.$el.focus();
   },
   methods: {
-    unplayableHintText,
+    formatClock,
+    formatCount,
     async nextVideo(direction = 1) {
       if (this.loading || direction === 0 || this.sheet || this.authRequired) return;
+      // 收藏墙上没有「下一条」；在收藏里看只在那份列表里走。
+      if (this.view === 'favorites') return;
+      if (this.inFavoriteStream) {
+        this.moveFavoriteStream(direction);
+        return;
+      }
       // 往回划走历史，不重新抽签：抽签回来的是另一条，那不叫"上一条"。
       if (direction < 0) {
         if (this.index > 0) {
@@ -411,11 +512,22 @@ export default {
       if (this.items.length === 0) this.statusText = '加载中';
       try {
         const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope, this.mediaKind);
+        // 范围里一条能播的都没有（服务端回一条放不了的视频当说明）：历史为空时整屏说明并给「换个范围」（D-MW-07）。
+        if (this.items.length === 0 && isScopeExhaustedHint(video)) {
+          this.enterEmptyScope();
+          return;
+        }
+        this.emptyScope = false;
         this.appendItem(video);
       } catch (err) {
         // PIN 页接管，不在底下再叠一条失败提示。
         if (this.authRequired) return;
-        // 失败不清空浏览历史（D-PC46、PLAY-13）：停在当前条目，往回划照样能看，另给一条「网络异常 · 重试」。
+        // 404 no_eligible_videos 是「这个范围里没有」，不是取失败：历史为空时同样给空态（D-MW-07）。
+        if (this.items.length === 0 && err?.code === 'no_eligible_videos') {
+          this.enterEmptyScope();
+          return;
+        }
+        // 失败不清空浏览历史（D-PC46、PLAY-13）：停在当前条目，往回划照样能看，另给一条「没取到下一条 · 重试」。
         const message = feedErrorText(err);
         this.loadError = message;
         if (this.items.length === 0) this.statusText = message;
@@ -427,6 +539,12 @@ export default {
     retryLoad() {
       return this.loadNextItem();
     },
+    // 空范围：舞台上不留「加载中」，读一次范围计数好写明有几个视频是因为格式放不了（D-MW-07）。
+    enterEmptyScope() {
+      this.emptyScope = true;
+      this.statusText = '';
+      this.loadScopes();
+    },
     // 登录成功：回到原来的位置；还没有任何条目就重新取一条。收藏页开着就重读收藏。
     async onAuthenticated() {
       this.authRequired = false;
@@ -435,7 +553,7 @@ export default {
         await this.loadFavorites();
         return;
       }
-      if (this.items.length === 0) {
+      if (!this.inFavoriteStream && this.items.length === 0) {
         await this.nextVideo();
         return;
       }
@@ -464,11 +582,14 @@ export default {
       this.photoZoomed = false;
       this.nativeFullscreenAvailable = false;
       this.clearControlsHideTimer();
-      const key = itemKey(video);
-      if (!this.recentKeys.includes(key)) {
-        this.recentKeys.push(key);
+      // 排除集与后台预取只属于推荐流：在收藏里看不影响推荐流接下来抽什么。
+      if (!this.inFavoriteStream) {
+        const key = itemKey(video);
+        if (!this.recentKeys.includes(key)) {
+          this.recentKeys.push(key);
+        }
+        this.recentKeys = this.recentKeys.slice(-20);
       }
-      this.recentKeys = this.recentKeys.slice(-20);
       this.$nextTick(() => {
         const player = this.player();
         this.applyPlaybackRate();
@@ -476,22 +597,26 @@ export default {
       });
       // 图片没有缓冲过程，也不占带宽，预取可以直接整只下载。
       this.prefetchPreload = this.isImageItem ? 'auto' : 'metadata';
-      this.prefetchNextVideo();
+      if (!this.inFavoriteStream) this.prefetchNextVideo();
     },
     onVideoBuffered() {
       this.prefetchPreload = 'auto';
     },
-    // 改动后的整条 DTO 由后端回来，就地换掉，不猜写入结果。
+    // 改动后的整条 DTO 由后端回来，就地换掉当前这一条，不猜写入结果。推荐流、收藏流与收藏墙里同一条都换掉，
+    // 切回去不显示旧值。
     replaceCurrent(updated) {
-      if (!updated || this.index < 0) return;
-      const next = [...this.items];
-      next[this.index] = updated;
-      this.items = next;
+      if (!updated || !this.currentVideo) return;
+      const key = itemKey(this.currentVideo);
+      const swap = list => (list.some(item => itemKey(item) === key) ? list.map(item => (itemKey(item) === key ? updated : item)) : list);
+      this.items = swap(this.items);
+      this.favoriteStream = { ...this.favoriteStream, items: swap(this.favoriteStream.items) };
+      this.favorites = swap(this.favorites);
     },
-    flashToast(message, undo = false) {
-      this.toast = { message, undo };
+    // 一条提示：message 一行；detail 是第二行（删除后的「去哪找回」）；icon 取图标集里的名字。没有按钮（D-MW-03）。
+    flashToast(message, { detail = '', icon = '' } = {}) {
+      this.toast = { message, detail, icon };
       if (this.toastTimer) clearTimeout(this.toastTimer);
-      this.toastTimer = window.setTimeout(() => { this.toast = null; }, 5000);
+      this.toastTimer = window.setTimeout(() => { this.toast = null; }, TOAST_MS);
     },
     takePrefetchedVideo() {
       if (!this.prefetchedVideo) return null;
@@ -874,43 +999,81 @@ export default {
         this.flashToast(`${favorited ? '收藏' : '取消收藏'}失败：${feedErrorText(err)}`);
       }
     },
-    async confirmDelete() {
-      if (!this.currentVideo) return;
-      const deleted = this.currentVideo;
-      const deletedKey = itemKey(deleted);
-      this.deleteDialogOpen = false;
+    // 移到废纸篓（D-MW-03）：不弹确认、不给撤销，恢复在电脑端回收站。成功后这一条从两个流里摘掉，
+    // 当前流前进到下一条；失败留在原条目，按 409 的三种原因说清楚。
+    async moveCurrentToTrash() {
+      const target = this.currentVideo;
+      if (!target || this.deleting) return;
+      this.sheet = null;
+      this.deleting = true;
       try {
-        await deleteItem(deleted);
-        this.recentKeys = this.recentKeys.filter(key => key !== deletedKey);
-        // 删掉的这条从历史里摘掉，往回划不该再翻到一条已经不存在的内容。
-        this.items = this.items.filter((item, position) => position !== this.index);
-        this.index = Math.min(this.index, this.items.length - 1);
-        this.pendingUndo = deleted;
-        this.flashToast(`已移到废纸篓 · ${deleted.name}`, true);
-        if (this.index < 0 || this.items.length === 0) {
-          await this.nextVideo();
-        } else {
-          this.activateCurrent();
-        }
+        await deleteItem(target);
       } catch (err) {
         // 409 volume_offline / permission_denied / trash_unsupported：什么都没动，说清原因（D-PC01、PLAY-13）。
-        // 之前写进 statusText，而它只在条目放不了时才显示，可播放的条目上删除失败完全没有反馈。
         this.flashToast(`删除失败：${feedErrorText(err)}`);
+        return;
+      } finally {
+        this.deleting = false;
       }
+      this.flashToast(`「${target.name}」已移到废纸篓`, { detail: '要找回，在电脑端「回收站」里恢复', icon: 'trash' });
+      await this.forgetDeleted(target);
     },
-    async undoDelete() {
-      if (!this.pendingUndo) return;
-      const target = this.pendingUndo;
-      this.pendingUndo = null;
-      this.toast = null;
-      try {
-        await restoreItem(target);
-        this.flashToast(`已恢复 · ${target.name}`);
-      } catch (err) {
-        this.flashToast(`恢复失败：${feedErrorText(err)}`);
+    // 删掉的这条从历史、收藏流与收藏墙里摘掉，往回划不该再翻到一条已经不存在的内容。按条目认，
+    // 不按请求发出时的位置认：请求在路上时可能已经划走了。
+    async forgetDeleted(target) {
+      const key = itemKey(target);
+      const matches = item => itemKey(item) === key;
+      this.recentKeys = this.recentKeys.filter(recent => recent !== key);
+      if (this.prefetchedVideo && matches(this.prefetchedVideo)) this.prefetchedVideo = null;
+      this.favorites = this.favorites.filter(item => !matches(item));
+
+      const wasCurrent = !!this.currentVideo && matches(this.currentVideo);
+      const streamPosition = this.favoriteStream.items.findIndex(matches);
+      if (streamPosition !== -1) {
+        const items = this.favoriteStream.items.filter((_, position) => position !== streamPosition);
+        let index = this.favoriteStream.index;
+        if (streamPosition < index) index -= 1;
+        this.favoriteStream = { items, index: Math.min(index, items.length - 1) };
       }
+      const position = this.items.findIndex(matches);
+      if (position !== -1) {
+        this.items = this.items.filter((_, offset) => offset !== position);
+        if (position < this.index) this.index -= 1;
+      }
+      if (!wasCurrent) return;
+
+      if (this.inFavoriteStream) {
+        // 收藏删空了就回到墙上（回墙时重新取一次）。
+        if (this.favoriteStream.items.length === 0) {
+          await this.closeFavoriteStream();
+          return;
+        }
+        this.activateCurrent();
+        return;
+      }
+      // 推荐流：后面还有历史就前进到它；删的是最后一条就取新的一条，取不到停在前一条并给重试。
+      if (this.index < this.items.length) {
+        this.activateCurrent();
+        return;
+      }
+      this.index = this.items.length - 1;
+      const fallback = this.currentVideo;
+      await this.loadNextItem();
+      // 没取到新的（失败或正在取）：停在前一条，把它重新激活。
+      if (fallback && this.currentVideo === fallback) this.activateCurrent();
+    },
+    openMoreSheet() {
+      this.sheet = 'more';
+      this.showControls();
+      this.clearControlsHideTimer();
+    },
+    // 全屏在「更多」里（D-MW-01）：选了就关面板再切换，请求仍在这次点击的手势里发出。
+    toggleFullscreenFromSheet() {
+      this.sheet = null;
+      return this.toggleFullscreen();
     },
     openRatingSheet() {
+      this.ratingDraft = null;
       this.sheet = 'rating';
       this.showControls();
       this.clearControlsHideTimer();
@@ -988,18 +1151,28 @@ export default {
       this.index = -1;
       this.prefetchedVideo = null;
       this.recentKeys = [];
+      this.emptyScope = false;
+      this.loadError = '';
       await this.nextVideo();
     },
     resetPhotoZoom() {
       this.photoZoomed = false;
       this.showControls();
     },
+    // 拖滑杆只改显示，松手（change）才写入（D-MW-04）。
+    previewRating(value) {
+      this.ratingDraft = { value };
+    },
+    // 点星、松开滑杆、清空都走这里：写入期间先显示新分；失败时显示回到写入前的分并说原因。
     async applyRating(rating) {
       if (!this.currentVideo) return;
+      this.ratingDraft = { value: rating };
       try {
         this.replaceCurrent(await setRating(this.currentVideo, rating));
       } catch (err) {
         this.flashToast(`评分失败：${String(err.message || err)}`);
+      } finally {
+        this.ratingDraft = null;
       }
     },
     async toggleWatched() {
@@ -1024,9 +1197,64 @@ export default {
         this.flashToast(`标签写入失败：${String(err.message || err)}`);
       }
     },
+    // 顶部标签（D-MW-01）：推荐 ↔ 收藏。
+    async switchView(key) {
+      if (key === 'favorites') {
+        await this.openFavorites();
+        return;
+      }
+      if (key === 'feed' && this.view === 'favorites') await this.returnToFeed();
+    },
     async openFavorites() {
+      this.leaveStage();
+      this.sheet = null;
       this.view = 'favorites';
       await this.loadFavorites();
+    },
+    // 回到推荐流：历史与位置原样（D-MW-05），当前这一条重新开始一次观看。
+    async returnToFeed() {
+      this.view = 'feed';
+      if (this.items.length === 0) {
+        await this.nextVideo();
+        return;
+      }
+      await this.$nextTick();
+      this.activateCurrent();
+    },
+    // 舞台要卸下（去收藏墙）：<video> 直接拿掉不会发 pause，播放态、唤醒锁与定时器在这里收拾。
+    leaveStage() {
+      this.isPlaying = false;
+      this.clearControlsHideTimer();
+      this.cancelLongPress();
+      this.releaseWakeLock();
+    },
+    // 点墙上一张：用墙上当前筛选后的列表、从这一张开始（D-MW-05）。
+    openFavoriteStream(list, index) {
+      if (!list?.[index]) return;
+      this.favoriteStream = { items: [...list], index };
+      this.view = 'favorites-feed';
+      this.activateCurrent();
+    },
+    // 「‹ 收藏」：回到墙上并重新取列表（在里面取消收藏、删除过的都以服务端为准）。
+    async closeFavoriteStream() {
+      this.leaveStage();
+      this.sheet = null;
+      this.favoriteStream = { items: [], index: -1 };
+      this.view = 'favorites';
+      await this.loadFavorites();
+    },
+    // 收藏流里上下滑：到两端停住，不取新条目。在这里取消了收藏的那一条留到划走为止，划走时从流里拿掉。
+    moveFavoriteStream(direction) {
+      const { items, index } = this.favoriteStream;
+      const target = index + direction;
+      if (target < 0 || target >= items.length) return;
+      const leaving = items[index];
+      if (leaving && !leaving.favorited) {
+        this.favoriteStream = { items: items.filter((_, position) => position !== index), index: direction > 0 ? index : target };
+      } else {
+        this.favoriteStream = { items, index: target };
+      }
+      this.activateCurrent();
     },
     // 收藏页加载失败显示错误态与重试（D-PC46、PLAY-13）：之前清空列表，看起来像「暂无收藏」。
     // 已经显示的收藏不清掉，重试成功再换。
@@ -1041,10 +1269,6 @@ export default {
       } finally {
         this.favoritesLoading = false;
       }
-    },
-    selectFavorite(video) {
-      this.view = 'feed';
-      this.appendItem(video);
     },
     onTouchStart(event) {
       this.touchBeganZoomed = this.photoZoomed;
@@ -1096,31 +1320,20 @@ export default {
       if (target?.closest?.('.tag-row')) return true;
       // 底部面板整层（含遮罩、输入框）都不归舞台管：舞台一 preventDefault，
       // 点遮罩关闭的合成 click 与输入框聚焦就都没了。
-      return !!target?.closest?.('button, input, textarea, select, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view, .pin-gate, .feed-retry, .sheet-layer');
+      return !!target?.closest?.('button, input, textarea, select, [role="slider"], .progress-dock, .favorites-view, .pin-gate, .feed-retry, .sheet-layer');
     },
     onWheel(event) {
       this.nextVideo(wheelDirection(event.deltaY, Date.now(), this.wheelState));
     },
     onKeydown(event) {
-      // PIN 页与输入框里的空格、方向键属于输入，不是翻页。
-      if (this.authRequired || event.target?.closest?.('input, textarea, select')) return;
+      // PIN 页与输入框里的空格、方向键属于输入，不是翻页；收藏墙上的方向键留给墙自己滚动。
+      if (this.authRequired || this.view === 'favorites' || event.target?.closest?.('input, textarea, select')) return;
       const direction = keyboardDirection(event.key);
       if (direction !== 0) {
         event.preventDefault();
         this.nextVideo(direction);
       }
     },
-    tagColor(color) {
-      if (!color) return 'rgba(255,255,255,0.18)';
-      return `${color}66`;
-    },
-    formatTime(seconds) {
-      if (!Number.isFinite(seconds) || seconds <= 0) return '00:00';
-      const totalSeconds = Math.floor(seconds);
-      const minutes = Math.floor(totalSeconds / 60);
-      const remainingSeconds = totalSeconds % 60;
-      return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
-    }
   }
 };
 </script>

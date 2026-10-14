@@ -1,15 +1,21 @@
 <template>
   <Teleport to="body">
   <div class="sheet-layer" :style="viewportStyle" @click.self="$emit('close')">
-    <section class="sheet" :class="{ 'sheet--tall': tall }" role="dialog" :aria-label="title" @click.stop>
+    <section class="sheet" :class="{ 'sheet--tall': tall }" role="dialog" :aria-label="label || title" @click.stop>
       <span class="sheet__grip" aria-hidden="true"></span>
       <header class="sheet__head">
-        <h2>{{ title }}</h2>
+        <div class="sheet__titles">
+          <h2>{{ title }}</h2>
+          <p v-if="subtitle" class="sheet__subtitle">{{ subtitle }}</p>
+        </div>
         <p v-if="hint" class="sheet__hint">{{ hint }}</p>
-        <div class="sheet__spacer"></div>
         <slot name="head" />
-        <!-- 显式关闭：点遮罩关闭依赖合成 click，浏览器里被舞台的 touch 拦截过一次就没了。 -->
-        <button type="button" class="sheet__close" aria-label="关闭" data-test="sheet-close" @click="$emit('close')">✕</button>
+        <!-- 显式关闭：点遮罩关闭依赖合成 click，浏览器里被舞台的 touch 拦截过一次就没了。
+             标签面板按设计稿是右上角「完成」；评分与「更多」的关闭在底部按钮里（closeStyle none），其余是 ×。 -->
+        <button v-if="closeStyle === 'icon'" type="button" class="btn-icon sheet__close" aria-label="关闭" data-test="sheet-close" @click="$emit('close')">
+          <AppIcon name="close" :size="20" />
+        </button>
+        <button v-else-if="closeStyle === 'done'" type="button" class="btn-link sheet__done" data-test="sheet-close" @click="$emit('close')">完成</button>
       </header>
       <div class="sheet__scroll">
         <div ref="body" class="sheet__body" @scroll.passive="updateOverflow">
@@ -27,14 +33,23 @@
 </template>
 
 <script>
-// 手机端的底部动作面板：评分、标签、删除确认、播放范围共用同一个壳。
+import AppIcon from '../../components/ui/AppIcon.vue';
+
+// 手机端的底部面板：更多、评分、标签、播放范围共用同一个壳。
 export default {
   name: 'FeedSheet',
+  components: { AppIcon },
   props: {
     title: { type: String, required: true },
+    // 标题下的一行（「更多」面板写类型与时长）。
+    subtitle: { type: String, default: '' },
     hint: { type: String, default: '' },
+    // 读屏名，缺省用标题（「更多」面板的标题是片名，读屏名是「更多操作」）。
+    label: { type: String, default: '' },
     // 列表型面板（标签）几乎占满屏幕，少滚动。
-    tall: { type: Boolean, default: false }
+    tall: { type: Boolean, default: false },
+    // icon：右上角 ×；done：右上角「完成」；none：由底部按钮关闭。
+    closeStyle: { type: String, default: 'icon', validator: value => ['icon', 'done', 'none'].includes(value) }
   },
   emits: ['close'],
   data() {

@@ -27,7 +27,7 @@
 //                   写法与改名注册）只给 ui/DialogShell 内部用，页面一律用 DialogShell
 //   page-header  6. 顶层页面（顶栏导航列出的各页）模板里必须有 PageHeader 或 HeroHeader
 //   wording      7. 模板文本里不许出现用词表（详细设计 §4）的旧词：...、选择本页、打开所在目录 等
-// 手机端 short-feed/ 不在统一设计范围内（受保护，见概要设计「受保护的旧行为」），整个目录不查。
+// 手机端 short-feed/ 2026-10-14 起同样受查（手机网页重做 D-MW-06）。
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -46,7 +46,7 @@ function walk(dir) {
 }
 
 const ALL_FILES = walk(SRC).map(file => relative(SRC, file));
-const STYLE_FILES = ALL_FILES.filter(file => /\.(vue|css)$/.test(file) && !file.startsWith('short-feed/'));
+const STYLE_FILES = ALL_FILES.filter(file => /\.(vue|css)$/.test(file));
 const read = file => readFileSync(join(SRC, file), 'utf8');
 
 // 注释里提到旧值是允许的（说明「原来写死 #fff」之类），只查真正生效的代码。
