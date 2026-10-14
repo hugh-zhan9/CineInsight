@@ -1,6 +1,7 @@
 <template>
   <section v-if="snapshot?.current || error || open" class="queue-dock" data-test="queue-dock">
     <div v-if="snapshot?.current" class="queue-current">
+      <span class="queue-thumb queue-thumb--dock" aria-hidden="true"><img v-if="!thumbFailed[snapshot.current.video_id]" :src="thumb(snapshot.current)" alt="" decoding="async" data-test="queue-current-thumb" @error="markThumbFailed(snapshot.current)" /></span>
       <strong>{{ snapshot.current.title }}</strong><span>{{ unavailable ? '队列暂不可用' : statusLabel(snapshot.state.status) }} · {{ playerLabel(snapshot.state.player) }}</span>
       <button v-if="snapshot.state.player !== 'system' && snapshot.state.active_token" type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable" @click="control">{{ snapshot.state.status === 'paused' ? '继续' : '暂停' }}</button>
       <button type="button" class="btn btn--primary btn--sm" :disabled="busy || unavailable || !snapshot.state.active_token" data-test="queue-next" @click="next">下一项</button>
@@ -29,7 +30,8 @@
         <p v-for="cap in snapshot.capabilities.filter(item => !item.available)" :key="cap.player">{{ playerLabel(cap.player) }}：{{ cap.reason }}</p>
         <ol class="queue-items">
           <li v-for="(item, index) in snapshot.items" :key="item.id" :class="{ current: item.id === snapshot.current?.id }" :data-test="`queue-item-${item.id}`">
-            <span>{{ item.title }}<small v-if="!item.source_available"> · 原片不可用</small></span>
+            <span class="queue-thumb" aria-hidden="true"><img v-if="!thumbFailed[item.video_id]" :src="thumb(item)" alt="" loading="lazy" decoding="async" :data-test="`queue-item-thumb-${item.id}`" @error="markThumbFailed(item)" /></span>
+            <span class="queue-item__title">{{ item.title }}<small v-if="!item.source_available"> · 原片不可用</small></span>
             <button type="button" class="btn btn--primary btn--sm" :disabled="busy || unavailable || loading" @click="play(item)">播放</button>
             <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || (index === 0 && !history.length)" @click="moveAdjacent(item, index, -1)">上移</button>
             <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || (index === snapshot.items.length - 1 && !snapshot.has_more)" @click="moveAdjacent(item, index, 1)">下移</button>
@@ -50,17 +52,21 @@ import QueueInlinePlayer from './QueueInlinePlayer.vue';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 import { confirmAction } from '../utils/feedback.js';
 import { queueStatusLabel, queuePlayerLabel } from '../utils/playbackQueue.js';
+import { videoThumbnail } from '../utils/recap.js';
 const firstCursor = () => ({ revision: 0, cursor_position: 0, cursor_id: 0 });
 export default {
   name: 'PlaybackQueuePanel',
   components: { DialogShell, QueueInlinePlayer }, mixins: [runtimeEventsMixin],
   props: { open: Boolean }, emits: ['open', 'close', 'open-video'],
-  data: () => ({ snapshot: null, error: '', unavailable: false, loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [] }),
+  data: () => ({ snapshot: null, error: '', unavailable: false, loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [], thumbFailed: {} }),
   mounted() { this.registerRuntimeEvent('playback-queue-state', () => this.load(this.cursor, this.history)); this.load(); },
   beforeUnmount() { this.generation++; },
   watch: { open(value) { if (value) this.load(this.cursor, this.history); } },
   methods: {
     statusLabel: queueStatusLabel, playerLabel: queuePlayerLabel,
+    // 缩略图按视频取（同一部片可以排进队列好几次）；取不到（还没生成、视频已删）就留一块底色占位。
+    thumb(item) { return videoThumbnail(Number(item?.video_id || 0)); },
+    markThumbFailed(item) { this.thumbFailed = { ...this.thumbFailed, [item.video_id]: true }; },
     async load(cursor = firstCursor(), history = []) {
       const generation = ++this.generation; this.loading = true;
       try {
@@ -133,8 +139,11 @@ export default {
 .queue-items { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--hairline); }
 .queue-items li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px 6px; border-bottom: 1px solid var(--hairline); }
 .queue-items li.current { background: var(--panel-muted-bg); }
-.queue-items li > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-secondary); }
-.queue-items li.current > span { color: var(--accent-text); font-weight: var(--fw-semibold); }
+.queue-items li > .queue-item__title { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-secondary); }
+.queue-items li.current > .queue-item__title { color: var(--accent-text); font-weight: var(--fw-semibold); }
+.queue-thumb { flex: 0 0 auto; display: block; width: 96px; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--radius-sm); background: var(--thumb-fallback-bg); }
+.queue-thumb--dock { width: 64px; }
+.queue-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .queue-current span { color: var(--text-secondary); }
 .queue-current strong { font-size: var(--fs-secondary); }
 .queue-field { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-secondary); color: var(--text-secondary); white-space: nowrap; }

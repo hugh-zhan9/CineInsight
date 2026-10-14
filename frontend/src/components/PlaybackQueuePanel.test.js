@@ -69,3 +69,14 @@ it('unmounts the actual media component on a maintenance RPC code', async () => 
     expect(wrapper.find('[data-test="queue-item-1"]').exists()).toBe(true);
   } finally { pause.mockRestore(); load.mockRestore(); }
 });
+it('shows each entry and the current item with its video thumbnail, and a placeholder when it fails to load', async () => {
+  api.GetPlaybackQueue.mockResolvedValue(snapshot({ items: [{ id: 1, title: '第一集', video_id: 7, source_available: true }, { id: 2, title: '第二集', video_id: 8, source_available: true }], current: { id: 1, title: '第一集', video_id: 7 } }));
+  await panel();
+  expect(wrapper.find('[data-test="queue-item-thumb-1"]').attributes('src')).toBe('/preview/thumbnail/7');
+  expect(wrapper.find('[data-test="queue-item-thumb-2"]').attributes('src')).toBe('/preview/thumbnail/8');
+  expect(wrapper.find('[data-test="queue-current-thumb"]').attributes('src')).toBe('/preview/thumbnail/7');
+  await wrapper.find('[data-test="queue-item-thumb-2"]').trigger('error');
+  expect(wrapper.find('[data-test="queue-item-thumb-2"]').exists()).toBe(false);
+  expect(wrapper.find('[data-test="queue-item-2"] .queue-thumb').exists()).toBe(true);
+  expect(wrapper.find('[data-test="queue-item-thumb-1"]').exists()).toBe(true);
+});
