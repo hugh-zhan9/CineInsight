@@ -4,6 +4,9 @@
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>析微影策</title>
+    <!-- 页面一出来就按系统深浅定主题（App 读到设置后再按设置套用）：App 知道是正常进观看区（影院深色）还是启动失败页
+         （跟随系统）之前只画底色，这几帧要和系统一致，深色系统下不先闪一下浅色。 -->
+    <script>document.documentElement.setAttribute('data-theme', window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');</script>
 </head>
 <body>
 <div id="app"></div>

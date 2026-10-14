@@ -186,3 +186,65 @@ describe('层级刻度（D-UD-05）', () => {
     }
   });
 });
+
+// 对话框开着时提示让开对话框的动作（2026-10-14 UI 遗留 F2）：几条提示叠起来（全局提示在 --z-toast，压在对话框之上）
+// 会盖住居中对话框右下角的主操作，高的对话框连一条都会盖住。对话框开着时提示挪到左上角、只占窗口上半截：
+// DialogShell 的动作是底部一排和标题行右端的 ×，居中时底部一排总在中线以下、× 总在右半边。
+// 位置写在样式里，jsdom 不算布局：读源码核对规则本身与它依赖的前提，选择器是否跟着对话框开关在 jsdom 里验。
+describe('对话框开着时全局提示让开对话框的动作', () => {
+  const SRC = join(process.cwd(), 'src');
+  const read = file => readFileSync(join(SRC, file), 'utf8');
+  const MODAL_OPEN = 'body:has(.modal-overlay)';
+  // 取「selector {」那一块的声明，{ 属性: 值 }。
+  function declarations(file, selector) {
+    const source = read(file);
+    const start = source.indexOf(`${selector} {`);
+    expect(start, `${file} 里找不到 ${selector}`).toBeGreaterThan(-1);
+    const block = source.slice(source.indexOf('{', start) + 1, source.indexOf('}', start));
+    return Object.fromEntries(block.split(';').map(item => item.trim()).filter(Boolean).map(item => {
+      const colon = item.indexOf(':');
+      return [item.slice(0, colon).trim(), item.slice(colon + 1).trim()];
+    }));
+  }
+  const tokenPx = name => Number((read('styles/tokens.css').match(new RegExp(`${name}:\\s*(\\d+)px;`)) || [])[1]);
+
+  it('没有对话框时提示在右下角', () => {
+    expect(declarations('components/AppFeedback.vue', '.app-toasts')).toMatchObject({ right: 'var(--space-4)', bottom: 'var(--space-4)' });
+  });
+
+  it('有对话框开着时提示贴左上角，整条最多到窗口中线以上', () => {
+    const rule = declarations('components/AppFeedback.vue', `${MODAL_OPEN} .app-toasts`);
+    expect(rule).toMatchObject({ top: 'var(--space-4)', left: 'var(--space-4)', right: 'auto', bottom: 'auto' });
+    // 下沿 = top + max-height = 16 + (50vh - n)，n 不小于 top 才不越过中线。
+    const [, viewport, offset] = rule['max-height'].match(/^calc\((\d+)vh - (\d+)px\)$/) || [];
+    expect(Number(viewport)).toBe(50);
+    expect(Number(offset)).toBeGreaterThanOrEqual(tokenPx('--space-4'));
+    // 宽度不超过窗口一半减去左边距：× 在居中对话框的右半边，提示够不着。
+    expect(declarations('components/AppFeedback.vue', '.app-toasts')['max-width']).toBe('min(420px, calc(100vw - 32px))');
+    expect(420 + tokenPx('--space-4')).toBeLessThan(1024 / 2);
+  });
+
+  it('规则依赖的前提：遮罩只由 BaseModal 画并让对话框居中；DialogShell 的动作在底部一排与标题行右端', () => {
+    expect(read('components/ui/BaseModal.vue')).toContain(`:class="['modal-overlay', overlayClass]"`);
+    expect(declarations('styles/components.css', '.modal-overlay')).toMatchObject({ 'align-items': 'center', 'justify-content': 'center' });
+    const shell = read('components/ui/DialogShell.vue');
+    expect(shell).toMatch(/<\/header>\s*<div ref="body" class="ui-dialog__body"><slot \/><\/div>\s*<footer v-if="\$slots.footer" class="ui-dialog__footer">/);
+    expect(shell).toMatch(/<h2 [^>]*class="ui-dialog__title"[\s\S]*class="btn-icon btn--sm ui-dialog__close"[\s\S]*<\/header>/);
+  });
+
+  it('选择器只在有对话框开着时命中', async () => {
+    const modalOpen = () => document.body.matches(MODAL_OPEN);
+    expect(modalOpen()).toBe(false);
+    mountIn(appLayer, AppFeedback);
+    notifyUndo('已移到废纸篓：3 个视频', vi.fn());
+    await flushPromises();
+    expect(modalOpen()).toBe(false);
+    const answer = confirmAction({ title: '永久删除 4 个文件', message: '无法恢复', confirmText: '永久删除', level: 'irreversible' });
+    await flushPromises();
+    expect(modalOpen()).toBe(true);
+    resetFeedback();
+    await flushPromises();
+    expect(modalOpen()).toBe(false);
+    void answer;
+  });
+});
