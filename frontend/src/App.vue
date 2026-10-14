@@ -553,6 +553,9 @@ export default {
       // GetStartupError 读回来之前为 false：这时还不知道是正常进观看首页（影院深色）还是启动失败页（跟随系统主题），
       // 先按哪一种画，另一种情况下第一屏都会闪一下，所以外壳先不画（见 appReady）。
       startupChecked: false,
+      // 送出首页时 Go 写在 <html> 上的启动状态（data-startup：ready 正常启动 / error 启动失败页，见 startupStateMiddleware）。
+      // 只在读到 GetStartupError 之前定表面（cinemaSurface）；直接由 vite 送出的首页上没有它，为空串，照旧等读回来。
+      servedStartupState: document.documentElement.getAttribute('data-startup') || '',
       startupDiagnosticsOpen: false,
       // 启动错误页按当前后端给提示（D-PC58）：sqlite / postgres，读不到时为空串（按 Postgres 口径提示）。
       startupBackend: '',
@@ -744,9 +747,11 @@ export default {
       return this.startupChecked && !this.startupError;
     },
     // 观看区（含「视频」「图片」与整页详情）不论系统深浅都用影院深色，管理区跟随系统主题（D-UD-02）。
-    // 启动失败页不属于哪个区，跟随系统主题；读到启动状态之前也不开，那时只画底色（与系统一致，见 index.html）。
+    // 启动失败页不属于哪个区，跟随系统主题。读到启动状态之前按首页上注入的状态：ready（正常启动，默认页 home 在观看区）
+    // 第一帧就开，与 index.html 一致；error 与没有注入时不开，那时只画底色（与系统一致，见 index.html）。
     cinemaSurface() {
-      return this.appReady && this.area === 'viewer';
+      const ready = this.startupChecked ? this.appReady : this.servedStartupState === 'ready';
+      return ready && this.area === 'viewer';
     },
     visibleNavGroups() {
       return (this.area === 'manage' ? MANAGE_NAV_GROUPS : VIEWER_NAV_GROUPS)

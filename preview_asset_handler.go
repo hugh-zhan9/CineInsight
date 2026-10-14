@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"video-master/services"
 
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"gorm.io/gorm"
 )
 
@@ -111,6 +113,77 @@ func newAssetHandler(app *App) http.Handler {
 
 		http.NotFound(w, r)
 	})
+}
+
+// startupStateMiddleware 挂在 Wails 资源链最外层（AssetServer.Middleware）：首页 index.html 由 Wails 从内嵌资源
+// 直接送出，到不了 newAssetHandler，所以在这一层改。只改首页：在 <html> 上写明这次的启动状态（data-startup，
+// 见 startupState），页面第一帧就按它定外壳表面，不必等 GetStartupError（D-UD-02）。启动状态在 wails.Run
+// 之前就定了（数据库在 main 里打开）。其余请求原样交给 next，不缓冲。
+func startupStateMiddleware(app *App) assetserver.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || (r.URL.Path != "/" && r.URL.Path != "/index.html") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			page := &indexPageRecorder{header: w.Header(), code: http.StatusOK}
+			next.ServeHTTP(page, r)
+			body := page.body.Bytes()
+			if page.code == http.StatusOK {
+				body = withStartupState(body, app.startupState())
+				w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			}
+			w.WriteHeader(page.code)
+			_, _ = w.Write(body)
+		})
+	}
+}
+
+// startupState 是写进首页的启动状态：ready 正常启动（默认页 home 在观看区，影院表面）；error 启动失败页
+// （含回落保护拦下，D-DBG-03），跟随系统主题。页面内容仍以 GetStartupError 为准。
+func (a *App) startupState() string {
+	if a.startupError != "" {
+		return "error"
+	}
+	return "ready"
+}
+
+var htmlStartTag = regexp.MustCompile(`(?i)<html[\s>]`)
+
+// withStartupState 在首页第一个 <html> 标签上加 data-startup；没有这个标签时原样返回，前端照旧等 GetStartupError。
+func withStartupState(page []byte, state string) []byte {
+	loc := htmlStartTag.FindIndex(page)
+	if loc == nil {
+		return page
+	}
+	at := loc[0] + len("<html")
+	attr := ` data-startup="` + state + `"`
+	out := make([]byte, 0, len(page)+len(attr))
+	out = append(out, page[:at]...)
+	out = append(out, attr...)
+	return append(out, page[at:]...)
+}
+
+// indexPageRecorder 收下 next 写出的首页，改完再一次写出；响应头直接落在外层 ResponseWriter 上。
+type indexPageRecorder struct {
+	header      http.Header
+	code        int
+	wroteHeader bool
+	body        bytes.Buffer
+}
+
+func (p *indexPageRecorder) Header() http.Header { return p.header }
+
+func (p *indexPageRecorder) WriteHeader(code int) {
+	if p.wroteHeader {
+		return
+	}
+	p.code, p.wroteHeader = code, true
+}
+
+func (p *indexPageRecorder) Write(b []byte) (int, error) {
+	p.WriteHeader(http.StatusOK)
+	return p.body.Write(b)
 }
 
 func (a *App) serveCollectionCover(w http.ResponseWriter, r *http.Request) {

@@ -2658,7 +2658,8 @@ describe('观看区用影院表面（D-UD-02）', () => {
     return value => resolve(value);
   }
 
-  it('读到启动状态之前不开影院表面、不画外壳与页面；读到正常启动再打开', async () => {
+  it('首页上没有注入启动状态（直接由 vite 送出）：读到启动状态之前不开影院表面、不画外壳与页面；读到正常启动再打开', async () => {
+    expect(document.documentElement.hasAttribute('data-startup')).toBe(false);
     const resolveStartup = deferStartup();
     const wrapper = shallowMount(App);
     mountedWrappers.push(wrapper);
@@ -2708,6 +2709,91 @@ describe('观看区用影院表面（D-UD-02）', () => {
       new Function(inline[1])();
       expect(document.documentElement.getAttribute('data-theme')).toBe(dark ? 'dark' : 'light');
     }
+  });
+
+  // 第一帧的表面按 Go 送出首页时注入的启动状态定（<html data-startup>，2026-10-14 已知缺口 G2）：浅色系统下
+  // 正常启动以前先画几帧浅色底、读到 GetStartupError 才翻成影院深色。外壳与页面仍等读回来，内容以它为准。
+  describe('首页上注入的启动状态（data-startup）', () => {
+    afterEach(() => {
+      document.documentElement.removeAttribute('data-startup');
+      document.body.classList.remove('surface-cinema');
+    });
+
+    // body 的 class 每变一次记下变之后的值：影院表面中途哪怕只关过一瞬也看得出来。
+    function recordBodyClass() {
+      const after = [];
+      const observer = new MutationObserver(() => after.push(document.body.className));
+      observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      return { after, stop: () => observer.disconnect() };
+    }
+
+    it('ready：第一次渲染就打开影院表面，外壳与页面仍等 GetStartupError；读到正常启动后一直开着', async () => {
+      document.documentElement.setAttribute('data-startup', 'ready');
+      const resolveStartup = deferStartup();
+      const record = recordBodyClass();
+      const wrapper = shallowMount(App);
+      mountedWrappers.push(wrapper);
+      expect(cinema()).toBe(true);
+      await flushPromises();
+      expect(cinema()).toBe(true);
+      expect(wrapper.find('.header').exists()).toBe(false);
+      expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(false);
+
+      resolveStartup('');
+      await flushPromises();
+      record.stop();
+      expect(cinema()).toBe(true);
+      expect(record.after.filter(value => !value.split(/\s+/).includes('surface-cinema'))).toEqual([]);
+      expect(wrapper.find('.header').exists()).toBe(true);
+      expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(true);
+    });
+
+    it('error：第一帧不开影院表面（跟随系统），读到启动失败后是启动失败页，影院表面始终没开', async () => {
+      document.documentElement.setAttribute('data-startup', 'error');
+      const resolveStartup = deferStartup();
+      const record = recordBodyClass();
+      const wrapper = shallowMount(App);
+      mountedWrappers.push(wrapper);
+      expect(cinema()).toBe(false);
+      await flushPromises();
+      resolveStartup('backend_fallback_blocked: 上次用的是 PostgreSQL');
+      await flushPromises();
+      record.stop();
+      expect(cinema()).toBe(false);
+      expect(record.after.filter(value => value.split(/\s+/).includes('surface-cinema'))).toEqual([]);
+      expect(wrapper.find('.startup-error-view').exists()).toBe(true);
+    });
+
+    it('只管读到之前：与 GetStartupError 读回来的不一致时以读回来的为准', async () => {
+      document.documentElement.setAttribute('data-startup', 'ready');
+      api.GetStartupError.mockResolvedValue('数据库未初始化');
+      const failed = await mountApp();
+      expect(cinema()).toBe(false);
+      expect(failed.find('.startup-error-view').exists()).toBe(true);
+      failed.unmount();
+
+      document.documentElement.setAttribute('data-startup', 'error');
+      api.GetStartupError.mockResolvedValue('');
+      const ready = await mountApp();
+      expect(cinema()).toBe(true);
+      expect(ready.findComponent({ name: 'HomePage' }).exists()).toBe(true);
+    });
+
+    // 应用脚本执行之前也可能先画一帧：index.html 在 #app 之前就按注入的状态给 body 打开影院表面。
+    it('index.html 在 #app 与应用脚本之前按注入的状态打开影院表面：ready 开，error 与没有注入时不开', () => {
+      const html = readFileSync(join(process.cwd(), 'index.html'), 'utf8');
+      const body = html.slice(html.indexOf('<body>'));
+      const inline = body.match(/<script>([\s\S]*?)<\/script>/);
+      expect(inline).toBeTruthy();
+      expect(inline.index).toBeLessThan(body.indexOf('<div id="app">'));
+      for (const [state, on] of [['ready', true], ['error', false], [null, false]]) {
+        document.body.classList.remove('surface-cinema');
+        if (state) document.documentElement.setAttribute('data-startup', state);
+        else document.documentElement.removeAttribute('data-startup');
+        new Function(inline[1])();
+        expect(cinema(), String(state)).toBe(on);
+      }
+    });
   });
 
   it('读启动状态本身失败时照旧按正常启动画出外壳（与改动前一致），错误照旧交给 Vue 的错误处理', async () => {

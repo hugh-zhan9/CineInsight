@@ -41,6 +41,8 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: newAssetHandler(app),
+			// 送出首页时在 <html> 上写明启动状态，第一帧就定好外壳表面（G2，D-UD-02）。
+			Middleware: startupStateMiddleware(app),
 		},
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0}, // 设为透明
 		OnStartup:        app.startup,
