@@ -9,13 +9,14 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../wailsjs/go/main/App', async (importOriginal) => ({ ...(await importOriginal()), ...api }));
 
-import AppFeedback from './AppFeedback.vue';
+import AppFeedback, { TOAST_GAP, TOAST_INSET } from './AppFeedback.vue';
 import CommandPalette from './CommandPalette.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import QuitConfirmDialog from './QuitConfirmDialog.vue';
 import TrashUnsupportedDialog from './TrashUnsupportedDialog.vue';
 import DialogShell from './ui/DialogShell.vue';
+import { selectionBarZone } from './ui/SelectionBar.vue';
 import { confirmAction, feedbackState, notifyUndo, resetFeedback } from '../utils/feedback.js';
 
 // 层级（tokens.css「层级」）：对话框、确认框与全屏查看器同在 --z-modal，谁在上面看 DOM 顺序。
@@ -214,7 +215,7 @@ describe('对话框开着时全局提示让开对话框的动作', () => {
     // 下沿是 --toast-bottom：没有吸底的选择操作条时回落成 16（见下面「选择操作条」那条）。
     const rule = declarations('components/AppFeedback.vue', '.app-toasts');
     expect(rule).toMatchObject({ right: 'var(--space-4)', bottom: 'var(--toast-bottom)' });
-    expect(rule['--toast-bottom']).toBe('max(var(--space-4), calc(var(--selection-bar-inset, 0px) + var(--space-2)))');
+    expect(rule['--toast-bottom']).toBe('max(var(--space-4), calc(var(--toast-clearance, 0px) + var(--space-2)))');
   });
 
   it('有对话框开着时提示贴左上角，整条最多到窗口中线以上', () => {
@@ -310,14 +311,14 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
     return Object.assign({}, ...matched.map(rule => rule.decls));
   }
   // 长度换成像素：var(--…)（tokens.css 里的 px）、vh / vw、px、calc()、min()。
-  // inset：SelectionBar 运行时写在根节点上的 --selection-bar-inset（不给就是没有看得见的操作条，取回落值）；
-  // --toast-bottom 是 AppFeedback 自己在 .app-toasts 上声明的。
-  function px(value, { w, h, inset }) {
+  // clearance：AppFeedback 照常的位置会碰到选择操作条时写在提示条上的 --toast-clearance（操作条上沿离窗口底边多高；
+  // 不给就是没写，取回落值）；--toast-bottom 是 AppFeedback 自己在 .app-toasts 上声明的。
+  function px(value, { w, h, clearance }) {
     const tokens = read('styles/tokens.css');
     const toastBottom = declarationsOf(FEEDBACK, '.app-toasts')['--toast-bottom'];
     const expr = value
       .replace(/var\(--toast-bottom\)/g, `(${toastBottom})`)
-      .replace(/var\(--selection-bar-inset,\s*([^)]*)\)/g, (_, fallback) => (inset === undefined ? fallback : `${inset}px`))
+      .replace(/var\(--toast-clearance,\s*([^)]*)\)/g, (_, fallback) => (clearance === undefined ? fallback : `${clearance}px`))
       .replace(/var\((--[\w-]+)\)/g, (_, name) => (tokens.match(new RegExp(`${name}:\\s*(\\d+)px;`)) || [, 'NaN'])[1])
       .replace(/(\d+(?:\.\d+)?)vh/g, (_, n) => String(Number(n) * h / 100))
       .replace(/(\d+(?:\.\d+)?)vw/g, (_, n) => String(Number(n) * w / 100))
@@ -399,25 +400,80 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
   });
 
   // 选择操作条（SelectionBar）吸底（bottom 16），勾得多时按钮折成两三行。以前右下角的提示压住它右边的按钮，详情抽屉
-  // 开着时左下角的提示压住它最后一行。操作条把自己从窗口底边往上占的高度写在 --selection-bar-inset 上（SelectionBar.test.js）。
-  it('选择操作条看得见时，右下角与抽屉开着时的左下角都抬到它上面；贴顶的位置不动', () => {
+  // 开着时左下角的提示压住它最后一行。照常的位置碰到操作条时 AppFeedback 写上 --toast-clearance（操作条上沿离窗口底边
+  // 多高，判断见下一条），这里核对写上以后的位置。
+  it('写上 --toast-clearance 时，右下角与抽屉开着时的左下角都抬到操作条上面；贴顶的位置不动', () => {
     const BAR_GAP = 16;
     for (const size of SIZES) {
       for (const barHeight of [46, 90, 134]) {
-        const inset = BAR_GAP + barHeight;
+        const clearance = BAR_GAP + barHeight;
         for (const selector of ['.app-toasts', toastsWhen('.preview-drawer')]) {
-          const area = toastArea(selector, { ...size, inset });
-          expect(area.bottom + 8, `${selector} ${size.w} ${barHeight}`).toBeLessThanOrEqual(size.h - inset);
+          const area = toastArea(selector, { ...size, clearance });
+          expect(area.bottom + 8, `${selector} ${size.w} ${barHeight}`).toBeLessThanOrEqual(size.h - clearance);
           expect(area.top, `${selector} ${size.w} ${barHeight}`).toBeGreaterThanOrEqual(16);
         }
         for (const root of ['.modal-overlay', ...INSIDE_DIALOG_AREA]) {
-          expect(toastArea(toastsWhen(root), { ...size, inset }), root).toEqual(toastArea(toastsWhen(root), size));
+          expect(toastArea(toastsWhen(root), { ...size, clearance }), root).toEqual(toastArea(toastsWhen(root), size));
         }
       }
       // 没有看得见的操作条：照旧离底 16。
       expect(toastArea('.app-toasts', size).bottom).toBe(size.h - 16);
     }
     expect(declarationsOf('components/ui/SelectionBar.vue', '.ui-selection-bar')).toMatchObject({ position: 'sticky', bottom: 'var(--space-4)' });
+  });
+
+  // 抬不抬由 AppFeedback 判断：照常的位置（离底 16、往上到 16 + 整条高度）与操作条的范围（SelectionBar 报来的离底
+  // 距离，再各留 8）有交叠才抬；列表短、操作条停在半屏处时照常待在底部、在它下面。jsdom 不排版：整条高度替浏览器给出。
+  it('照常的位置碰到操作条才抬：吸底或离底很近时抬到它上面，停在半屏处时照常在底部且不交叠', async () => {
+    let stackHeight = 142;
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function () {
+      return this.classList.contains('app-toasts') ? stackHeight : 0;
+    });
+    const setBar = zone => Object.assign(selectionBarZone, zone);
+    try {
+      const feedback = mountIn(appLayer, AppFeedback);
+      const clearance = () => feedback.find('.app-toasts').element.style.getPropertyValue('--toast-clearance');
+      notifyUndo('已移到废纸篓：3 个视频', vi.fn());
+      await flushPromises();
+      expect(clearance(), '没有操作条').toBe('');
+
+      setBar({ visible: true, top: 124, bottom: 16 });
+      await flushPromises();
+      expect(clearance(), '吸底').toBe('124px');
+
+      // 列表短：操作条在 300–346（窗口 768），照常的提示到离底 16 + 142 = 158，与它的下沿（离底 422）隔得远。
+      setBar({ visible: true, top: 468, bottom: 422 });
+      await flushPromises();
+      expect(clearance(), '停在半屏处').toBe('');
+      expect(TOAST_INSET + stackHeight + TOAST_GAP).toBeLessThanOrEqual(422);
+
+      // 没吸住但离底很近（列表滚到头时操作条离底 24 左右，或刚好停在下方）：照常的位置会碰到，抬。
+      setBar({ visible: true, top: 146, bottom: 100 });
+      await flushPromises();
+      expect(clearance(), '离底很近').toBe('146px');
+
+      // 操作条在半屏处，但提示多了、整条长到碰到它：抬。
+      setBar({ visible: true, top: 468, bottom: 422 });
+      await flushPromises();
+      expect(clearance()).toBe('');
+      stackHeight = 420;
+      notifyUndo('已移到废纸篓：1 张图片', vi.fn());
+      await flushPromises();
+      expect(clearance(), '提示长到碰到操作条').toBe('468px');
+
+      setBar({ visible: false, top: 0, bottom: 0 });
+      await flushPromises();
+      expect(clearance(), '操作条没了').toBe('');
+    } finally {
+      scrollHeight.mockRestore();
+      Object.assign(selectionBarZone, { visible: false, top: 0, bottom: 0 });
+    }
+  });
+
+  it('判断用的两个距离就是样式里的 16 与 8', () => {
+    expect(TOAST_INSET).toBe(px('var(--space-4)', SIZES[0]));
+    expect(TOAST_GAP).toBe(px('var(--space-2)', SIZES[0]));
+    expect(declarationsOf(FEEDBACK, '.app-toasts')['--toast-bottom']).toBe('max(var(--space-4), calc(var(--toast-clearance, 0px) + var(--space-2)))');
   });
 
   // 人脸来源的「查看视频片段」把同一个抽屉加宽看画面；以前固定 900，窗口 1024 宽时左边只剩 124，提示压住播放器控制条。
