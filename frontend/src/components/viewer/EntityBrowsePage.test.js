@@ -351,6 +351,17 @@ describe('人物观看页', () => {
     expect(wrapper.emitted('navigate')).toEqual([['photos']]);
   });
 
+  // D-P2-08：相关图片的「去图片」去观看侧照片流并带上这个人（App 的 navigateTo('photos', { personId })）。
+  it('相关图片「去图片」带上人物去照片流；没有图片时不出这个入口', async () => {
+    const wrapper = await mountPage({ kind: 'person', focusEntity: { id: 8, name: '某人' } });
+    await wrapper.get('[data-test="entity-person-images-open-photos"]').trigger('click');
+    expect(wrapper.emitted('navigate')).toEqual([['photos', { personId: 8, personName: '人物8' }]]);
+
+    api.GetPersonImages.mockResolvedValue({ images: [], next_image_id: 0 });
+    const empty = await mountPage({ kind: 'person', focusEntity: { id: 9, name: '另一人' } });
+    expect(empty.find('[data-test="entity-person-images-open-photos"]').exists()).toBe(false);
+  });
+
   it('作品翻页带上游标；图片「更多」按 next_image_id 续读', async () => {
     const cursor = { sort_mode: 'year_desc', year: 2021, year_is_null: false, id: 22, score: 0, size: 0, rating_is_null: false };
     api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [video(21), video(22)], version_groups: {}, next_cursor: cursor })

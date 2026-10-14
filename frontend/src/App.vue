@@ -272,8 +272,22 @@
 	    @open-video="openVideoByID($event, { from: 'video-workbench' })"
 	    @cleanup-sources="cleanupEditSources"
 	  />
-	  <!-- 首次进入才挂载，之后只隐藏不卸载：切走再切回不会丢已加载的图片和滚动位置。
-	       观看侧「图片」与管理侧「图片管理」共用这一个实例。 -->
+	  <!-- 观看侧「图片」是照片流（D-P2-08）：只做浏览，筛选状态与图片管理各自独立。首次进入才挂载，之后只隐藏，切走再回来
+	       筛选、已加载的照片与滚动位置都在。navigateTo('photos', { personId }) 带来的参数经 pageRequests 交给它；别处改了图片时
+	       photoImagesVersion 递增，它下次显示时原地重取。「在图片管理中打开」进管理页定位；看图里存成功的收藏 / 评分并到管理页上。 -->
+	  <PhotoBrowsePage
+	    v-if="photoBrowseMounted"
+	    ref="photoBrowsePage"
+	    v-show="currentPage === 'photos'"
+	    :page-active="currentPage === 'photos'"
+	    :navigation-request="pageRequests.photos || null"
+	    :images-version="photoImagesVersion"
+	    @navigate="navigateTo"
+	    @open-person="openPerson"
+	    @open-in-manage="openImageInManage"
+	    @image-changed="handleViewerImageChanged"
+	  />
+	  <!-- 图片管理：首次进入才挂载，之后只隐藏不卸载，切走再切回不会丢已加载的图片和滚动位置。只在「图片管理」上显示。 -->
 	  <PhotoLibraryPage
 	    ref="photoLibrary"
 	    v-if="photosMounted"
@@ -364,6 +378,7 @@ import ScenesPage from './components/ScenesPage.vue';
 import VideoWorkbenchPage from './components/VideoWorkbenchPage.vue';
 import HomePage from './components/viewer/HomePage.vue';
 import VideoBrowsePage from './components/viewer/VideoBrowsePage.vue';
+import PhotoBrowsePage from './components/viewer/PhotoBrowsePage.vue';
 import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
 import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
@@ -415,7 +430,7 @@ export default {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
-    HomePage, VideoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, CleanupCenterPage
+    HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
   data() {
     return {
@@ -435,7 +450,7 @@ export default {
       cleanupRequest: null,
       cleanupBusy: false,
       // 带参数切页（navigateTo(page, params)）：{ [page]: { ...params, token } }，token 每次都换，页面据此套用一次。
-      // 二期只有「视频」用（{ keyword } / { watch } / { tagId }）。
+      // 「视频」（{ keyword } / { watch } / { tagId }）与「图片」（{ personId, personName? }）用。
       pageRequests: {},
       // 整页详情的参数（D-UI-05）：token 每次打开或返回都换，让详情页重新挂载。
       detailRoute: { videoId: 0, startAtMs: null, bookmark: null, token: 0 },
@@ -443,8 +458,11 @@ export default {
       detailReturnStack: [],
       // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
       versionCompare: versionCompareState,
-      // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
+      // 图片管理首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"；观看侧照片流同理（D-P2-08）。
       photosMounted: false,
+      photoBrowseMounted: false,
+      // 别处改了图片（离开图片管理、清理中心删除或撤销、数据维护撤销、标签转人物）就递增，照片流据此原地重取。
+      photoImagesVersion: 0,
       // 人物、作品集观看页：首次进入才挂载，之后只隐藏（D-P2-06）；离开管理侧「人物与作品集」时换代重挂。
       peopleMounted: false,
       collectionsMounted: false,
@@ -596,7 +614,10 @@ export default {
         }
         if (page === 'home') this.homeMounted = true;
         if (page === 'videos') this.videosMounted = true;
-        if (page === 'photos' || page === 'photos-manage') this.photosMounted = true;
+        // 图片管理里可能删了、收藏了、扫描进来或打了人物：离开时让照片流下次显示时原地重取（D-P2-08）。
+        if (previous === 'photos-manage') this.markViewerImagesChanged();
+        if (page === 'photos') this.photoBrowseMounted = true;
+        if (page === 'photos-manage') this.photosMounted = true;
         if (page === LISTS_PAGE) this.listsMounted = true;
         if (page === CLEANUP_PAGE) this.cleanupMounted = true;
         if (page === 'people') this.peopleMounted = true;
@@ -634,12 +655,12 @@ export default {
         .filter(group => group.pages.length > 0);
     },
     // 片库页（VideoListPage）常挂载，只在「片库管理」上显示；「视频」是海报墙（D-P2-01）。
-    // 「图片」与「图片管理」仍是同一个常挂载实例的两个入口。
+    // 图片管理（PhotoLibraryPage）只在「图片管理」上显示；「图片」是照片流（D-P2-08）。
     libraryPageVisible() {
       return this.currentPage === 'library-manage';
     },
     photoPageVisible() {
-      return this.currentPage === 'photos' || this.currentPage === 'photos-manage';
+      return this.currentPage === 'photos-manage';
     },
     // 计数任一失败就整段不显示，不给占位数字——头部的数字是用来一眼确认库规模的，
     // 显示一个假的比不显示更糟。
@@ -752,13 +773,14 @@ export default {
     },
     // 页面参数落到页面状态上：
     // - 「视频」的 { keyword } / { watch } / { tagId }：经 pageRequests 交给海报墙，每次换 token，页面据此套用一次；
+    // - 「图片」的 { personId, personName? }（人物页「去图片」）：同样经 pageRequests 交给照片流；
     // - 片单的标签（认不出的标签忽略，留在原来的标签上）；
     // - 人物 / 作品集的 { keyword }：页面回到列表并按它搜（每次交接换 token，同一个词再交一次也会重搜）；
     // - 场景检索的 { query, mode } 或 { image: { dataURL, name } }：范围是全部视频，页面直接检索（ScenesPage 的 scopeRequest）；
     // - 清理中心的 { tab }（认不出的忽略）与落在视频标签上的请求 { open | relationId | consolidationTaskID }；
     // - 人物与作品集的 { tab }（人物 · 作品集 · 人脸审阅，认不出的忽略）。
     applyPageParams(page, params) {
-      if (page === 'videos') this.setPageRequest(page, params);
+      if (page === 'videos' || page === 'photos') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       if (page === CLEANUP_PAGE) this.applyCleanupParams(params);
       if (page === ENTITIES_MANAGE_PAGE && isEntitiesManageTab(params?.tab)) this.entitiesManageTab = params.tab;
@@ -781,7 +803,7 @@ export default {
       if (this.currentPage === LISTS_PAGE) return { tab: this.listsTab };
       return null;
     },
-    // 带参数切页的「一次性请求」（二期 D-P2-01，目前只有「视频」用）：{ [page]: { ...params, token } }。
+    // 带参数切页的「一次性请求」（「视频」D-P2-01、「图片」D-P2-08）：{ [page]: { ...params, token } }。
     setPageRequest(page, params) {
       if (!params || typeof params !== 'object') return;
       const token = (this.pageRequests[page]?.token || 0) + 1;
@@ -812,10 +834,20 @@ export default {
         return true;
       });
     },
-    // 清理中心的图片标签删除或撤销删除了图片：顶栏计数重取，图片库重载（原来清理页 @deleted 的那一条路）。
+    // 清理中心的图片标签删除或撤销删除了图片：顶栏计数重取，图片管理重载（原来清理页 @deleted 的那一条路），照片流下次显示时原地重取。
     handleCleanupImagesChanged() {
       this.loadLibraryCounts();
+      this.markViewerImagesChanged();
       return this.$refs.photoLibrary?.handleCleanupDeleted();
+    },
+    // 别处改了图片：照片流（D-P2-08）下次显示时按同一条件原地重取，滚动位置不动；还没挂载过的不用管（进来就是新取的）。
+    markViewerImagesChanged() {
+      this.photoImagesVersion += 1;
+    },
+    // 照片流看图里存成功的收藏 / 评分（{ id, ...fields }）：并到图片管理已加载的那一张上，没挂载、没加载到就不管
+    // （两页原来是同一个实例，改了这边那边当场就是新的）。
+    handleViewerImageChanged(fields) {
+      return this.$refs.photoLibrary?.patchImage(fields);
     },
     // 片库管理的回收站恢复了视频：清理中心视频审阅里的「已移到废纸篓」标记跟着放掉（原来同在片库页里）。
     handleLibraryTrashRestored({ videoIDs = [], fromTrashDialog = false } = {}) {
@@ -864,7 +896,10 @@ export default {
     // 洞察页「存储体检」删掉或撤销删除了视频：顶栏计数与片库按当前条件重取。
     // kind 为 image 时是数据维护里撤销了图片的批量编辑：只通知图片库。
     handleVideosChangedElsewhere({ removedIDs = [], kind = 'video' } = {}) {
-      if (kind === 'image') return this.$refs.photoLibrary?.markImagesChanged();
+      if (kind === 'image') {
+        this.markViewerImagesChanged();
+        return this.$refs.photoLibrary?.markImagesChanged();
+      }
       this.loadLibraryCounts();
       return this.$refs.videoListPage?.handleVideosChangedElsewhere(removedIDs);
     },
@@ -937,10 +972,18 @@ export default {
       if (!Number.isInteger(id) || id <= 0) return false;
       return this.navigateTo('videos', { tagId: id });
     },
-    // 观看回顾里点图片：切到图片页并定位到这一张，打开查看器（PhotoLibraryPage.locateImage）。
+    // 观看回顾、人物 / 作品集观看页里点图片：切到观看侧照片流并打开这一张（PhotoBrowsePage.locateImage，D-P2-08）。
     async openPhotoImage(image) {
       if (!Number(image?.id)) return;
       const navigated = await this.navigateTo('photos');
+      if (navigated === false) return;
+      await this.$nextTick();
+      await this.$refs.photoBrowsePage?.locateImage(image);
+    },
+    // 照片流看图的「在图片管理中打开」：切到图片管理并定位到这一张，打开它的查看器（PhotoLibraryPage.locateImage）。
+    async openImageInManage(image) {
+      if (!Number(image?.id)) return;
+      const navigated = await this.navigateTo('photos-manage');
       if (navigated === false) return;
       await this.$nextTick();
       await this.$refs.photoLibrary?.locateImage(image);
@@ -1076,6 +1119,7 @@ export default {
       if (changed > 0) this.loadLibraryCounts();
     },
     handleTagPersonConverted(result) {
+      this.markViewerImagesChanged();
       this.$refs.photoLibrary?.handleTagPersonConverted(result);
     },
     // 三个事件报的是同一件事：窗口现在是不是用户正在看的那个。
