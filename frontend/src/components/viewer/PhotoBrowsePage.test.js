@@ -719,6 +719,51 @@ describe('PhotoBrowsePage 别处改了图片后原地刷新', () => {
     expect(monthHeaders(wrapper)[0]).toContain('2026 年 11 月');
   });
 
+  it('两次刷新交叠：先发的那次晚回来也不覆盖后一次的结果', async () => {
+    installLibrary(photos(120));
+    const wrapper = await mountPage();
+    const real = api.SearchImagePage.getMockImplementation();
+    let releaseFirst;
+    api.SearchImagePage.mockImplementationOnce(request => new Promise(resolve => { releaseFirst = () => resolve(real(request)); }));
+    // 第一次刷新时的图片库（之后又删了一张）：它取回来的是旧样子。
+    await wrapper.setProps({ imagesVersion: 1 });
+    await flushPromises();
+    library = library.filter(image => image.id !== 2);
+    await wrapper.setProps({ imagesVersion: 2 });
+    await flushPromises();
+    expect(wrapper.vm.list.items.some(image => image.id === 2)).toBe(false);
+    library = [...library, photo(2)];
+    releaseFirst();
+    await flushPromises();
+    expect(wrapper.vm.list.items.some(image => image.id === 2)).toBe(false);
+  });
+
+  it('刷新开始时正在取下一批：等它落定再按加上它之后的张数重取，旧游标那一批不会接到刷新后的列表上', async () => {
+    installLibrary(photos(200));
+    const wrapper = await mountPage();
+    expect(wrapper.vm.list.items).toHaveLength(60);
+    const real = api.SearchImagePage.getMockImplementation();
+    let releaseMore;
+    api.SearchImagePage.mockImplementationOnce(request => new Promise(resolve => { releaseMore = () => resolve(real(request)); }));
+    const more = wrapper.vm.loadMore();
+    await flushPromises();
+    // 取下一批的途中，最前面进来三张更新的照片，接着收到改动。
+    library = [photo(0, { id: 901, taken_at: '2026-11-03T10:00:00', created_at: '2026-11-03T10:00:00' }),
+      photo(0, { id: 902, taken_at: '2026-11-02T10:00:00', created_at: '2026-11-02T10:00:00' }),
+      photo(0, { id: 903, taken_at: '2026-11-01T10:00:00', created_at: '2026-11-01T10:00:00' }), ...library];
+    api.SearchImagePage.mockClear();
+    await wrapper.setProps({ imagesVersion: 1 });
+    await flushPromises();
+    expect(api.SearchImagePage).not.toHaveBeenCalled();
+    releaseMore();
+    await more;
+    await flushPromises();
+    // 按 120 张的深度重取：结果就是最新图片库的前 120 张，不缺不重。
+    const ids = wrapper.vm.list.items.map(image => image.id);
+    expect(ids).toEqual(matching(DEFAULT_FILTER).slice(0, 120).map(image => image.id));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('只有还没加载过（或什么也没加载到）时才从头取；取的途中换了条件就作废', async () => {
     installLibrary(photos(100));
     const wrapper = await mountPage();

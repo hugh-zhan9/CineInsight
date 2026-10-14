@@ -282,6 +282,58 @@ describe('D-MW-03 移到废纸篓：不确认、不撤销', () => {
     expect(toast().textContent.trim()).toBe('删除失败：该磁盘不支持废纸篓，请在桌面端处理');
     wrapper.unmount();
   });
+
+  // 没有确认与撤销兜底，删的必须是打开「更多」时看着的那一条：面板开着时新取到的一条只接到历史末尾、不切过去。
+  it('「更多」开着时下一条才取回来：不切过去，删的仍是正看着的那一条', async () => {
+    let releaseNext;
+    let nextCount = 0;
+    server({ handlers: { '/short-api/feed/next': () => {
+      nextCount += 1;
+      if (nextCount === 1) return jsonResponse(200, video(1));
+      // 后台预取失败，划到末尾时只能现取，取的这段时间里用户点开了「更多」。
+      if (nextCount === 2) return jsonResponse(404, { code: 'no_eligible_videos', message: '没有' });
+      return new Promise(resolve => { releaseNext = () => resolve(jsonResponse(200, video(2))); });
+    } } });
+    const wrapper = await mountApp();
+    const swipe = wrapper.vm.nextVideo(1);
+    await flushPromises();
+    expect(wrapper.vm.loading).toBe(true);
+    const sheet = await openMore(wrapper);
+    expect(sheet.querySelector('h2').textContent).toBe('clip-1.mp4');
+    releaseNext();
+    await swipe;
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(1);
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([1, 2]);
+    expect(body().querySelector('[role="dialog"][aria-label="更多操作"] h2').textContent).toBe('clip-1.mp4');
+    await click(body().querySelector('[data-test="short-feed-delete"]'));
+    expect(callsTo('/delete').map(call => call.url)).toEqual(['/short-api/items/video/1/delete']);
+    // 删完前进到刚才接上的那一条。
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    wrapper.unmount();
+  });
+
+  it('同一条在历史里出现两次（范围很小时会重复）：删掉后两处都摘掉，停在后面那一条或取新的', async () => {
+    server({ next: [video(1), video(2), video(1), video(3)] });
+    const wrapper = await mountApp();
+    // 每划一次等后台预取落定，服务端给的顺序就是历史的顺序。
+    await wrapper.vm.nextVideo(1);
+    await flushPromises();
+    await wrapper.vm.nextVideo(1);
+    await flushPromises();
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([1, 2, 1]);
+    expect(wrapper.vm.index).toBe(2);
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    expect(callsTo('/delete')).toHaveLength(1);
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([2, 3]);
+    expect(wrapper.vm.currentVideo.id).toBe(3);
+    // 往回划只剩 2，不会再翻到已删的 1。
+    await wrapper.vm.nextVideo(-1);
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    await wrapper.vm.nextVideo(-1);
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    wrapper.unmount();
+  });
 });
 
 describe('D-MW-04 评分：10 颗星 + 半分滑杆', () => {
@@ -424,6 +476,51 @@ describe('D-MW-05 收藏墙与「在收藏里看」', () => {
     expect(wrapper.find('.favorites-view').exists()).toBe(true);
     // 推荐流没受影响。
     expect(wrapper.vm.items.map(item => item.id)).toEqual([1]);
+    wrapper.unmount();
+  });
+
+  it('在收藏里删掉的正是推荐流停着的最后一条：切回推荐停在它前一条，不是空舞台', async () => {
+    server({ next: [video(1), video(2)], favorites: [video(2, { favorited: true }), video(13, { favorited: true })] });
+    const wrapper = await mountApp();
+    await wrapper.vm.nextVideo(1);
+    await flushPromises();
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([1, 2]);
+    await wrapper.get('[data-test="short-feed-tab-favorites"]').trigger('click');
+    await flushPromises();
+    await wrapper.findAll('.favorite-tile')[0].trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    await wrapper.get('[data-test="short-feed-favorites-back"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="short-feed-tab-feed"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.items.map(item => item.id)).toEqual([1]);
+    expect(wrapper.vm.currentVideo.id).toBe(1);
+    expect(wrapper.get('video.feed-video').attributes('src')).toBe('/short-media/video/1');
+    expect(wrapper.find('[data-test="short-feed-more"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('删除请求还在路上时回到墙上：先回来的旧收藏列表里有它，也不让它回到墙上', async () => {
+    let finishDelete;
+    server({
+      favorites: [video(11, { favorited: true }), video(13, { favorited: true })],
+      handlers: { '/short-api/items/video/11/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); }) }
+    });
+    const wrapper = await mountApp();
+    await wrapper.get('[data-test="short-feed-tab-favorites"]').trigger('click');
+    await flushPromises();
+    await wrapper.findAll('.favorite-tile')[0].trigger('click');
+    await flushPromises();
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    finishDelete();
+    await flushPromises();
+    // 删除提交之前服务端给的那份列表（还有 11）晚一步到。
+    const tileIDs = () => wrapper.findAll('.favorite-tile').map(tile => tile.get('img').attributes('src'));
+    await wrapper.get('[data-test="short-feed-favorites-back"]').trigger('click');
+    await flushPromises();
+    expect(tileIDs()).toEqual(['/short-thumb/video/13']);
     wrapper.unmount();
   });
 

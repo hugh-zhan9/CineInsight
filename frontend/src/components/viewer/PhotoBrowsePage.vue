@@ -612,26 +612,31 @@ export default {
       this.refreshInPlace();
     },
     // 同一条件原地重取（别处改了图片）：列表不清空、不出「加载中」，从头按已加载的张数重取，取齐后整体替换，
-    // 再把视口顶部那张放回原位（它被删了就放它原来位置上的那张）。取的途中条件变了作废；失败留着原来的列表，下次显示再取。
+    // 再把视口顶部那张放回原位（它被删了就放它原来位置上的那张）。取的途中条件变了、或又开始了一次更新的刷新，这次作废；
+    // 失败留着原来的列表，下次显示再取。
     async refreshInPlace() {
       this.imagesStale = false;
-      const depth = this.list.items.length;
-      if (!depth || this.list.loading) {
+      if (!this.list.items.length || this.list.loading) {
         if (!this.list.loading) this.reloadNow();
         return;
       }
       const token = this._tokens.list;
       const seq = this._refreshing = ++this._refreshSeq;
+      const superseded = () => token !== this._tokens.list || seq !== this._refreshSeq;
       this.loadBuckets({ keep: true });
       const refreshed = [];
       let cursor = null;
       let hasMore = true;
       try {
+        // 正在取下一批：等它落定，按加上它之后的张数重取；不然它晚到时会把旧游标后面那一批接到刷新后的列表上。
+        if (this._morePromise) await this._morePromise;
+        if (superseded()) return;
+        const depth = this.list.items.length;
         while (hasMore && refreshed.length < depth) {
           const request = { filter: this.currentFilter(), limit: Math.min(PHOTO_BROWSE_REFRESH_BATCH, depth - refreshed.length) };
           if (cursor) request.cursor = cursor;
           const page = await SearchImagePage(request);
-          if (token !== this._tokens.list) return;
+          if (superseded()) return;
           const images = page?.images || [];
           refreshed.push(...images);
           cursor = page?.next_cursor || null;
@@ -639,13 +644,13 @@ export default {
           if (!images.length) break;
         }
       } catch (err) {
-        if (token === this._tokens.list) this.imagesStale = true;
+        if (!superseded()) this.imagesStale = true;
         logFrontend('PhotoBrowsePage', 'refreshInPlace failed', { err: String(err) }, true);
         return;
       } finally {
         if (this._refreshing === seq) this._refreshing = 0;
       }
-      if (token !== this._tokens.list) return;
+      if (superseded()) return;
       const anchor = this.captureAnchor();
       const openID = Number(this.lightboxImage?.id || 0);
       this.list = { ...this.list, items: refreshed, cursor, hasMore, loadingMore: false, moreError: '' };

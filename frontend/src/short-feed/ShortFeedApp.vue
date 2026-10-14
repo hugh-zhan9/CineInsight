@@ -338,6 +338,10 @@ export default {
       favoritesLoading: false,
       // 收藏页加载失败的说明（D-PC46）：不再显示成「还没有收藏」。
       favoritesError: '',
+      // 收藏列表请求的序号：只认最新一次的结果。
+      favoritesSeq: 0,
+      // 这次打开页面以来移到废纸篓的条目（itemKey）：删除请求还在路上时取回的收藏列表里可能还有它，不让它回到墙上。
+      deletedKeys: new Set(),
       // 「在收藏里看」（D-MW-05）：墙上当时筛出来的列表与位置，上下滑只在这里面走，到两端停住。
       favoriteStream: { items: [], index: -1 },
       favoriteStreamHint: '上下滑只在收藏之间切换；取消收藏后这一条留到你划走为止',
@@ -562,7 +566,15 @@ export default {
     },
     appendItem(video) {
       // 历史有上限，否则一路划下去会把整库都留在内存里。
-      this.items = [...this.items, video].slice(-FEED_HISTORY_LIMIT);
+      const items = [...this.items, video];
+      const dropped = Math.max(0, items.length - FEED_HISTORY_LIMIT);
+      this.items = items.slice(dropped);
+      // 面板开着（更多、评分、标签、范围）时新取到的一条只接到历史末尾、不切过去：面板操作的是用户正看着的那一条，
+      // 这时切走，「移到废纸篓」就会落到另一条上（D-MW-03 没有确认与撤销兜底）。关了面板再划就到它；没有当前条目时照常切过去。
+      if (this.sheet && this.items[this.index - dropped]) {
+        this.index -= dropped;
+        return;
+      }
       this.index = this.items.length - 1;
       this.activateCurrent();
     },
@@ -1023,23 +1035,30 @@ export default {
     async forgetDeleted(target) {
       const key = itemKey(target);
       const matches = item => itemKey(item) === key;
+      this.deletedKeys.add(key);
       this.recentKeys = this.recentKeys.filter(recent => recent !== key);
       if (this.prefetchedVideo && matches(this.prefetchedVideo)) this.prefetchedVideo = null;
       this.favorites = this.favorites.filter(item => !matches(item));
 
       const wasCurrent = !!this.currentVideo && matches(this.currentVideo);
-      const streamPosition = this.favoriteStream.items.findIndex(matches);
-      if (streamPosition !== -1) {
-        const items = this.favoriteStream.items.filter((_, position) => position !== streamPosition);
-        let index = this.favoriteStream.index;
-        if (streamPosition < index) index -= 1;
-        this.favoriteStream = { items, index: Math.min(index, items.length - 1) };
-      }
-      const position = this.items.findIndex(matches);
-      if (position !== -1) {
-        this.items = this.items.filter((_, offset) => offset !== position);
-        if (position < this.index) this.index -= 1;
-      }
+      // 同一条在历史里可能出现不止一次（范围里条目很少时服务端放行重复）：每一处都摘掉，位置按它前面摘掉的条数往前挪。
+      // 当前这条被摘掉时位置不动，正好落在它后面那一条上（后面没有了就等于列表长度）。
+      const prune = (list, index) => {
+        let next = index;
+        const kept = list.filter((item, position) => {
+          if (!matches(item)) return true;
+          if (position < index) next -= 1;
+          return false;
+        });
+        return { kept, index: next };
+      };
+      const stream = prune(this.favoriteStream.items, this.favoriteStream.index);
+      this.favoriteStream = { items: stream.kept, index: Math.min(stream.index, stream.kept.length - 1) };
+      const feed = prune(this.items, this.index);
+      this.items = feed.kept;
+      this.index = feed.index;
+      // 推荐流此刻不在显示（在收藏里删的）：位置落到末尾之外就收回到最后一条，切回推荐时不是一个空舞台。
+      if (this.view !== 'feed') this.index = Math.min(this.index, this.items.length - 1);
       if (!wasCurrent) return;
 
       if (this.inFavoriteStream) {
@@ -1259,15 +1278,18 @@ export default {
     // 收藏页加载失败显示错误态与重试（D-PC46、PLAY-13）：之前清空列表，看起来像「暂无收藏」。
     // 已经显示的收藏不清掉，重试成功再换。
     async loadFavorites() {
+      const seq = ++this.favoritesSeq;
       this.favoritesLoading = true;
       this.favoritesError = '';
       try {
         const payload = await getFavorites();
-        this.favorites = payload?.items || [];
+        if (seq !== this.favoritesSeq) return;
+        this.favorites = (payload?.items || []).filter(item => !this.deletedKeys.has(itemKey(item)));
       } catch (err) {
+        if (seq !== this.favoritesSeq) return;
         this.favoritesError = `收藏加载失败：${feedErrorText(err)}`;
       } finally {
-        this.favoritesLoading = false;
+        if (seq === this.favoritesSeq) this.favoritesLoading = false;
       }
     },
     onTouchStart(event) {
