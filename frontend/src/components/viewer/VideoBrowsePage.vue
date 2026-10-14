@@ -286,7 +286,7 @@
 // - 列表：SearchLibraryVideoPage，collapse_versions 恒为 true（版本组一张卡），每批 60，接近底部自动加载下一批；
 //   总数另取 CountLibraryVideos（按卡片计），失败只是不显示数字。每次换条件换代，晚到的旧结果丢掉。
 // - 海报墙按行窗口化（2026-10-14，utils/photoGrid.js 的行布局，与图片库同一套）：只渲染视口附近的行，上下占位撑住
-//   总高；列数跟墙宽走，宽度变了、同一次浏览里卡片增删、墙上面的「追到哪了」变高变矮，视口顶部那张卡都留在原处；
+//   总高；列数跟墙宽走，宽度变了、同一次浏览里卡片增删、墙上面的「追到哪了」或随机播放结果条变高变矮，视口顶部那张卡都留在原处；
 //   方向键挪焦点，目标行没渲染时先滚进视口。
 // - 「追到哪了」：ListCollectionProgress({ continue_only: true })，独立加载、独立失败，没有数据不显示；页面切回来时重取，
 //   重取期间保持上一次的样子（只有第一次取和出错后重试出骨架）。
@@ -522,6 +522,8 @@ export default {
     progressVisible() {
       return Boolean(this.progressBlock.error || this.progressSkeleton || this.progressCards.length);
     },
+    // 墙上面会自己变化的两块（随机播放结果条、「追到哪了」）的状态：任一变了，侦听在 DOM 更新后看墙顶挪没挪。
+    aboveWallState() { return [this.randomPlayBanner, this.progressBlock]; },
     wallWindowed() { return this.wallGeometry.width > 0; },
     // 行布局只看条数与几何（卡片等高、不分组）：翻页追加、拿掉失效卡时重建，O(行数)；滚动时只做二分。
     wallLayout() {
@@ -552,7 +554,7 @@ export default {
     // 滚动宿主（.main-view）是各页共用的：离开前记下位置，切回来等内容够高再放回去（与图片页同一做法）。
     // 隐藏期间不跟滚动与宽度（滚的是别的页面，宽度报 0）；离开时视口顶部那张卡（_wallAnchor）留着，回来时按那张卡
     // 放回——窗口宽度变了、墙上面的「追到哪了」高度变了、或整页详情里把它前面的卡标成失效拿掉了都照样落在它上面；
-    // 视口还在墙上面（没有锚点）时原样放回离开时的位置。回来后重取的「追到哪了」结果出来再变高变矮，由 progressBlock 侦听接着放回。
+    // 视口还在墙上面（没有锚点）时原样放回离开时的位置。回来后重取的「追到哪了」结果出来再变高变矮，由 aboveWallState 侦听接着放回。
     pageActive(active) {
       if (!active) {
         this.closeMenu();
@@ -573,9 +575,10 @@ export default {
         this._cancelScrollRestore = restoreScrollWhenReachable(owner, target);
       });
     },
-    // 「追到哪了」条带出现、收起、骨架换成卡片或出错横幅，下面的墙整体跟着上下挪（回到本页时重取，结果晚于放回位置到达）：
+    // 墙上面自己会变高变矮的东西（aboveWallState）：「追到哪了」条带出现、收起、骨架换成卡片或出错横幅（回到本页时重取，
+    // 结果晚于放回位置到达），随机播放结果条出现、换说法、关掉（⌘K「随机播放一部」时视口可能停在墙深处）。
     // DOM 更新完再看墙顶挪没挪，挪了就把视口顶部那张卡放回原处。
-    progressBlock: {
+    aboveWallState: {
       flush: 'post',
       handler() { this.keepWallAnchorInPlace(); }
     },
@@ -882,7 +885,7 @@ export default {
       });
     },
     // 墙上面的东西变了高度、墙顶挪了（与记下锚点时比）：视口顶部那张卡放回原处。墙顶没动、没有锚点（视口还在墙上面，
-    // 条带就在眼前，跟着它挪是对的）、页面隐藏时不动。只比墙顶，不比 scrollTop：用户刚滚过、滚动事件还没到时不会被拉回去。
+    // 条带、结果条就在眼前，跟着它挪是对的）、页面隐藏时不动。只比墙顶，不比 scrollTop：用户刚滚过、滚动事件还没到时不会被拉回去。
     keepWallAnchorInPlace() {
       const anchor = this._wallAnchor;
       if (!anchor || !this.pageActive || !this._wallOwner || Math.abs(this.wallListTop() - anchor.listTop) < 0.5) return;

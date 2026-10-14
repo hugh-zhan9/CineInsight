@@ -17,6 +17,8 @@
 </template>
 
 <script>
+import { isTextEntryTarget } from '../../utils/keyboardShortcuts.js';
+
 // 「全选当前结果（N）」的文案（D-UD-10）：选择操作条与片库工具栏共用这一处，N 就是点了之后会选中的条数；
 // 宿主正在补取剩余的页时是「正在选择…」。N 未知时不带括号（只有片库工具栏的按钮会这样用）。
 export function selectAllMatchingLabel(total, selecting = false) {
@@ -26,7 +28,8 @@ export function selectAllMatchingLabel(total, selecting = false) {
 
 // 选择操作条（D-UD-10）：有选中时才浮在内容区底部，没选中时页面上没有批量动作。默认只作用于勾选的条目；
 // 要作用于整个筛选结果必须点「全选当前结果（N）」（select-all-matching），宿主据此把 allMatchingSelected 置真。
-// 文案全站固定；Esc 发 clear（有对话框开着、焦点在输入框里、按键已被别人处理、或宿主被 v-show 藏起来时不抢）。
+// 文案全站固定；Esc 发 clear（有对话框开着、焦点在文本框里——判定见 utils/keyboardShortcuts.js 的 isTextEntryTarget、
+// 按键已被别人处理、或宿主被 v-show 藏起来时不抢）。
 // 清理审阅的勾选是审阅结果而不是临时选择，宿主传 clear-on-escape=false 关掉 Esc 清空（「取消选择」照旧）。
 // actions 插槽放批量动作按钮（主操作放最后）。宿主负责把它放在滚动内容的末尾，吸底靠 position: sticky。
 // 两个内置链接的 data-test 默认是 selection-bar-select-all-matching / selection-bar-clear；宿主要保留自己原有的
@@ -74,8 +77,7 @@ export default {
     handleKeydown(event) {
       if (event.key !== 'Escape' || !this.clearOnEscape || !this.visible || event.defaultPrevented) return;
       if (!this.isShown() || [...document.querySelectorAll('[role="dialog"]')].some(dialog => isRendered(dialog))) return;
-      const target = event.target;
-      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ''))) return;
+      if (isTextEntryTarget(event.target)) return;
       event.preventDefault();
       this.$emit('clear');
     },

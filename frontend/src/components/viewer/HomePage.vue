@@ -29,7 +29,7 @@
     <section v-if="blockVisible(continueBlock)" class="recap-section" data-test="home-continue">
       <header class="recap-section__head"><h3><RecapIcon name="play" /> 继续观看</h3><small>从上次停下的地方接着看</small></header>
       <p v-if="continueBlock.error" class="viewer-home__error" role="alert" data-test="home-continue-error">{{ continueBlock.error }}</p>
-      <div v-else-if="continueBlock.loading && !continueBlock.items.length" class="viewer-home__skeletons" aria-busy="true" data-test="home-continue-loading">
+      <div v-else-if="skeletonVisible(continueBlock)" class="viewer-home__skeletons" aria-busy="true" data-test="home-continue-loading">
         <SkeletonBlock v-for="n in 4" :key="n" shape="card" :lines="2" />
       </div>
       <div v-if="continueBlock.items.length" class="recap-strip">
@@ -51,7 +51,7 @@
       <AppBanner v-if="progressBlock.error" tone="danger" :title="progressBlock.error" data-test="home-progress-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="home-progress-retry" @click="loadProgress">重试</button></template>
       </AppBanner>
-      <div v-else-if="progressBlock.loading && !progressCards.length" class="viewer-home__posters" aria-busy="true" data-test="home-progress-loading">
+      <div v-else-if="skeletonVisible(progressBlock, progressCards)" class="viewer-home__posters" aria-busy="true" data-test="home-progress-loading">
         <SkeletonBlock v-for="n in 6" :key="n" shape="poster" :lines="2" />
       </div>
       <div v-if="progressCards.length" class="viewer-home__posters">
@@ -77,7 +77,7 @@
         <button type="button" class="btn btn--secondary btn--sm viewer-home__reroll" :disabled="tonightBlock.loading" data-test="home-tonight-reroll" @click="rerollTonight"><AppIcon name="refresh" /> {{ tonightBlock.loading ? '正在抽…' : '换一批' }}</button>
       </header>
       <p v-if="tonightBlock.error" class="viewer-home__error" role="alert" data-test="home-tonight-error">{{ tonightBlock.error }}</p>
-      <div v-else-if="tonightBlock.loading && !tonightBlock.items.length" class="viewer-home__skeletons" aria-busy="true" data-test="home-tonight-loading">
+      <div v-else-if="skeletonVisible(tonightBlock)" class="viewer-home__skeletons" aria-busy="true" data-test="home-tonight-loading">
         <SkeletonBlock v-for="n in 3" :key="n" shape="card" :lines="2" />
       </div>
       <p v-else-if="tonightBlock.notice" class="recap-muted" role="status" data-test="home-tonight-notice">{{ tonightBlock.notice }}</p>
@@ -97,7 +97,7 @@
     <section v-if="blockVisible(recentBlock)" class="recap-section" data-test="home-recent">
       <header class="recap-section__head"><h3><RecapIcon name="videos" /> 最近添加</h3><small>最近 30 天收进片库的视频</small></header>
       <p v-if="recentBlock.error" class="viewer-home__error" role="alert" data-test="home-recent-error">{{ recentBlock.error }}</p>
-      <div v-else-if="recentBlock.loading && !recentBlock.items.length" class="viewer-home__posters" aria-busy="true" data-test="home-recent-loading">
+      <div v-else-if="skeletonVisible(recentBlock)" class="viewer-home__posters" aria-busy="true" data-test="home-recent-loading">
         <SkeletonBlock v-for="n in 7" :key="n" shape="poster" :lines="1" />
       </div>
       <div v-if="recentBlock.items.length" class="viewer-home__posters">
@@ -120,7 +120,7 @@
       <AppBanner v-if="watchlistBlock.error" tone="danger" :title="watchlistBlock.error" data-test="home-watchlist-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="home-watchlist-retry" @click="loadWatchlist">重试</button></template>
       </AppBanner>
-      <div v-else-if="watchlistBlock.loading && !watchlistBlock.items.length" class="viewer-home__posters" aria-busy="true" data-test="home-watchlist-loading">
+      <div v-else-if="skeletonVisible(watchlistBlock)" class="viewer-home__posters" aria-busy="true" data-test="home-watchlist-loading">
         <SkeletonBlock v-for="n in 6" :key="n" shape="poster" :lines="2" />
       </div>
       <div v-if="watchlistBlock.items.length" class="viewer-home__posters">
@@ -141,7 +141,7 @@
     <section v-if="blockVisible(recapBlock, topPeople)" class="recap-section" data-test="home-people">
       <header class="recap-section__head"><h3><RecapIcon name="person" /> 本月常看的人物</h3><small>按本月播放次数</small></header>
       <p v-if="recapBlock.error" class="viewer-home__error" role="alert" data-test="home-people-error">{{ recapBlock.error }}</p>
-      <SkeletonBlock v-else-if="recapBlock.loading && !topPeople.length" class="viewer-home__skeleton-lines" :lines="2" data-test="home-people-loading" />
+      <SkeletonBlock v-else-if="skeletonVisible(recapBlock, topPeople)" class="viewer-home__skeleton-lines" :lines="2" data-test="home-people-loading" />
       <div v-if="topPeople.length" class="recap-people">
         <button
           v-for="item in topPeople"
@@ -165,7 +165,7 @@
         <button type="button" class="btn btn--secondary btn--sm viewer-home__reroll" data-test="home-open-recap" @click="$emit('navigate', 'recap')">看完整回顾 <AppIcon name="arrow" /></button>
       </header>
       <p v-if="recapBlock.error" class="viewer-home__error" role="alert" data-test="home-highlight-error">{{ recapBlock.error }}</p>
-      <SkeletonBlock v-else-if="recapBlock.loading && !highlight" class="viewer-home__skeleton-lines" :lines="3" data-test="home-highlight-loading" />
+      <SkeletonBlock v-else-if="skeletonVisible(recapBlock, highlight ? [highlight] : [])" class="viewer-home__skeleton-lines" :lines="3" data-test="home-highlight-loading" />
       <div v-if="highlight" :class="['viewer-home__highlight', { 'viewer-home__highlight--solo': !highlight.favorite }]">
         <RecapMediaCard
           v-if="highlight.favorite"
@@ -224,13 +224,14 @@ export const HOME_WATCHLIST_LIMIT = 12;
 
 // 大图选哪一部：继续观看的第一条优先（它还在读时先等它），没有再取今晚看什么的第一条。
 // 两块都读成功又都为空时给一句引导；有一块失败又挑不出时不出大图，失败写在各自区块里。
+// 「还在读」只算还没取到过结果的（loaded 为假）：回到首页重取时大图区保持原样，不回到「正在挑一部…」。
 export function pickHomeHero(continueBlock, tonightBlock) {
   const resumed = continueBlock?.items?.[0];
   if (resumed) return { state: 'ready', from: 'continue', video: resumed, reasons: [] };
-  if (continueBlock?.loading) return { state: 'pending' };
+  if (continueBlock?.loading && !continueBlock.loaded) return { state: 'pending' };
   const tonight = tonightBlock?.first;
   if (tonight) return { state: 'ready', from: 'tonight', video: tonight.video, reasons: tonight.reasons || [] };
-  if (tonightBlock?.loading) return { state: 'pending' };
+  if (tonightBlock?.loading && !tonightBlock.loaded) return { state: 'pending' };
   if (continueBlock?.error || tonightBlock?.error) return { state: 'none' };
   return { state: 'guide' };
 }
@@ -256,12 +257,13 @@ export default {
   emits: ['open-video', 'navigate', 'open-person'],
   data() {
     return {
-      continueBlock: { loading: true, error: '', items: [] },
-      progressBlock: { loading: true, error: '', items: [] },
-      watchlistBlock: { loading: true, error: '', items: [] },
-      tonightBlock: { loading: true, error: '', items: [], first: null, notice: '' },
-      recentBlock: { loading: true, error: '', items: [] },
-      recapBlock: { loading: true, error: '', result: null },
+      // 各块的 loaded：上一次取成功了，块里显示的就是结果（空就是不显示）；重取期间保持这个样子（见 runBlock）。
+      continueBlock: { loading: true, loaded: false, error: '', items: [] },
+      progressBlock: { loading: true, loaded: false, error: '', items: [] },
+      watchlistBlock: { loading: true, loaded: false, error: '', items: [] },
+      tonightBlock: { loading: true, loaded: false, error: '', items: [], first: null, notice: '' },
+      recentBlock: { loading: true, loaded: false, error: '', items: [] },
+      recapBlock: { loading: true, loaded: false, error: '', result: null },
       heroArtwork: { id: 0, hasFanart: null },
       // 第一次挑出来的大图（ready 的那一份）：之后回到首页、换一批都不换它。
       heroLock: null
@@ -298,6 +300,10 @@ export default {
       };
     },
     progressCards() { return (this.progressBlock.items || []).map(collectionProgressCard).filter(Boolean); },
+    // 会改变本页排版的状态（各块与大图）：layoutState 侦听据此在 DOM 更新后检查视口顶部那一块。
+    layoutState() {
+      return [this.hero.state, this.continueBlock, this.progressBlock, this.tonightBlock, this.recentBlock, this.watchlistBlock, this.recapBlock];
+    },
     topPeople() { return (this.recapBlock.result?.top_people || []).slice(0, HOME_PEOPLE_LIMIT); },
     // 本月没有任何记录（empty）时整块不显示。
     highlight() {
@@ -317,23 +323,43 @@ export default {
   watch: {
     livePick(pick) { if (!this.heroLock && pick.state === 'ready') this.heroLock = pick; },
     heroVideoID(id) { this.loadHeroArtwork(id); },
-    pageActive(active) { if (active) this.refresh(); }
+    // 离开时记下视口顶部那一块（此刻首页还显示着），隐藏期间不跟滚动；回来时接着跟、重取会变的几块。
+    pageActive(active) {
+      if (!active) {
+        this.captureViewAnchor();
+        this.detachScrollWatch();
+        return;
+      }
+      this.attachScrollWatch();
+      this.refresh();
+    },
+    // 任一块的数据变了（重取开始、结果到了）或大图换了状态：DOM 更新完看视口顶部那一块挪没挪，挪了就放回原处。
+    layoutState: {
+      flush: 'post',
+      handler() { this.keepViewAnchor(); }
+    }
   },
   created() {
     this._tokens = {};
   },
   mounted() {
+    if (this.pageActive) this.attachScrollWatch();
     this.load();
   },
   beforeUnmount() {
+    this.detachScrollWatch();
     for (const key of Object.keys(this._tokens)) this._tokens[key]++;
   },
   methods: {
     videoTitle: homeVideoTitle,
     progressText: homeProgressText,
     posterURL(id) { return videoArtwork(id, 'poster'); },
+    // 一块显示不显示：有内容、出错、或第一次取（出错后重试）还没结果时显示骨架；上一次取到的是空的，重取期间照旧不显示。
     blockVisible(block, items = block.items) {
-      return Boolean(block.loading || block.error || items?.length);
+      return Boolean(this.skeletonVisible(block, items) || block.error || items?.length);
+    },
+    skeletonVisible(block, items = block.items) {
+      return Boolean(block.loading && !block.loaded && !items?.length);
     },
     // 挂载时各块的请求同时发出，互不等待。
     load() {
@@ -380,10 +406,56 @@ export default {
       this[name] = { ...this[name], loading: true, error: '' };
       try {
         const patch = await fetch();
-        if (token === this._tokens[name]) this[name] = { ...this[name], ...patch, loading: false };
+        if (token === this._tokens[name]) this[name] = { ...this[name], ...patch, loading: false, loaded: true };
       } catch (err) {
-        if (token === this._tokens[name]) this[name] = { ...this[name], loading: false, error: `读取${label}失败：${translateBackendError(err?.message || err)}` };
+        if (token === this._tokens[name]) this[name] = { ...this[name], loading: false, loaded: false, error: `读取${label}失败：${translateBackendError(err?.message || err)}` };
       }
+    },
+    // ===== 回到首页时内容不跳（2026-10-14 G3）=====
+    // App 从整页详情返回时按离开时的 scrollTop 原样放回，首页回来后重取的几块结果晚到、多了少了一块或一排，会把视口里的
+    // 内容整体推上推下。这里记着视口顶部那一块（本页的直接子节点）、它在内容里的位置、视口顶在它里面的偏移和当时的
+    // scrollTop（_viewAnchor）：显示期间跟着滚动记，离开时再记一次。任一块变了就看那一块挪没挪，挪了把它放回原处——
+    // 只在视口还停在记下时的位置（App 刚原样放回、用户没再滚）时放；从导航切回首页（视口在别处）或用户刚滚过时不动。
+    // 浏览器自带的滚动锚定关掉了（样式里 overflow-anchor: none），只认这一套，免得两边各挪一次。
+    scrollOwner() {
+      return this.$el?.closest?.('.main-view') || null;
+    },
+    attachScrollWatch() {
+      const owner = this.scrollOwner();
+      if (!owner || owner === this._scrollOwner) return;
+      this.detachScrollWatch();
+      this._scrollOwner = owner;
+      owner.addEventListener('scroll', this.captureViewAnchor, { passive: true });
+    },
+    detachScrollWatch() {
+      this._scrollOwner?.removeEventListener('scroll', this.captureViewAnchor);
+      this._scrollOwner = null;
+    },
+    // 本页量不到（已经隐藏、没有滚动宿主）时保留上一次记下的。
+    captureViewAnchor() {
+      const owner = this._scrollOwner;
+      if (!owner || !(this.$el?.getBoundingClientRect().height > 0)) return;
+      const viewTop = owner.getBoundingClientRect().top;
+      const block = [...this.$el.children].find(child => child.getBoundingClientRect().bottom > viewTop);
+      if (!block) {
+        this._viewAnchor = null;
+        return;
+      }
+      const top = block.getBoundingClientRect().top;
+      this._viewAnchor = { block, scrollTop: owner.scrollTop, top: owner.scrollTop + top - viewTop, offset: viewTop - top };
+    },
+    keepViewAnchor() {
+      const owner = this._scrollOwner;
+      const anchor = this._viewAnchor;
+      if (!owner || !this.pageActive || !anchor?.block.isConnected) return;
+      // 内容变矮时浏览器会把 scrollTop 夹到新的底，那也算停在原处。
+      const settled = Math.min(anchor.scrollTop, Math.max(0, owner.scrollHeight - owner.clientHeight));
+      if (Math.abs(owner.scrollTop - settled) >= 1) return;
+      const viewTop = owner.getBoundingClientRect().top;
+      const top = owner.scrollTop + anchor.block.getBoundingClientRect().top - viewTop;
+      if (Math.abs(top - anchor.top) < 0.5) return;
+      owner.scrollTop = top + anchor.offset;
+      this.captureViewAnchor();
     },
     // 默认条件（不限观看状态、不限收藏与时长、不带片库筛选）。换一批在原条件上排除当前这一批，
     // 抽不出新的就留着这一批并说明（与「今晚看什么」弹窗同一口径）。大图只认首次取到的第一条，换一批不换大图。
@@ -430,11 +502,13 @@ export default {
 </script>
 
 <style scoped>
+/* 不参与浏览器的滚动锚定：回到首页时各块变高变矮由脚本按视口顶部那一块放回（keepViewAnchor），两边都挪会挪两次。 */
 .viewer-home {
   display: grid;
   gap: 26px;
   align-content: start;
   padding-bottom: 56px;
+  overflow-anchor: none;
   background:
     radial-gradient(1100px 360px at 88% -80px, color-mix(in srgb, var(--accent-color) 13%, transparent), transparent 70%),
     radial-gradient(800px 300px at 2% -60px, color-mix(in srgb, var(--warning-color) 9%, transparent), transparent 70%);

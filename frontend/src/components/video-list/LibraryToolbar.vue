@@ -685,6 +685,8 @@ export default {
       this._personSearchTimer = setTimeout(() => this.searchPeople(), 200);
     },
     onPersonKeydown(event) {
+      // 输入法组词期间的按键归输入法（Esc 取消组词、回车上屏、方向键挑候选字），不当成筛选操作。
+      if (event.isComposing) return;
       const options = this.personOptions;
       if (event.key === 'ArrowDown' && options.length) {
         event.preventDefault();
@@ -699,10 +701,25 @@ export default {
         const option = options[this.personActiveIndex] || options[0];
         if (option) this.addPersonFilter(option);
       } else if (event.key === 'Escape') {
-        // 下拉开着时它是最上面一层：Esc 只收起下拉，不再传到片库页（那里的 Esc 会清空多选）；收起之后的 Esc 照常往外走。
-        if (this.personMenuOpen) event.stopPropagation();
-        this.personMenuOpen = false;
+        // Esc 一下只做一件事。下拉开着时它是最上面一层：只收起下拉，字留着，也不往外传。下拉收着、框里有字时清空文字，
+        // 下拉不弹出来。两种都拦掉 search 框原生的 Esc 清空——它会发 input 事件，onPersonInput 又把下拉打开。
+        // 框里没字时不管，照常往外传（片库页对文本框里的 Esc 不清空多选，外层的任务中心抽屉之类照常收到）。
+        if (this.personMenuOpen) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.personMenuOpen = false;
+        } else if (this.personKeyword) {
+          event.preventDefault();
+          this.clearPersonKeyword();
+        }
       }
+    },
+    // 清空人物搜索框但不打开下拉：候选按空关键字重取，下次打开时就是全部人物，而不是刚才那个关键字的结果。
+    clearPersonKeyword() {
+      clearTimeout(this._personSearchTimer);
+      this.personKeyword = '';
+      this.personActiveIndex = 0;
+      this.searchPeople();
     },
     async searchPeople() {
       const token = Symbol('library-person-filter');
