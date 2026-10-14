@@ -1082,6 +1082,26 @@ describe('VideoBrowsePage poster wall windowing', () => {
       expect(host.scrollTop).toBe(40);
     });
 
+    // 2026-10-14：⌘K「随机播放一部」（App 的 action:random-play 直接调本页 playRandom）时视口可能停在墙深处，
+    // 结果条出现在墙上面、关掉时收起，墙整体被推下去又拉回来。
+    it('keeps the card at the viewport top when the random-play banner appears above the wall and goes away', async () => {
+      const BANNER_HEIGHT = 56;
+      const aboveWall = () => (document.querySelector('[data-test="random-play-banner"]') ? BANNER_HEIGHT : 0) + stripHeight();
+      const { wrapper, host, scroll } = await mountWall(600, { aboveWall });
+      await scroll(WALL_TOP + 50 * PITCH + 100);
+      api.PlayRandomVideoWithFilter.mockResolvedValue({ dispatch_succeeded: true, video: video(7), reroll_token: 'tok', selection_reason: '按当前筛选条件选择' });
+      await wrapper.vm.playRandom();
+      await flushPromises();
+      expect(wrapper.find('[data-test="random-play-banner"]').exists()).toBe(true);
+      expect(host.scrollTop).toBe(WALL_TOP + BANNER_HEIGHT + 50 * PITCH + 100);
+      expect(cardIndexes(wrapper)).toContain(300);
+
+      await wrapper.get('[data-test="random-play-dismiss"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-test="random-play-banner"]').exists()).toBe(false);
+      expect(host.scrollTop).toBe(WALL_TOP + 50 * PITCH + 100);
+    });
+
     it('puts the card back by the wall, not the raw scroll position, when the strip changed height before the restore', async () => {
       // 离开时条带是出错横幅（80px）；回来重试时换成骨架（300px），放回位置时墙已经比离开时低了 220px。
       api.ListCollectionProgress.mockRejectedValueOnce('数据库不可用');
