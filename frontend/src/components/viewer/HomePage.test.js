@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 
 const api = vi.hoisted(() => ({
   GetRecap: vi.fn(),
@@ -184,6 +187,9 @@ describe('HomePage hero', () => {
     expect(pickHomeHero(empty, { ...empty, loading: true })).toEqual({ state: 'pending' });
     expect(pickHomeHero({ ...empty, error: 'x' }, empty)).toEqual({ state: 'none' });
     expect(pickHomeHero(empty, empty)).toEqual({ state: 'guide' });
+    // 回到首页重取时（上一次已取到、结果是空的）不再回到「正在挑一部…」：大图区保持原样，结果出来再换。
+    expect(pickHomeHero({ ...empty, loading: true, loaded: true }, empty)).toEqual({ state: 'guide' });
+    expect(pickHomeHero(empty, { ...empty, loading: true, loaded: true })).toEqual({ state: 'guide' });
     expect(homeProgressText({ duration: 0, watch_position_seconds: 0 })).toBe('');
     expect(homeProgressText({ duration: 3600 })).toBe('共 01:00:00');
   });
@@ -351,5 +357,206 @@ describe('HomePage highlight layout', () => {
     api.GetRecap.mockResolvedValue(recap());
     const withFavorite = await mountPage();
     expect(withFavorite.get('[data-test="home-highlight"] .viewer-home__highlight').classes()).not.toContain('viewer-home__highlight--solo');
+  });
+});
+
+// 2026-10-14 G3：从整页详情「返回」首页时，App 按离开时的 scrollTop 原样放回（goBackFromDetail：切回 → 等一拍 → 放回），
+// 首页随即重取继续观看、追到哪了、最近添加、想看已在库、本月回顾。重取期间空的几块先闪出骨架、结果出来又多了少了一块，
+// 视口里的内容被整体推上推下。这里用固定的块高模拟排版，看「最近添加」在视口里的位置回来前后是否一致。
+describe('HomePage keeps its place when coming back from the full-page detail', () => {
+  const progress = id => ({
+    collection_id: id, name: `作品集${id}`, has_cover: false, total_works: 4, watched_works: 1, complete: false,
+    next: { video_id: 200 + id, title: `第二部${id}`, work_index: 2, resume: false }
+  });
+  // 本页每个直接子节点（按 data-test）的高度，块与块之间不留缝；视口 600 高。
+  const HEIGHTS = {
+    'home-hero': 400, 'home-hero-loading': 160, 'home-guide': 160, 'home-continue': 260, 'home-progress': 320, 'home-tonight': 220,
+    'home-recent': 600, 'home-watchlist': 340, 'home-people': 160, 'home-highlight': 320
+  };
+  let geometry;
+  let host;
+
+  beforeEach(() => {
+    geometry = { scrollTop: 0 };
+    host = document.createElement('div');
+    host.className = 'main-view';
+    Object.defineProperty(host, 'scrollTop', { configurable: true, get: () => geometry.scrollTop, set: value => { geometry.scrollTop = Math.max(0, value); } });
+    Object.defineProperty(host, 'clientHeight', { configurable: true, get: () => 600 });
+    Object.defineProperty(host, 'scrollHeight', { configurable: true, get: () => 1e6 });
+    const rect = (top, height) => ({ top, bottom: top + height, left: 0, right: 1000, width: 1000, height, x: 0, y: top });
+    const blockHeight = node => HEIGHTS[node.dataset?.test] || 0;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this === host) return rect(0, 600);
+      if (this.classList.contains('viewer-home')) return rect(-geometry.scrollTop, [...this.children].reduce((sum, child) => sum + blockHeight(child), 0));
+      const root = this.parentElement;
+      if (root?.classList.contains('viewer-home')) {
+        let top = 0;
+        for (const child of root.children) {
+          if (child === this) break;
+          top += blockHeight(child);
+        }
+        return rect(top - geometry.scrollTop, blockHeight(this));
+      }
+      return rect(0, 0);
+    });
+    document.body.appendChild(host);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    host.remove();
+  });
+
+  async function mountHome() {
+    const mountPoint = document.createElement('div');
+    host.appendChild(mountPoint);
+    const wrapper = mount(HomePage, { props: { pageActive: true }, attachTo: mountPoint });
+    await flushPromises();
+    return wrapper;
+  }
+  const offsetOf = key => document.querySelector(`[data-test="${key}"]`)?.getBoundingClientRect().top;
+  const blocks = wrapper => wrapper.findAll('.viewer-home > [data-test]').map(node => node.attributes('data-test'));
+  // 滚到「最近添加」顶边往下 100px 处（像用户那样滚，发 scroll 事件）。
+  function scrollIntoRecent() {
+    geometry.scrollTop += offsetOf('home-recent') + 100;
+    host.dispatchEvent(new Event('scroll'));
+    return geometry.scrollTop;
+  }
+  // App.goBackFromDetail 的顺序：离开（整页详情从顶部看起）→ 切回 → 等一拍 → 按离开时的 scrollTop 放回。
+  async function leaveAndComeBack(wrapper, { restore = true } = {}) {
+    const saved = geometry.scrollTop;
+    await wrapper.setProps({ pageActive: false });
+    geometry.scrollTop = 0;
+    await wrapper.setProps({ pageActive: true });
+    await nextTick();
+    if (restore) geometry.scrollTop = saved;
+  }
+  const pending = mockFn => {
+    let resolve;
+    mockFn.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    return value => resolve(value);
+  };
+
+  it('keeps 最近添加 in place when 追到哪了 fills in after coming back, with no skeleton flash meanwhile', async () => {
+    const wrapper = await mountHome();
+    expect(blocks(wrapper)).toEqual(['home-hero', 'home-continue', 'home-tonight', 'home-recent', 'home-people', 'home-highlight']);
+    scrollIntoRecent();
+    expect(offsetOf('home-recent')).toBe(-100);
+
+    const settleProgress = pending(api.ListCollectionProgress);
+    const settleWatchlist = pending(api.ListWatchlistInLibrary);
+    await leaveAndComeBack(wrapper);
+    await flushPromises();
+    // 重取期间上一次是空的几块保持不显示（不先闪出骨架），最近添加还在原处。
+    expect(wrapper.findAll('[aria-busy="true"]')).toHaveLength(0);
+    expect(offsetOf('home-recent')).toBe(-100);
+
+    settleProgress([progress(1)]);
+    settleWatchlist([]);
+    await flushPromises();
+    expect(blocks(wrapper)).toContain('home-progress');
+    expect(offsetOf('home-recent')).toBe(-100);
+  });
+
+  it('keeps 最近添加 in place when 继续观看 appears or 追到哪了 empties after coming back', async () => {
+    api.ListContinueWatchingWithFilter.mockResolvedValueOnce({ videos: [] });
+    api.ListCollectionProgress.mockResolvedValueOnce([progress(1)]);
+    const wrapper = await mountHome();
+    expect(blocks(wrapper)).toEqual(['home-hero', 'home-progress', 'home-tonight', 'home-recent', 'home-people', 'home-highlight']);
+    scrollIntoRecent();
+
+    // 在整页详情里开始看了一部、看完了那个作品集：继续观看出现在最上面，追到哪了收起。
+    const settleContinue = pending(api.ListContinueWatchingWithFilter);
+    const settleProgress = pending(api.ListCollectionProgress);
+    await leaveAndComeBack(wrapper);
+    await flushPromises();
+    expect(offsetOf('home-recent')).toBe(-100);
+    settleContinue({ videos: [video(5)] });
+    await flushPromises();
+    expect(blocks(wrapper)).toContain('home-continue');
+    expect(offsetOf('home-recent')).toBe(-100);
+    settleProgress([]);
+    await flushPromises();
+    expect(blocks(wrapper)).not.toContain('home-progress');
+    expect(offsetOf('home-recent')).toBe(-100);
+  });
+
+  it('follows the user scrolling between two late blocks, keeping the new place when the second one lands', async () => {
+    const wrapper = await mountHome();
+    scrollIntoRecent();
+    const settleContinue = pending(api.ListContinueWatchingWithFilter);
+    const settleProgress = pending(api.ListCollectionProgress);
+    await leaveAndComeBack(wrapper);
+    settleProgress([progress(1)]);
+    await flushPromises();
+    expect(offsetOf('home-recent')).toBe(-100);
+    // 用户接着往下滚了 50px，然后继续观看那一块才回来（少了一部，块高不变；再让它整块收起）。
+    geometry.scrollTop += 50;
+    host.dispatchEvent(new Event('scroll'));
+    settleContinue({ videos: [] });
+    await flushPromises();
+    expect(blocks(wrapper)).not.toContain('home-continue');
+    expect(offsetOf('home-recent')).toBe(-150);
+  });
+
+  it('records the block at the viewport top when leaving, even if the last scroll never fired a scroll event', async () => {
+    const wrapper = await mountHome();
+    geometry.scrollTop += offsetOf('home-recent') + 100;
+    const settle = pending(api.ListCollectionProgress);
+    await leaveAndComeBack(wrapper);
+    settle([progress(1)]);
+    await flushPromises();
+    expect(offsetOf('home-recent')).toBe(-100);
+  });
+
+  it('does not move the view when home was entered some other way or the user scrolled since', async () => {
+    const wrapper = await mountHome();
+    scrollIntoRecent();
+    // 从导航切回首页：App 不放回滚动位置，视口在顶部；结果出来不把人拉回离开时的位置。
+    const settle = pending(api.ListCollectionProgress);
+    await leaveAndComeBack(wrapper, { restore: false });
+    settle([progress(1)]);
+    await flushPromises();
+    expect(geometry.scrollTop).toBe(0);
+
+    // 用户刚滚过（滚动事件还没派发）时，墙上面多出一块也不把视口拉回去。
+    scrollIntoRecent();
+    const saved = geometry.scrollTop;
+    const again = pending(api.ListCollectionProgress);
+    await leaveAndComeBack(wrapper);
+    geometry.scrollTop = saved + 250;
+    again([]);
+    await flushPromises();
+    expect(geometry.scrollTop).toBe(saved + 250);
+  });
+
+  it('opts out of the browser scroll anchoring so only this page moves the view', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/viewer/HomePage.vue'), 'utf8');
+    expect(source).toMatch(/\.viewer-home \{[^}]*overflow-anchor: none/);
+  });
+
+  it('shows skeletons on the first load and on a retry after an error, not on a refresh of a block that was empty', async () => {
+    const settleFirst = pending(api.ListWatchlistInLibrary);
+    const wrapper = await mountHome();
+    expect(wrapper.find('[data-test="home-watchlist-loading"]').exists()).toBe(true);
+    settleFirst([]);
+    await flushPromises();
+    expect(wrapper.find('[data-test="home-watchlist"]').exists()).toBe(false);
+
+    const refresh = pending(api.ListWatchlistInLibrary);
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(wrapper.find('[data-test="home-watchlist"]').exists()).toBe(false);
+    refresh(Promise.reject('数据库不可用'));
+    await flushPromises();
+    expect(wrapper.find('[data-test="home-watchlist-error"]').exists()).toBe(true);
+
+    const retry = pending(api.ListWatchlistInLibrary);
+    await wrapper.get('[data-test="home-watchlist-retry"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="home-watchlist-loading"]').exists()).toBe(true);
+    retry([]);
+    await flushPromises();
+    expect(wrapper.find('[data-test="home-watchlist"]').exists()).toBe(false);
   });
 });
