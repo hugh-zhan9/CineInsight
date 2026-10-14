@@ -724,8 +724,9 @@ describe('VideoListPage 工具栏接线', () => {
     wrapper.unmount();
   });
 
-  // 2026-10-14：焦点在文本框里（搜索框、人物筛选、任何文字输入框 / 多行文本 / 下拉选择 / 可编辑区域）时 Esc 只归那个控件，
-  // 不连带清空片库多选；焦点不在可编辑元素上（页面本身、按钮、行勾选框）时 Esc 照旧清空。
+  // 2026-10-14：焦点在文本框里（搜索框、人物筛选、任何文字输入框 / 多行文本 / 下拉选择 / 可编辑区域，判定是
+  // utils/keyboardShortcuts.js 的 isTextEntryTarget）时 Esc 只归那个控件，不连带清空片库多选；焦点不在文本框里
+  //（页面本身、按钮、行勾选框）时 Esc 照旧清空。
   it('Esc 在文本框里不清空多选，焦点不在可编辑元素上时照旧清空', async () => {
     const wrapper = await mountPage({ pageActive: true }, { attachTo: document.body });
     wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
@@ -747,7 +748,7 @@ describe('VideoListPage 工具栏接线', () => {
     for (const html of [
       '<input type="text" aria-label="搜索">', '<input type="search">', '<input>', '<input type="number">',
       '<textarea></textarea>', '<select><option>均衡排序</option></select>', '<div contenteditable="true"></div>',
-      '<div contenteditable=""></div>', '<div role="textbox"></div>'
+      '<div contenteditable=""></div>', '<div contenteditable="plaintext-only"></div>', '<div role="textbox"></div>'
     ]) {
       expect(pressEscapeIn(element(html)), html).toEqual({ selection: [1, 2], prevented: false });
     }
@@ -755,9 +756,15 @@ describe('VideoListPage 工具栏接线', () => {
     const editor = element('<div contenteditable="true"><p><b>粗体</b></p></div>');
     expect(pressEscapeIn(editor, editor.querySelector('b'))).toEqual({ selection: [1, 2], prevented: false });
 
-    for (const html of ['<button type="button">播放</button>', '<input type="checkbox">', '<div tabindex="0"></div>', '<div contenteditable="false"></div>']) {
+    for (const html of [
+      '<button type="button">播放</button>', '<input type="checkbox">', '<input type="radio">', '<input type="range">',
+      '<div tabindex="0"></div>', '<div contenteditable="false"></div>'
+    ]) {
       expect(pressEscapeIn(element(html)), html).toEqual({ selection: [], prevented: true });
     }
+    // 判定以离焦点最近的 contenteditable 为准（utils/keyboardShortcuts.js isTextEntryTarget）：编辑区里不可编辑的那一块不算。
+    const island = element('<div contenteditable="true"><span contenteditable="false"><i>不可改</i></span></div>');
+    expect(pressEscapeIn(island, island.querySelector('i'))).toEqual({ selection: [], prevented: true });
     // 焦点不在任何控件上（落在 body）。
     wrapper.vm.selectedVideoIds = [1, 2];
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));

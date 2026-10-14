@@ -95,6 +95,32 @@ describe('SelectionBar', () => {
     expect(wrapper.emitted('clear')).toHaveLength(1);
   });
 
+  // 2026-10-14 起与片库页、单键快捷键共用 isTextEntryTarget：文本框（含 role=textbox、各种可编辑区域）里的 Esc 归那个控件；
+  // 勾选框、按钮等不收文字的控件上 Esc 照旧清空（以前任何 input 上都不清空）。
+  it('Esc is left to text fields of every kind but still clears from checkboxes and buttons', () => {
+    const wrapper = mountBar({ count: 2 });
+    const pressIn = html => {
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      document.body.appendChild(holder);
+      const target = holder.querySelector('[data-target]') || holder.firstElementChild;
+      const event = pressEscape(target);
+      holder.remove();
+      return event.defaultPrevented;
+    };
+    for (const html of [
+      '<input type="search">', '<textarea></textarea>', '<select><option>a</option></select>', '<div role="textbox"></div>',
+      '<div contenteditable="plaintext-only"></div>', '<div contenteditable="true"><b data-target>字</b></div>'
+    ]) {
+      expect(pressIn(html), html).toBe(false);
+    }
+    expect(wrapper.emitted('clear')).toBeUndefined();
+    for (const html of ['<input type="checkbox">', '<input type="radio">', '<button type="button">播放</button>', '<input type="range">']) {
+      expect(pressIn(html), html).toBe(true);
+    }
+    expect(wrapper.emitted('clear')).toHaveLength(4);
+  });
+
   it('Esc does nothing while hidden', () => {
     const wrapper = mountBar({ count: 0 });
     pressEscape();

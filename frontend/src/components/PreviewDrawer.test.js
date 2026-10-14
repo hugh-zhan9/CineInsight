@@ -283,6 +283,22 @@ describe('PreviewDrawer', () => {
 	  expect(wrapper.emitted('shortcut')).toHaveLength(1);
 	});
 
+	// 2026-10-14 统一的文本框判定（utils/keyboardShortcuts.js isTextEntryTarget）：可编辑区域的各种取值、role=textbox 都让开；
+	// 勾选框、按钮、内嵌播放器这些自己吃空格 / 回车的原生控件照旧让开。
+	it('ignores every text field kind and native key controls under the unified text-field check', async () => {
+	  const wrapper = await mountDrawer();
+	  const preventDefault = vi.fn();
+	  for (const html of ['<div contenteditable="plaintext-only"></div>', '<div role="textbox"></div>', '<select></select>', '<input type="checkbox">', '<button type="button"></button>', '<video></video>']) {
+	    const holder = document.createElement('div');
+	    holder.innerHTML = html;
+	    wrapper.vm.handleReviewShortcut({ key: 'f', target: holder.firstElementChild, preventDefault });
+	  }
+	  expect(wrapper.emitted('shortcut')).toBeUndefined();
+	  expect(preventDefault).not.toHaveBeenCalled();
+	  wrapper.vm.handleReviewShortcut({ key: 'f', target: document.createElement('div'), preventDefault });
+	  expect(wrapper.emitted('shortcut')).toHaveLength(1);
+	});
+
   it('maps seek hover time to the matching sprite frame and degrades on asset failure', async () => {
     const details = videoDetails(1);
     api.GetVideoDetails.mockResolvedValue(details);
