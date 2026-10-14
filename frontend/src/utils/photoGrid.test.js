@@ -7,13 +7,17 @@ import {
   PHOTO_ROW_HEADER,
   buildPhotoLayout,
   calculatePhotoAnchorScrollTop,
+  calculatePhotoRevealScrollTop,
+  calculatePhotoViewportAnchorScrollTop,
   calculatePhotoWindow,
+  capturePhotoViewportAnchor,
   findPhotoRowIndexForItem,
   firstVisiblePhotoItemIndex,
   formatPhotoTimelineLabel,
   photoTimelineKey,
   resolvePhotoCellSize,
-  resolvePhotoColumns
+  resolvePhotoColumns,
+  stepPhotoGridItem
 } from './photoGrid.js';
 
 const CELL = 200;
@@ -287,6 +291,106 @@ describe('column changes keep the scroll anchor', () => {
   it('falls back to the list top when the anchor item is gone', () => {
     const layout = layoutOf(items, 4, PHOTO_GROUP_NONE);
     expect(calculatePhotoAnchorScrollTop({ layout, listTop: 42, itemIndex: 999 })).toBe(42);
+  });
+});
+
+// 视频海报墙（VideoBrowsePage）用到的三样：视口锚点（行内偏移一起放回）、把一行滚进视口、方向键挪格。
+describe('viewport anchor keeps the item at the viewport top', () => {
+  const items = Array.from({ length: 40 }, (_, index) => makeItem(index + 1));
+  const PITCH = CELL + GAP;
+
+  it('records the first item of the row under the viewport top and the offset into that row', () => {
+    const layout = layoutOf(items, 4, PHOTO_GROUP_NONE);
+    expect(capturePhotoViewportAnchor({ layout, scrollTop: 100 + 3 * PITCH + 50, listTop: 100 }))
+      .toEqual({ itemIndex: 12, offset: 50, rowHeight: CELL });
+    // 视口顶边落在行下间隙里：仍算这一行，偏移越过行高。
+    expect(capturePhotoViewportAnchor({ layout, scrollTop: 100 + 3 * PITCH + CELL + 5, listTop: 100 }))
+      .toEqual({ itemIndex: 12, offset: CELL + 5, rowHeight: CELL });
+    // 视口顶边还在网格上方（页头可见）、或布局为空：不需要锚点。
+    expect(capturePhotoViewportAnchor({ layout, scrollTop: 40, listTop: 100 })).toBeNull();
+    expect(capturePhotoViewportAnchor({ layout: layoutOf([], 4), scrollTop: 400, listTop: 0 })).toBeNull();
+  });
+
+  it('anchors a header row to the cells right below it with a negative offset', () => {
+    const grouped = layoutOf(items.map((item, index) => makeItem(item.id, index < 8 ? '2026-08-01T00:00:00' : '2026-07-01T00:00:00')), 4, PHOTO_GROUP_MONTH);
+    // 行序：header(0), cells 0-3, cells 4-7, header(3), cells 8-11 …
+    const anchor = capturePhotoViewportAnchor({ layout: grouped, scrollTop: grouped.offsets[3] + 10, listTop: 0 });
+    expect(anchor).toEqual({ itemIndex: 8, offset: 10 - grouped.rows[3].outerHeight, rowHeight: CELL });
+    expect(calculatePhotoViewportAnchorScrollTop({ layout: grouped, listTop: 0, anchor })).toBe(grouped.offsets[3] + 10);
+  });
+
+  it('puts the anchor back to the pixel when only items moved, and scales the offset when the row height changed', () => {
+    const layout = layoutOf(items, 4, PHOTO_GROUP_NONE);
+    const scrollTop = 100 + 3 * PITCH + 50;
+    const anchor = capturePhotoViewportAnchor({ layout, scrollTop, listTop: 100 });
+    expect(calculatePhotoViewportAnchorScrollTop({ layout, listTop: 100, anchor })).toBe(scrollTop);
+
+    // 前面拿掉 4 条：锚点条目（原第 12 条）现在是第 8 条，落在第 2 行。
+    const shifted = layoutOf(items.slice(4), 4, PHOTO_GROUP_NONE);
+    expect(calculatePhotoViewportAnchorScrollTop({ layout: shifted, listTop: 100, anchor: { ...anchor, itemIndex: 8 } })).toBe(100 + 2 * PITCH + 50);
+
+    // 换成两列且行高翻倍：第 12 条在第 6 行，行内偏移按比例变成 100。
+    const taller = buildPhotoLayout({ items, columns: 2, cellHeight: 2 * CELL, gap: GAP });
+    expect(calculatePhotoViewportAnchorScrollTop({ layout: taller, listTop: 100, anchor })).toBe(100 + 6 * (2 * CELL + GAP) + 100);
+    expect(calculatePhotoViewportAnchorScrollTop({ layout, listTop: 100, anchor: { ...anchor, itemIndex: 40 } })).toBeNull();
+    expect(calculatePhotoViewportAnchorScrollTop({ layout, listTop: 100, anchor: null })).toBeNull();
+  });
+});
+
+describe('calculatePhotoRevealScrollTop', () => {
+  const items = Array.from({ length: 40 }, (_, index) => makeItem(index + 1));
+  const PITCH = CELL + GAP;
+  const reveal = (itemIndex, scrollTop, extra = {}) => calculatePhotoRevealScrollTop({
+    layout: layoutOf(items, 4, PHOTO_GROUP_NONE), listTop: 100, itemIndex, scrollTop, viewportHeight: 500, ...extra
+  });
+
+  it('leaves the scroll alone when the whole row is already in view', () => {
+    expect(reveal(4, 100)).toBe(100);
+    expect(reveal(7, 100 + PITCH - 200)).toBe(100 + PITCH - 200);
+  });
+
+  it('aligns the row top when it is above the viewport and the row bottom when it is below', () => {
+    expect(reveal(4, 100 + PITCH + 1)).toBe(100 + PITCH);
+    expect(reveal(39, 0)).toBe(100 + 9 * PITCH + CELL - 500);
+    // 视口比行还矮：对齐行顶。
+    expect(reveal(39, 0, { viewportHeight: 150 })).toBe(100 + 9 * PITCH);
+  });
+
+  it('keeps a margin around the row (focus ring) and ignores items outside the layout', () => {
+    expect(reveal(4, 100 + PITCH + 1, { margin: 8 })).toBe(100 + PITCH - 8);
+    expect(reveal(39, 0, { margin: 8 })).toBe(100 + 9 * PITCH + CELL + 8 - 500);
+    expect(reveal(0, 50, { listTop: 0, margin: 8 })).toBe(0);
+    expect(reveal(40, 321)).toBe(321);
+  });
+});
+
+describe('stepPhotoGridItem', () => {
+  const layout = layoutOf(Array.from({ length: 10 }, (_, index) => makeItem(index + 1)), 4, PHOTO_GROUP_NONE);
+
+  it('moves one item left / right and one row up / down in the same column', () => {
+    expect(stepPhotoGridItem(layout, 5, 'left')).toBe(4);
+    expect(stepPhotoGridItem(layout, 5, 'right')).toBe(6);
+    expect(stepPhotoGridItem(layout, 5, 'up')).toBe(1);
+    expect(stepPhotoGridItem(layout, 1, 'down')).toBe(5);
+  });
+
+  it('lands on the end of a short last row and stays put at the edges', () => {
+    // 末行只有 8、9 两条：从第 7 条（第 3 列）往下落在 9。
+    expect(stepPhotoGridItem(layout, 7, 'down')).toBe(9);
+    expect(stepPhotoGridItem(layout, 9, 'down')).toBe(9);
+    expect(stepPhotoGridItem(layout, 2, 'up')).toBe(2);
+    expect(stepPhotoGridItem(layout, 0, 'left')).toBe(0);
+    expect(stepPhotoGridItem(layout, 9, 'right')).toBe(9);
+  });
+
+  it('skips header rows between groups and rejects unknown input', () => {
+    const grouped = layoutOf(Array.from({ length: 10 }, (_, index) => makeItem(index + 1, index < 6 ? '2026-08-01T00:00:00' : '2026-07-01T00:00:00')), 4, PHOTO_GROUP_MONTH);
+    // 8 月：0-3、4-5；7 月：6-9。从 5（第 1 列）往下跳过分组头落在 7。
+    expect(stepPhotoGridItem(grouped, 5, 'down')).toBe(7);
+    expect(stepPhotoGridItem(grouped, 7, 'up')).toBe(5);
+    expect(stepPhotoGridItem(layout, 3, 'sideways')).toBe(-1);
+    expect(stepPhotoGridItem(layout, 10, 'left')).toBe(-1);
+    expect(stepPhotoGridItem(layoutOf([], 4), 0, 'down')).toBe(-1);
   });
 });
 

@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 
 const api = vi.hoisted(() => ({
   CountLibraryVideos: vi.fn(),
@@ -16,7 +19,8 @@ vi.mock('../../../wailsjs/go/main/App', async importOriginal => ({ ...(await imp
 vi.mock('../../utils/feedback.js', async importOriginal => ({ ...(await importOriginal()), notify: vi.fn(), notifyError: vi.fn() }));
 
 import VideoBrowsePage, {
-  collectionProgressCard, recentlyPlayedNextCursor, VIDEO_BROWSE_PAGE_SIZE, VIDEO_BROWSE_WATCH_OPTIONS, videoBrowseFilter, videoBrowseMark
+  collectionProgressCard, recentlyPlayedNextCursor, VIDEO_BROWSE_GRID, VIDEO_BROWSE_PAGE_SIZE, VIDEO_BROWSE_WATCH_OPTIONS,
+  videoBrowseCellSize, videoBrowseFilter, videoBrowseMark
 } from './VideoBrowsePage.vue';
 import BaseMenu from '../ui/BaseMenu.vue';
 import RandomPickBanner from '../video-list/RandomPickBanner.vue';
@@ -701,5 +705,300 @@ describe('VideoBrowsePage 点赞 and 最近播放', () => {
     expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="browse-watch-recent"]').attributes('aria-checked')).toBe('true');
     expect(wrapper.findAll('[data-test="browse-card"]')).toHaveLength(1);
+  });
+});
+
+// 海报墙按行窗口化（2026-10-14）。jsdom 没有布局：滚动宿主、墙与卡片的尺寸由 wallHost 按 CSS 的同一套几何给出——
+// 墙宽 980 → 6 列、列宽 150，海报 225 + 片名年份 45 = 卡高 270，行距 270 + 24 = 294；墙顶在宿主内容里 200，视口 600。
+describe('VideoBrowsePage poster wall windowing', () => {
+  const PITCH = 294;
+  const WALL_TOP = 200;
+  const many = n => Array.from({ length: n }, (_, index) => video(index + 1));
+  let resizeObservers;
+
+  function wallHost({ width = 980, viewport = 600, caption = 45 } = {}) {
+    const host = document.createElement('div');
+    host.className = 'main-view';
+    const geometry = { width, viewport, scrollTop: 0 };
+    Object.defineProperty(host, 'scrollTop', { configurable: true, get: () => geometry.scrollTop, set: value => { geometry.scrollTop = Math.max(0, value); } });
+    Object.defineProperty(host, 'clientHeight', { configurable: true, get: () => geometry.viewport });
+    Object.defineProperty(host, 'scrollHeight', { configurable: true, get: () => 1e7 });
+    const rect = (top, w, h) => ({ top, bottom: top + h, left: 0, right: w, width: w, height: h, x: 0, y: top });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this === host) return rect(0, geometry.width, geometry.viewport);
+      if (this.classList.contains('video-browse__wall')) return rect(WALL_TOP - geometry.scrollTop, geometry.width, 0);
+      if (this.classList.contains('video-browse__card')) {
+        const columns = Math.floor((geometry.width + 16) / 166);
+        const cardWidth = (geometry.width - 16 * (columns - 1)) / columns;
+        return rect(0, cardWidth, cardWidth * 1.5 + caption);
+      }
+      return rect(0, 0, 0);
+    });
+    const mountPoint = document.createElement('div');
+    host.appendChild(mountPoint);
+    document.body.appendChild(host);
+    return {
+      host,
+      mountPoint,
+      geometry,
+      async scroll(top) {
+        geometry.scrollTop = top;
+        host.dispatchEvent(new Event('scroll'));
+        await nextTick();
+      }
+    };
+  }
+
+  const cardIndexes = wrapper => wrapper.findAll('[data-test="browse-card"]').map(card => Number(card.attributes('data-index')));
+  const spacer = (wrapper, which) => {
+    const node = wrapper.find(`[data-test="browse-window-${which}"]`);
+    return node.exists() ? parseFloat(node.element.style.height) : 0;
+  };
+
+  beforeEach(() => {
+    resizeObservers = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback) { this.callback = callback; resizeObservers.push(this); }
+      observe(target) { this.target = target; }
+      disconnect() { this.disconnected = true; }
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.querySelectorAll('.main-view').forEach(node => node.remove());
+  });
+
+  async function mountWall(count, hostOptions) {
+    const env = wallHost(hostOptions);
+    api.SearchLibraryVideoPage.mockResolvedValue(page(many(count)));
+    const wrapper = await mountPage({}, { attachTo: env.mountPoint });
+    await flushPromises();
+    return { ...env, wrapper };
+  }
+
+  it('derives columns and card height from the wall width with the same numbers as the CSS', () => {
+    expect(videoBrowseCellSize(980)).toEqual({ columns: 6, cellHeight: 270 });
+    expect(videoBrowseCellSize(1400, 45)).toEqual({ columns: 8, cellHeight: 286.5 });
+    // 窄到放不下两列也至少一列，宽度为 0 时不出负数。
+    expect(videoBrowseCellSize(140, 45)).toEqual({ columns: 1, cellHeight: 140 * 1.5 + 45 });
+    expect(videoBrowseCellSize(0, 45)).toEqual({ columns: 1, cellHeight: 45 });
+    // 行布局按 VIDEO_BROWSE_GRID 算占位：它必须与样式里的列宽下限、两向间隙（tokens 的 --space-5 / --space-4）一致。
+    const source = readFileSync(resolve(process.cwd(), 'src/components/viewer/VideoBrowsePage.vue'), 'utf8');
+    const tokens = readFileSync(resolve(process.cwd(), 'src/styles/tokens.css'), 'utf8');
+    const token = name => Number(tokens.match(new RegExp(`${name}:\\s*(\\d+)px`))[1]);
+    expect(source).toMatch(new RegExp(`\\.video-browse__grid \\{[^}]*minmax\\(${VIDEO_BROWSE_GRID.minColumnWidth}px, 1fr\\)[^}]*gap: var\\(--space-5\\) var\\(--space-4\\)`));
+    expect([token('--space-5'), token('--space-4')]).toEqual([VIDEO_BROWSE_GRID.rowGap, VIDEO_BROWSE_GRID.columnGap]);
+    expect(source).toMatch(/\.video-browse__poster \{[^}]*aspect-ratio: 2 \/ 3/);
+    // 整面墙不参与浏览器的滚动锚定（否则追加一批后被锚回底部、哨兵一直可见，一路翻完整个库）；
+    // 卡片不再用 content-visibility（视口外的预渲染行会按占位高度排，与行布局对不上）。
+    expect(source).toMatch(/\.video-browse__wall \{[^}]*overflow-anchor: none/);
+    expect(source).not.toMatch(/content-visibility\s*:/);
+  });
+
+  it('measures the real caption height once cards render and lays rows out with it', async () => {
+    // 片名区实际 57px（估计 45）：卡高 225 + 57 = 282，行距 306。
+    const { wrapper, scroll } = await mountWall(600, { caption: 57 });
+    expect(wrapper.vm.wallGeometry).toEqual({ width: 980, columns: 6, cellHeight: 282 });
+    expect(spacer(wrapper, 'bottom')).toBe(100 * 306 - 24 - 5 * 306);
+    await scroll(WALL_TOP + 50 * 306);
+    expect(cardIndexes(wrapper)[0]).toBe(47 * 6);
+    expect(spacer(wrapper, 'top')).toBe(47 * 306);
+  });
+
+  it('renders only the rows near the viewport plus overscan, with spacers keeping the full height', async () => {
+    const { wrapper, scroll } = await mountWall(600);
+    // 视口 0–600 覆盖墙内 0–400：第 0、1 行可见，下面再多 3 行 → 5 行 30 张。
+    expect(cardIndexes(wrapper)).toEqual(Array.from({ length: 30 }, (_, index) => index));
+    expect(wrapper.get('[data-test="browse-grid"]').attributes('style')).toContain('grid-template-columns: repeat(6, minmax(0, 1fr))');
+    const total = 100 * PITCH - 24;
+    expect(spacer(wrapper, 'top')).toBe(0);
+    expect(spacer(wrapper, 'bottom')).toBe(total - 5 * PITCH);
+
+    // 滚到第 50 行行顶：可见 50–52 行，上下各多 3 行 → 47–55 行。
+    await scroll(WALL_TOP + 50 * PITCH);
+    const indexes = cardIndexes(wrapper);
+    expect(indexes[0]).toBe(47 * 6);
+    expect(indexes.at(-1)).toBe(56 * 6 - 1);
+    expect(spacer(wrapper, 'top')).toBe(47 * PITCH);
+    expect(spacer(wrapper, 'top') + 9 * PITCH + spacer(wrapper, 'bottom')).toBe(total);
+    // 600 张里只渲染 54 张。
+    expect(indexes).toHaveLength(54);
+  });
+
+  it('reaches the end of the loaded list with no bottom spacer, and the sentinel still pages in the next batch', async () => {
+    const observers = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback, options) { this.callback = callback; this.options = options; observers.push(this); }
+      observe(target) { this.target = target; }
+      disconnect() {}
+    });
+    const env = wallHost();
+    api.SearchLibraryVideoPage.mockResolvedValueOnce(page(many(120), { id: 120 }));
+    const wrapper = await mountPage({}, { attachTo: env.mountPoint });
+    await flushPromises();
+    // 20 行：滚到底，最后一行渲染出来、下占位没了，哨兵就贴在最后一行后面。
+    await env.scroll(WALL_TOP + 20 * PITCH - 24 - 600);
+    expect(cardIndexes(wrapper).at(-1)).toBe(119);
+    expect(spacer(wrapper, 'bottom')).toBe(0);
+    const windowEl = wrapper.get('[data-test="browse-window"]').element;
+    expect(windowEl.nextElementSibling).toBe(observers[0].target);
+
+    api.SearchLibraryVideoPage.mockResolvedValueOnce(page(many(180).slice(120), null));
+    observers[0].callback([{ isIntersecting: true }]);
+    await flushPromises();
+    expect(lastRequest().cursor).toEqual({ id: 120 });
+    expect(wrapper.vm.list.items).toHaveLength(180);
+    // 追加的 10 行在窗口下面：下占位撑出来，滚动位置不动。
+    expect(env.host.scrollTop).toBe(WALL_TOP + 20 * PITCH - 24 - 600);
+    expect(spacer(wrapper, 'bottom')).toBeGreaterThan(0);
+    expect(cardIndexes(wrapper).at(-1)).toBeLessThan(179);
+  });
+
+  it('recomputes columns on resize and keeps the card at the viewport top', async () => {
+    const { wrapper, scroll, geometry, host } = await mountWall(600);
+    // 视口顶边在第 50 行（第 300–305 张）往下 100px。
+    await scroll(WALL_TOP + 50 * PITCH + 100);
+    geometry.width = 1400;
+    resizeObservers[0].callback([]);
+    await flushPromises();
+    // 8 列、卡高 286.5、行距 310.5：第 300 张在第 37 行；行内偏移按行高比例换算。
+    expect(wrapper.get('[data-test="browse-grid"]').attributes('style')).toContain('repeat(8, minmax(0, 1fr))');
+    expect(host.scrollTop).toBeCloseTo(WALL_TOP + 37 * 310.5 + 100 * 286.5 / 270, 6);
+    expect(cardIndexes(wrapper)).toContain(300);
+    expect(cardIndexes(wrapper)[0]).toBe((37 - 3) * 8);
+
+    // 宽度没变的通知（高度变化等）不挪位置。
+    const top = host.scrollTop;
+    resizeObservers[0].callback([]);
+    await flushPromises();
+    expect(host.scrollTop).toBe(top);
+  });
+
+  it('moves keyboard focus into an unrendered row by scrolling it into view first', async () => {
+    const { wrapper, host, scroll } = await mountWall(600);
+    const card = index => wrapper.find(`[data-index="${index}"]`);
+    expect(card(599).exists()).toBe(false);
+    card(0).element.focus();
+    await card(0).trigger('keydown', { key: 'End' });
+    await flushPromises();
+    // 第 599 张在第 99 行：行底（含 8px 余量）对齐视口底。
+    expect(host.scrollTop).toBe(WALL_TOP + 99 * PITCH + 270 + 8 - 600);
+    expect(document.activeElement).toBe(card(599).element);
+
+    await card(599).trigger('keydown', { key: 'Home' });
+    await flushPromises();
+    expect(host.scrollTop).toBe(WALL_TOP - 8);
+    expect(document.activeElement).toBe(card(0).element);
+
+    // 回到最顶：第 24 张在窗口最后一行（第 4 行，视口外的预渲染行），往下一行（第 5 行）还没渲染。
+    await scroll(0);
+    expect(card(30).exists()).toBe(false);
+    await card(24).trigger('keydown', { key: 'ArrowDown' });
+    await flushPromises();
+    expect(document.activeElement).toBe(card(30).element);
+    expect(host.scrollTop).toBe(WALL_TOP + 5 * PITCH + 270 + 8 - 600);
+    await card(30).trigger('keydown', { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(card(31).element);
+    await card(31).trigger('keydown', { key: 'ArrowUp' });
+    await flushPromises();
+    expect(document.activeElement).toBe(card(25).element);
+  });
+
+  it('parks focus on the wall when the focused card scrolls out, and Tab / arrows continue from that card', async () => {
+    const { wrapper, host, scroll } = await mountWall(600);
+    const card = index => wrapper.find(`[data-index="${index}"]`);
+    const wall = wrapper.get('[data-test="browse-window"]');
+    card(7).element.focus();
+    await scroll(WALL_TOP + 50 * PITCH);
+    expect(card(7).exists()).toBe(false);
+    expect(document.activeElement).toBe(wall.element);
+
+    await wall.trigger('keydown', { key: 'Tab' });
+    await flushPromises();
+    expect(document.activeElement).toBe(card(8).element);
+    expect(host.scrollTop).toBe(WALL_TOP + PITCH - 8);
+
+    await scroll(WALL_TOP + 50 * PITCH);
+    await wall.trigger('keydown', { key: 'Tab', shiftKey: true });
+    await flushPromises();
+    expect(document.activeElement).toBe(card(7).element);
+
+    await scroll(WALL_TOP + 50 * PITCH);
+    await wall.trigger('keydown', { key: 'ArrowDown' });
+    await flushPromises();
+    expect(document.activeElement).toBe(card(13).element);
+  });
+
+  it('keeps the card at the viewport top when a card above it leaves the wall (same query, in place)', async () => {
+    const { wrapper, host, scroll } = await mountWall(600);
+    // 视口顶边在第 50 行（第 300 张起）往下 100px。
+    await scroll(WALL_TOP + 50 * PITCH + 100);
+    // 整页详情把第 11 张标成失效：后面的卡前移一格，第 300 张（id 301）现在是第 299 张、在第 49 行。
+    wrapper.vm.applyExternalVideoStateChange({ id: 11, changes: { is_stale: true } });
+    await flushPromises();
+    expect(host.scrollTop).toBe(WALL_TOP + 49 * PITCH + 100);
+    expect(wrapper.get('[data-index="299"]').text()).toContain('影片301');
+
+    // 视口下面的卡拿掉、翻页追加：顶上那张没挪，不动。
+    wrapper.vm.applyExternalVideoStateChange({ id: 500, changes: { is_stale: true } });
+    await flushPromises();
+    expect(host.scrollTop).toBe(WALL_TOP + 49 * PITCH + 100);
+    // 合并改动（看过）不改几何。
+    wrapper.vm.applyExternalVideoStateChange({ id: 301, changes: { is_watched: true } });
+    await flushPromises();
+    expect(host.scrollTop).toBe(WALL_TOP + 49 * PITCH + 100);
+    expect(wrapper.get('[data-index="299"] [data-test="browse-card-mark"]').text()).toBe('看过');
+  });
+
+  it('restores the position when coming back from the full-page detail, re-anchoring if the width changed meanwhile', async () => {
+    const { wrapper, host, scroll, geometry } = await mountWall(600);
+    await scroll(WALL_TOP + 50 * PITCH + 100);
+    await wrapper.setProps({ pageActive: false });
+    // 隐藏期间宿主滚的是别的页面：不跟着重算窗口。
+    await scroll(0);
+    expect(cardIndexes(wrapper)[0]).toBe(47 * 6);
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(host.scrollTop).toBe(WALL_TOP + 50 * PITCH + 100);
+    expect(cardIndexes(wrapper)[0]).toBe(47 * 6);
+
+    await wrapper.setProps({ pageActive: false });
+    geometry.width = 1400;
+    await scroll(0);
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(host.scrollTop).toBeCloseTo(WALL_TOP + 37 * 310.5 + 100 * 286.5 / 270, 6);
+    expect(cardIndexes(wrapper)).toContain(300);
+  });
+
+  it('a new query starts from the top instead of re-anchoring', async () => {
+    const { wrapper, host, scroll } = await mountWall(600);
+    await scroll(WALL_TOP + 50 * PITCH);
+    await wrapper.setProps({ navigationRequest: { keyword: '星', token: 1 } });
+    await flushPromises();
+    expect(host.scrollTop).toBe(0);
+    expect(cardIndexes(wrapper)[0]).toBe(0);
+  });
+
+  it('handles empty and single-card walls', async () => {
+    const empty = await mountWall(0);
+    expect(empty.wrapper.find('[data-test="browse-empty"]').exists()).toBe(true);
+    expect(empty.wrapper.find('[data-test="browse-window"]').exists()).toBe(false);
+    empty.wrapper.unmount();
+    vi.restoreAllMocks();
+    document.querySelectorAll('.main-view').forEach(node => node.remove());
+
+    const single = await mountWall(1);
+    expect(cardIndexes(single.wrapper)).toEqual([0]);
+    expect(spacer(single.wrapper, 'top')).toBe(0);
+    expect(spacer(single.wrapper, 'bottom')).toBe(0);
+    const only = single.wrapper.get('[data-index="0"]');
+    only.element.focus();
+    for (const key of ['ArrowDown', 'ArrowRight', 'End', 'Home']) {
+      await only.trigger('keydown', { key });
+      await flushPromises();
+      expect(document.activeElement).toBe(only.element);
+    }
   });
 });

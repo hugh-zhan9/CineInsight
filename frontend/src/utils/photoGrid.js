@@ -7,6 +7,9 @@
  *   - virtualList 每次窗口计算都用 sumHeights 从头 O(n) 累加行高，万级网格上每次滚动都要
  *     全量重算，这正是它不适合照片网格的原因；这里布局构建一次 O(n)，之后每次窗口定位 O(log n)。
  *
+ * 视频海报墙（components/viewer/VideoBrowsePage.vue）也用这一套按行窗口化：海报卡等高、不分组，
+ * 另用到下面的视口锚点、滚入视口与方向键挪格。
+ *
  * 行几何约定（组件按此渲染，见 PhotoLibraryPage.vue）：
  *   - rows[i].height 是行的内容高度，rows[i].outerHeight = height + gap（最后一行不带尾隙）；
  *   - offsets[i] 是第 i 行的顶边（含它前面所有行的行高与行间隙），offsets 长度 rows.length + 1；
@@ -257,4 +260,97 @@ export function calculatePhotoAnchorScrollTop({ layout, listTop, itemIndex } = {
     return Number(listTop) || 0;
   }
   return (Number(listTop) || 0) + layout.offsets[rowIndex];
+}
+
+/**
+ * capturePhotoViewportAnchor 记下视口顶边落在哪一行：那一行首个条目的下标、视口顶边在这一行里往下的偏移
+ * （offset，相对行顶，可能超过行高落进行下间隙），以及当时的行高（rowHeight，不含间隙）。
+ * 视口顶边落在分组头行时锚到其后第一个格子行（offset 为负）。视口顶边还在网格上方（网格上面的页头、
+ * 工具条可见）或没有格子行时返回 null：这时用不着锚点，原样保留 scrollTop 即可。
+ * 与 calculatePhotoAnchorScrollTop 不同：那个把锚点行顶对齐到视口顶，这里连行内偏移一起放回。
+ */
+export function capturePhotoViewportAnchor({ layout, scrollTop, listTop } = {}) {
+  const rows = layout?.rows || [];
+  const relativeTop = (Number(scrollTop) || 0) - (Number(listTop) || 0);
+  if (!rows.length || relativeTop < 0) {
+    return null;
+  }
+  let row = findFirstRowEndingAfter(layout.offsets, rows.length, relativeTop);
+  while (row < rows.length && rows[row].kind !== PHOTO_ROW_CELLS) {
+    row += 1;
+  }
+  if (row >= rows.length) {
+    return null;
+  }
+  return { itemIndex: rows[row].startIndex, offset: relativeTop - layout.offsets[row], rowHeight: rows[row].height };
+}
+
+/**
+ * calculatePhotoViewportAnchorScrollTop 按新布局放回 capturePhotoViewportAnchor 记下的锚点，返回 scrollTop；
+ * 锚点条目不在布局里时返回 null。行高没变（同一几何，只是前面增删了条目）时偏移原样放回，一个像素不差；
+ * 行高变了（列宽变了）按行内比例换算，视口顶仍落在锚点条目那一行的同一相对位置。
+ */
+export function calculatePhotoViewportAnchorScrollTop({ layout, listTop, anchor } = {}) {
+  const row = findPhotoRowIndexForItem(layout, anchor?.itemIndex);
+  if (row < 0) {
+    return null;
+  }
+  const height = layout.rows[row].height;
+  const offset = Number(anchor.offset) || 0;
+  const scaled = anchor.rowHeight > 0 && height !== anchor.rowHeight ? offset * height / anchor.rowHeight : offset;
+  return (Number(listTop) || 0) + layout.offsets[row] + scaled;
+}
+
+/**
+ * calculatePhotoRevealScrollTop 给出让某个条目所在行整行进入视口的最小滚动：已经整行可见就返回原 scrollTop；
+ * 行在视口上方对齐行顶，在下方对齐行底（行比视口还高时对齐行顶）。margin 是行上下各留的余量（如焦点框），
+ * 算在行里一起进视口。条目越界时返回原 scrollTop。
+ */
+export function calculatePhotoRevealScrollTop({ layout, listTop, itemIndex, scrollTop, viewportHeight, margin = 0 } = {}) {
+  const current = Number(scrollTop) || 0;
+  const row = findPhotoRowIndexForItem(layout, itemIndex);
+  if (row < 0) {
+    return current;
+  }
+  const spare = Math.max(0, Number(margin) || 0);
+  const top = Math.max(0, (Number(listTop) || 0) + layout.offsets[row] - spare);
+  const height = layout.rows[row].height + 2 * spare;
+  const viewport = Math.max(0, Number(viewportHeight) || 0);
+  if (top < current || height > viewport) {
+    return top;
+  }
+  return top + height > current + viewport ? top + height - viewport : current;
+}
+
+/**
+ * stepPhotoGridItem 是方向键在网格里挪一格后的条目下标：left / right 是前一条 / 后一条；up / down 是
+ * 上一个 / 下一个格子行的同一列，那一行没有这一列（末行不满）时落在行尾；分组头行跳过。
+ * 到了边上原地不动（返回原下标）；条目越界或方向不认识时返回 -1。
+ */
+export function stepPhotoGridItem(layout, itemIndex, direction) {
+  const rows = layout?.rows || [];
+  const count = layout?.itemCount || 0;
+  const index = Number(itemIndex);
+  if (!Number.isInteger(index) || index < 0 || index >= count) {
+    return -1;
+  }
+  if (direction === 'left') {
+    return Math.max(0, index - 1);
+  }
+  if (direction === 'right') {
+    return Math.min(count - 1, index + 1);
+  }
+  const step = { up: -1, down: 1 }[direction];
+  if (!step) {
+    return -1;
+  }
+  const row = findPhotoRowIndexForItem(layout, index);
+  let target = row + step;
+  while (target >= 0 && target < rows.length && rows[target].kind !== PHOTO_ROW_CELLS) {
+    target += step;
+  }
+  if (target < 0 || target >= rows.length) {
+    return index;
+  }
+  return Math.min(rows[target].startIndex + (index - rows[row].startIndex), rows[target].endIndex - 1);
 }
