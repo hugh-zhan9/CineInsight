@@ -744,12 +744,16 @@ func resetBackendStartupForTest(t *testing.T) {
 		resolved       bool
 		backend        Backend
 		fromProcessEnv bool
-	}{backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv}
+		guard          StartupBackendGuard
+		dataDir        string
+	}{backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv, backendStartup.guard, backendStartup.dataDir}
 	backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv = false, "", false
+	backendStartup.guard, backendStartup.dataDir = StartupBackendGuard{}, ""
 	backendStartup.mu.Unlock()
 	t.Cleanup(func() {
 		backendStartup.mu.Lock()
 		backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv = saved.resolved, saved.backend, saved.fromProcessEnv
+		backendStartup.guard, backendStartup.dataDir = saved.guard, saved.dataDir
 		backendStartup.mu.Unlock()
 	})
 }

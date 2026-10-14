@@ -153,12 +153,15 @@ func loadEnvConfig(dataDir string) {
 	}
 }
 
-// backendStartup 记下本进程启动时确定的后端，以及 DB_BACKEND 当时是否已由进程环境给出。
+// backendStartup 记下本进程启动时确定的后端，以及 DB_BACKEND 当时是否已由进程环境给出；
+// guard 与 dataDir 是启动时回落保护的结果与当时的数据目录（D-DBG-02）。
 var backendStartup struct {
 	mu             sync.Mutex
 	resolved       bool
 	backend        Backend
 	fromProcessEnv bool
+	guard          StartupBackendGuard
+	dataDir        string
 }
 
 // resolveStartupBackend 返回本进程使用的后端。
@@ -170,10 +173,17 @@ var backendStartup struct {
 //
 // 「来自进程环境」按变量是否存在判定，空值也算（m5）：godotenv 同样是「存在即不覆盖」，进程环境里
 // 有一个 DB_BACKEND= 空值时，数据目录下的配置同样写不进来，应用内切换同样不会生效。
+//
+// 回落保护（D-DBG-02）也只在首次调用时判定：上次成功打开的是 PostgreSQL、这次却是走默认得到的 SQLite
+// 时返回 backend_fallback_blocked，调用方在打开任何库之前就停下。之后的调用沿用这次的结果，不再
+// 判定——恢复备份后的重连不会因为启动之后才写的记录被拦。
 func resolveStartupBackend(dataDir string) (Backend, error) {
 	backendStartup.mu.Lock()
 	defer backendStartup.mu.Unlock()
 	if backendStartup.resolved {
+		if backendStartup.guard.Blocked {
+			return "", backendFallbackBlockedError(backendStartup.guard.PreviousLocation)
+		}
 		return backendStartup.backend, nil
 	}
 	_, fromProcessEnv := os.LookupEnv(BackendConfigKey)
@@ -185,6 +195,23 @@ func resolveStartupBackend(dataDir string) (Backend, error) {
 	backendStartup.resolved = true
 	backendStartup.backend = backend
 	backendStartup.fromProcessEnv = fromProcessEnv
+	backendStartup.dataDir = dataDir
+
+	// 「显式」= 加载完所有配置文件后 DB_BACKEND 非空（进程环境或任一配置文件给出，含应用内切换写下的）。
+	explicit := strings.TrimSpace(os.Getenv(BackendConfigKey)) != ""
+	previous, readErr := readBackendState(dataDir)
+	if readErr != nil {
+		log.Printf("读取上次使用的数据库后端失败，按没有记录处理 err=%v", readErr)
+	}
+	if shouldBlockBackendFallback(backend, explicit, previous) {
+		backendStartup.guard = StartupBackendGuard{
+			Blocked:          true,
+			PreviousLocation: previous.Location,
+			ConfigFiles:      startupConfigFiles(dataDir),
+			DataDirConfig:    filepath.Join(dataDir, BackendConfigFileName),
+		}
+		return "", backendFallbackBlockedError(previous.Location)
+	}
 	return backend, nil
 }
 
@@ -401,6 +428,8 @@ func Init() error {
 	if err != nil {
 		return err
 	}
+	// 拦下隐式回落（backend_fallback_blocked）时在这里就返回：建目录、清扫与 openBackend 都还没做，
+	// 数据目录里不会出现新的 SQLite 库文件（D-DBG-02）。
 	backend, err := resolveStartupBackend(dataDir)
 	if err != nil {
 		return err
@@ -432,6 +461,8 @@ func Init() error {
 	if err := ApplySchema(db); err != nil {
 		return err
 	}
+	// 库打开、表建好之后才记下这次的后端（D-DBG-01）；写失败只记日志。
+	recordOpenedBackend(dataDir, backend)
 	DB = db
 	published = true
 	return nil

@@ -54,7 +54,37 @@
     <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue' })" />
 
     <div v-if="startupError" class="startup-error-view">
-      <div class="startup-error-card">
+      <!-- 回落保护（D-DBG-03）：上次用的是 PostgreSQL、这次没读到它的配置，没有打开本机库。读到保护结果之前
+           两张卡片都不画，被拦下时不先闪一下「数据库连接失败」；其他启动错误照旧是下面那张卡片。 -->
+      <div v-if="startupGuard.blocked" class="startup-error-card" data-test="startup-guard">
+        <h2>没有读到 PostgreSQL 配置，已停下</h2>
+        <p class="startup-error-text" data-test="startup-guard-summary">
+          上次用的是 PostgreSQL{{ startupGuard.previous_location ? `（${startupGuard.previous_location}）` : '' }}，这次没有读到 PostgreSQL 配置，为了不打开一个空的本机库，已经停下。数据还在 PostgreSQL 里。
+        </p>
+        <h3 class="startup-guard-heading">这次读过的配置文件（按优先级从高到低）</h3>
+        <ul class="startup-guard-files" data-test="startup-guard-config-files">
+          <li v-for="file in startupGuard.config_files" :key="file.path" class="startup-guard-file" data-test="startup-guard-config-file">
+            <code class="startup-guard-path">{{ file.path }}</code>
+            <AppBadge :tone="file.exists ? 'success' : 'neutral'">{{ file.exists ? '存在' : '不存在' }}</AppBadge>
+          </li>
+        </ul>
+        <p class="startup-error-hint" data-test="startup-guard-data-dir-hint">
+          推荐把 PostgreSQL 配置（PG_HOST、PG_PORT、PG_USER、PG_PASSWORD、PG_DB）写进数据目录下的
+          <code class="startup-guard-path">{{ startupGuard.data_dir_config }}</code>，写好后点「重新打开」。
+        </p>
+        <p class="startup-error-hint">
+          也可以这次改用本机 SQLite：会打开本机数据库，它可能是空的；PostgreSQL 里的数据不受影响。
+        </p>
+        <p v-if="relaunchError" class="relaunch-error startup-guard-error" data-test="startup-guard-error">{{ relaunchError }}</p>
+        <div class="startup-guard-actions">
+          <button type="button" class="btn btn--ghost startup-guard-diagnostics" data-test="startup-open-diagnostics" @click="startupDiagnosticsOpen = true">运行状态与诊断</button>
+          <button type="button" class="btn btn--secondary" :disabled="relaunching" data-test="startup-guard-use-sqlite" @click="acceptSQLiteAfterFallbackBlock">这次改用本机 SQLite…</button>
+          <button type="button" class="btn btn--primary" :disabled="relaunching" data-test="startup-guard-reopen" @click="relaunchNow">
+            {{ relaunching ? '正在重新打开…' : '重新打开' }}
+          </button>
+        </div>
+      </div>
+      <div v-else-if="startupGuardChecked" class="startup-error-card">
         <h2>应用已启动，但数据库连接失败</h2>
         <p class="startup-error-text">{{ startupError }}</p>
         <p class="startup-error-hint">
@@ -365,7 +395,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary, GetStartupBackendGuard, AcceptSQLiteAfterFallbackBlock } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -421,6 +451,17 @@ const PENDING_WORK_REFRESH_MS = 60000;
 // 浏览器插件的下载里还有在跑或排队的：「立即重启」会打断它们（m5）。
 function hasActiveDownloads(tasks) {
   return (tasks || []).some(task => task?.state === 'running' || task?.state === 'queued');
+}
+
+// 启动时的回落保护结果（D-DBG-03）：{ blocked, previous_location, config_files: [{ path, exists }], data_dir_config }。
+// 读不到时按没拦下处理，出错页照旧。
+function startupGuardFrom(guard) {
+  return {
+    blocked: guard?.blocked === true,
+    previous_location: String(guard?.previous_location || ''),
+    config_files: Array.isArray(guard?.config_files) ? guard.config_files : [],
+    data_dir_config: String(guard?.data_dir_config || '')
+  };
 }
 
 export default {
@@ -486,6 +527,9 @@ export default {
       startupDiagnosticsOpen: false,
       // 启动错误页按当前后端给提示（D-PC58）：sqlite / postgres，读不到时为空串（按 Postgres 口径提示）。
       startupBackend: '',
+      // 回落保护（D-DBG-03）：被拦下时出错页换成专门说明；startupGuardChecked 之前两张卡片都不画。
+      startupGuard: startupGuardFrom(null),
+      startupGuardChecked: false,
       // 「待重启」遮罩（D-PC55）。
       relaunchRequired: false,
       relaunchMessage: '',
@@ -533,6 +577,14 @@ export default {
     if (this.startupError) {
       // 启动失败页跟随系统主题（读不到设置，settings.theme 停在 system）：在下一次渲染之前定好，不先按浅色画一帧。
       this.followSystemTheme();
+      // 回落保护的结果先读（只读内存，不需要数据库连接）：被拦下时出错页换成专门说明。
+      try {
+        this.startupGuard = startupGuardFrom(await GetStartupBackendGuard());
+      } catch {
+        this.startupGuard = startupGuardFrom(null);
+      } finally {
+        this.startupGuardChecked = true;
+      }
       // 后端状态只读配置、不需要数据库连接，连不上库时也能拿到。
       try {
         const status = await GetDatabaseBackendStatus();
@@ -709,11 +761,27 @@ export default {
       }
     },
     async relaunchNow() {
+      await this.runRelaunch(RelaunchApp);
+    },
+    // 回落保护出错页的「这次改用本机 SQLite…」（D-DBG-03）：二次确认后由后端把记录改成 sqlite 再重启，
+    // 不写任何配置文件；取消什么都不做。
+    async acceptSQLiteAfterFallbackBlock() {
+      if (this.relaunching) return;
+      const confirmed = await confirmAction({
+        title: '这次改用本机 SQLite？',
+        message: '会打开本机 SQLite 数据库，它可能是空的。PostgreSQL 里的数据不受影响；之后想回到 PostgreSQL，把配置放回去再重新打开应用即可。',
+        confirmText: '改用本机 SQLite'
+      });
+      if (!confirmed) return;
+      await this.runRelaunch(AcceptSQLiteAfterFallbackBlock);
+    },
+    // 调一个以重启收尾的绑定（RelaunchApp、AcceptSQLiteAfterFallbackBlock）：没能自动重启时把原因留在 relaunchError。
+    async runRelaunch(call) {
       if (this.relaunching) return;
       this.relaunching = true;
       this.relaunchError = '';
       try {
-        const result = await RelaunchApp();
+        const result = await call();
         if (!result?.relaunched) {
           this.relaunchError = result?.message || '无法自动重启，请手动退出并重新打开应用。';
           this.relaunching = false;
@@ -1447,6 +1515,51 @@ export default {
   font-size: var(--fs-secondary);
   line-height: 1.6;
   color: var(--text-secondary);
+}
+/* 回落保护的专门说明（D-DBG-03）：读过的配置文件逐行列出，路径等宽、可整段换行。 */
+.startup-guard-heading {
+  margin-top: var(--space-5);
+  font-size: var(--fs-section);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+.startup-guard-files {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.startup-guard-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--surface-faint);
+}
+.startup-guard-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.startup-guard-error {
+  margin-top: var(--space-3);
+  margin-bottom: 0;
+}
+.startup-guard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.startup-guard-diagnostics {
+  margin-right: auto;
 }
 
 </style>

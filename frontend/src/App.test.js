@@ -8,7 +8,8 @@ const api = vi.hoisted(() => Object.fromEntries([
   'SyncScanDirectories', 'SyncImageDirectories', 'GetLibraryCounts', 'LogFrontend',
   'SetWindowForeground', 'GetVideosByIDs',
   'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople',
-  'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus', 'ListDownloadTasks', 'RelaunchApp', 'GetPendingWorkSummary'
+  'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus', 'ListDownloadTasks', 'RelaunchApp', 'GetPendingWorkSummary',
+  'GetStartupBackendGuard', 'AcceptSQLiteAfterFallbackBlock'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../wailsjs/go/main/App', () => api);
@@ -40,6 +41,7 @@ beforeEach(() => {
   api.GetDatabaseSwitchStatus.mockResolvedValue({ running: false, completed: false, failed: false });
   api.ListDownloadTasks.mockResolvedValue([]);
   api.GetPendingWorkSummary.mockResolvedValue({ total: 0 });
+  api.GetStartupBackendGuard.mockResolvedValue({ blocked: false, previous_location: '', config_files: [], data_dir_config: '' });
   // jsdom 的 hasFocus 行为随实现变动，前后台用例自己钉住它。
   document.hasFocus = vi.fn(() => true);
   resetFeedback();
@@ -1156,6 +1158,166 @@ describe('「待重启」遮罩与启动错误页', () => {
     wrapper = await mountApp();
     expect(wrapper.find('[data-test="startup-error-postgres-hint"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="startup-error-sqlite-hint"]').exists()).toBe(false);
+  });
+});
+
+// 数据库后端回落保护（D-DBG-03）：上次用的是 PostgreSQL、这次没读到它的配置时，后端在打开任何库之前停下，
+// 启动出错页按 GetStartupBackendGuard().blocked 换成专门说明与两个出口；其他启动错误照旧。
+describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
+  const BLOCKED_ERROR = 'backend_fallback_blocked: 上次用的是 PostgreSQL（me@db.local:5432/cine），这次没有读到 PostgreSQL 配置；为了不打开一个空的本机库，已经停下，数据还在 PostgreSQL 里';
+  const CONFIG_PATHS = [
+    '/Users/me/.CineInsight/.env',
+    '/.env',
+    '/Applications/析微影策.app/Contents/MacOS/.env',
+    '/Applications/析微影策.app/Contents/Resources/.env'
+  ];
+  const blockedGuard = () => ({
+    blocked: true,
+    previous_location: 'me@db.local:5432/cine',
+    config_files: CONFIG_PATHS.map((path, index) => ({ path, exists: index === 3 })),
+    data_dir_config: '/Users/me/.CineInsight/.env'
+  });
+
+  // 确认框由 AppFeedback 画（shallowMount 下是桩），这里读 feedbackState、用 resolveConfirm 作答。
+  // AppBadge 的文字在默认插槽里，所以渲染桩的默认插槽。
+  async function mountBlocked() {
+    api.GetStartupError.mockResolvedValue(BLOCKED_ERROR);
+    api.GetStartupBackendGuard.mockResolvedValue(blockedGuard());
+    api.GetDatabaseBackendStatus.mockResolvedValue({ backend: 'sqlite' });
+    const wrapper = shallowMount(App, { global: { renderStubDefaultSlot: true } });
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('被拦下时换成专门说明：上次的位置、按优先级读过的配置文件（标明是否存在）、推荐的数据目录 .env；不显示原因码与通用提示', async () => {
+    const wrapper = await mountBlocked();
+    const page = wrapper.get('[data-test="startup-guard"]');
+    expect(page.get('h2').text()).toBe('没有读到 PostgreSQL 配置，已停下');
+    expect(page.get('[data-test="startup-guard-summary"]').text()).toBe(
+      '上次用的是 PostgreSQL（me@db.local:5432/cine），这次没有读到 PostgreSQL 配置，为了不打开一个空的本机库，已经停下。数据还在 PostgreSQL 里。'
+    );
+    const files = page.findAll('[data-test="startup-guard-config-file"]');
+    expect(files.map(file => file.get('.startup-guard-path').text())).toEqual(CONFIG_PATHS);
+    expect(files.map(file => file.findComponent({ name: 'AppBadge' }).text())).toEqual(['不存在', '不存在', '不存在', '存在']);
+    expect(files.map(file => file.findComponent({ name: 'AppBadge' }).props('tone'))).toEqual(['neutral', 'neutral', 'neutral', 'success']);
+    const hint = page.get('[data-test="startup-guard-data-dir-hint"]').text();
+    expect(hint).toContain('/Users/me/.CineInsight/.env');
+    expect(hint).toContain('PG_HOST');
+    expect(hint).toContain('写好后点「重新打开」');
+    expect(page.get('[data-test="startup-guard-use-sqlite"]').text()).toBe('这次改用本机 SQLite…');
+    expect(page.get('[data-test="startup-guard-reopen"]').text()).toBe('重新打开');
+    expect(wrapper.text()).not.toContain('backend_fallback_blocked');
+    expect(wrapper.text()).not.toContain('应用已启动，但数据库连接失败');
+    expect(wrapper.find('[data-test="startup-error-sqlite-hint"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="startup-error-postgres-hint"]').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).exists()).toBe(false);
+    expect(api.GetDatabaseSwitchStatus).not.toHaveBeenCalled();
+  });
+
+  it('上次的位置读不到时只说「上次用的是 PostgreSQL」，不留空括号', async () => {
+    api.GetStartupError.mockResolvedValue(BLOCKED_ERROR);
+    api.GetStartupBackendGuard.mockResolvedValue({ ...blockedGuard(), previous_location: '' });
+    const wrapper = await mountApp();
+    expect(wrapper.get('[data-test="startup-guard-summary"]').text()).toMatch(/^上次用的是 PostgreSQL，这次没有读到/);
+  });
+
+  it('「这次改用本机 SQLite…」二次确认后才调绑定；没能自动重启时把原因留在页上', async () => {
+    api.AcceptSQLiteAfterFallbackBlock.mockResolvedValue({ relaunched: false, message: '当前不是从应用包运行，应用将退出，请手动重新打开' });
+    const wrapper = await mountBlocked();
+    await wrapper.get('[data-test="startup-guard-use-sqlite"]').trigger('click');
+    expect(feedbackState.confirm).toMatchObject({ title: '这次改用本机 SQLite？', confirmText: '改用本机 SQLite', level: 'confirm' });
+    expect(feedbackState.confirm.message).toContain('它可能是空的');
+    expect(feedbackState.confirm.message).toContain('PostgreSQL 里的数据不受影响');
+    expect(feedbackState.confirm.message).toContain('把配置放回去再重新打开应用');
+    expect(api.AcceptSQLiteAfterFallbackBlock).not.toHaveBeenCalled();
+
+    resolveConfirm(true);
+    await flushPromises();
+    expect(api.AcceptSQLiteAfterFallbackBlock).toHaveBeenCalledTimes(1);
+    expect(api.RelaunchApp).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="startup-guard-error"]').text()).toBe('当前不是从应用包运行，应用将退出，请手动重新打开');
+  });
+
+  it('取消确认时不调绑定、页上什么都不变', async () => {
+    const wrapper = await mountBlocked();
+    await wrapper.get('[data-test="startup-guard-use-sqlite"]').trigger('click');
+    resolveConfirm(false);
+    await flushPromises();
+    expect(api.AcceptSQLiteAfterFallbackBlock).not.toHaveBeenCalled();
+    expect(api.RelaunchApp).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="startup-guard-error"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="startup-guard-use-sqlite"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('改用本机 SQLite 被后端拒绝时把错误留在页上，按钮恢复可点', async () => {
+    api.AcceptSQLiteAfterFallbackBlock.mockRejectedValue('记下改用本机 SQLite 失败: disk full');
+    const wrapper = await mountBlocked();
+    await wrapper.get('[data-test="startup-guard-use-sqlite"]').trigger('click');
+    resolveConfirm(true);
+    await flushPromises();
+    expect(wrapper.get('[data-test="startup-guard-error"]').text()).toBe('记下改用本机 SQLite 失败: disk full');
+    expect(wrapper.get('[data-test="startup-guard-use-sqlite"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('「重新打开」走现有的 RelaunchApp，进行中两个按钮都禁用', async () => {
+    api.RelaunchApp.mockResolvedValue({ relaunched: true, message: '应用即将重新启动' });
+    const wrapper = await mountBlocked();
+    await wrapper.get('[data-test="startup-guard-reopen"]').trigger('click');
+    await flushPromises();
+    expect(api.RelaunchApp).toHaveBeenCalledTimes(1);
+    expect(api.AcceptSQLiteAfterFallbackBlock).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="startup-guard-reopen"]').text()).toBe('正在重新打开…');
+    expect(wrapper.get('[data-test="startup-guard-reopen"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="startup-guard-use-sqlite"]').attributes('disabled')).toBeDefined();
+  });
+
+  it('专门说明页同样能打开只读诊断', async () => {
+    const wrapper = await mountBlocked();
+    await wrapper.get('[data-test="startup-open-diagnostics"]').trigger('click');
+    expect(wrapper.vm.startupDiagnosticsOpen).toBe(true);
+  });
+
+  it('其他启动错误照旧：通用卡片原样显示错误与排查提示，没有专门说明', async () => {
+    api.GetStartupError.mockResolvedValue('打开数据库失败: connection refused');
+    api.GetDatabaseBackendStatus.mockResolvedValue({ backend: 'postgres' });
+    const wrapper = await mountApp();
+    expect(api.GetStartupBackendGuard).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="startup-guard"]').exists()).toBe(false);
+    const card = wrapper.get('.startup-error-card');
+    expect(card.get('h2').text()).toBe('应用已启动，但数据库连接失败');
+    expect(card.get('.startup-error-text').text()).toBe('打开数据库失败: connection refused');
+    expect(card.find('[data-test="startup-error-postgres-hint"]').exists()).toBe(true);
+    expect(card.find('[data-test="startup-open-diagnostics"]').exists()).toBe(true);
+    expect(card.find('[data-test="startup-guard-use-sqlite"]').exists()).toBe(false);
+  });
+
+  it('读回落保护结果失败时按没拦下处理，出错页照旧', async () => {
+    api.GetStartupError.mockResolvedValue('数据库未初始化');
+    api.GetStartupBackendGuard.mockRejectedValue(new Error('ipc broken'));
+    const wrapper = await mountApp();
+    expect(wrapper.find('[data-test="startup-guard"]').exists()).toBe(false);
+    expect(wrapper.get('.startup-error-text').text()).toBe('数据库未初始化');
+  });
+
+  it('读到回落保护结果之前两张卡片都不画：被拦下时不先闪一下通用卡片', async () => {
+    api.GetStartupError.mockResolvedValue(BLOCKED_ERROR);
+    let resolveGuard;
+    api.GetStartupBackendGuard.mockReturnValue(new Promise(done => { resolveGuard = done; }));
+    const wrapper = shallowMount(App);
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.find('.startup-error-view').exists()).toBe(true);
+    expect(wrapper.find('.startup-error-card').exists()).toBe(false);
+    resolveGuard(blockedGuard());
+    await flushPromises();
+    expect(wrapper.find('[data-test="startup-guard"]').exists()).toBe(true);
+    expect(wrapper.findAll('.startup-error-card')).toHaveLength(1);
+  });
+
+  it('正常启动不读回落保护结果', async () => {
+    await mountApp();
+    expect(api.GetStartupBackendGuard).not.toHaveBeenCalled();
   });
 });
 
