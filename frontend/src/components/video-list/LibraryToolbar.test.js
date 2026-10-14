@@ -564,6 +564,12 @@ describe('人物筛选组合框（META-02）', () => {
     expect(wrapper.find('[data-test="person-filter-options"]').exists()).toBe(true);
     expect(wrapper.vm.personKeyword).toBe('zh');
     expect(wrapper.vm.personActiveIndex).toBe(0);
+    // WKWebView 里回车上屏那一下 isComposing 已是 false、keyCode 是 229：同样交给输入法，不加人物。
+    const commit = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true });
+    input.element.dispatchEvent(commit);
+    await flushPromises();
+    expect(commit.defaultPrevented).toBe(false);
+    expect(wrapper.emitted('update:selectedPeople')).toBeUndefined();
     wrapper.unmount();
   });
 });

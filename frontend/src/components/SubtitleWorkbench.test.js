@@ -492,12 +492,15 @@ describe('SubtitleWorkbench ⌘Z', () => {
     wrapper.vm.handleShortcut(inOffset);
     expect(inOffset.defaultPrevented).toBe(false);
     expect(wrapper.vm.entries[0].text).toBe('changed');
-    // 条目里的时间框也一样：改动要等 change 才记，打字途中 ⌘Z 撤的是框里的字。
-    const timeInput = wrapper.find('[data-test="subtitle-entry"] input:not([type="checkbox"])').element;
+    // 条目里的时间框：改动要等 change 才记，打字途中（框里的字与已确认的值不同）⌘Z 撤的是框里的字。
+    const timeInput = wrapper.find('[data-test="subtitle-entry"] input[type="text"]').element;
+    const committedTime = timeInput.value;
+    timeInput.value = '00:00:09,999';
     const inTime = undoKey(timeInput);
     wrapper.vm.handleShortcut(inTime);
     expect(inTime.defaultPrevented).toBe(false);
     expect(wrapper.vm.entries[0].text).toBe('changed');
+    timeInput.value = committedTime;
 
     // 字幕正文框里 ⌘Z：工作台撤销；⇧⌘Z 重做。
     const inEntry = undoKey(textarea.element);
@@ -510,6 +513,25 @@ describe('SubtitleWorkbench ⌘Z', () => {
     // 焦点不在输入框（工作台本身）：工作台撤销。
     wrapper.vm.handleShortcut(undoKey(wrapper.element));
     expect(wrapper.vm.entries[0].text).toBe('first');
+    wrapper.unmount();
+  });
+});
+
+describe('SubtitleWorkbench ⌘Z 时间框', () => {
+  it('时间改完按回车确认后焦点还在框里：⌘Z 是工作台撤销，撤回这次时间修改', async () => {
+    const wrapper = await mountWorkbench();
+    const input = wrapper.find('[data-test="subtitle-entry"] input[type="text"]');
+    const before = wrapper.vm.entries[0].start_time_ms;
+    await input.setValue('00:00:00,500');
+    await input.trigger('change');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.entries[0].start_time_ms).toBe(500);
+    expect(input.element.value).toBe(input.element.dataset.committed);
+    const event = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'target', { value: input.element });
+    wrapper.vm.handleShortcut(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.vm.entries[0].start_time_ms).toBe(before);
     wrapper.unmount();
   });
 });

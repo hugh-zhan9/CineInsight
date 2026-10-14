@@ -685,8 +685,9 @@ export default {
       this._personSearchTimer = setTimeout(() => this.searchPeople(), 200);
     },
     onPersonKeydown(event) {
-      // 输入法组词期间的按键归输入法（Esc 取消组词、回车上屏、方向键挑候选字），不当成筛选操作。
-      if (event.isComposing) return;
+      // 输入法组词期间的按键归输入法（Esc 取消组词、回车上屏、方向键挑候选字），不当成筛选操作。WKWebView 里
+      // 组词结束那一下 isComposing 已是 false、keyCode 是 229（与 AppFeedback 同一判断），同样交给输入法。
+      if (event.isComposing || event.keyCode === 229) return;
       const options = this.personOptions;
       if (event.key === 'ArrowDown' && options.length) {
         event.preventDefault();

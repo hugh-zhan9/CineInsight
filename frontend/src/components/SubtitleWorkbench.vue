@@ -198,6 +198,7 @@
                     <input
                       type="text"
                       :value="formatTimestampInput(item.entry.start_time_ms)"
+                      :data-committed="formatTimestampInput(item.entry.start_time_ms)"
                       @change="updateEntryTime(item.index, 'start_time_ms', $event.target.value)"
                     />
                   </label>
@@ -207,6 +208,7 @@
                     <input
                       type="text"
                       :value="formatTimestampInput(item.entry.end_time_ms)"
+                      :data-committed="formatTimestampInput(item.entry.end_time_ms)"
                       @change="updateEntryTime(item.index, 'end_time_ms', $event.target.value)"
                     />
                   </label>
@@ -299,9 +301,12 @@ function newClientID(counter) {
   return `cue-local-${Date.now()}-${counter}`;
 }
 
-// 字幕条目的正文框（每次输入都经 updateEntryText 记进撤销记录）。
+// 改动已经记进撤销记录的条目输入框：正文框（每次输入都经 updateEntryText 记录），以及框里的字与已确认的值一致的
+// 时间框（时间要等 change 才记；还在打字、没确认时框里的字与 data-committed 不同，⌘Z 撤的是框里的字）。
 function isEntryTextEditor(target) {
-  return target?.tagName === 'TEXTAREA' && Boolean(target.closest?.('[data-test="subtitle-entry"]'));
+  if (!target?.closest?.('[data-test="subtitle-entry"]')) return false;
+  if (target.tagName === 'TEXTAREA') return true;
+  return target.tagName === 'INPUT' && target.dataset.committed !== undefined && target.value === target.dataset.committed;
 }
 
 export default {
