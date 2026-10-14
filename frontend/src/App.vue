@@ -10,7 +10,8 @@
            （utils/appCommands.js 的 VIEWER_NAV_GROUPS / MANAGE_NAV_GROUPS）。管理侧带 command 的一项是动作：
            执行命令面板里同 ID 的既有命令，打开任务中心；「待处理」「清理中心」三期起是页面（D-P3-01、D-P3-02）。
            导航项是 .btn .btn--ghost，尺寸与选中态由下面的 .header .nav-btn 收窄。 -->
-      <nav class="header-nav" aria-label="页面导航" :data-test="`nav-area-${area}`">
+      <!-- 启动失败时没有可去的页面（片库、各页都不挂载），只留标题，不给一排点了没反应的导航。 -->
+      <nav v-if="appReady" class="header-nav" aria-label="页面导航" :data-test="`nav-area-${area}`">
         <template v-if="area === 'manage'">
           <button type="button" class="btn btn--ghost nav-btn" data-test="nav-back-to-viewer" @click="navigateTo('home')">返回观看</button>
           <span class="header-nav__divider" aria-hidden="true"></span>

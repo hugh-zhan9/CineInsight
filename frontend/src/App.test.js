@@ -140,6 +140,23 @@ it('片库详情「找相似画面」：切到场景检索页并带上这一刻'
   expect(wrapper.vm.scenesScope).toEqual({ filter: null, similar: { videoID: 3, atMS: 4000, title: '片' }, token: expect.any(Number) });
 });
 
+it('启动失败页只留标题：没有页面可去，不画导航与右上角工具；正常启动时导航照常', async () => {
+  api.GetStartupError.mockResolvedValue('数据库未初始化');
+  const failed = shallowMount(App);
+  mountedWrappers.push(failed);
+  await flushPromises();
+  expect(failed.find('.header h1').text()).toBe('析微影策');
+  expect(failed.find('.header-nav').exists()).toBe(false);
+  expect(failed.find('[data-test="open-manage"]').exists()).toBe(false);
+
+  api.GetStartupError.mockResolvedValue('');
+  const ready = shallowMount(App);
+  mountedWrappers.push(ready);
+  await flushPromises();
+  expect(ready.find('.header-nav').exists()).toBe(true);
+  expect(ready.find('[data-test="nav-home"]').exists()).toBe(true);
+});
+
 it('启动失败时仍可打开只读诊断，不挂载片库或任务中心', async () => {
   api.GetStartupError.mockResolvedValue('数据库未初始化');
   // 诊断框是 DialogShell，「关闭」在 footer 插槽里：渲染真的 DialogShell，它里面的 BaseModal 等仍是桩。
