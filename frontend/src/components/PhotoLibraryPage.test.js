@@ -564,6 +564,55 @@ describe('PhotoLibraryPage viewer', () => {
     expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(false);
   });
 
+  // 2026-10-14：查看器的键与全站共用 isTextEntryTarget（utils/keyboardShortcuts.js）判定文本框——role=textbox 与可编辑区域
+  // 也算，勾选框不再算；查看器上面另有对话框（模态层，例如删除确认框）时整个不接，框里的勾选框、按钮上按的键都不动底下的图。
+  it('ignores keys typed in any text field and under a dialog above the viewer; keys on a button still navigate', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2), makeImage(3)]));
+    const wrapper = mount(PhotoLibraryPage, { props: { settings: { confirm_before_delete: true, delete_original_file: false }, tags: [] }, attachTo: document.body });
+    // 用例中途失败也要卸掉：开着的删除确认框在模态层栈里（模块级），留下会挡住后面用例的按键。
+    try {
+      await flushPromises();
+      await wrapper.findAll('.photo-card__media')[0].trigger('click');
+      await flushPromises();
+      const title = () => wrapper.get('.photo-viewer__sidebar h3').text();
+      const press = (node, key = 'ArrowRight') => node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      const viewer = wrapper.get('[data-test="photo-viewer"]').element;
+
+      press(wrapper.get('[data-test="photo-rating-input"]').element);
+      for (const html of ['<div role="textbox"></div>', '<div contenteditable="true"><b>字</b></div>']) {
+        const holder = document.createElement('div');
+        holder.innerHTML = html;
+        viewer.append(holder);
+        press(holder.querySelector('b') || holder.firstElementChild);
+        press(holder.querySelector('b') || holder.firstElementChild, 'f');
+        holder.remove();
+      }
+      await flushPromises();
+      expect(title()).toBe('photo-1.jpg');
+      expect(api.SetImageFavorite).not.toHaveBeenCalled();
+
+      press(wrapper.get('[data-test="photo-viewer-favorite"]').element);
+      await flushPromises();
+      expect(title()).toBe('photo-2.jpg');
+
+      await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click');
+      await flushPromises();
+      const dialog = wrapper.get('[data-test="photo-delete-file"]').element.closest('[role="dialog"]');
+      const cancel = [...dialog.querySelectorAll('button')].find(button => button.textContent.trim() === '取消');
+      for (const node of [wrapper.get('[data-test="photo-delete-file"]').element, cancel]) {
+        press(node);
+        press(node, 'ArrowLeft');
+        press(node, 'f');
+      }
+      await flushPromises();
+      expect(title()).toBe('photo-2.jpg');
+      expect(api.SetImageFavorite).not.toHaveBeenCalled();
+      expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(true);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('renders the 拍摄信息 block with camera, exposure and GPS when EXIF is present', async () => {
     const withEXIF = makeImage(4, {
       taken_at: '2024-03-11T08:09:10Z',

@@ -117,6 +117,7 @@ import TagPill from '../ui/TagPill.vue';
 import RatingStars from './RatingStars.vue';
 import { translateBackendError } from '../../utils/feedback.js';
 import { logFrontend } from '../../utils/frontendLog.js';
+import { isTextEntryTarget } from '../../utils/keyboardShortcuts.js';
 
 export function photoOriginalURL(id) {
   return `/preview/image/${Number(id)}`;
@@ -290,8 +291,8 @@ export default {
     },
     handleKeydown(event) {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || !this.isTopmost()) return;
-      const target = event.target;
-      if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName)) return;
+      // 焦点在文本框里（全站同一判定，utils/keyboardShortcuts.js）时按键归那个控件。
+      if (isTextEntryTarget(event.target)) return;
       if (event.key === 'ArrowLeft') {
         event.preventDefault();
         if (this.hasPrev) this.$emit('prev');

@@ -23,6 +23,7 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import PhotoCleanupPage from './PhotoCleanupPage.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { photoCleanupStore, resetPhotoCleanupReview, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
 import { clearToasts, feedbackState, runToastAction } from '../utils/feedback.js';
 import * as recentOperations from '../utils/recentOperations.js';
@@ -1331,6 +1332,40 @@ describe('统一设计：选择操作条与用词（D-UD-10 / D-UD-14）', () =>
     expect(wrapper.get('[data-test="cleanup-progress"]').text()).toContain('已处理 3 / 12');
     wrapper.unmount();
     stopPhotoCleanupPolling();
+  });
+
+  // 2026-10-14：查看器的键与全站共用 isTextEntryTarget（utils/keyboardShortcuts.js）判定文本框——role=textbox 与可编辑区域
+  // 也算；底下「设为保留」单选、勾选框这类不收文字的控件不再挡（以前 ← → 会留给它，悄悄改掉看不见的保留项）。
+  // 上面另有对话框（模态层）时不接。
+  it('查看器：任何文本框里的键与上面另有对话框时不接；焦点在按钮或底下的「设为保留」上照常切换', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    await wrapper.findAll('[data-test="cleanup-member-open"]')[0].trigger('click');
+    const src = () => wrapper.get('[data-test="cleanup-viewer"] .cleanup-viewer__img').attributes('src');
+    const press = (node, key = 'ArrowRight') => node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    const viewer = wrapper.get('[data-test="cleanup-viewer"]').element;
+    for (const html of ['<input type="search">', '<div role="textbox"></div>', '<div contenteditable="true"></div>']) {
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      viewer.append(holder);
+      press(holder.firstElementChild);
+      holder.remove();
+    }
+    await flushPromises();
+    expect(src()).toBe('/preview/image/11');
+
+    press(wrapper.findAll('[data-test="cleanup-keep-toggle"]')[0].element);
+    await flushPromises();
+    expect(src()).toBe('/preview/image/12');
+    press(wrapper.get('.cleanup-viewer__nav--prev').element, 'ArrowLeft');
+    await flushPromises();
+    expect(src()).toBe('/preview/image/11');
+
+    const above = mount(DialogShell, { props: { title: '确认' }, attachTo: document.body });
+    press(document.body);
+    await flushPromises();
+    expect(src()).toBe('/preview/image/11');
+    above.unmount();
+    wrapper.unmount();
   });
 
   it('查看器关闭按钮在右上角、带「关闭」读屏名，← → 切换，Esc 退出', async () => {
