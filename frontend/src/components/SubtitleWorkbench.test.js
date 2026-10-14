@@ -469,6 +469,51 @@ describe('SubtitleWorkbench 不能直放时的播放代理（2026-10-13）', () 
 
 // 统一设计 D-UD-13 / D-UD-15：整窗工作台是自制遮罩，Esc 要能关；有未保存修改先确认，叠在上面的模态框优先。
 // 前面的用例没有卸载工作台，window 上还挂着它们的监听；这里直接把按键交给本实例的 handleShortcut（mounted 里挂到 window 的那个）。
+describe('SubtitleWorkbench ⌘Z', () => {
+  const undoKey = (target, extra = {}) => {
+    const event = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true, ...extra });
+    Object.defineProperty(event, 'target', { value: target });
+    return event;
+  };
+
+  it('字幕正文框里与焦点不在输入框时是工作台撤销 / 重做；查找、替换、偏移框里交给浏览器撤销框里的字，不动字幕', async () => {
+    const wrapper = await mountWorkbench();
+    const textarea = wrapper.find('[data-test="entry-text-cue-1"]');
+    await textarea.setValue('changed');
+    expect(wrapper.vm.history).toHaveLength(1);
+
+    // 查找框里 ⌘Z：不拦、不撤字幕。
+    const find = wrapper.find('input[type="search"]').element;
+    const inFind = undoKey(find);
+    wrapper.vm.handleShortcut(inFind);
+    expect(inFind.defaultPrevented).toBe(false);
+    expect(wrapper.vm.entries[0].text).toBe('changed');
+    const inOffset = undoKey(wrapper.find('input[aria-label="偏移毫秒"]').element);
+    wrapper.vm.handleShortcut(inOffset);
+    expect(inOffset.defaultPrevented).toBe(false);
+    expect(wrapper.vm.entries[0].text).toBe('changed');
+    // 条目里的时间框也一样：改动要等 change 才记，打字途中 ⌘Z 撤的是框里的字。
+    const timeInput = wrapper.find('[data-test="subtitle-entry"] input:not([type="checkbox"])').element;
+    const inTime = undoKey(timeInput);
+    wrapper.vm.handleShortcut(inTime);
+    expect(inTime.defaultPrevented).toBe(false);
+    expect(wrapper.vm.entries[0].text).toBe('changed');
+
+    // 字幕正文框里 ⌘Z：工作台撤销；⇧⌘Z 重做。
+    const inEntry = undoKey(textarea.element);
+    wrapper.vm.handleShortcut(inEntry);
+    expect(inEntry.defaultPrevented).toBe(true);
+    expect(wrapper.vm.entries[0].text).toBe('first');
+    wrapper.vm.handleShortcut(undoKey(textarea.element, { shiftKey: true }));
+    expect(wrapper.vm.entries[0].text).toBe('changed');
+
+    // 焦点不在输入框（工作台本身）：工作台撤销。
+    wrapper.vm.handleShortcut(undoKey(wrapper.element));
+    expect(wrapper.vm.entries[0].text).toBe('first');
+    wrapper.unmount();
+  });
+});
+
 describe('SubtitleWorkbench Esc', () => {
   const escape = () => new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
 

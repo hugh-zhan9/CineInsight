@@ -266,6 +266,7 @@ import {
   SaveSubtitleEditDocument
 } from '../../wailsjs/go/main/App';
 import { confirmAction } from '../utils/feedback.js';
+import { isTextEntryTarget } from '../utils/keyboardShortcuts.js';
 import AppIcon from './ui/AppIcon.vue';
 import { createPreviewProxyFollower } from '../utils/previewProxy.js';
 import { formatBytes } from '../utils/mediaDetails.js';
@@ -296,6 +297,11 @@ function entriesSignature(entries) {
 
 function newClientID(counter) {
   return `cue-local-${Date.now()}-${counter}`;
+}
+
+// 字幕条目的正文框（每次输入都经 updateEntryText 记进撤销记录）。
+function isEntryTextEditor(target) {
+  return target?.tagName === 'TEXTAREA' && Boolean(target.closest?.('[data-test="subtitle-entry"]'));
 }
 
 export default {
@@ -691,12 +697,13 @@ export default {
       if (event.key.toLowerCase() === 's') {
         event.preventDefault();
         this.saveDocument();
-      } else if (event.key.toLowerCase() === 'z' && event.shiftKey) {
-        event.preventDefault();
-        this.redo();
       } else if (event.key.toLowerCase() === 'z') {
+        // 字幕正文框每敲一下都记进工作台的撤销记录，在那里（或焦点不在输入框时）⌘Z / ⇧⌘Z 就是工作台撤销、重做；
+        // 查找、替换、偏移、时间这些输入框里打的字不进记录，⌘Z 交给浏览器撤销框里的字，不去悄悄撤掉别处的一条字幕。
+        if (isTextEntryTarget(event.target) && !isEntryTextEditor(event.target)) return;
         event.preventDefault();
-        this.undo();
+        if (event.shiftKey) this.redo();
+        else this.undo();
       } else if (event.key.toLowerCase() === 'f') {
         event.preventDefault();
         this.$refs.findInput?.focus();
