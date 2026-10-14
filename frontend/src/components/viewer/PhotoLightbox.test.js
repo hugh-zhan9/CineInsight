@@ -173,6 +173,32 @@ describe('PhotoLightbox 看图', () => {
     expect(wrapper.emitted('close')).toHaveLength(1);
   });
 
+  // 2026-10-14：「焦点在文本框里」与全站共用 utils/keyboardShortcuts.js 的 isTextEntryTarget——role=textbox 与各种可编辑区域
+  // 也算；按钮照旧不算（← → F 照常），勾选框等不收文字的 input 也不再算（以前任何 input 都挡）。
+  it('键盘：焦点在任何文本框里不接；焦点在按钮、勾选框上照常切换', async () => {
+    const wrapper = await mountLightbox({ hasPrev: true, hasNext: true }, { attachTo: document.body });
+    const pressOn = (html, key = 'ArrowRight') => {
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      document.body.append(holder);
+      holder.firstElementChild.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      holder.remove();
+    };
+    for (const html of [
+      '<input type="search">', '<textarea></textarea>', '<select></select>', '<div role="textbox"></div>',
+      '<div contenteditable="plaintext-only"></div>', '<div contenteditable="true"></div>'
+    ]) {
+      pressOn(html);
+      pressOn(html, 'f');
+    }
+    expect(wrapper.emitted('next')).toBeUndefined();
+    expect(api.SetImageFavorite).not.toHaveBeenCalled();
+    pressOn('<button type="button">按钮</button>');
+    expect(wrapper.emitted('next')).toHaveLength(1);
+    pressOn('<input type="checkbox">', 'ArrowLeft');
+    expect(wrapper.emitted('prev')).toHaveLength(1);
+  });
+
   it('收藏先改后存：成功并回库里的值并发 changed；失败改回原值、在面板上说原因', async () => {
     const wrapper = await mountLightbox();
     await wrapper.get('[data-test="photo-lightbox-favorite"]').trigger('click');

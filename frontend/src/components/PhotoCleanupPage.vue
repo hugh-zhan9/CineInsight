@@ -543,6 +543,8 @@ import {
   refreshPhotoCleanupStatus
 } from '../utils/photoCleanupStore.js';
 import { confirmAction, notify, notifySuccess, notifyUndoable } from '../utils/feedback.js';
+import { isTextEntryTarget } from '../utils/keyboardShortcuts.js';
+import { hasOpenModalLayer } from './ui/modalSignals.js';
 import { groupPairKeys, memberPairKeys, undoCleanupDismissalRecords } from '../utils/cleanupDismissals.js';
 import {
   applySuggestion, cleanupGroup, clearGroupSelection, deletionPlan, deletionPlanUnchanged,
@@ -1214,10 +1216,11 @@ export default {
       if (next < 0 || next >= this.viewer.members.length) return;
       this.viewer = { ...this.viewer, index: next, member: this.viewer.members[next] };
     },
+    // 查看器的键：Esc 关、← → 切换。焦点在文本框里（全站同一判定，utils/keyboardShortcuts.js）时归那个控件；
+    // 上面另有对话框（模态层）时归对话框。底下「设为保留」单选这类不收文字的控件不挡——← → 归查看器，不悄悄改掉看不见的保留项。
     handleKeydown(event) {
       if (!this.viewer.member) return;
-      const tag = event.target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (isTextEntryTarget(event.target) || hasOpenModalLayer()) return;
       if (event.key === 'Escape') { event.preventDefault(); this.closeViewer(); }
       else if (event.key === 'ArrowRight') { event.preventDefault(); this.stepViewer(1); }
       else if (event.key === 'ArrowLeft') { event.preventDefault(); this.stepViewer(-1); }

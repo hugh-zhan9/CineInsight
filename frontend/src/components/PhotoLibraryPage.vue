@@ -825,6 +825,8 @@ import { logFrontend } from '../utils/frontendLog.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction, notify } from '../utils/feedback.js';
+import { isTextEntryTarget } from '../utils/keyboardShortcuts.js';
+import { hasOpenModalLayer } from './ui/modalSignals.js';
 import {
   PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
   buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
@@ -2396,11 +2398,12 @@ export default {
         this.candidateBusy = false;
       }
     },
+    // 查看器的键：Esc 关、← → 切换、F 收藏。焦点在文本框里（全站同一判定，utils/keyboardShortcuts.js）时归那个控件；
+    // 查看器上面另有对话框（删除确认框等模态层）时归对话框——框里的勾选框、按钮上按的键不动底下的图。
     handleKeydown(event) {
       if (!this.pageActive) return;
       if (this.viewerIndex < 0) return;
-      const tag = event.target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (isTextEntryTarget(event.target) || hasOpenModalLayer()) return;
       if (event.key === 'Escape') { event.preventDefault(); this.closeViewer(); }
       else if (event.key === 'ArrowRight') { event.preventDefault(); this.viewerNext(); }
       else if (event.key === 'ArrowLeft') { event.preventDefault(); this.viewerPrev(); }
