@@ -1,5 +1,5 @@
 <template>
-  <DialogShell title="建议作品集" size="xl" class="suggestion-modal" @close="$emit('close')">
+  <component :is="embedded ? 'InlineShell' : 'DialogShell'" v-bind="shellProps">
     <div class="suggestion-toolbar">
       <span class="suggestion-toolbar__meta">
         <template v-if="suggestions.length">共 {{ suggestions.length }} 组候选</template>
@@ -130,10 +130,11 @@
         @click="confirm"
       >{{ isAppend(activeSuggestion) ? '追加到作品集' : '确认建作品集' }}</button>
     </template>
-  </DialogShell>
+  </component>
 </template>
 
 <script>
+import { h } from 'vue';
 import {
   CancelCollectionSuggestionAnalysis,
   ConfirmCollectionSuggestion,
@@ -151,16 +152,36 @@ import { confirmAction, notifyError, notifySuccess } from '../utils/feedback.js'
 import { formatBytes } from '../utils/mediaDetails.js';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 
+// 嵌入模式的外壳：与 DialogShell 收同样的正文与 footer 两个插槽，但只是页面里的一块——不弹层、没有标题栏
+// （标题由宿主的区块给），footer 接在两栏下面当这一块的操作行。
+const InlineShell = {
+  name: 'CollectionSuggestionInline',
+  setup(_, { slots }) {
+    return () => h('div', { class: 'suggestion-inline' }, [
+      slots.default?.(),
+      slots.footer ? h('div', { class: 'suggestion-inline__footer' }, slots.footer()) : null
+    ]);
+  }
+};
+
 // 建议作品集面板（D-023..D-025）。
 //
 // 只做三件事：显示候选、让用户改名与去掉成员、把确认/忽略发回后端。分析本身是
 // 后台任务，进度经 collection-suggestion-state 事件回来；确认后由后端复用作品集
 // 写入，标题与文件名一律不动。
+//
+// 两种用法：默认是对话框，自己读候选（片库管理「管理」菜单）；embedded 嵌在待处理页的「建议作品集」区块里
+// （D-P3-01），候选由宿主读好经 items 传进来——这一块的数量、加载、出错与清空都跟宿主的同一份来源走，面板不另读。
+// 候选在后端变了（确认、忽略、分析跑完）都发 changed：嵌入时宿主据此重读这一块与摘要。
 export default {
   name: 'CollectionSuggestionPanel',
-  components: { AppBadge, DialogShell, EmptyState, ProgressBar, SkeletonBlock },
+  components: { AppBadge, DialogShell, EmptyState, InlineShell, ProgressBar, SkeletonBlock },
   mixins: [runtimeEventsMixin],
-  emits: ['close', 'confirmed'],
+  props: {
+    embedded: { type: Boolean, default: false },
+    items: { type: Array, default: null }
+  },
+  emits: ['close', 'confirmed', 'changed'],
   data() {
     return {
       suggestions: [],
@@ -173,6 +194,10 @@ export default {
     };
   },
   computed: {
+    shellProps() {
+      if (this.embedded) return {};
+      return { title: '建议作品集', size: 'xl', class: 'suggestion-modal', onClose: () => this.$emit('close') };
+    },
     activeSuggestion() {
       return this.suggestions.find(item => item.id === this.activeID) || null;
     },
@@ -193,14 +218,28 @@ export default {
       return this.keptVideoIDs.length >= 2 && Boolean(this.activeDraft.name.trim());
     }
   },
+  watch: {
+    // 嵌入模式：宿主每次重读都换上新的候选；改过的名称与去掉的成员按候选 id 留着（syncDrafts）。
+    items: {
+      immediate: true,
+      handler(items) {
+        if (!this.embedded) return;
+        this.suggestions = Array.isArray(items) ? [...items] : [];
+        this.syncDrafts();
+      }
+    }
+  },
   async mounted() {
     this.registerRuntimeEvent('collection-suggestion-state', (data) => {
       this.applyStatus(data);
-      // 跑完就把候选拉一遍：分析是后台任务，用户不该再点一次刷新。
-      if (data && !data.running) this.refresh();
+      // 跑完就把候选拉一遍：分析是后台任务，用户不该再点一次刷新。嵌入时候选归宿主读，由 changed 让宿主重读。
+      if (data && !data.running) {
+        this.$emit('changed');
+        if (!this.embedded) this.refresh();
+      }
     });
     await this.refreshStatus();
-    await this.refresh();
+    if (!this.embedded) await this.refresh();
   },
   methods: {
     formatBytes,
@@ -293,6 +332,7 @@ export default {
         notifySuccess(append ? `已把 ${videoIDs.length} 集追加到作品集「${name}」` : `已把 ${videoIDs.length} 集写入作品集「${name}」`);
         this.$emit('confirmed', detail);
         this.dropSuggestion(suggestion.id);
+        this.$emit('changed');
       } catch (err) {
         const raw = String(err?.message || err || '');
         notifyError(raw.includes('target_collection_gone') ? '目标作品集已被删除，请重新分析剧集。' : '确认作品集失败：' + raw);
@@ -314,6 +354,7 @@ export default {
       try {
         await DismissCollectionSuggestion(suggestion.id);
         this.dropSuggestion(suggestion.id);
+        this.$emit('changed');
       } catch (err) {
         notifyError('忽略剧集候选失败：' + err);
       } finally {
@@ -407,4 +448,18 @@ export default {
 .suggestion-member__badge { font-family: inherit; }
 
 .suggestion-footer__meta { color: var(--text-secondary); font-size: var(--fs-caption); }
+
+/* 嵌入模式（待处理页的一块）：两栏按内容高、封顶后各自滚，不跟窗口高度走（页面本身会滚）；
+   操作行与对话框 footer 同一排法——第一项（将写入几集）靠左，按钮靠右。
+   操作行由 InlineShell 生成，不带本组件的 scope 属性，要用 :deep 才命中；外壳根节点带。 */
+.suggestion-inline .suggestion-body { height: auto; max-height: 480px; }
+.suggestion-inline :deep(.suggestion-inline__footer) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.suggestion-inline :deep(.suggestion-inline__footer > :first-child:not(:last-child)) { margin-right: auto; }
 </style>
