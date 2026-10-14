@@ -33,7 +33,9 @@ const api = vi.hoisted(() => Object.fromEntries([
   // P-036 接入的绑定（随机「换一个」、重新定位、字幕备份与索引同步），以及撤销条真身用到的删除绑定。
   'RerollRandom', 'SelectVideoFile', 'RelocateVideo', 'ListSubtitleBackups', 'RestoreSubtitleBackup',
   'GetSubtitleIndexSyncStatus', 'SyncSubtitleIndexNow',
-  'DeleteVideosWithResult', 'DeleteImagesWithResult', 'PermanentlyDeleteVideos', 'PermanentlyDeleteImages', 'CancelBatchDelete', 'RestoreTrashBatch'
+  'DeleteVideosWithResult', 'DeleteImagesWithResult', 'PermanentlyDeleteVideos', 'PermanentlyDeleteImages', 'CancelBatchDelete', 'RestoreTrashBatch',
+  // 真工具栏（LibraryToolbar: false）挂载与人物筛选用到的绑定。
+  'ListPeople', 'GetCollectionSuggestionStatus'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -718,6 +720,76 @@ describe('VideoListPage 工具栏接线', () => {
     await wrapper.vm.$nextTick();
 
     wrapper.vm.handleLibraryShortcut({ key: 'Escape', preventDefault() {} });
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  // 2026-10-14：焦点在文本框里（搜索框、人物筛选、任何文字输入框 / 多行文本 / 下拉选择 / 可编辑区域）时 Esc 只归那个控件，
+  // 不连带清空片库多选；焦点不在可编辑元素上（页面本身、按钮、行勾选框）时 Esc 照旧清空。
+  it('Esc 在文本框里不清空多选，焦点不在可编辑元素上时照旧清空', async () => {
+    const wrapper = await mountPage({ pageActive: true }, { attachTo: document.body });
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
+    const element = html => {
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      return holder.firstElementChild;
+    };
+    // 元素放进页面里、按一下 Esc（冒泡到 window 上的页面处理器），返回按完后的选择与事件。
+    const pressEscapeIn = (node, target = node) => {
+      wrapper.vm.selectedVideoIds = [1, 2];
+      wrapper.element.appendChild(node);
+      const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      node.remove();
+      return { selection: [...wrapper.vm.selectedVideoIds], prevented: event.defaultPrevented };
+    };
+
+    for (const html of [
+      '<input type="text" aria-label="搜索">', '<input type="search">', '<input>', '<input type="number">',
+      '<textarea></textarea>', '<select><option>均衡排序</option></select>', '<div contenteditable="true"></div>',
+      '<div contenteditable=""></div>', '<div role="textbox"></div>'
+    ]) {
+      expect(pressEscapeIn(element(html)), html).toEqual({ selection: [1, 2], prevented: false });
+    }
+    // 可编辑区域里面的子节点也算在里面。
+    const editor = element('<div contenteditable="true"><p><b>粗体</b></p></div>');
+    expect(pressEscapeIn(editor, editor.querySelector('b'))).toEqual({ selection: [1, 2], prevented: false });
+
+    for (const html of ['<button type="button">播放</button>', '<input type="checkbox">', '<div tabindex="0"></div>', '<div contenteditable="false"></div>']) {
+      expect(pressEscapeIn(element(html)), html).toEqual({ selection: [], prevented: true });
+    }
+    // 焦点不在任何控件上（落在 body）。
+    wrapper.vm.selectedVideoIds = [1, 2];
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('⌘F 进片库搜索框后按 Esc 不清空多选；移出搜索框后 Esc 照旧清空', async () => {
+    api.ListPeople.mockResolvedValue([]);
+    api.GetCollectionSuggestionStatus.mockResolvedValue({ running: false });
+    const wrapper = await mountPage({ pageActive: true }, { attachTo: document.body, global: { stubs: { LibraryToolbar: false } } });
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
+    wrapper.vm.selectedVideoIds = [1, 2];
+    const search = wrapper.get('input[aria-label="搜索"]').element;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, cancelable: true }));
+    expect(document.activeElement).toBe(search);
+    const escape = () => {
+      const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      document.activeElement.dispatchEvent(event);
+      return event;
+    };
+    expect(escape().defaultPrevented).toBe(false);
+    expect(wrapper.vm.selectedVideoIds).toEqual([1, 2]);
+    // 人物筛选的搜索框（下拉收起时）同样只归它自己。
+    const person = wrapper.get('[data-test="person-filter-search"]').element;
+    person.focus();
+    escape();
+    escape();
+    expect(wrapper.vm.selectedVideoIds).toEqual([1, 2]);
+
+    person.blur();
+    expect(escape().defaultPrevented).toBe(true);
     expect(wrapper.vm.selectedVideoIds).toEqual([]);
     wrapper.unmount();
   });
