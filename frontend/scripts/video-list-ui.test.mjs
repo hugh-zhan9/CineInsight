@@ -121,7 +121,8 @@ assert.match(videoListSource, /case 'delete': this\.confirmDelete\(video\)/, 'ro
 // ⋯ 与右键是同一份定义、两个入口：右键只是换了定位方式。
 assert.match(videoListSource, /this\.rowMenu = \{ video, anchor: null, position: \{ x: event\.clientX, y: event\.clientY \} \}/, 'right-click reuses the same menu definition');
 assert.doesNotMatch(videoListSource, /class="context-menu"/, 'the bespoke context menu markup is gone');
-assert.match(shortFeedCss, /--short-glass-bg:\s*var\(--glass-strong-bg\)/, 'short feed should consume shared glass tokens');
+// 旧的 glass-* 变量随手机网页重做全部删掉（D-UD-05、D-MW-06）：手机页只读统一 tokens。
+assert.doesNotMatch(shortFeedCss, /--(short-)?glass-/, 'short feed no longer uses the retired glass variables');
 assert.match(shortFeedMain, /styles\/tokens\.css/, 'short feed entry should load shared design tokens');
 assert.doesNotMatch(shortFeedSource, /🔇|🔊|🗑/, 'short feed controls should avoid emoji action labels');
 assert.doesNotMatch(shortFeedSource, />\s*(Fav|Mute|Sound|Like|Save|Del)\s*</, 'short feed controls should use compact icons instead of text action labels');

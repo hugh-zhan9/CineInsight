@@ -33,8 +33,6 @@
   --warning-text: #b45309;
   --warning-soft: #fef3e2;
   --warning-border: #f3ddba;
-  /* glass-* 只剩手机端短视频页还在读的这一个（short-feed.css 的 --short-glass-bg），其余已删（D-UD-05）。 */
-  --glass-strong-bg: #ffffff;
   --row-bg: #ffffff;
   --row-hover-bg: #fafbfb;
   --row-selected-bg: #f4fbfa;
@@ -191,7 +189,6 @@
   --warning-text: #f0a13a;
   --warning-soft: #33260f;
   --warning-border: #5c451c;
-  --glass-strong-bg: #1a2122;
   --row-bg: #1a2122;
   --row-hover-bg: #1f2728;
   --row-selected-bg: #14282a;
@@ -308,7 +305,6 @@
   --shadow-segment: 0 1px 2px rgba(0, 0, 0, 0.36);
   /* 深色主题改了、上面没有映射的其余变量（审阅、置信度、回顾、播放器、角标等）：取深色主题的值，
      否则影院表面在浅色主题下会继承浅色值。 */
-  --glass-strong-bg: #1a2122;
   --success-bright: #4caf50;
   --media-badge-bg: rgba(0, 0, 0, 0.55);
   --media-badge-fg: #ffffff;

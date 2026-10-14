@@ -30,8 +30,6 @@ body {
   --feed-scrim-bottom: color-mix(in srgb, var(--bg-color) 86%, transparent);
   --feed-text-shadow: 0 1px 10px color-mix(in srgb, var(--bg-color) 80%, transparent);
   --feed-safe-bottom: env(safe-area-inset-bottom, 0px);
-  /* 浮在画面上的小提示用的「玻璃」底：scripts/video-list-ui.test.mjs 钉着手机页读 --glass-strong-bg（影院表面里是深色面板色）。 */
-  --short-glass-bg: var(--glass-strong-bg);
   background: var(--bg-color);
   color: var(--text-primary);
 }
@@ -384,7 +382,7 @@ button {
   display: inline-flex;
   align-items: center;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--short-glass-bg) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
   color: var(--text-secondary);
   font-size: var(--fs-caption);
   white-space: nowrap;

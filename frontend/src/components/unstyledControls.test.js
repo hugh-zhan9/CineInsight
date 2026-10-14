@@ -52,7 +52,7 @@ describe('form controls use the shared style primitives', () => {
 // 或是 components/ui 组件内部已登记的例外（下面 INTERNAL_BUTTONS，按「文件:类名」登记）。旧按钮类（btn-primary、row-btn、toolbar-btn…）
 // 已在第 0 步全部换掉并从 components.css 删除；scripts/design-system-pending/*.json 的 buttons 清单随之清零。清单按文件记「还剩几个不合规按钮」，
 // 是棘轮（与 design-system.test.mjs 共用 scripts/design-system-ratchet.mjs）：不在清单里的文件出现不合规按钮、
-// 或个数比清单多都会失败；个数比清单少会失败并提示把数字改小，清零了提示把这一项删掉。手机端 short-feed/ 不查。
+// 或个数比清单多都会失败；个数比清单少会失败并提示把数字改小，清零了提示把这一项删掉。手机端 short-feed/ 2026-10-14 起同样受查（D-MW-06）。
 const BUTTON_CLASSES = new Set(['btn', 'btn-link', 'btn-icon', 'btn-plain']);
 const INTERNAL_BUTTONS = new Set([
   'components/ui/AppTabs.vue:ui-tabs__tab',
@@ -89,7 +89,6 @@ describe('buttons use the unified button classes (D-UD-15)', () => {
     const actual = new Map();
     for (const path of listVueFiles(SRC)) {
       const file = relative(SRC, path);
-      if (file.startsWith('short-feed/')) continue;
       const buttons = offStyleButtons(path, file);
       if (buttons.length) actual.set(file, buttons);
     }
