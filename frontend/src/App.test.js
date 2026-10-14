@@ -1180,6 +1180,7 @@ describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
     previous_location: 'me@db.local:5432/cine',
     config_files: CONFIG_PATHS.map((path, index) => ({ path, exists: index === 3 })),
     data_dir_config: '/Users/me/.CineInsight/.env',
+    data_dir_config_status: 'missing',
     config_snippet: SNIPPET,
     pg_host_empty_in_launch_env: false
   });
@@ -1208,10 +1209,13 @@ describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
     expect(files.map(file => file.findComponent({ name: 'AppBadge' }).text())).toEqual(['不存在', '不存在', '不存在', '存在']);
     expect(files.map(file => file.findComponent({ name: 'AppBadge' }).props('tone'))).toEqual(['neutral', 'neutral', 'neutral', 'success']);
     const hint = page.get('[data-test="startup-guard-data-dir-hint"]').text();
-    expect(hint).toContain('把下面这段存成 /Users/me/.CineInsight/.env');
-    expect(hint).toContain('在 PG_PASSWORD 一行填上密码');
-    expect(hint).toContain('然后点「重新打开」');
+    expect(hint).toContain('把下面这段存成 /Users/me/.CineInsight/.env，在 PG_PASSWORD 一行填上密码，然后点「重新打开」');
+    expect(hint).not.toContain('替换这份文件的全部内容');
     expect(hint).not.toContain('补全空着的几项');
+    // 密码提示按 godotenv v1.5.1 的规则写（见 database 的 TestDBG05QuotedPasswordRoundTripsThroughLoadEnvConfig）。
+    const passwordHint = page.get('[data-test="startup-guard-password-hint"]').text();
+    expect(passwordHint).toContain('密码里有空格、#、引号、\\ 或 $ 时，用英文双引号括起来');
+    expect(passwordHint).toContain('PG_PASSWORD="a \\"b\\" #1"');
     // 配置块原样显示（pre 保留换行），是应用内切换写下的同一格式。
     expect(page.get('[data-test="startup-guard-snippet"]').element.textContent).toBe(SNIPPET);
     expect(page.find('[data-test="startup-guard-launch-env"]').exists()).toBe(false);
@@ -1233,9 +1237,35 @@ describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
     const summary = wrapper.get('[data-test="startup-guard-summary"]').text();
     expect(summary).toContain('数据目录里有之前使用留下的数据（缩略图、备份等），但本机 SQLite 库文件不存在');
     expect(summary).toContain('看起来之前用的是 PostgreSQL');
+    expect(summary).toContain('如果之前用的是放在别处的 SQLite 库，把 SQLITE_PATH 配置找回来后重新打开');
     expect(summary).not.toContain('上次用的是');
     expect(wrapper.get('[data-test="startup-guard-data-dir-hint"]').text()).toContain('补全空着的几项');
     expect(wrapper.get('[data-test="startup-guard-snippet"]').element.textContent).toBe(emptySnippet);
+  });
+
+  it('数据目录下的 .env 已经有了时说「替换这份文件的全部内容」，没有生效的才说原有内容没有生效', async () => {
+    api.GetStartupError.mockResolvedValue(BLOCKED_ERROR);
+    api.GetStartupBackendGuard.mockResolvedValue({ ...blockedGuard(), data_dir_config_status: 'ignored' });
+    let wrapper = await mountApp();
+    let hint = wrapper.get('[data-test="startup-guard-data-dir-hint"]').text();
+    expect(hint).toContain('/Users/me/.CineInsight/.env 已经有了，但这份文件里原有的内容现在都没有生效。用下面这段替换这份文件的全部内容，在 PG_PASSWORD 一行填上密码');
+    expect(hint).not.toContain('存成');
+    wrapper.unmount();
+
+    api.GetStartupBackendGuard.mockResolvedValue({ ...blockedGuard(), data_dir_config_status: 'loaded' });
+    wrapper = await mountApp();
+    hint = wrapper.get('[data-test="startup-guard-data-dir-hint"]').text();
+    expect(hint).toContain('/Users/me/.CineInsight/.env 已经有了。用下面这段替换这份文件的全部内容');
+    expect(hint).not.toContain('没有生效');
+  });
+
+  it('配置块里有空着的项时（记录里没有连接项）也提示补全', async () => {
+    const emptySnippet = 'DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=\nPG_PORT=\nPG_USER=\nPG_PASSWORD=（在这里填密码）\nPG_DB=\n';
+    api.GetStartupError.mockResolvedValue(BLOCKED_ERROR);
+    api.GetStartupBackendGuard.mockResolvedValue({ ...blockedGuard(), config_snippet: emptySnippet });
+    const wrapper = await mountApp();
+    expect(wrapper.get('[data-test="startup-guard-summary"]').text()).toContain('上次用的是 PostgreSQL（me@db.local:5432/cine）');
+    expect(wrapper.get('[data-test="startup-guard-data-dir-hint"]').text()).toContain('在 PG_PASSWORD 一行填上密码、补全空着的几项');
   });
 
   it('启动环境里有空的 PG_HOST 时说清是它挡住了配置文件', async () => {

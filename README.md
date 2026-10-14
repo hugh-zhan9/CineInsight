@@ -176,7 +176,7 @@ PG_PASSWORD=your_password
 PG_DB=video_master
 ```
 
-回落保护：应用记得上次打开的是哪个后端（`~/.CineInsight/backend-state.json`，不含密码）。上次是 PostgreSQL、这次却没读到 PostgreSQL 配置时（或者还没有这份记录，但数据目录里已有缩略图、备份等数据而本机库文件不存在），应用不会悄悄打开一个空的 SQLite 库，而是停在启动出错页：列出这次读过的配置文件，给出按上次连接预填、可以直接存成 `~/.CineInsight/.env` 的配置块（填上密码后「重新打开」），或者确认后「这次改用本机 SQLite」。
+回落保护：应用记得上次打开的是哪个后端（`~/.CineInsight/backend-state.json`，不含密码）。上次是 PostgreSQL、这次却没读到 PostgreSQL 配置时（或者还没有这份记录，但数据目录里已有缩略图、备份等数据而本机库文件不存在），应用不会悄悄打开一个空的 SQLite 库，而是停在启动出错页：列出这次读过的配置文件，给出按上次连接预填的配置块（存成 `~/.CineInsight/.env`，已有这个文件时替换它的全部内容；填上密码后「重新打开」），或者确认后「这次改用本机 SQLite」。密码里有空格、`#`、引号、`\` 或 `$` 时用英文双引号括起来，并在其中的 `"`、`\`、`$` 前各加一个 `\`。
 
 语义搜索只在 PostgreSQL 后端可用，需要安装 `pgvector` 扩展，并要求当前数据库用户可执行 `CREATE EXTENSION vector`（或由管理员预先安装）。SQLite 后端或扩展不可用时只有语义功能不可用，片库其他能力不受影响。
 

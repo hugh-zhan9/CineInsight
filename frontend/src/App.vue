@@ -59,7 +59,7 @@
       <div v-if="startupGuard.blocked" class="startup-error-card" data-test="startup-guard">
         <h2>没有读到 PostgreSQL 配置，已停下</h2>
         <p v-if="startupGuardInferred" class="startup-error-text" data-test="startup-guard-summary">
-          数据目录里有之前使用留下的数据（缩略图、备份等），但本机 SQLite 库文件不存在，这次也没有读到 PostgreSQL 配置。看起来之前用的是 PostgreSQL，为了不打开一个空的本机库，已经停下。
+          数据目录里有之前使用留下的数据（缩略图、备份等），但本机 SQLite 库文件不存在，这次也没有读到 PostgreSQL 配置。看起来之前用的是 PostgreSQL，为了不打开一个空的本机库，已经停下。如果之前用的是放在别处的 SQLite 库，把 SQLITE_PATH 配置找回来后重新打开。
         </p>
         <p v-else class="startup-error-text" data-test="startup-guard-summary">
           上次用的是 PostgreSQL{{ startupGuard.previous_location ? `（${startupGuard.previous_location}）` : '' }}，这次没有读到 PostgreSQL 配置，为了不打开一个空的本机库，已经停下。数据还在 PostgreSQL 里。
@@ -80,8 +80,9 @@
           </li>
         </ul>
         <h3 class="startup-guard-heading">把 PostgreSQL 配置存进数据目录</h3>
+        <!-- 文件已经有了就整份替换（D-DBG-05）：贴在旧内容前面时，旧文件后面的 DB_BACKEND=sqlite 会压过配置块。 -->
         <p class="startup-error-hint" data-test="startup-guard-data-dir-hint">
-          把下面这段存成 <code class="startup-guard-path">{{ startupGuard.data_dir_config }}</code>（这个文件已经有了时，用这几行替换其中同名的行），在 PG_PASSWORD 一行填上密码{{ startupGuardInferred ? '、补全空着的几项' : '' }}，然后点「重新打开」。这个位置不随应用更新被替换。
+          <template v-if="startupGuard.data_dir_config_status === 'missing'">把下面这段存成 <code class="startup-guard-path">{{ startupGuard.data_dir_config }}</code>，</template><template v-else><code class="startup-guard-path">{{ startupGuard.data_dir_config }}</code> 已经有了{{ startupGuard.data_dir_config_status === 'ignored' ? '，但这份文件里原有的内容现在都没有生效' : '' }}。用下面这段替换这份文件的全部内容，</template>在 PG_PASSWORD 一行填上密码{{ startupGuardSnippetHasEmpty ? '、补全空着的几项' : '' }}，然后点「重新打开」。这个位置不随应用更新被替换。
         </p>
         <div class="startup-guard-snippet">
           <pre ref="startupGuardSnippet" class="startup-guard-snippet__text" data-test="startup-guard-snippet">{{ startupGuard.config_snippet }}</pre>
@@ -89,6 +90,9 @@
             {{ startupGuardCopy === 'copied' ? '已复制' : '复制' }}
           </button>
         </div>
+        <!-- godotenv v1.5.1：不加引号时「空格 + #」后面算注释、$NAME 会被展开；双引号里 \"、\\、\$ 各读成一个字符，
+             以 \ 结尾的值读不出来、以 \" 结尾的会被截掉末尾的引号。 -->
+        <p class="startup-error-hint" data-test="startup-guard-password-hint">密码里有空格、#、引号、\ 或 $ 时，用英文双引号括起来，并在其中的 "、\、$ 前各加一个 \，例如 PG_PASSWORD="a \"b\" #1"；以 " 或 \ 结尾的密码这样写也读不对。</p>
         <p v-if="startupGuardCopy === 'selected'" class="startup-error-hint" role="status" data-test="startup-guard-copy-fallback">
           没能写进剪贴板，已经选中了上面这段，按 ⌘C 复制。
         </p>
@@ -483,6 +487,7 @@ function startupGuardFrom(guard) {
     previous_location: String(guard?.previous_location || ''),
     config_files: Array.isArray(guard?.config_files) ? guard.config_files : [],
     data_dir_config: String(guard?.data_dir_config || ''),
+    data_dir_config_status: String(guard?.data_dir_config_status || ''),
     config_snippet: String(guard?.config_snippet || ''),
     pg_host_empty_in_launch_env: guard?.pg_host_empty_in_launch_env === true
   };
@@ -717,6 +722,10 @@ export default {
     // 回落保护按数据目录推断拦下（还没有记录，D-DBG-02 首次运行缺口）：说不出上次的位置，配置块留空。
     startupGuardInferred() {
       return this.startupGuard.reason === 'inferred_postgres';
+    },
+    // 配置块里有留空的项（推断拦下，或记录里没有连接项）时，说明里加一句「补全空着的几项」。
+    startupGuardSnippetHasEmpty() {
+      return /^[A-Z_]+=$/m.test(this.startupGuard.config_snippet);
     },
     // 任务指示的读屏文字（接在导航名后面）：按钮上只看得到转圈、数字和红点。
     taskIndicatorStatus() {

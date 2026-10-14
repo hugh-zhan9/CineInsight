@@ -97,7 +97,7 @@ func TestDBG04GetStartupBackendGuardDefaultsToNotBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"blocked":false,"reason":"","previous_location":"","config_files":[],"data_dir_config":"","config_snippet":"","pg_host_empty_in_launch_env":false}`
+	want := `{"blocked":false,"reason":"","previous_location":"","config_files":[],"data_dir_config":"","data_dir_config_status":"","config_snippet":"","pg_host_empty_in_launch_env":false}`
 	if string(encoded) != want {
 		t.Fatalf("未拦下时的结果不对: %s want %s", encoded, want)
 	}

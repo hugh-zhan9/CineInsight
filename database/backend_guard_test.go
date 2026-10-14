@@ -24,7 +24,7 @@ func guardInitEnv(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	resetBackendStartupForTest(t)
-	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND", "PG_HOST", "PG_PORT", "PG_USER", "PG_PASSWORD", "PG_DB", "PG_SSLMODE", "SQLITE_PATH")
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND", "PG_HOST", "PG_PORT", "PG_USER", "PG_PASSWORD", "PG_DB", "PG_SSLMODE", "PG_TIMEZONE", "SQLITE_PATH")
 	previous := DB
 	t.Cleanup(func() {
 		if DB != previous {
@@ -157,6 +157,7 @@ func TestDBG01BackendStateRoundTripSQLite(t *testing.T) {
 // D-DBG-01：PostgreSQL 记录写 user@host:port/dbname，任何地方都不能出现密码。
 func TestDBG01PostgresRecordOmitsPassword(t *testing.T) {
 	dataDir := t.TempDir()
+	unsetEnvForTest(t, "PG_SSLMODE", "PG_TIMEZONE")
 	t.Setenv("PG_HOST", "db.local")
 	t.Setenv("PG_PORT", "5433")
 	t.Setenv("PG_USER", "me")
@@ -177,19 +178,20 @@ func TestDBG01PostgresRecordOmitsPassword(t *testing.T) {
 	if state.Backend != BackendPostgres || state.Location != "me@db.local:5433/cine" {
 		t.Fatalf("PostgreSQL 记录不对: %#v", state)
 	}
-	// 出错页预填配置块要的连接项（D-DBG-05）：没给 PG_SSLMODE 时不记。
+	// 出错页预填配置块要的连接项（D-DBG-05）：没给 PG_SSLMODE / PG_TIMEZONE 时不记。
 	if state.Postgres == nil || *state.Postgres != (BackendStatePostgres{Host: "db.local", Port: "5433", User: "me", DBName: "cine"}) {
 		t.Fatalf("PostgreSQL 连接项不对: %#v", state.Postgres)
 	}
 	if _, err := time.Parse(time.RFC3339, state.UpdatedAt); err != nil {
 		t.Fatalf("updated_at 应为 RFC3339: %q err=%v", state.UpdatedAt, err)
 	}
-	// 没给端口时与连接口径一致，记成 5432；显式给了 PG_SSLMODE 才记。
+	// 没给端口时与连接口径一致，记成 5432；显式给了 PG_SSLMODE、PG_TIMEZONE 才记。
 	t.Setenv("PG_PORT", "")
 	t.Setenv("PG_SSLMODE", "require")
+	t.Setenv("PG_TIMEZONE", "Asia/Shanghai")
 	next := newBackendState(BackendPostgres, dataDir, time.Now())
-	if next.Location != "me@db.local:5432/cine" || next.Postgres.Port != "5432" || next.Postgres.SSLMode != "require" {
-		t.Fatalf("默认端口应记成 5432、显式的 sslmode 应记下: %#v %#v", next, next.Postgres)
+	if next.Location != "me@db.local:5432/cine" || next.Postgres.Port != "5432" || next.Postgres.SSLMode != "require" || next.Postgres.Timezone != "Asia/Shanghai" {
+		t.Fatalf("默认端口应记成 5432、显式的 sslmode / timezone 应记下: %#v %#v", next, next.Postgres)
 	}
 }
 
@@ -257,7 +259,7 @@ func TestDBG02InitBlocksImplicitSQLiteAfterPostgres(t *testing.T) {
 
 	guard := StartupGuard()
 	if !guard.Blocked || guard.Reason != BackendGuardReasonPreviousPostgres || guard.PreviousLocation != "me@db.local:5432/cine" ||
-		guard.DataDirConfig != dataDirConfig || guard.PGHostEmptyInLaunchEnv {
+		guard.DataDirConfig != dataDirConfig || guard.DataDirConfigStatus != DataDirConfigIgnored || guard.PGHostEmptyInLaunchEnv {
 		t.Fatalf("回落保护结果不对: %#v", guard)
 	}
 	wantSnippet := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=db.local\nPG_PORT=5432\nPG_USER=me\nPG_PASSWORD=（在这里填密码）\nPG_DB=cine\n"
@@ -582,15 +584,15 @@ func TestDBG03ReportsEmptyPGHostInLaunchEnv(t *testing.T) {
 
 // D-DBG-05：配置块是应用内切换写下的同一格式（带 PREVIOUS_BACKEND，启动时整份采用），按记录预填，密码永远是占位。
 func TestDBG05ConfigSnippetPrefillsFromRecord(t *testing.T) {
-	full := BackendConfigSnippet(&BackendStatePostgres{Host: "db.local", Port: "5433", User: "me", DBName: "cine", SSLMode: "require"})
-	wantFull := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=db.local\nPG_PORT=5433\nPG_USER=me\nPG_PASSWORD=（在这里填密码）\nPG_DB=cine\nPG_SSLMODE=require\n"
+	full := BackendConfigSnippet(&BackendStatePostgres{Host: "db.local", Port: "5433", User: "me", DBName: "cine", SSLMode: "require", Timezone: "Asia/Shanghai"})
+	wantFull := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=db.local\nPG_PORT=5433\nPG_USER=me\nPG_PASSWORD=（在这里填密码）\nPG_DB=cine\nPG_SSLMODE=require\nPG_TIMEZONE=Asia/Shanghai\n"
 	if full != wantFull {
 		t.Fatalf("预填的配置块不对:\n%s\nwant\n%s", full, wantFull)
 	}
 	empty := BackendConfigSnippet(nil)
 	wantEmpty := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=\nPG_PORT=\nPG_USER=\nPG_PASSWORD=（在这里填密码）\nPG_DB=\n"
 	if empty != wantEmpty {
-		t.Fatalf("不知道连接项时应留空、不写 PG_SSLMODE:\n%s", empty)
+		t.Fatalf("不知道连接项时应留空、不写 PG_SSLMODE / PG_TIMEZONE:\n%s", empty)
 	}
 	values, err := godotenv.Unmarshal(full)
 	if err != nil {
@@ -667,4 +669,95 @@ func TestDBG01FailedApplySchemaLeavesRecordUnchanged(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("ApplySchema 失败时记录不应改动:\nbefore %s\nafter  %s", before, after)
 	}
+}
+
+// D-DBG-05：出错页按数据目录下 .env 的状态说「存成」还是「替换这份文件的全部内容」。
+func TestDBG05DataDirConfigStatusWhenBlocked(t *testing.T) {
+	cases := []struct {
+		name    string
+		content *string
+		want    string
+	}{
+		{"不存在 → missing", nil, DataDirConfigMissing},
+		{"缺 PREVIOUS_BACKEND（旧格式）→ ignored", ptr("DB_BACKEND=sqlite\nPG_HOST=db.local\n"), DataDirConfigIgnored},
+		{"读不出来 → ignored", ptr("PG_PASSWORD=\"unterminated\n"), DataDirConfigIgnored},
+		{"带 PREVIOUS_BACKEND、没有 DB_BACKEND → loaded", ptr("PREVIOUS_BACKEND=postgres\n"), DataDirConfigLoaded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := guardInitEnv(t)
+			writeRecordForTest(t, dataDir, BackendPostgres, "me@db.local:5432/cine")
+			if tc.content != nil {
+				if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte(*tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := Init(); !errors.Is(err, ErrBackendFallbackBlocked) {
+				t.Fatalf("应被拦下: %v", err)
+			}
+			if got := StartupGuard().DataDirConfigStatus; got != tc.want {
+				t.Fatalf("数据目录 .env 状态 got=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
+func ptr(value string) *string { return &value }
+
+// D-DBG-05：整份文件就是配置块时解析为 postgres（显式）；配置块贴在旧文件前面、旧文件里还留着
+// DB_BACKEND=sqlite 时，同名键取最后一个，sqlite 赢——这正是出错页要求「替换这份文件的全部内容」的原因。
+func TestDBG05FileOfExactlyTheSnippetResolvesToPostgres(t *testing.T) {
+	snippet := BackendConfigSnippet(&BackendStatePostgres{Host: "db.local", Port: "5432", User: "me", DBName: "cine"})
+	t.Run("整份就是配置块", func(t *testing.T) {
+		dataDir := guardInitEnv(t)
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte(snippet), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		backend, err := resolveStartupBackend(dataDir)
+		if err != nil || backend != BackendPostgres || os.Getenv(BackendConfigKey) != "postgres" || os.Getenv("PG_HOST") != "db.local" {
+			t.Fatalf("整份配置块应解析为 postgres: backend=%s err=%v", backend, err)
+		}
+	})
+	t.Run("贴在旧内容前面", func(t *testing.T) {
+		dataDir := guardInitEnv(t)
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte(snippet+"DB_BACKEND=sqlite\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if backend, _ := resolveStartupBackend(dataDir); backend != BackendSQLite {
+			t.Fatalf("对照：旧文件里后面的 DB_BACKEND=sqlite 会压过配置块，得到 %s", backend)
+		}
+	})
+}
+
+// 出错页的密码提示（godotenv v1.5.1 的规则）：不加引号时「空格 + #」后面算注释；用英文双引号括起来，
+// 其中的 "、\、$ 前加 \，就能原样读进来。
+func TestDBG05QuotedPasswordRoundTripsThroughLoadEnvConfig(t *testing.T) {
+	write := func(t *testing.T, password string) string {
+		dataDir := guardInitEnv(t)
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := strings.Replace(BackendConfigSnippet(nil), "PG_PASSWORD="+configSnippetPasswordPlaceholder, "PG_PASSWORD="+password, 1)
+		if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loadEnvConfig(dataDir)
+		return os.Getenv("PG_PASSWORD")
+	}
+	t.Run("双引号", func(t *testing.T) {
+		if got := write(t, `"p@ss #1 \"q\" \\ \$X"`); got != `p@ss #1 "q" \ $X` {
+			t.Fatalf("双引号括起来的密码应原样读进来: %q", got)
+		}
+	})
+	t.Run("对照：不加引号", func(t *testing.T) {
+		if got := write(t, `p@ss #1`); got != "p@ss" {
+			t.Fatalf("对照：不加引号时「空格 + #」后面算注释: %q", got)
+		}
+	})
 }

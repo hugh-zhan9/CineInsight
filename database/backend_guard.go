@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // 数据库后端回落保护（D-DBG-01..05，docs/loopx/design/2026-10-14-db-backend-guard/）。
@@ -48,13 +50,40 @@ type BackendState struct {
 	Postgres *BackendStatePostgres `json:"postgres,omitempty"`
 }
 
-// BackendStatePostgres 是记录里的 PostgreSQL 连接项。密码永远不记。SSLMode 只在 PG_SSLMODE 显式给出时记。
+// BackendStatePostgres 是记录里的 PostgreSQL 连接项。密码永远不记。SSLMode、Timezone 只在 PG_SSLMODE、
+// PG_TIMEZONE 显式给出时记。
 type BackendStatePostgres struct {
-	Host    string `json:"host"`
-	Port    string `json:"port"`
-	User    string `json:"user"`
-	DBName  string `json:"dbname"`
-	SSLMode string `json:"sslmode,omitempty"`
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	User     string `json:"user"`
+	DBName   string `json:"dbname"`
+	SSLMode  string `json:"sslmode,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
+}
+
+// 数据目录下 .env 在这次启动时的状态（StartupBackendGuard.DataDirConfigStatus）：出错页据此说「存成」还是
+// 「替换这份文件的全部内容」——把配置块贴在一份旧文件里，旧文件后面的 DB_BACKEND=sqlite 会压过配置块
+// （同名键取最后一个），文件又因为配置块带了 PREVIOUS_BACKEND 而被采用，结果是一个空的本机库。
+const (
+	DataDirConfigMissing = "missing" // 不存在
+	DataDirConfigIgnored = "ignored" // 存在，但这次整份没有采用（缺 PREVIOUS_BACKEND，或读不出来）
+	DataDirConfigLoaded  = "loaded"  // 存在且已采用
+)
+
+// dataDirConfigStatus 按 loadEnvConfig 的同一口径看数据目录下的 .env。
+func dataDirConfigStatus(dataDir string) string {
+	path := filepath.Join(dataDir, BackendConfigFileName)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return DataDirConfigMissing
+		}
+		return DataDirConfigIgnored
+	}
+	values, err := godotenv.Read(path)
+	if err != nil || !BackendConfigAdoptable(values) {
+		return DataDirConfigIgnored
+	}
+	return DataDirConfigLoaded
 }
 
 // BackendConfigFile 是启动时按优先级读过的一个配置文件位置，以及它当时是否存在。
@@ -75,6 +104,8 @@ type StartupBackendGuard struct {
 	ConfigFiles []BackendConfigFile `json:"config_files"`
 	// DataDirConfig 是推荐放配置的位置：数据目录下的 .env。
 	DataDirConfig string `json:"data_dir_config"`
+	// DataDirConfigStatus 是这份文件这次的状态：missing / ignored / loaded（见上）。
+	DataDirConfigStatus string `json:"data_dir_config_status"`
 	// ConfigSnippet 是可以直接存成 DataDirConfig 的配置块（本版本写出的格式，按记录预填，密码留给用户填）。
 	ConfigSnippet string `json:"config_snippet"`
 	// PGHostEmptyInLaunchEnv：启动环境（进程环境变量，加载配置文件之前）里有 PG_HOST 但是空值。
@@ -186,11 +217,12 @@ func newBackendState(backend Backend, dataDir string, now time.Time) BackendStat
 	}
 	state.Location = fmt.Sprintf("%s@%s:%s/%s", config.User, config.Host, config.Port, config.Database)
 	state.Postgres = &BackendStatePostgres{
-		Host:    config.Host,
-		Port:    config.Port,
-		User:    config.User,
-		DBName:  config.Database,
-		SSLMode: strings.TrimSpace(os.Getenv("PG_SSLMODE")),
+		Host:     config.Host,
+		Port:     config.Port,
+		User:     config.User,
+		DBName:   config.Database,
+		SSLMode:  strings.TrimSpace(os.Getenv("PG_SSLMODE")),
+		Timezone: strings.TrimSpace(os.Getenv("PG_TIMEZONE")),
 	}
 	return state
 }
@@ -252,7 +284,7 @@ const configSnippetPasswordPlaceholder = "（在这里填密码）"
 
 // BackendConfigSnippet 是出错页给的配置块（D-DBG-05）：与应用内切换写下的数据目录 .env 同一格式
 // （DB_BACKEND=postgres、PREVIOUS_BACKEND=sqlite，带 PREVIOUS_BACKEND 才会被启动采用），PG_* 按记录预填，
-// 不知道的留空；密码永远是占位，由用户自己填。PG_SSLMODE 只在记录里有时才写。
+// 不知道的留空；密码永远是占位，由用户自己填。PG_SSLMODE、PG_TIMEZONE 只在记录里有时才写。
 func BackendConfigSnippet(pg *BackendStatePostgres) string {
 	var known BackendStatePostgres
 	if pg != nil {
@@ -269,6 +301,9 @@ func BackendConfigSnippet(pg *BackendStatePostgres) string {
 	}
 	if known.SSLMode != "" {
 		lines = append(lines, "PG_SSLMODE="+known.SSLMode)
+	}
+	if known.Timezone != "" {
+		lines = append(lines, "PG_TIMEZONE="+known.Timezone)
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

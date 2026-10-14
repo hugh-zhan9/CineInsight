@@ -20,6 +20,7 @@ export namespace database {
 	    previous_location: string;
 	    config_files: BackendConfigFile[];
 	    data_dir_config: string;
+	    data_dir_config_status: string;
 	    config_snippet: string;
 	    pg_host_empty_in_launch_env: boolean;
 	
@@ -34,6 +35,7 @@ export namespace database {
 	        this.previous_location = source["previous_location"];
 	        this.config_files = this.convertValues(source["config_files"], BackendConfigFile);
 	        this.data_dir_config = source["data_dir_config"];
+	        this.data_dir_config_status = source["data_dir_config_status"];
 	        this.config_snippet = source["config_snippet"];
 	        this.pg_host_empty_in_launch_env = source["pg_host_empty_in_launch_env"];
 	    }

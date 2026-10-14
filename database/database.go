@@ -220,6 +220,7 @@ func resolveStartupBackend(dataDir string) (Backend, error) {
 			Reason:                 reason,
 			ConfigFiles:            startupConfigFiles(dataDir),
 			DataDirConfig:          filepath.Join(dataDir, BackendConfigFileName),
+			DataDirConfigStatus:    dataDirConfigStatus(dataDir),
 			PGHostEmptyInLaunchEnv: pgHostEmptyInLaunchEnv,
 		}
 		var previousPostgres *BackendStatePostgres
