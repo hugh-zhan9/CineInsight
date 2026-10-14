@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
-import { h } from 'vue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { h, vShow, withDirectives } from 'vue';
 
 import SelectionBar, { selectAllMatchingLabel } from './SelectionBar.vue';
 
@@ -184,5 +184,98 @@ describe('SelectionBar', () => {
     expect(selectAllMatchingLabel(20)).toBe('全选当前结果（20）');
     expect(selectAllMatchingLabel(null)).toBe('全选当前结果');
     expect(selectAllMatchingLabel(20, true)).toBe('正在选择…');
+  });
+});
+
+// 吸底的操作条把自己从窗口底边往上占的高度（自身高度 + 吸底的 16）写在根节点的 --selection-bar-inset 上，
+// 全局提示据此抬到它上面（AppFeedback，位置在 layering.test.js 里核对）。jsdom 没有 ResizeObserver 也不排版：
+// 这里换一个能手动通知的 ResizeObserver，并替浏览器给出操作条量出来的高度（页面被 v-show 藏起来时是 0）。
+describe('SelectionBar 把吸底占的高度写在根节点上', () => {
+  let observers;
+  beforeEach(() => {
+    observers = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback) {
+        this.callback = callback;
+        this.targets = new Set();
+        observers.push(this);
+      }
+      observe(target) { this.targets.add(target); }
+      unobserve(target) { this.targets.delete(target); }
+      disconnect() { this.targets.clear(); }
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.documentElement.style.removeProperty('--selection-bar-inset');
+  });
+
+  const inset = () => document.documentElement.style.getPropertyValue('--selection-bar-inset');
+  const observed = bar => observers.some(observer => observer.targets.has(bar));
+  // 浏览器排版后 ResizeObserver 报的那一下。jsdom 不加载组件样式，照样式表给操作条写上吸底的 16。
+  function layout(bar, height) {
+    bar.style.bottom = '16px';
+    bar.getBoundingClientRect = () => ({ top: 0, left: 0, right: height ? 600 : 0, bottom: height, width: height ? 600 : 0, height });
+    for (const observer of observers) if (observer.targets.has(bar)) observer.callback([{ target: bar }]);
+  }
+
+  it('看得见时写上高度 + 16，折成两三行时跟着变；选中清空（操作条消失）时去掉', async () => {
+    const wrapper = mountBar({ count: 3, totalMatching: 120 });
+    const bar = wrapper.get('.ui-selection-bar').element;
+    expect(observed(bar)).toBe(true);
+    expect(inset()).toBe('');
+    layout(bar, 46);
+    expect(inset()).toBe('62px');
+    layout(bar, 90);
+    expect(inset()).toBe('106px');
+    layout(bar, 134);
+    expect(inset()).toBe('150px');
+    await wrapper.setProps({ count: 0 });
+    expect(wrapper.find('.ui-selection-bar').exists()).toBe(false);
+    expect(observed(bar)).toBe(false);
+    expect(inset()).toBe('');
+  });
+
+  it('卸载时去掉', () => {
+    const wrapper = mountBar({ count: 2 });
+    layout(wrapper.get('.ui-selection-bar').element, 46);
+    expect(inset()).toBe('62px');
+    mounted.splice(mounted.indexOf(wrapper), 1);
+    wrapper.unmount();
+    expect(inset()).toBe('');
+  });
+
+  // 片库、图片管理、清理中心切走时只隐藏不卸载，各自的操作条还挂着：只算看得见的那条。
+  it('所在页面被 v-show 藏起来时不算；几个页面各有一条时只算看得见的，都看得见取最高的', async () => {
+    const Pages = {
+      props: { active: { type: String, default: 'library' } },
+      render() {
+        return h('div', ['library', 'photos'].map(page => withDirectives(
+          h('section', { 'data-page': page }, [h(SelectionBar, { count: 2 })]),
+          [[vShow, this.active === page]]
+        )));
+      }
+    };
+    const wrapper = mount(Pages, { attachTo: document.body });
+    mounted.push(wrapper);
+    const barIn = page => wrapper.get(`[data-page="${page}"] .ui-selection-bar`).element;
+    // 图片管理藏着：它的操作条量出来是 0。
+    layout(barIn('library'), 90);
+    layout(barIn('photos'), 0);
+    expect(inset()).toBe('106px');
+
+    // 切到图片管理：片库那条变 0，图片管理那条量出实际高度。
+    await wrapper.setProps({ active: 'photos' });
+    layout(barIn('library'), 0);
+    layout(barIn('photos'), 46);
+    expect(inset()).toBe('62px');
+
+    // 两条都看得见（同一页上）时取最高的；都藏起来时去掉。
+    layout(barIn('library'), 134);
+    expect(inset()).toBe('150px');
+    await wrapper.setProps({ active: 'none' });
+    layout(barIn('library'), 0);
+    layout(barIn('photos'), 0);
+    expect(inset()).toBe('');
   });
 });

@@ -211,7 +211,10 @@ describe('对话框开着时全局提示让开对话框的动作', () => {
   const tokenPx = name => Number((read('styles/tokens.css').match(new RegExp(`${name}:\\s*(\\d+)px;`)) || [])[1]);
 
   it('没有对话框时提示在右下角', () => {
-    expect(declarations('components/AppFeedback.vue', '.app-toasts')).toMatchObject({ right: 'var(--space-4)', bottom: 'var(--space-4)' });
+    // 下沿是 --toast-bottom：没有吸底的选择操作条时回落成 16（见下面「选择操作条」那条）。
+    const rule = declarations('components/AppFeedback.vue', '.app-toasts');
+    expect(rule).toMatchObject({ right: 'var(--space-4)', bottom: 'var(--toast-bottom)' });
+    expect(rule['--toast-bottom']).toBe('max(var(--space-4), calc(var(--selection-bar-inset, 0px) + var(--space-2)))');
   });
 
   it('有对话框开着时提示贴左上角，整条最多到窗口中线以上', () => {
@@ -307,17 +310,23 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
     return Object.assign({}, ...matched.map(rule => rule.decls));
   }
   // 长度换成像素：var(--…)（tokens.css 里的 px）、vh / vw、px、calc()、min()。
-  function px(value, { w, h }) {
+  // inset：SelectionBar 运行时写在根节点上的 --selection-bar-inset（不给就是没有看得见的操作条，取回落值）；
+  // --toast-bottom 是 AppFeedback 自己在 .app-toasts 上声明的。
+  function px(value, { w, h, inset }) {
     const tokens = read('styles/tokens.css');
+    const toastBottom = declarationsOf(FEEDBACK, '.app-toasts')['--toast-bottom'];
     const expr = value
+      .replace(/var\(--toast-bottom\)/g, `(${toastBottom})`)
+      .replace(/var\(--selection-bar-inset,\s*([^)]*)\)/g, (_, fallback) => (inset === undefined ? fallback : `${inset}px`))
       .replace(/var\((--[\w-]+)\)/g, (_, name) => (tokens.match(new RegExp(`${name}:\\s*(\\d+)px;`)) || [, 'NaN'])[1])
       .replace(/(\d+(?:\.\d+)?)vh/g, (_, n) => String(Number(n) * h / 100))
       .replace(/(\d+(?:\.\d+)?)vw/g, (_, n) => String(Number(n) * w / 100))
       .replace(/(\d+(?:\.\d+)?)px/g, '$1')
       .replace(/calc\(/g, '(')
-      .replace(/min\(/g, 'M(');
-    expect(expr, value).toMatch(/^[\d\s+\-*/().,M]+$/);
-    return Function('M', `return (${expr});`)(Math.min);
+      .replace(/min\(/g, 'M(')
+      .replace(/max\(/g, 'X(');
+    expect(expr, value).toMatch(/^[\d\s+\-*/().,MX]+$/);
+    return Function('M', 'X', `return (${expr});`)(Math.min, Math.max);
   }
   // 提示条在窗口里的范围（按 top/left 或 bottom/right 定位，宽取 max-width、高取 max-height 的上限）。
   function toastArea(selector, size) {
@@ -325,8 +334,9 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
     const rule = { ...base, ...declarationsOf(FEEDBACK, selector) };
     const width = px(rule['max-width'], size);
     const height = px(rule['max-height'], size);
-    const left = rule.left !== 'auto' ? px(rule.left, size) : size.w - px(rule.right, size) - width;
-    const top = rule.top !== 'auto' ? px(rule.top, size) : size.h - px(rule.bottom, size) - height;
+    const set = value => value && value !== 'auto';
+    const left = set(rule.left) ? px(rule.left, size) : size.w - px(rule.right, size) - width;
+    const top = set(rule.top) ? px(rule.top, size) : size.h - px(rule.bottom, size) - height;
     return { left, top, right: left + width, bottom: top + height };
   }
 
@@ -337,7 +347,7 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
       expect(Object.keys(rule).filter(key => POSITION.includes(key)).sort(), root).toEqual([...POSITION].sort());
       expect(rule['z-index'], root).toBeUndefined();
     }
-    expect(declarationsOf(FEEDBACK, toastsWhen('.preview-drawer'))).toMatchObject({ top: 'auto', right: 'auto', bottom: 'var(--space-4)', left: 'var(--space-4)' });
+    expect(declarationsOf(FEEDBACK, toastsWhen('.preview-drawer'))).toMatchObject({ top: 'auto', right: 'auto', bottom: 'var(--toast-bottom)', left: 'var(--space-4)' });
     expect(declarationsOf(FEEDBACK, toastsWhen('.task-center-overlay'))).toEqual(declarationsOf(FEEDBACK, toastsWhen('.preview-drawer')));
     expect(declarationsOf(FEEDBACK, toastsWhen('.version-compare'))).toMatchObject({ top: 'auto', right: 'var(--space-4)', left: 'auto' });
     for (const root of INSIDE_DIALOG_AREA) {
@@ -386,6 +396,28 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
       expect(area.right + 8, `${size.w}`).toBeLessThanOrEqual(size.w - 520);
       expect(area.bottom).toBe(size.h - 16);
     }
+  });
+
+  // 选择操作条（SelectionBar）吸底（bottom 16），勾得多时按钮折成两三行。以前右下角的提示压住它右边的按钮，详情抽屉
+  // 开着时左下角的提示压住它最后一行。操作条把自己从窗口底边往上占的高度写在 --selection-bar-inset 上（SelectionBar.test.js）。
+  it('选择操作条看得见时，右下角与抽屉开着时的左下角都抬到它上面；贴顶的位置不动', () => {
+    const BAR_GAP = 16;
+    for (const size of SIZES) {
+      for (const barHeight of [46, 90, 134]) {
+        const inset = BAR_GAP + barHeight;
+        for (const selector of ['.app-toasts', toastsWhen('.preview-drawer')]) {
+          const area = toastArea(selector, { ...size, inset });
+          expect(area.bottom + 8, `${selector} ${size.w} ${barHeight}`).toBeLessThanOrEqual(size.h - inset);
+          expect(area.top, `${selector} ${size.w} ${barHeight}`).toBeGreaterThanOrEqual(16);
+        }
+        for (const root of ['.modal-overlay', ...INSIDE_DIALOG_AREA]) {
+          expect(toastArea(toastsWhen(root), { ...size, inset }), root).toEqual(toastArea(toastsWhen(root), size));
+        }
+      }
+      // 没有看得见的操作条：照旧离底 16。
+      expect(toastArea('.app-toasts', size).bottom).toBe(size.h - 16);
+    }
+    expect(declarationsOf('components/ui/SelectionBar.vue', '.ui-selection-bar')).toMatchObject({ position: 'sticky', bottom: 'var(--space-4)' });
   });
 
   // 人脸来源的「查看视频片段」把同一个抽屉加宽看画面；以前固定 900，窗口 1024 宽时左边只剩 124，提示压住播放器控制条。
