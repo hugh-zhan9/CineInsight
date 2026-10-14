@@ -247,14 +247,14 @@ export const LIBRARY_MANAGE_SMART_VIEWS = Object.freeze(COMMAND_SMART_VIEWS.filt
 
 // 智能视图命令的落点（D-P3-03「命令改指向观看侧」）：
 // - 海报墙认得的观看状态（未看、继续观看、已看、收藏、点赞、最近播放）一律去「视频」并带上 { watch }，不论当前在哪一侧；
-// - 海报墙不单列的「最近添加」（海报墙默认就按最近添加排序）片库管理已不再提供：命令保留但不在面板里列出（hidden），
-//   执行时去「视频」的全部；
+// - 海报墙不单列的「最近添加」片库管理已不再提供：命令保留但不在面板里列出（hidden），执行时去「视频」并带上
+//   { watch: 'recently_added' }（海报墙显示成可去掉的「最近 30 天添加」筛选项，与首页「最近添加」的「查看全部」同一落点）；
 // - 「全部视频」跟着当前区域：管理侧是片库管理的全部，观看侧是「视频」的全部；
 // - 其余（管理向）去「片库管理」套上这个视图。
 export function smartViewTarget(value, area) {
   const view = value || '';
   if (view === '') return area === 'manage' ? { page: 'library-manage', view } : { page: 'videos', watch: '' };
-  if (VIDEO_BROWSE_SMART_VIEWS.includes(view)) return { page: 'videos', watch: view };
+  if (VIDEO_BROWSE_SMART_VIEWS.includes(view) || view === 'recently_added') return { page: 'videos', watch: view };
   if (LIBRARY_MANAGE_SMART_VIEWS.includes(view)) return { page: 'library-manage', view };
   return { page: 'videos', watch: '' };
 }
