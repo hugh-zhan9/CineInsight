@@ -85,16 +85,28 @@ type TaskLastRun struct {
 	NothingToDo bool       `json:"nothing_to_do"`
 }
 
+// TaskRunCounts 是运行中这一轮到目前为止的计数，从服务状态原样取；这一轮结束后同样的数在 LastRun 里。
+// 只有近重复指纹给：片库页状态条在跑时就列「本轮新生成 / 已有指纹复用 / 处理失败 / 已移出处理范围」，
+// 2026-10-14 起任务中心在跑时也列。
+type TaskRunCounts struct {
+	Succeeded  int `json:"succeeded"`
+	Reused     int `json:"reused"`
+	Failed     int `json:"failed"`
+	OutOfScope int `json:"out_of_scope"`
+}
+
 // TaskCenterItem 是任务中心里一个后台任务 key 的状态。Preparing 是运行中、还在统计待处理项
 // （总数还不知道，Progress 为 nil）；只有服务状态里本来就有「准备中」的任务会给（D-P3-05）。
+// RunCounts 只在运行中、且服务在跑时就有计数的任务（近重复指纹）给出，其余为 nil。
 type TaskCenterItem struct {
-	Key        string        `json:"key"`
-	State      string        `json:"state"`
-	GateReason string        `json:"gate_reason"`
-	Preparing  bool          `json:"preparing"`
-	Progress   *TaskProgress `json:"progress"`
-	LastRun    *TaskLastRun  `json:"last_run"`
-	Actions    []string      `json:"actions"`
+	Key        string         `json:"key"`
+	State      string         `json:"state"`
+	GateReason string         `json:"gate_reason"`
+	Preparing  bool           `json:"preparing"`
+	Progress   *TaskProgress  `json:"progress"`
+	RunCounts  *TaskRunCounts `json:"run_counts"`
+	LastRun    *TaskLastRun   `json:"last_run"`
+	Actions    []string       `json:"actions"`
 }
 
 // TaskRecentJob 是字幕、超分、下载、播放代理及集中整理任务的逐条记录（进行中与最近结束的）。
@@ -277,6 +289,7 @@ func buildTaskCenterItem(key string, state taskCenterKeyState, src *taskCenterSo
 		item.State = TaskCenterStateRunning
 		item.Preparing = state.preparing
 		item.Progress = state.progress
+		item.RunCounts = state.runCounts
 	case waiting:
 		item.State = TaskCenterStateWaitingIdle
 	}

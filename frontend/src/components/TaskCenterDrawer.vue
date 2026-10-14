@@ -77,6 +77,7 @@
                 <ProgressBar class="task-item__bar" :value="progressPercent(item) / 100" />
                 <span class="task-item__progress-text">{{ item.progress.done }}/{{ item.progress.total }}</span>
               </div>
+              <p v-if="runCountsText(item)" class="task-item__last" :data-test="`task-item-run-counts-${item.key}`">{{ runCountsText(item) }}</p>
               <p v-if="lastRunText(item)" class="task-item__last" :data-test="`task-item-last-${item.key}`">{{ lastRunText(item) }}</p>
               <p v-for="(note, index) in itemNotes(item)" :key="`${item.key}-note-${index}`" class="task-item__note" :data-test="`task-item-note-${item.key}`">{{ note }}</p>
               <details v-if="failures(item).length" class="task-item__failures" :data-test="`task-item-failures-${item.key}`">
@@ -431,6 +432,14 @@ export default {
     },
     lastRunFailed(item) {
       return Number(item?.last_run?.failed || 0) > 0 || asArray(item?.last_run?.failures).length > 0;
+    },
+    // 运行中这一轮到目前为止的计数（run_counts，只有近重复指纹给）：照搬片库页状态条在跑时的说法，
+    // 新生成、复用、失败总是列，移出处理范围不为 0 才列（2026-10-14 起，此前只在这一轮结束后给出）。
+    runCountsText(item) {
+      const counts = item.run_counts;
+      if (!counts) return '';
+      const text = `本轮新生成 ${Number(counts.succeeded || 0)} 部，已有指纹复用 ${Number(counts.reused || 0)} 部，处理失败 ${Number(counts.failed || 0)} 部`;
+      return Number(counts.out_of_scope) > 0 ? `${text}，已移出处理范围 ${Number(counts.out_of_scope)} 部` : text;
     },
     // 上一轮：总数为 0 的一轮只说「无需补全 / 无需处理（已是最新状态）」；其余列计数（跳过、未处理、
     // 复用、移出范围只在不为 0 时列），再按状态条的说法收尾：取消的写「已取消」，有结束时间的写

@@ -224,6 +224,29 @@ describe('状态条收进任务中心（D-P3-05）', () => {
     expect(wrapper.get('[data-test="task-item-last-phash"]').text()).not.toContain('复用');
   });
 
+  it('近重复指纹在跑时照状态条的说法列本轮计数，跟着 task-center-changed 走；移出处理范围为 0 不列', async () => {
+    const running = (counts, done) => ({ state: 'running', progress: { done, total: 10 }, run_counts: counts, actions: ['cancel'] });
+    const wrapper = await mountWith({ phash: running({ succeeded: 0, reused: 0, failed: 0, out_of_scope: 0 }, 0) });
+    expect(wrapper.get('[data-test="task-item-run-counts-phash"]').text()).toBe('本轮新生成 0 部，已有指纹复用 0 部，处理失败 0 部');
+
+    handlers['task-center-changed'](snapshot({ overrides: { phash: running({ succeeded: 2, reused: 3, failed: 1, out_of_scope: 1 }, 7) } }));
+    await flushPromises();
+    expect(wrapper.get('[data-test="task-item-run-counts-phash"]').text()).toBe('本轮新生成 2 部，已有指纹复用 3 部，处理失败 1 部，已移出处理范围 1 部');
+    expect(wrapper.get('[data-test="task-item-progress-phash"]').text()).toContain('7/10');
+    expect(wrapper.find('[data-test="task-item-last-phash"]').exists()).toBe(false);
+    // 在跑时没有失败明细，「具体原因见下方」那句仍只跟上一轮走。
+    expect(wrapper.findAll('[data-test="task-item-note-phash"]')).toHaveLength(1);
+
+    handlers['task-center-changed'](snapshot({ overrides: {
+      phash: { last_run: { finished_at: FINISHED, succeeded: 2, failed: 1, reused: 4, out_of_scope: 1, failures: ['a.mp4：解码失败'] }, actions: ['start'] },
+      frame_hash: { state: 'running', progress: { done: 1, total: 4 } }
+    } }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="task-item-run-counts-phash"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="task-item-last-phash"]').text()).toContain('成功 2 · 失败 1 · 已有指纹复用 4 · 已移出处理范围 1（本轮结束，有失败项）');
+    expect(wrapper.find('[data-test="task-item-run-counts-frame_hash"]').exists()).toBe(false);
+  });
+
   it('总数为 0 的一轮：补全类写「无需补全（已是最新状态）」，其余写「无需处理（已是最新状态）」，不列计数', async () => {
     const wrapper = await mountWith({
       technical: { last_run: { finished_at: FINISHED, succeeded: 0, failed: 0, nothing_to_do: true, failures: [] } },
