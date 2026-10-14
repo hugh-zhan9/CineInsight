@@ -357,6 +357,16 @@ describe('RecapPage live refresh', () => {
     expect(wrapper.find('[data-test^="recap-all-favorites"]').exists()).toBe(false);
   });
 
+  it('keeps the Top and image sections (with 查看全部) when everything watched this period is gone', async () => {
+    api.GetRecap.mockResolvedValue(recap({ overview: { ...recap().overview, videos: 3, images: 2 }, top_videos: [], top_images: [] }));
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="recap-top-videos-gone"]').text()).toBe('这 3 部都已不在库中，记录仍然保留。');
+    expect(wrapper.get('[data-test="recap-all-videos"]').text()).toBe('查看全部 3 部');
+    expect(wrapper.find('[data-test="recap-top-videos"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="recap-top-images-gone"]').text()).toBe('这 2 张都已不在库中，记录仍然保留。');
+    expect(wrapper.get('[data-test="recap-all-images"]').text()).toBe('查看全部 2 张');
+  });
+
   it('opens the full list for the displayed period and closes it when an item opens', async () => {
     api.GetRecap.mockResolvedValue(recap({ overview: { ...recap().overview, videos: 15 } }));
     api.ListRecapItems.mockResolvedValue({ kind: 'videos', offset: 0, total: 15, has_more: false, videos: [], image_ranks: [], favorites: [], diary: [], feed: [],

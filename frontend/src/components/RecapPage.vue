@@ -149,10 +149,12 @@
           </div>
         </section>
 
-        <div v-if="result.top_videos.length" class="recap-split recap-split--wide">
+        <!-- 期内看过的视频都已不在库中时排行为空，但计数还在：区块照样出，写一句说明并留「查看全部」。 -->
+        <div v-if="result.top_videos.length || listCounts.videos.total" class="recap-split recap-split--wide">
           <section v-reveal class="recap-panel">
-            <header class="recap-section__head"><h3><RecapIcon name="videos" /> 本期 Top {{ result.top_videos.length }}</h3><small>按播放次数，并列看最近一次</small><button v-if="canListAll('videos')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-videos" @click="openList('videos')">{{ listAllText('videos') }}</button></header>
-            <div class="recap-posters" data-test="recap-top-videos">
+            <header class="recap-section__head"><h3><RecapIcon name="videos" /> {{ result.top_videos.length ? `本期 Top ${result.top_videos.length}` : '看过的视频' }}</h3><small>按播放次数，并列看最近一次</small><button v-if="canListAll('videos')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-videos" @click="openList('videos')">{{ listAllText('videos') }}</button></header>
+            <p v-if="!result.top_videos.length" class="recap-muted" data-test="recap-top-videos-gone">这 {{ listCounts.videos.total }} 部都已不在库中，记录仍然保留。</p>
+            <div v-else class="recap-posters" data-test="recap-top-videos">
               <RecapMediaCard
                 v-for="(item, index) in result.top_videos"
                 :key="item.video.id"
@@ -204,9 +206,10 @@
           </aside>
         </div>
 
-        <section v-if="result.top_images.length" v-reveal class="recap-section">
+        <section v-if="result.top_images.length || listCounts.images.total" v-reveal class="recap-section">
           <header class="recap-section__head"><h3><RecapIcon name="images" /> 最常看的图片</h3><small>{{ imageHeadline }}</small><button v-if="canListAll('images')" type="button" class="btn btn--secondary btn--sm recap-more" data-test="recap-all-images" @click="openList('images')">{{ listAllText('images') }}</button></header>
-          <div class="recap-mosaic" data-test="recap-top-images">
+          <p v-if="!result.top_images.length" class="recap-muted" data-test="recap-top-images-gone">这 {{ listCounts.images.total }} 张都已不在库中，记录仍然保留。</p>
+          <div v-else class="recap-mosaic" data-test="recap-top-images">
             <RecapMediaCard
               v-for="item in result.top_images"
               :key="item.image.id"
