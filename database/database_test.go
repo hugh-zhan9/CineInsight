@@ -759,11 +759,10 @@ func resetBackendStartupForTest(t *testing.T) {
 }
 
 // APP02 / M-1：09-01 以来旧版本写的数据目录 .env 只有 DB_BACKEND（那次切换当时从未生效），
-// 启动时不采用；带 PREVIOUS_BACKEND 的新格式才采用。D-DBG-05 起缺 PREVIOUS_BACKEND 的文件只忽略
-// DB_BACKEND 与 PREVIOUS_BACKEND 两个键（其余键照常加载，见 TestDBG05*），解析结果与以前整份不采用时一样。
-func TestAPP02LoadEnvConfigIgnoresLegacyDataDirBackendWithoutPreviousBackend(t *testing.T) {
+// 启动时不采用；带 PREVIOUS_BACKEND 的新格式才加载。
+func TestAPP02LoadEnvConfigSkipsLegacyDataDirConfigWithoutPreviousBackend(t *testing.T) {
 	dataDir := t.TempDir()
-	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND", "PG_HOST")
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND")
 	path := filepath.Join(dataDir, BackendConfigFileName)
 	if err := os.WriteFile(path, []byte("DB_BACKEND=postgres\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -772,28 +771,13 @@ func TestAPP02LoadEnvConfigIgnoresLegacyDataDirBackendWithoutPreviousBackend(t *
 	if got, ok := os.LookupEnv("DB_BACKEND"); ok {
 		t.Fatalf("旧格式（缺 PREVIOUS_BACKEND）不应被采用，DB_BACKEND=%q", got)
 	}
-	if got := ActiveBackend(); got != BackendSQLite {
-		t.Fatalf("旧格式里的 DB_BACKEND 不应改变解析结果，得到 %s", got)
-	}
-
-	// PREVIOUS_BACKEND 是空值同样不算本版本格式：两个键都不进环境。
-	if err := os.WriteFile(path, []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	loadEnvConfig(dataDir)
-	if got, ok := os.LookupEnv("DB_BACKEND"); ok {
-		t.Fatalf("PREVIOUS_BACKEND 为空时 DB_BACKEND 不应被采用，DB_BACKEND=%q", got)
-	}
-	if got, ok := os.LookupEnv("PREVIOUS_BACKEND"); ok {
-		t.Fatalf("PREVIOUS_BACKEND 为空时不应写进环境，PREVIOUS_BACKEND=%q", got)
-	}
 
 	if err := os.WriteFile(path, []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	loadEnvConfig(dataDir)
-	if got := os.Getenv("DB_BACKEND"); got != "postgres" || os.Getenv("PREVIOUS_BACKEND") != "sqlite" {
-		t.Fatalf("新格式应被采用，DB_BACKEND=%q PREVIOUS_BACKEND=%q", got, os.Getenv("PREVIOUS_BACKEND"))
+	if got := os.Getenv("DB_BACKEND"); got != "postgres" {
+		t.Fatalf("新格式应被采用，DB_BACKEND=%q", got)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -124,8 +123,8 @@ const (
 )
 
 // BackendConfigAdoptable 报告数据目录下的后端配置是不是本版本写出的格式：只有带 PREVIOUS_BACKEND 的
-// 才采用其中的 DB_BACKEND。09-01 以来的旧版本切换后端时也往这份文件里写过 DB_BACKEND，但当时这份文件
-// 从未被加载，那次切换从未生效；升级后突然采用它，用户会在什么都没做的情况下被换到另一个库。
+// 才采用。09-01 以来的旧版本切换后端时也往这份文件里写过 DB_BACKEND，但当时这份文件从未被加载，
+// 那次切换从未生效；升级后突然采用它，用户会在什么都没做的情况下被换到另一个库。
 func BackendConfigAdoptable(values map[string]string) bool {
 	return strings.TrimSpace(values[PreviousBackendConfigKey]) != ""
 }
@@ -146,31 +145,11 @@ func loadEnvConfig(dataDir string) {
 				continue
 			}
 			if !BackendConfigAdoptable(values) {
-				// D-DBG-05：不是本版本写出的格式时，只忽略 DB_BACKEND 与 PREVIOUS_BACKEND 两个键（M-1 要挡的
-				// 就是旧版本写下、从未生效的 DB_BACKEND），其余键（用户自己写的 PG_* 等）照常加载——
-				// 回落保护出错页推荐把 PostgreSQL 配置写在这里。
-				if _, ok := values[BackendConfigKey]; ok {
-					log.Printf("数据目录下的后端配置缺少 %s（旧版本写入、从未生效的切换），其中的 %s 本次不采用，其余配置照常加载", PreviousBackendConfigKey, BackendConfigKey)
-				}
-				setEnvWithoutOverride(values, BackendConfigKey, PreviousBackendConfigKey)
+				log.Printf("数据目录下的后端配置缺少 %s（旧版本写入、从未生效的切换），本次不采用", PreviousBackendConfigKey)
 				continue
 			}
 		}
 		_ = godotenv.Load(path)
-	}
-}
-
-// setEnvWithoutOverride 把 values 写进进程环境，跳过 skip 里的键；与 godotenv.Load 同一口径：
-// 环境里已存在的变量（空值也算）不覆盖。
-func setEnvWithoutOverride(values map[string]string, skip ...string) {
-	for key, value := range values {
-		if slices.Contains(skip, key) {
-			continue
-		}
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
-		_ = os.Setenv(key, value)
 	}
 }
 

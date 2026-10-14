@@ -186,8 +186,8 @@ const databaseStatusMaintenanceSemanticReason = "数据库正在迁移、恢复�
 
 // nextBackend 返回下次启动要用的后端。进程环境变量在启动时就定下了，切换只改数据目录下的 .env，
 // 所以下次启动的后端要从那份文件读；判定口径与启动时加载那份文件的口径一致：DB_BACKEND 来自进程
-// 环境时文件压不过它，旧格式文件（没有 PREVIOUS_BACKEND）里的 DB_BACKEND 启动时不采用（D-DBG-05 起
-// 这种文件的其余键照常加载，与下次用哪个后端无关）。读不出或取值非法时按 configured（本进程的后端）算。
+// 环境时文件压不过它，旧格式文件（没有 PREVIOUS_BACKEND）启动时不采用。读不出或取值非法时按
+// configured（本进程的后端）算。
 func (s *DatabaseSwitchService) nextBackend(configured database.Backend) database.Backend {
 	if s.backendFromProcessEnv() {
 		return configured
