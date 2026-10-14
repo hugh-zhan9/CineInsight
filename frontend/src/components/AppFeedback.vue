@@ -139,8 +139,8 @@ export default {
      它们的位置都在对话框那条的范围（左边、中线以上）以内，上面再开对话框也让得开对话框的动作，所以照旧按自己的。
    每条都把 top / right / bottom / left / max-height 写全，几条同时命中时不会混着生效。 */
 
-/* 抽屉（详情抽屉、任务中心）靠右停靠，里面从上到下都是控件：提示挪到另一边的左下角。
-   人脸来源的「查看视频片段」也是这个抽屉，但加宽到 900：窗口 1024 宽时左边只剩 124，提示仍会压到抽屉左下角。 */
+/* 抽屉（详情抽屉、任务中心）靠右停靠，里面从上到下都是控件：提示挪到另一边的左下角。人脸来源的「查看视频片段」
+   也是这个抽屉，它加宽时给这一列留了位置（FaceClusterDetailDialog：宽不超过 100vw - 452）。 */
 body:has(.preview-drawer:where(:not([style*="display: none"] *))) .app-toasts,
 body:has(.task-center-overlay:where(:not([style*="display: none"] *))) .app-toasts {
   top: auto;

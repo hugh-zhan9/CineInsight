@@ -388,6 +388,19 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
     }
   });
 
+  // 人脸来源的「查看视频片段」把同一个抽屉加宽看画面；以前固定 900，窗口 1024 宽时左边只剩 124，提示压住播放器控制条。
+  it('人脸来源的视频片段：加宽的抽屉给左下角的提示留出一列，又不比一般的详情抽屉窄', () => {
+    const wide = declarationsOf('components/FaceClusterDetailDialog.vue', '.face-source-video :deep(.preview-drawer)');
+    for (const size of SIZES) {
+      const area = toastArea(toastsWhen('.preview-drawer'), size);
+      const width = Math.min(px(wide.width, size), px(wide['max-width'], size));
+      expect(area.right + 8, `${size.w}`).toBeLessThanOrEqual(size.w - width);
+      expect(width, `${size.w}`).toBeGreaterThanOrEqual(520);
+    }
+    // 窗口够宽时照旧 900。
+    expect(px(wide.width, { w: 1440, h: 900 })).toBe(900);
+  });
+
   it('版本对比：提示在一行播放条之上、整条在下半截，够不着顶栏、两侧标注与舞台正中的分界线把手', () => {
     const transport = declarationsOf('components/VersionCompareDialog.vue', '.version-compare__transport');
     expect(transport).toMatchObject({ padding: 'var(--space-2) var(--space-4)', 'flex-wrap': 'nowrap', 'border-top': '1px solid var(--hairline)' });
