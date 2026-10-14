@@ -79,7 +79,17 @@
             </select>
           </label>
         </div>
-        <div v-if="tagIDs.length || people.length" class="video-browse__chips" data-test="browse-active-filters">
+        <div v-if="extraViewLabel || tagIDs.length || people.length" class="video-browse__chips" data-test="browse-active-filters">
+          <!-- 观看状态里不单列的视图（首页「最近添加」的「查看全部」带来的 recently_added）：一个可去掉的筛选项。 -->
+          <FilterChip
+            v-if="extraViewLabel"
+            :label="extraViewLabel"
+            active
+            removable
+            data-test="browse-view-chip"
+            @toggle="setWatch('')"
+            @remove="setWatch('')"
+          />
           <FilterChip
             v-for="tag in selectedTagChips"
             :key="`tag-${tag.id}`"
@@ -113,6 +123,7 @@
       <header class="video-browse__section-head">
         <h2><AppIcon name="collection" :size="20" /> 追到哪了</h2>
         <small>作品集看到第几部，点开接着看下一部</small>
+        <button v-if="progressBlock.more" type="button" class="btn btn--secondary btn--sm video-browse__section-action" data-test="browse-progress-all" @click="progressAllOpen = true">查看全部 <AppIcon name="arrow" /></button>
       </header>
       <AppBanner v-if="progressBlock.error" tone="danger" title="读取「追到哪了」失败" :message="progressBlock.error" data-test="browse-progress-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="browse-progress-retry" @click="loadProgress">重试</button></template>
@@ -276,6 +287,15 @@
       @play="playTonightSuggestion"
       @play-random="playRandomFromTonight"
     />
+    <ViewAllDialog
+      v-if="progressAllOpen"
+      title="追到哪了"
+      data-test="browse-progress-dialog"
+      :fetch-page="fetchProgressPage"
+      :to-card="progressCard"
+      @close="progressAllOpen = false"
+      @open-video="openProgressFromDialog"
+    />
   </section>
 </template>
 
@@ -295,7 +315,8 @@
 //   （排序保留），滚动回到顶部。
 // 事件：open-video(id) 进整页详情（App 按 from='videos' 分流）；navigate(key) 去别的页面（空片库的「去添加扫描目录」）。
 import {
-  CountLibraryVideos, ListCollectionProgress, ListPeople, ListRecentlyPlayedWithFilter, PlayVideo, SearchLibraryVideoPage
+  CountLibraryVideos, ListCollectionProgress, ListCollectionProgressPage, ListPeople, ListRecentlyPlayedWithFilter, PlayVideo,
+  SearchLibraryVideoPage
 } from '../../../wailsjs/go/main/App';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import TonightPickerDialog from '../TonightPickerDialog.vue';
@@ -311,6 +332,7 @@ import FilterChip from '../ui/FilterChip.vue';
 import PageHeader from '../ui/PageHeader.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
+import ViewAllDialog from './ViewAllDialog.vue';
 import { notifyError, translateBackendError } from '../../utils/feedback.js';
 import { scrubAbsolutePaths } from '../../utils/pathText.js';
 import {
@@ -335,6 +357,9 @@ export const VIDEO_BROWSE_WATCH_OPTIONS = Object.freeze([
   { value: 'liked', label: '点赞', dataTest: 'browse-watch-liked' },
   { value: 'recently_played', label: '最近播放', dataTest: 'browse-watch-recent' }
 ]);
+// 观看状态里不单列、只经 navigationRequest 带进来的视图（首页「最近添加」的「查看全部」）：不进分段控件（分段与
+// appCommands.js 的 VIDEO_BROWSE_SMART_VIEWS 逐项一致），在筛选项一行显示成一个可去掉的标签。
+export const VIDEO_BROWSE_EXTRA_VIEWS = Object.freeze({ recently_added: '最近 30 天添加' });
 // 「最近播放」按最近一次播放倒序：走 ListRecentlyPlayedWithFilter 的键集分页（last_played_at DESC, id DESC），
 // 不走 SearchLibraryVideoPage，排序选择不适用（锁成这一项）。
 export const RECENTLY_PLAYED_VIEW = 'recently_played';
@@ -427,7 +452,7 @@ export default {
   name: 'VideoBrowsePage',
   components: {
     AppBadge, AppBanner, AppIcon, AppSpinner, BaseMenu, BasePopover, EmptyState, FilterChip, PageHeader, RandomPickBanner,
-    RecapMediaCard, SegmentedControl, SkeletonBlock, TonightPickerDialog
+    RecapMediaCard, SegmentedControl, SkeletonBlock, TonightPickerDialog, ViewAllDialog
   },
   mixins: [randomPlaybackMixin],
   props: {
@@ -449,7 +474,9 @@ export default {
       versionGroups: {},
       totalCount: null,
       // loaded：上一次取成功了，条带现在显示的就是结果（空就是不显示）。
-      progressBlock: { loading: false, error: '', items: [], loaded: false },
+      // more：没放全（多取的那一条取到了），标题右边给「查看全部」，开 ViewAllDialog（progressAllOpen）按页取全。
+      progressBlock: { loading: false, error: '', items: [], loaded: false, more: false },
+      progressAllOpen: false,
       posterFailed: {},
       menu: null,
       menuAnchor: null,
@@ -468,6 +495,7 @@ export default {
     watchOptions() { return VIDEO_BROWSE_WATCH_OPTIONS; },
     sortOptions() { return VIDEO_BROWSE_SORT_OPTIONS; },
     recentlyPlayed() { return this.watch === RECENTLY_PLAYED_VIEW; },
+    extraViewLabel() { return Object.hasOwn(VIDEO_BROWSE_EXTRA_VIEWS, this.watch) ? VIDEO_BROWSE_EXTRA_VIEWS[this.watch] : ''; },
     sortSelectOptions() {
       return this.recentlyPlayed ? [{ value: RECENTLY_PLAYED_VIEW, label: RECENTLY_PLAYED_SORT_HINT }] : VIDEO_BROWSE_SORT_OPTIONS;
     },
@@ -656,7 +684,8 @@ export default {
     applyNavigationRequest(request) {
       if (!request || typeof request !== 'object') return false;
       this.keyword = String(request.keyword || '');
-      this.watch = VIDEO_BROWSE_WATCH_OPTIONS.some(option => option.value === request.watch) ? request.watch : '';
+      const known = VIDEO_BROWSE_WATCH_OPTIONS.some(option => option.value === request.watch) || Object.hasOwn(VIDEO_BROWSE_EXTRA_VIEWS, request.watch || '');
+      this.watch = known ? request.watch : '';
       const tagID = Number(request.tagId || 0);
       this.tagIDs = Number.isInteger(tagID) && tagID > 0 ? [tagID] : [];
       this.people = [];
@@ -780,13 +809,25 @@ export default {
       const token = ++this._tokens.progress;
       this.progressBlock = { ...this.progressBlock, loading: true, error: '' };
       try {
-        const items = await ListCollectionProgress({ collection_ids: [], continue_only: true, limit: VIDEO_BROWSE_PROGRESS_LIMIT });
-        if (token === this._tokens.progress) this.progressBlock = { loading: false, error: '', items: items || [], loaded: true };
+        // 多取一条判断有没有放全。
+        const items = (await ListCollectionProgress({ collection_ids: [], continue_only: true, limit: VIDEO_BROWSE_PROGRESS_LIMIT + 1 })) || [];
+        if (token === this._tokens.progress) {
+          this.progressBlock = { loading: false, error: '', items: items.slice(0, VIDEO_BROWSE_PROGRESS_LIMIT), loaded: true, more: items.length > VIDEO_BROWSE_PROGRESS_LIMIT };
+        }
       } catch (err) {
         if (token === this._tokens.progress) {
           this.progressBlock = { ...this.progressBlock, loading: false, error: translateBackendError(err?.message || err), loaded: false };
         }
       }
+    },
+    // 「追到哪了」查看全部：与条带同一口径（continue_only）按页取；点了一部先关弹窗再进整页详情。
+    fetchProgressPage(offset, limit) {
+      return ListCollectionProgressPage({ collection_ids: [], continue_only: true, offset, limit });
+    },
+    progressCard: collectionProgressCard,
+    openProgressFromDialog(id) {
+      this.progressAllOpen = false;
+      this.openVideoID(id);
     },
     observeSentinel() {
       if (typeof IntersectionObserver !== 'function' || !this.$refs.sentinel) return;
@@ -1093,6 +1134,7 @@ export default {
 }
 .video-browse__section-head h2 :deep(svg) { color: var(--accent-text); }
 .video-browse__section-head small { color: var(--text-muted); font-size: var(--fs-caption); }
+.video-browse__section-action { margin-left: auto; align-self: center; }
 /* 条带里的卡与海报墙的卡一样大，不压过下面的主体。 */
 .video-browse__progress-strip { grid-auto-columns: minmax(140px, 156px); }
 /* 窗口化的墙：上下占位随滚动、翻页改高，浏览器自带的滚动锚定会跟着去改 scrollTop——锚到墙下面的「正在加载更多」时

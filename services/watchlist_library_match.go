@@ -75,6 +75,14 @@ type WatchlistInLibraryItem struct {
 	LinkedAt   time.Time `json:"linked_at" ts_type:"string"`
 }
 
+// WatchlistInLibraryPage 是「想看的片片库里已有」的一页（ListInLibraryPage，首页「查看全部」）：Total 是此刻全部
+// 符合条件的条目数，HasMore 表示 offset + 本页条数之后还有。
+type WatchlistInLibraryPage struct {
+	Items   []WatchlistInLibraryItem `json:"items"`
+	Total   int                      `json:"total"`
+	HasMore bool                     `json:"has_more"`
+}
+
 // watchlistLibraryMatch 是自动匹配的并发状态，零值可用。
 type watchlistLibraryMatch struct {
 	runMu    sync.Mutex // 全量轮同一时刻只有一个；单条匹配不拿它（DO NOTHING 兜底）
@@ -564,12 +572,36 @@ func clearChartLinkDismissals(tx *gorm.DB, doubanID string, videoID uint) error 
 // ListInLibrary 返回首页「想看的片片库里已有」：每个条目取最近一次关联的未失效视频，映射到它所在版本组的代表；
 // 这部作品任一（活跃的，含失效离线的）版本看过就不列。按关联时间倒序，limit 默认 12、最大 50。
 func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, error) {
+	page, err := s.ListInLibraryPage(0, limit)
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
+}
+
+// ListInLibraryPage 与 ListInLibrary 同一口径与顺序，跳过前 offset 条（负数按 0）取一页，并给出总数。
+func (s *WatchlistService) ListInLibraryPage(offset, limit int) (*WatchlistInLibraryPage, error) {
 	if limit <= 0 {
 		limit = watchlistInLibraryDefaultLimit
 	}
 	if limit > watchlistInLibraryMaxLimit {
 		limit = watchlistInLibraryMaxLimit
 	}
+	items, err := listWatchlistInLibrary()
+	if err != nil {
+		return nil, err
+	}
+	total := len(items)
+	start := min(max(offset, 0), total)
+	items = items[start:]
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return &WatchlistInLibraryPage{Items: items, Total: total, HasMore: start+len(items) < total}, nil
+}
+
+// listWatchlistInLibrary 返回全部符合条件的条目，按关联时间倒序（同一时刻条目 ID 大的在前）。
+func listWatchlistInLibrary() ([]WatchlistInLibraryItem, error) {
 	var entries []models.WatchlistEntry
 	if err := database.DB.Select("id", "title", "kind", "year", "poster_path", "source_name", "source_item_id").
 		Order("id ASC").Find(&entries).Error; err != nil {
@@ -623,9 +655,6 @@ func (s *WatchlistService) ListInLibrary(limit int) ([]WatchlistInLibraryItem, e
 		}
 		return items[i].EntryID > items[j].EntryID
 	})
-	if len(items) > limit {
-		items = items[:limit]
-	}
 	return items, nil
 }
 

@@ -7,6 +7,7 @@ import { nextTick } from 'vue';
 const api = vi.hoisted(() => ({
   CountLibraryVideos: vi.fn(),
   ListCollectionProgress: vi.fn(),
+  ListCollectionProgressPage: vi.fn(),
   ListPeople: vi.fn(),
   ListRecentlyPlayedWithFilter: vi.fn(),
   PlayVideo: vi.fn(),
@@ -144,7 +145,7 @@ describe('VideoBrowsePage list', () => {
     expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith({ filter: DEFAULT_FILTER, limit: VIDEO_BROWSE_PAGE_SIZE });
     expect(VIDEO_BROWSE_PAGE_SIZE).toBe(60);
     expect(api.CountLibraryVideos).toHaveBeenCalledWith(DEFAULT_FILTER);
-    expect(api.ListCollectionProgress).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, limit: 12 });
+    expect(api.ListCollectionProgress).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, limit: 13 }); // 12 + 多取一条
     expect(wrapper.find('.ui-page-header__subtitle').text()).toBe('共 1,234 部');
 
     const cards = wrapper.findAll('[data-test="browse-card"]');
@@ -362,10 +363,24 @@ describe('VideoBrowsePage filters', () => {
     await wrapper.setProps({ navigationRequest: { watch: 'favorites', token: 3 } });
     await flushPromises();
     expect(lastRequest().filter).toEqual({ ...DEFAULT_FILTER, smart_view: 'favorites', sort_mode: 'title_asc' });
-    // 海报墙不认的观看状态（最近添加没有单列）按「全部」。
-    await wrapper.setProps({ navigationRequest: { watch: 'recently_added', token: 4 } });
+    // 海报墙不认的视图（管理向的未打标签）按「全部」。
+    await wrapper.setProps({ navigationRequest: { watch: 'untagged', token: 4 } });
     await flushPromises();
     expect(lastRequest().filter).toEqual({ ...DEFAULT_FILTER, sort_mode: 'title_asc' });
+    expect(wrapper.find('[data-test="browse-view-chip"]').exists()).toBe(false);
+  });
+
+  // 首页「最近添加」的「查看全部」：分段里不单列，套上 recently_added（与首页同一视图），筛选项一行出一个可去掉的标签。
+  it('applies the recently_added view from a navigation request as a removable chip', async () => {
+    const wrapper = await mountPage({ navigationRequest: { watch: 'recently_added', token: 1 } });
+    expect(lastRequest().filter).toEqual({ ...DEFAULT_FILTER, smart_view: 'recently_added' });
+    expect(api.CountLibraryVideos).toHaveBeenLastCalledWith({ ...DEFAULT_FILTER, smart_view: 'recently_added' });
+    expect(wrapper.get('[data-test="browse-view-chip"]').text()).toContain('最近 30 天添加');
+    expect(wrapper.find('[data-test="browse-watch"] [aria-checked="true"]').exists()).toBe(false);
+    await wrapper.get('[data-test="browse-view-chip"] .ui-filter-chip__remove').trigger('click');
+    await flushPromises();
+    expect(lastRequest().filter).toEqual(DEFAULT_FILTER);
+    expect(wrapper.find('[data-test="browse-view-chip"]').exists()).toBe(false);
   });
 
   it('merges state changes from the full-page detail into a loaded card; stale ones leave the wall', async () => {
@@ -1150,5 +1165,39 @@ describe('VideoBrowsePage poster wall windowing', () => {
       await flushPromises();
       expect(document.activeElement).toBe(only.element);
     }
+  });
+});
+
+// 「追到哪了」查看全部（2026-10-14）：条带多取一条，取到了才有按钮；弹窗与条带同一口径按页取全，点一部关弹窗进详情。
+describe('VideoBrowsePage 追到哪了 view-all', () => {
+  const many = (count, from = 1) => Array.from({ length: count }, (_, index) => progress(from + index));
+
+  it('has no 查看全部 when the strip fits', async () => {
+    api.ListCollectionProgress.mockResolvedValue(many(12));
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(12);
+    expect(wrapper.find('[data-test="browse-progress-all"]').exists()).toBe(false);
+  });
+
+  it('trims the extra one and pages through every in-progress collection in a dialog', async () => {
+    api.ListCollectionProgress.mockResolvedValue(many(13));
+    api.ListCollectionProgressPage
+      .mockResolvedValueOnce({ items: many(50), total: 60, has_more: true })
+      .mockResolvedValueOnce({ items: many(10, 51), total: 60, has_more: false });
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(12);
+    await wrapper.get('[data-test="browse-progress-all"]').trigger('click');
+    await flushPromises();
+    expect(api.ListCollectionProgressPage).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, offset: 0, limit: 50 });
+    const dialog = wrapper.get('[data-test="browse-progress-dialog"]');
+    expect(dialog.get('[data-test="view-all-count"]').text()).toBe('共 60 个');
+    await dialog.get('[data-test="view-all-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListCollectionProgressPage).toHaveBeenLastCalledWith({ collection_ids: [], continue_only: true, offset: 50, limit: 50 });
+    const items = wrapper.findAll('[data-test="view-all-item"]');
+    expect(items).toHaveLength(60);
+    await items[59].trigger('click');
+    expect(wrapper.emitted('open-video')).toEqual([[160]]);
+    expect(wrapper.find('[data-test="browse-progress-dialog"]').exists()).toBe(false);
   });
 });

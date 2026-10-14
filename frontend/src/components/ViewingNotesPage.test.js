@@ -89,3 +89,14 @@ it('embedded（嵌在片单页里）不显示自己的页头，分区页签与�
   expect(standalone.findComponent({ name: 'PageHeader' }).exists()).toBe(true);
   expect(standalone.find('.notes-embedded-bar').exists()).toBe(false);
 });
+
+// 「记录最多的影片」后端只给前 10（viewing_diary_service），满 10 条时标题如实写「前 10」。
+describe('ViewingNotesPage most-watched label', () => {
+  const review = count => ({ year: 2024, total: 30, days: 9, months: Array(12).fill(0), average_rating: null, most_watched: Array.from({ length: count }, (_, index) => ({ title: `片${index}`, count: 3 })) });
+  it.each([[10, '记录最多的影片 · 前 10'], [3, '记录最多的影片']])('%i entries → %s', async (count, title) => {
+    api.GetViewingYearReview.mockResolvedValue(review(count));
+    const wrapper = shallowMount(ViewingNotesPage);
+    await flushPromises();
+    expect(wrapper.get('[data-test="diary-most-watched-title"]').text()).toBe(title);
+  });
+});

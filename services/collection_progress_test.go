@@ -324,3 +324,46 @@ func TestCollectionProgressIncludeWorks(t *testing.T) {
 		t.Fatal("带明细时超过上限应报错")
 	}
 }
+
+// 「查看全部」翻页：同一口径与顺序，offset 跳过前面的，total 是全部在追的个数；只认 continue_only。
+func TestCollectionProgressPageOffsetAndTotal(t *testing.T) {
+	f := newProgressFixture(t)
+	var want []uint
+	for i := 0; i < 5; i++ {
+		id := f.collection(fmt.Sprintf("在追%02d", i), f.video(fmt.Sprintf("在追%02d-1", i), f.watched(100-i)), f.video(fmt.Sprintf("在追%02d-2", i), nil))
+		want = append(want, id) // watched(100-i)：越往前越晚，倒序就是创建顺序
+	}
+	f.collection("看完", f.video("看完1", f.watched(600)), f.video("看完2", f.watched(601)))
+
+	got := []uint{}
+	for offset := 0; ; offset += 2 {
+		page, err := f.service.ListCollectionProgressPage(CollectionProgressRequest{ContinueOnly: true, Offset: offset, Limit: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Total != 5 {
+			t.Fatalf("total 应为全部在追的 5 个: %+v", page)
+		}
+		for _, item := range page.Items {
+			got = append(got, item.CollectionID)
+		}
+		if page.HasMore != (offset+len(page.Items) < 5) {
+			t.Fatalf("has_more 不对 offset=%d: %+v", offset, page)
+		}
+		if !page.HasMore {
+			break
+		}
+	}
+	requireUintSlice(t, "翻完与一次取全同序", got, want)
+
+	beyond, err := f.service.ListCollectionProgressPage(CollectionProgressRequest{ContinueOnly: true, Offset: 99, Limit: 2})
+	if err != nil || len(beyond.Items) != 0 || beyond.Total != 5 || beyond.HasMore {
+		t.Fatalf("越界 offset 应得空页: %+v err=%v", beyond, err)
+	}
+	if first, err := f.service.ListCollectionProgress(CollectionProgressRequest{ContinueOnly: true, Limit: 2}); err != nil || len(first) != 2 || first[0].CollectionID != want[0] {
+		t.Fatalf("不带 offset 的旧接口不变: %+v err=%v", first, err)
+	}
+	if _, err := f.service.ListCollectionProgressPage(CollectionProgressRequest{CollectionIDs: []uint{want[0]}}); err == nil {
+		t.Fatal("分页只用于 continue_only，按 ID 查应报错")
+	}
+}

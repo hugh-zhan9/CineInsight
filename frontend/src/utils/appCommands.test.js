@@ -241,7 +241,7 @@ describe('应用级命令注册', () => {
       wrapper.vm.currentPage = area;
       await findCommand('nav:smart:recently_added').run();
       expect(wrapper.vm.currentPage).toBe('videos');
-      expect(wrapper.vm.navigateParams).toEqual({ watch: '' });
+      expect(wrapper.vm.navigateParams).toEqual({ watch: 'recently_added' });
     }
     expect(applySmartView).not.toHaveBeenCalled();
 
@@ -275,9 +275,9 @@ describe('应用级命令注册', () => {
       expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'videos', watch: view });
     }
     expect(VIDEO_BROWSE_SMART_VIEWS).toEqual(['', 'unwatched', 'continue_watching', 'watched', 'favorites', 'liked', 'recently_played']);
-    for (const view of ['recently_added', 'nope']) {
-      expect(smartViewTarget(view, 'manage'), view).toEqual({ page: 'videos', watch: '' });
-    }
+    expect(smartViewTarget('recently_added', 'manage')).toEqual({ page: 'videos', watch: 'recently_added' });
+    expect(smartViewTarget('recently_added', 'viewer')).toEqual({ page: 'videos', watch: 'recently_added' });
+    expect(smartViewTarget('nope', 'manage')).toEqual({ page: 'videos', watch: '' });
     for (const view of ['untagged', 'no_subtitle', 'local_metadata_updated', 'stale']) {
       expect(smartViewTarget(view, 'viewer')).toEqual({ page: 'library-manage', view });
     }

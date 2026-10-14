@@ -424,3 +424,63 @@ describe('统一搜索带来的初始查询', () => {
     expect(api.SearchScenesByImage).not.toHaveBeenCalled();
   });
 });
+
+// 「加载更多」（2026-10-14）：后端如实标 truncated；能多取就多取一批（同样的条件，最多 200），已列出的不清空；
+// 到上限说明只列出了这些；每部的「N 处」在还有没列出的时写成「已列出 N 处」。
+describe('场景检索页：加载更多', () => {
+  const hits = (count, videoID = 7) => Array.from({ length: count }, (_, index) => ({
+    video_id: videoID, title: '长片', start_ms: index * 1000, end_ms: index * 1000 + 500, source: 'dialogue', score: 1, text: `第${index}句`
+  }));
+
+  it('没有截断时不出加载更多，每部写「N 处」', async () => {
+    api.SearchScenes.mockResolvedValue({ hits: hits(3), notices: [], coverage: COVERAGE, truncated: false });
+    const wrapper = mountPage();
+    await typeAndSearch(wrapper, '句');
+    expect(wrapper.find('[data-test="scenes-more"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="scenes-count-7"]').text()).toBe('3 处');
+  });
+
+  it('截断时同条件多取一批，结果留在原处直到新的到达；到 200 如实说明', async () => {
+    api.SearchScenes.mockResolvedValueOnce({ hits: hits(50), notices: [], coverage: COVERAGE, truncated: true });
+    const wrapper = mountPage();
+    await typeAndSearch(wrapper, '句');
+    expect(wrapper.get('[data-test="scenes-count-7"]').text()).toBe('已列出 50 处');
+    const pending = deferred();
+    api.SearchScenes.mockReturnValueOnce(pending.promise);
+    await wrapper.get('[data-test="scenes-load-more"]').trigger('click');
+    expect(api.SearchScenes).toHaveBeenLastCalledWith({ query: '句', mode: 'all', filter: null, limit: 100 });
+    expect(wrapper.find('[data-test="scenes-loading"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test^="scenes-hit-7-"]')).toHaveLength(50);
+    expect(wrapper.get('[data-test="scenes-load-more"]').attributes('disabled')).toBeDefined();
+    pending.resolve({ hits: hits(100), notices: [], coverage: COVERAGE, truncated: true });
+    await flushPromises();
+    expect(wrapper.findAll('[data-test^="scenes-hit-7-"]')).toHaveLength(100);
+
+    for (const limit of [150, 200]) {
+      api.SearchScenes.mockResolvedValueOnce({ hits: hits(limit), notices: [], coverage: COVERAGE, truncated: true });
+      await wrapper.get('[data-test="scenes-load-more"]').trigger('click');
+      await flushPromises();
+      expect(api.SearchScenes).toHaveBeenLastCalledWith({ query: '句', mode: 'all', filter: null, limit });
+    }
+    expect(wrapper.find('[data-test="scenes-load-more"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="scenes-cap-note"]').text()).toBe('只显示前 200 条，换个更具体的说法缩小范围。');
+
+    // 新的检索从第一批取起。
+    api.SearchScenes.mockResolvedValueOnce({ hits: hits(2), notices: [], coverage: COVERAGE, truncated: false });
+    await typeAndSearch(wrapper, '别的');
+    expect(api.SearchScenes).toHaveBeenLastCalledWith({ query: '别的', mode: 'all', filter: null, limit: 50 });
+    expect(wrapper.find('[data-test="scenes-more"]').exists()).toBe(false);
+  });
+
+  it('加载更多失败时已列出的留着、写出原因', async () => {
+    api.SearchScenes.mockResolvedValueOnce({ hits: hits(50), notices: [], coverage: COVERAGE, truncated: true });
+    const wrapper = mountPage();
+    await typeAndSearch(wrapper, '句');
+    api.SearchScenes.mockRejectedValueOnce(new Error('boom'));
+    await wrapper.get('[data-test="scenes-load-more"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="scenes-error"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-test^="scenes-hit-7-"]')).toHaveLength(50);
+    expect(wrapper.find('[data-test="scenes-load-more"]').exists()).toBe(true);
+  });
+});

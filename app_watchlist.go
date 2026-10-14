@@ -64,6 +64,11 @@ func (a *App) ListWatchlistInLibrary(limit int) ([]services.WatchlistInLibraryIt
 	return a.watchlistService.ListInLibrary(limit)
 }
 
+// ListWatchlistInLibraryPage 与 ListWatchlistInLibrary 同一口径，跳过前 offset 条取一页并带上总数（首页「查看全部」）。
+func (a *App) ListWatchlistInLibraryPage(offset, limit int) (*services.WatchlistInLibraryPage, error) {
+	return a.watchlistService.ListInLibraryPage(offset, limit)
+}
+
 // triggerWatchlistLibraryMatch 在扫描入库了新视频之后，后台给全部未关联的想看条目跑一轮片库自动关联
 // （D-P2-03）。不过空闲门：开销与想看条数成正比，且只读片库、只写关联表。
 func (a *App) triggerWatchlistLibraryMatch(reason string, added int) {

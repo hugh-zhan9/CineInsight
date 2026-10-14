@@ -496,6 +496,24 @@ func TestWatchlistLibraryStateAndInLibraryList(t *testing.T) {
 	if limited, err := f.service.ListInLibrary(1); err != nil || len(limited) != 1 {
 		t.Fatalf("limit: %v %v", limited, err)
 	}
+	// 「查看全部」翻页：同一口径与顺序，total 是全部条数，越界给空页。
+	paged := []uint{}
+	for offset := 0; ; offset += 2 {
+		page, err := f.service.ListInLibraryPage(offset, 2)
+		if err != nil || page.Total != 3 || page.HasMore != (offset+len(page.Items) < 3) {
+			t.Fatalf("翻页 offset=%d: %+v %v", offset, page, err)
+		}
+		for _, item := range page.Items {
+			paged = append(paged, item.EntryID)
+		}
+		if !page.HasMore {
+			break
+		}
+	}
+	requireUintSlice(t, "翻完与一次取全同序", paged, []uint{grouped.ID, second.ID, first.ID})
+	if page, err := f.service.ListInLibraryPage(9, 2); err != nil || len(page.Items) != 0 || page.Total != 3 || page.HasMore {
+		t.Fatalf("越界 offset: %+v %v", page, err)
+	}
 	// minor 6：解除后再手动关联，关联时间是这一次，排到最前。
 	time.Sleep(5 * time.Millisecond)
 	if err := f.service.UnlinkVideo(first.ID, firstVideo.ID); err != nil {

@@ -43,6 +43,8 @@ type CollectionProgressRequest struct {
 	ContinueOnly bool `json:"continue_only"`
 	// Limit 只在 ContinueOnly 时生效：默认 12，最大 50。
 	Limit int `json:"limit"`
+	// Offset 只在 ContinueOnly 时生效：跳过排在前面的这么多个（「查看全部」翻页）；负数按 0。
+	Offset int `json:"offset"`
 	// IncludeWorks 为 true 时每个作品集带上逐部明细与失效成员（作品集页用）；只能与 CollectionIDs 一起用，最多 20 个。
 	IncludeWorks bool `json:"include_works"`
 }
@@ -62,6 +64,14 @@ type CollectionProgress struct {
 	Works []CollectionProgressWork `json:"works,omitempty"`
 	// OfflineVideoIDs 是作品集里失效（离线）的成员，按作品集顺序；它们不计入任何一部（只在 include_works 时给）。
 	OfflineVideoIDs []uint `json:"offline_video_ids,omitempty"`
+}
+
+// CollectionProgressPage 是「追到哪了」的一页（ListCollectionProgressPage）：Total 是此刻全部在追的作品集数，
+// HasMore 表示 offset + 本页条数之后还有。
+type CollectionProgressPage struct {
+	Items   []CollectionProgress `json:"items"`
+	Total   int                  `json:"total"`
+	HasMore bool                 `json:"has_more"`
 }
 
 // CollectionProgressWork 是作品集里的一部。
@@ -112,30 +122,50 @@ type collectionProgressWork struct {
 
 // ListCollectionProgress 返回作品集进度（D-P2-02）。数据库不可用时返回错误。
 func (s *CollectionService) ListCollectionProgress(request CollectionProgressRequest) ([]CollectionProgress, error) {
+	items, _, err := s.listCollectionProgress(request)
+	return items, err
+}
+
+// ListCollectionProgressPage 是「追到哪了」的分页版（首页与「视频」页的「查看全部」）：只用于 ContinueOnly，
+// 按 offset / limit 取一页并给出全部在追的个数。
+func (s *CollectionService) ListCollectionProgressPage(request CollectionProgressRequest) (*CollectionProgressPage, error) {
+	if !request.ContinueOnly {
+		return nil, fmt.Errorf("分页只用于「追到哪了」（continue_only）")
+	}
+	items, total, err := s.listCollectionProgress(request)
+	if err != nil {
+		return nil, err
+	}
+	offset := max(request.Offset, 0)
+	return &CollectionProgressPage{Items: items, Total: total, HasMore: offset+len(items) < total}, nil
+}
+
+// listCollectionProgress 返回结果与总数：按 ID 查时总数就是结果条数，ContinueOnly 时是截取 offset / limit 之前的个数。
+func (s *CollectionService) listCollectionProgress(request CollectionProgressRequest) ([]CollectionProgress, int, error) {
 	var ids []uint
 	if request.IncludeWorks {
 		if request.ContinueOnly {
-			return nil, fmt.Errorf("逐部明细只能按作品集 ID 查询")
+			return nil, 0, fmt.Errorf("逐部明细只能按作品集 ID 查询")
 		}
 		if len(uniqueUintIDs(request.CollectionIDs)) > collectionProgressMaxIDsWithWorks {
-			return nil, fmt.Errorf("带逐部明细时一次最多查询 %d 个作品集", collectionProgressMaxIDsWithWorks)
+			return nil, 0, fmt.Errorf("带逐部明细时一次最多查询 %d 个作品集", collectionProgressMaxIDsWithWorks)
 		}
 	}
 	if request.ContinueOnly {
 		candidates, err := continueCollectionCandidates()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		ids = candidates
 	} else {
 		ids = uniqueUintIDs(request.CollectionIDs)
 		if len(ids) > collectionProgressMaxIDs {
-			return nil, fmt.Errorf("一次最多查询 %d 个作品集的进度", collectionProgressMaxIDs)
+			return nil, 0, fmt.Errorf("一次最多查询 %d 个作品集的进度", collectionProgressMaxIDs)
 		}
 	}
 	result := make([]CollectionProgress, 0, len(ids))
 	if len(ids) == 0 {
-		return result, nil
+		return result, 0, nil
 	}
 
 	var collections []struct {
@@ -145,16 +175,16 @@ func (s *CollectionService) ListCollectionProgress(request CollectionProgressReq
 	}
 	if err := database.DB.Table("media_collections").Select("id", "name", "cover_path").
 		Where("id IN ? AND deleted_at IS NULL", ids).Scan(&collections).Error; err != nil {
-		return nil, fmt.Errorf("读取作品集失败: %w", err)
+		return nil, 0, fmt.Errorf("读取作品集失败: %w", err)
 	}
 	rowsByCollection, err := loadCollectionProgressRows(ids)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var offline map[uint][]uint
 	if request.IncludeWorks {
 		if offline, err = loadCollectionOfflineMembers(ids); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	byID := make(map[uint]CollectionProgress, len(collections))
@@ -176,7 +206,7 @@ func (s *CollectionService) ListCollectionProgress(request CollectionProgressReq
 				result = append(result, progress)
 			}
 		}
-		return result, nil
+		return result, len(result), nil
 	}
 	for _, progress := range byID {
 		if progress.TotalWorks >= 2 && progress.WatchedWorks+progress.InProgressWorks >= 1 && !progress.Complete {
@@ -200,10 +230,13 @@ func (s *CollectionService) ListCollectionProgress(request CollectionProgressReq
 	if limit > collectionProgressMaxLimit {
 		limit = collectionProgressMaxLimit
 	}
+	total := len(result)
+	offset := min(max(request.Offset, 0), total)
+	result = result[offset:]
 	if len(result) > limit {
 		result = result[:limit]
 	}
-	return result, nil
+	return result, total, nil
 }
 
 // continueCollectionCandidates 是「追到哪了」的候选：至少一个活跃未失效的成员有活动时间的作品集。
