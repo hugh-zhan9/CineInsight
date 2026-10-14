@@ -1,10 +1,11 @@
 <template>
   <DialogShell title="版本组" size="lg" class="version-panel" data-test="version-panel" @close="onEscape">
-    <!-- 两个分区（D-UD-06 AppTabs），每个页签带 version-panel-tab-* 钩子；建议的条数写在徽标里。 -->
-    <AppTabs v-model="tab" class="version-panel__tabs" :tabs="panelTabs" aria-label="版本组分区" />
+    <!-- 两个分区（D-UD-06 AppTabs），每个页签带 version-panel-tab-* 钩子；建议的条数写在徽标里。
+         下面两块是各自的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）。 -->
+    <AppTabs v-model="tab" class="version-panel__tabs" :tabs="panelTabs" id-prefix="version-groups" aria-label="版本组分区" />
     <p v-if="error" class="version-panel__error" role="alert" data-test="version-panel-error">{{ error }}</p>
 
-    <div v-if="tab === 'suggestions'" class="version-panel__body">
+    <div v-if="tab === 'suggestions'" id="version-groups-panel-suggestions" class="version-panel__body" role="tabpanel" aria-labelledby="version-groups-tab-suggestions">
       <p class="help-text">建议来自清理中心已检测到的同源配对：时长相近（较短的不少于较长的 90%），截取片段不在此列。只有你点「建立版本组」才会建组。</p>
       <SkeletonBlock v-if="loadingSuggestions" class="version-panel__placeholder" :lines="3" />
       <EmptyState v-else-if="!suggestions.length" title="暂无建议" message="清理中心检测到时长相近的同源配对后，会在这里给出建议。" data-test="version-panel-no-suggestions" />
@@ -25,7 +26,7 @@
       </ul>
     </div>
 
-    <div v-else class="version-panel__body">
+    <div v-else id="version-groups-panel-groups" class="version-panel__body" role="tabpanel" aria-labelledby="version-groups-tab-groups">
       <SkeletonBlock v-if="loadingGroups" class="version-panel__placeholder" :lines="3" />
       <EmptyState v-else-if="!groups.length" title="还没有版本组" message="在片库里多选视频后点「合并为版本组」，或接受建议。" data-test="version-panel-no-groups" />
       <ul v-else class="version-panel__list">

@@ -6,6 +6,11 @@ vi.mock('./PreviewDrawer.vue', () => ({ default: { name: 'PreviewDrawer', props:
 import FaceClusterDetailDialog from './FaceClusterDetailDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
+import AppFeedback from './AppFeedback.vue';
+import DialogShell from './ui/DialogShell.vue';
+import { confirmAction } from '../utils/feedback.js';
+// 从页面里的元素按下 Esc：先经过 window 的捕获阶段，再冒泡到 document（BaseModal 在那里接）。
+const pressEscape = () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
 const source = (id, kind = 'image', more = {}) => ({ observation_id: id, media_id: 10, media_kind: kind, name: `${id}.jpg`, path: '/photos/source.jpg', frame_ms: kind === 'video' ? 0 : -1, size: 100, ...more });
 const cluster = { id: 1, status: 'unnamed' };
 beforeEach(() => vi.resetAllMocks());
@@ -99,6 +104,37 @@ describe('FaceClusterDetailDialog', () => {
   await w.setProps({ cluster: { id: 2, status: 'unnamed' } }); await flushPromises();
   finish({ observations: [source(1)] }); await flushPromises();
   expect(w.vm.sources.map(s => s.observation_id)).toEqual([2]); w.unmount();
+ });
+ // Esc 只关最上面一层：本组件在 window 捕获阶段接 Esc，曾经只认得自己的原图、删除媒体对话框与应用内确认框，
+ // 别的对话框叠在上面（视频片段里详情抽屉点开的原图 / 台词卡、关窗口时的退出确认……）时照样关掉自己，上面那层收不到 Esc。
+ it('a dialog opened over the video clip gets Escape first; the clip closes on the next Escape', async () => {
+  api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(2, 'video')] });
+  const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
+  await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-open-2"]').trigger('click'); await flushPromises();
+  const above = mount(DialogShell, { props: { title: '台词卡' }, attachTo: document.body });
+  pressEscape(); await flushPromises();
+  expect(above.emitted('close')).toHaveLength(1);
+  expect(w.findComponent(PreviewDrawer).exists()).toBe(true);
+  above.unmount();
+  pressEscape(); await flushPromises();
+  expect(w.findComponent(PreviewDrawer).exists()).toBe(false);
+  expect(w.emitted('close')).toBeUndefined();
+  pressEscape(); await flushPromises();
+  expect(w.emitted('close')).toHaveLength(1); w.unmount();
+ });
+ it('a dialog over the source list gets Escape first; an in-app confirmation is cancelled without closing the list', async () => {
+  api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(1)] });
+  const feedback = mount(AppFeedback, { attachTo: document.body });
+  const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
+  const above = mount(DialogShell, { props: { title: '还有任务在进行' }, attachTo: document.body });
+  pressEscape(); await flushPromises();
+  expect(above.emitted('close')).toHaveLength(1); expect(w.emitted('close')).toBeUndefined();
+  above.unmount();
+  const answer = confirmAction({ title: '确认' }); await flushPromises();
+  pressEscape(); await flushPromises();
+  expect(await answer).toBe(false); expect(w.emitted('close')).toBeUndefined();
+  pressEscape(); await flushPromises();
+  expect(w.emitted('close')).toHaveLength(1); w.unmount(); feedback.unmount();
  });
  it('retries a failed page without discarding already loaded sources', async () => {
   api.GetFaceClusterObservations.mockResolvedValueOnce({ observations: [source(1)], next_id: 1 }).mockRejectedValueOnce('offline').mockResolvedValueOnce({ observations: [source(2)], next_id: 0 });

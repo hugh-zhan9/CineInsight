@@ -38,6 +38,20 @@ describe('数据维护页（D-DC-01）', () => {
     expect(wrapper.find('[data-test="data-care-panel-lost"]').exists()).toBe(false);
   });
 
+  // 面板组件的根节点带 role=tabpanel、id 与 aria-labelledby，和页签的 id / aria-controls 互相指向；← → 切页签时跟着换。
+  it('当前页签与面板互相指向，← → 切换后面板跟着换', async () => {
+    const wrapper = mountPage();
+    for (const [key, next] of [['lost', 'ArrowRight'], ['completeness', 'ArrowRight'], ['rules', 'ArrowLeft'], ['completeness', null]]) {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id')).toBe(`data-care-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`data-care-tab-${key}`);
+      expect(panel.attributes('data-test')).toBe(`data-care-panel-${key}`);
+      expect(wrapper.get(`#data-care-tab-${key}`).attributes('aria-controls')).toBe(`data-care-panel-${key}`);
+      expect(wrapper.get(`#data-care-tab-${key}`).attributes('aria-selected')).toBe('true');
+      if (next) await wrapper.get('[role="tablist"]').trigger('keydown', { key: next });
+    }
+  });
+
   it('命令面板带进来的页签请求：初始与 token 变化时切换，未知页签忽略', async () => {
     const wrapper = mountPage({ tabRequest: { tab: 'rules', token: 1 } });
     expect(wrapper.find('[data-test="data-care-panel-rules"]').exists()).toBe(true);

@@ -367,6 +367,24 @@ describe('AITagReviewDialog face cluster review section', () => {
     expect(wrapper.find('.ai-tag-review-actions').exists()).toBe(true);
   });
 
+  // 页签下面整块是当前工作台的面板：role=tabpanel、id、aria-labelledby 与页签的 id / aria-controls 互相指向；
+  // ← → 切换时面板跟着换，标签侧的工具条与候选区都在面板里。
+  it('工作台页签与面板互相指向，← → 切换后面板跟着换', async () => {
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await flushPromises();
+    for (const [key, next] of [['tags', 'ArrowRight'], ['same-source', 'ArrowRight'], ['face', 'ArrowRight'], ['tags', null]]) {
+      const panel = wrapper.get('[role="tabpanel"]');
+      expect(panel.attributes('id')).toBe(`ai-review-panel-${key}`);
+      expect(panel.attributes('aria-labelledby')).toBe(`ai-review-tab-${key}`);
+      expect(wrapper.get(`#ai-review-tab-${key}`).attributes('aria-controls')).toBe(`ai-review-panel-${key}`);
+      expect(wrapper.get(`#ai-review-tab-${key}`).attributes('aria-selected')).toBe('true');
+      expect(panel.find('[data-test="ai-review-scroll-area"]').exists()).toBe(true);
+      expect(panel.find('[data-test="face-panel-stub"]').exists()).toBe(key === 'face');
+      expect(panel.find('.ai-tag-review-actions').exists()).toBe(key !== 'face');
+      if (next) await wrapper.get('[role="tablist"]').trigger('keydown', { key: next });
+    }
+  });
+
   // AI 标签候选加载失败不该把人物候选一起挡掉：两批数据来自不同的接口。
   it('keeps the face section usable when loading tag candidates failed', async () => {
     api.ListAITagCandidatePage.mockRejectedValueOnce(new Error('boom'));

@@ -14,7 +14,7 @@
 // 扫描前先跑两段自检（selfCheck：各条规则查得出该查的写法、不误报放行的写法；ratchetSelfCheck：棘轮的四种失败），
 // 改规则或棘轮时一起改。
 //
-// 七条规则：
+// 八条规则（前七条走待迁移清单的棘轮，第 8 条不走）：
 //   colors       1. .vue / .css 里不许写颜色字面量，只用 var(--…)（tokens.css 除外，影院表面也在 tokens.css 里）：
 //                   hex；rgb()/rgba()/hsl()/hsla()/hwb()/lab()/lch()/oklab()/oklch()；颜色属性里的 CSS 颜色名
 //                   （white、black、red、gray… 全表；transparent、currentColor、inherit、initial、unset 放行）；
@@ -27,6 +27,9 @@
 //                   写法与改名注册）只给 ui/DialogShell 内部用，页面一律用 DialogShell
 //   page-header  6. 顶层页面（顶栏导航列出的各页）模板里必须有 PageHeader 或 HeroHeader
 //   wording      7. 模板文本里不许出现用词表（详细设计 §4）的旧词：...、选择本页、打开所在目录 等
+//   tab-panels   8. 用了 AppTabs 的模板要接上面板：AppTabs 传 id-prefix（页签才有 id 与 aria-controls），面板写
+//                   role="tabpanel"、id（前缀-panel-…）与 aria-labelledby（前缀-tab-…）。这条不走待迁移清单：新代码直接
+//                   接好；确实没有面板可接的，写进 TAB_PANEL_EXCEPTIONS 并附上理由
 // 手机端 short-feed/ 不在统一设计范围内（受保护，见概要设计「受保护的旧行为」），整个目录不查。
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -248,6 +251,88 @@ function scanSource(file, source, add) {
   for (const match of template.matchAll(ASCII_ELLIPSIS)) add('wording', `${lineOf(template, match.index)}: ...`);
 }
 
+// 规则 8 的例外：文件 → 为什么这里的 AppTabs 不需要面板（理由必填）。接好面板后守卫会提示把这一项删掉。
+const TAB_PANEL_EXCEPTIONS = {};
+
+// 模板里的开始标签：从 <名字 起按引号配对找到收尾的 >，属性值里的 =>、> 不会把标签截断。
+function startTags(template) {
+  const tags = [];
+  const opener = /<([A-Za-z][\w-]*)/g;
+  let match;
+  while ((match = opener.exec(template))) {
+    let quote = '';
+    let end = opener.lastIndex;
+    for (; end < template.length; end += 1) {
+      const char = template[end];
+      if (quote) {
+        if (char === quote) quote = '';
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === '>') {
+        break;
+      }
+    }
+    tags.push({ name: match[1], text: template.slice(match.index, end + 1), index: match.index });
+    opener.lastIndex = end + 1;
+  }
+  return tags;
+}
+
+// 标签上有没有这个属性（静态或 : / v-bind: 绑定）；name 可以是正则片段（id-prefix|idPrefix）。
+const hasAttr = (tag, name) => new RegExp(`\\s(?::|v-bind:)?(?:${name})=`).test(tag);
+const staticAttr = (tag, name) => (tag.match(new RegExp(`\\s(?:${name})="([^"]*)"`)) || [])[1];
+
+// v-bind="名字" 整组绑定的面板属性（TrashCenterDialog 的 tabPanelAttrs）：取脚本里这个计算属性 / 方法的函数体。
+function boundBody(script, name) {
+  const start = script.search(new RegExp(`(?<![\\w$.])${name}\\s*\\([^)]*\\)\\s*\\{`));
+  if (start === -1) return '';
+  let depth = 0;
+  for (let index = script.indexOf('{', start); index < script.length; index += 1) {
+    if (script[index] === '{') depth += 1;
+    else if (script[index] === '}' && (depth -= 1) === 0) return script.slice(start, index + 1);
+  }
+  return '';
+}
+
+// 一个 .vue 文件里 AppTabs 与面板的接线问题（规则 8），没用 AppTabs 的文件返回空。
+function tabPanelProblems(source) {
+  const template = stripComments(templateOf(source));
+  const script = (stripComments(source).match(/<script\b[^>]*>([\s\S]*?)<\/script>/) || [, ''])[1];
+  const tags = startTags(template);
+  const tabs = tags.filter(tag => tag.name === 'AppTabs' || tag.name === 'app-tabs');
+  if (!tabs.length) return [];
+  const problems = [];
+  const prefixes = [];
+  for (const tag of tabs) {
+    if (!hasAttr(tag.text, 'id-prefix|idPrefix')) problems.push(`${lineOf(template, tag.index)}: AppTabs 没传 id-prefix（页签没有 id 与 aria-controls，面板对不上）`);
+    const prefix = staticAttr(tag.text, 'id-prefix|idPrefix');
+    if (prefix) prefixes.push(prefix);
+  }
+  const panels = [];
+  for (const tag of tags) {
+    const line = lineOf(template, tag.index);
+    if (/\srole="tabpanel"/.test(tag.text)) {
+      panels.push({ line, text: tag.text, hasID: hasAttr(tag.text, 'id'), hasLabel: hasAttr(tag.text, 'aria-labelledby') });
+    }
+    const bound = tag.text.match(/\sv-bind="([\w$]+)(?:\([^"]*\))?"/);
+    const body = bound ? boundBody(script, bound[1]) : '';
+    if (/role:\s*['"]tabpanel['"]/.test(body)) {
+      panels.push({ line, text: body, hasID: /(?<![\w-])['"]?id['"]?\s*:/.test(body), hasLabel: /['"]aria-labelledby['"]\s*:/.test(body) });
+    }
+  }
+  if (!panels.length) problems.push('模板里没有 role="tabpanel" 的面板（AppTabs 的宿主要给面板写 role、id 与 aria-labelledby）');
+  for (const panel of panels) {
+    if (!panel.hasID) problems.push(`${panel.line}: 面板没有 id`);
+    if (!panel.hasLabel) problems.push(`${panel.line}: 面板没有 aria-labelledby`);
+  }
+  for (const prefix of new Set(prefixes)) {
+    if (!panels.some(panel => panel.text.includes(`${prefix}-panel-`) && panel.text.includes(`${prefix}-tab-`))) {
+      problems.push(`id-prefix「${prefix}」没有对应的面板（面板 id 写 ${prefix}-panel-…，aria-labelledby 写 ${prefix}-tab-…）`);
+    }
+  }
+  return problems;
+}
+
 function scan() {
   const found = new Map(RULES.map(rule => [rule, new Map()]));
   const record = (rule, file, detail) => {
@@ -287,6 +372,24 @@ export default { components: { Dlg }, data: () => ({ color: 'red' }) };
   assert.deepEqual(counts, { colors: 7, 'font-scale': 2, 'z-index': 2, dialogs: 4 }, '守卫规则自检没过：某条检查查不出它该查的写法，或误报了放行的写法');
 }
 
+// 规则 8 自检：没接面板、面板缺属性、前缀对不上都查得出；静态、动态前缀与 v-bind 整组绑定的写法放行。
+function tabPanelSelfCheck() {
+  const problems = source => tabPanelProblems(source).length;
+  assert.equal(problems('<template><AppTabs v-model="tab" :tabs="tabs" /><div v-if="tab === \'a\'">A</div></template>'), 2,
+    '规则 8 自检没过：没传 id-prefix、没有面板的 AppTabs 要报两处');
+  assert.equal(problems('<template><app-tabs :tabs="tabs" id-prefix="demo" /><div id="other-panel-a" role="tabpanel">A</div></template>'), 2,
+    '规则 8 自检没过：面板缺 aria-labelledby、id 与前缀对不上要报两处');
+  assert.equal(problems(`<template>
+  <AppTabs v-model="tab" :tabs="tabs" id-prefix="demo" @update:model-value="value => (tab = value)" />
+  <section :id="\`demo-panel-\${tab}\`" role="tabpanel" :aria-labelledby="\`demo-tab-\${tab}\`">A</section>
+  <AppTabs :tabs="tabs" :id-prefix="prefix" /><div :id="\`\${prefix}-panel-a\`" role="tabpanel" :aria-labelledby="\`\${prefix}-tab-a\`" />
+</template>`), 0, '规则 8 自检没过：接好的静态 / 动态前缀被误报（属性值里的 => 不能截断标签）');
+  assert.equal(problems(`<template><AppTabs :tabs="tabs" :model-value="tab" id-prefix="bin" /><section v-bind="panelAttrs">A</section></template>
+<script>
+export default { computed: { panelAttrs() { return { id: \`bin-panel-\${this.tab}\`, role: 'tabpanel', 'aria-labelledby': \`bin-tab-\${this.tab}\` }; } } };
+</script>`), 0, '规则 8 自检没过：v-bind 整组绑定的面板属性被误报');
+}
+
 // 棘轮自检：四种失败各一条（没登记、比清单多、比清单少、已清零），处数相等的不报。buttons 用的是同一个函数。
 function ratchetSelfCheck() {
   const recorded = new Map([
@@ -306,6 +409,7 @@ function ratchetSelfCheck() {
 
 selfCheck();
 ratchetSelfCheck();
+tabPanelSelfCheck();
 const found = scan();
 
 // --report [规则名]：打印当前违规明细（按文件），不做断言，给换装时对照用。
@@ -342,6 +446,19 @@ assert.deepEqual(
 
 const { lists, problems } = loadPendingLists(SRC);
 const failures = [...problems];
+// 规则 8 不走待迁移清单：任何问题直接失败；例外要写理由，接好面板或文件没了就要删掉例外。
+for (const file of ALL_FILES.filter(file => file.endsWith('.vue') && !file.startsWith('short-feed/'))) {
+  const tabProblems = tabPanelProblems(read(file));
+  if (file in TAB_PANEL_EXCEPTIONS) {
+    if (!String(TAB_PANEL_EXCEPTIONS[file] || '').trim()) failures.push(`[tab-panels] ${file} 的例外没写理由`);
+    if (!tabProblems.length) failures.push(`[tab-panels] ${file} 已接好面板，请从 TAB_PANEL_EXCEPTIONS 删掉`);
+    continue;
+  }
+  for (const problem of tabProblems) failures.push(`[tab-panels] ${file} ${problem}`);
+}
+for (const file of Object.keys(TAB_PANEL_EXCEPTIONS)) {
+  if (!ALL_FILES.includes(file)) failures.push(`[tab-panels] TAB_PANEL_EXCEPTIONS 里的 ${file} 不存在，请删掉`);
+}
 const summary = [];
 for (const rule of RULES) {
   failures.push(...ratchetFailures(rule, found.get(rule), lists.get(rule)));

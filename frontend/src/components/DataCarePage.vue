@@ -4,12 +4,16 @@
     <PageHeader title="数据维护" subtitle="找回失联文件、补全元数据、自动整理与数据体检">
       <!-- 页签（D-UD-06 AppTabs），每个页签带 data-care-tab-* 钩子。 -->
       <template #below>
-        <AppTabs v-model="tab" :tabs="pageTabs" aria-label="数据维护内容" />
+        <AppTabs v-model="tab" :tabs="pageTabs" id-prefix="data-care" aria-label="数据维护内容" />
       </template>
     </PageHeader>
+    <!-- 当前页签的面板：role=tabpanel、id 与 aria-labelledby 落在面板组件的根节点上，与页签互相指向。 -->
     <component
       :is="activePanel"
+      :id="`data-care-panel-${tab}`"
       :key="tab"
+      role="tabpanel"
+      :aria-labelledby="`data-care-tab-${tab}`"
       :directories="directories"
       @open-video-id="$emit('open-video-id', $event)"
       @run-command="(id, label) => $emit('run-command', id, label)"

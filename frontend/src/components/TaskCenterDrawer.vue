@@ -12,13 +12,14 @@
         <button type="button" class="btn-icon btn--sm task-center__close" aria-label="关闭任务中心" data-test="task-center-close" @click="$emit('close')"><AppIcon name="close" :size="16" /></button>
       </header>
 
-      <!-- 三个分区（D-UD-06 AppTabs），每个页签带 task-center-tab-* 钩子；「最近操作」的条数写在徽标里。 -->
-      <AppTabs v-model="section" class="task-center__tabs" :tabs="sectionTabs" aria-label="任务中心内容" />
-      <div v-if="section === 'health'" class="task-center__body">
+      <!-- 三个分区（D-UD-06 AppTabs），每个页签带 task-center-tab-* 钩子；「最近操作」的条数写在徽标里。
+           下面三块是各自的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）。 -->
+      <AppTabs v-model="section" class="task-center__tabs" :tabs="sectionTabs" id-prefix="task-center" aria-label="任务中心内容" />
+      <div v-if="section === 'health'" id="task-center-panel-health" class="task-center__body" role="tabpanel" aria-labelledby="task-center-tab-health">
         <SystemHealthPanel @run-command="runHealthCommand" />
       </div>
       <!-- 最近操作（统一设计 D-UD-09）：事后撤销的入口，与提示里的「撤销」是同一条记录。只在内存里，重启后清空。 -->
-      <div v-else-if="section === 'recent'" class="task-center__body" data-test="task-center-operations">
+      <div v-else-if="section === 'recent'" id="task-center-panel-recent" class="task-center__body" role="tabpanel" aria-labelledby="task-center-tab-recent" data-test="task-center-operations">
         <p class="task-center__note" data-test="task-center-operations-note">这里列出最近 {{ operationsLimit }} 次可以撤销的操作（移到废纸篓、批量编辑等），新的在前。只记在内存里，应用重启后清空。</p>
         <EmptyState
           v-if="!operations.length"
@@ -44,7 +45,7 @@
           </li>
         </ul>
       </div>
-      <div v-else class="task-center__body">
+      <div v-else id="task-center-panel-tasks" class="task-center__body" role="tabpanel" aria-labelledby="task-center-tab-tasks">
         <AppBanner v-if="loadError" tone="danger" title="读取任务状态失败" :message="loadError" data-test="task-center-error" />
         <ul v-if="warnings.length" class="task-center__warnings" role="status" data-test="task-center-warnings">
           <li v-for="(warning, index) in warnings" :key="`warning-${index}`">{{ warning }}</li>
@@ -148,6 +149,7 @@ import AppBanner from './ui/AppBanner.vue';
 import AppIcon from './ui/AppIcon.vue';
 import AppTabs from './ui/AppTabs.vue';
 import EmptyState from './ui/EmptyState.vue';
+import { hasOpenModalLayer } from './ui/modalSignals.js';
 import ProgressBar from './ui/ProgressBar.vue';
 
 // 事件驱动的重拉合并窗口：清理分析与字幕队列的进度事件可能一秒好几条，只取最后一次。
@@ -372,9 +374,11 @@ export default {
       this.$emit('close');
       try { await command.run(); } catch (_) { notifyError('打开处理入口失败，请从设置页进入'); }
     },
-    // 与 BaseModal 同口径：Esc 关闭。已被别的处理器接手（preventDefault）的按键不再处理。
+    // 与 BaseModal 同口径：Esc 关闭。已被别的处理器接手（preventDefault）的按键不再处理；
+    // 抽屉里点开的确认框这类模态层开着时让给它（见 ui/modalSignals.js）：抽屉常挂载、比它们先登记 keydown，
+    // 不让的话一下 Esc 会先关抽屉、再关确认框。
     handleDocumentKeydown(event) {
-      if (!this.open || event.key !== 'Escape' || event.defaultPrevented) return;
+      if (!this.open || event.key !== 'Escape' || event.defaultPrevented || hasOpenModalLayer()) return;
       this.$emit('close');
     },
     taskLabel(key) {

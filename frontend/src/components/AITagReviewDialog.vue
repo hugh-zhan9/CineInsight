@@ -20,8 +20,10 @@
            352px 常驻只读面板。判断一条候选值不值得批准时，命中率就在旁边。 -->
       <div :class="['ai-review-split', { 'ai-review-split--with-quality': qualityEnabled }]">
         <div class="ai-review-main">
-        <!-- 三个待审工作台（D-UD-06 AppTabs）：条数写全（后端汇总的总数，META-08），不截成 99+。 -->
-        <AppTabs v-model="reviewSection" class="ai-review-type-tabs" :tabs="reviewTabs" aria-label="待审工作台类型" />
+        <!-- 三个待审工作台（D-UD-06 AppTabs）：条数写全（后端汇总的总数，META-08），不截成 99+。
+             页签下面整块是当前工作台的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）。 -->
+        <AppTabs v-model="reviewSection" class="ai-review-type-tabs" :tabs="reviewTabs" id-prefix="ai-review" aria-label="待审工作台类型" />
+        <div :id="`ai-review-panel-${reviewSection}`" class="ai-review-panel" role="tabpanel" :aria-labelledby="`ai-review-tab-${reviewSection}`">
 
         <!-- 人物候选自带说明与刷新（它的数据与 AI 标签候选不是同一批），
              所以这一行工具条只属于另外两个页签。 -->
@@ -242,6 +244,7 @@
               <span>已加载 {{ candidates.length }} 条，还有更多</span>
             </div>
           </template>
+        </div>
         </div>
         </div>
 
@@ -973,6 +976,8 @@ export default {
 .ai-review-split--with-quality { grid-template-columns: minmax(0, 1fr) 352px; }
 
 .ai-review-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* 面板接着排成纵向：滚动仍交给里面的 .ai-review-workbench-content。 */
+.ai-review-panel { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
 
 .ai-review-quality {
   min-width: 0;

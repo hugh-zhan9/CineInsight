@@ -34,6 +34,8 @@ import { readDeletePreferences } from '../utils/trashConfirm.js';
 // 一律先弹确认框（DialogShell），不看「删除前确认」开关（2026-10-13 破坏性流程复审 I-2，回到 master 的做法）：
 // 人物页上的按钮容易被当成「从这个人物名下拿掉」，实际是把媒体从片库 / 图片库移除，必须先让用户看清后果。
 // 框里的「同时把原文件移到废纸篓」默认取设置里的「删除原文件」；设置读回来之前框先挂着但不显示，免得勾选闪一下。
+// Esc 由确认框（DialogShell）按「只关最上面一层」处理（ui/modalSignals.js）：叠在上面的「不支持废纸篓」二选一先收到，
+// 删除进行中（busy）不关。
 // 删除走带结果码的批量接口（TrashUndoBanner 的 runDelete：进度、不支持废纸篓时二选一，D-PC02/04）。
 // 删完用全局提示带「撤销」（notifyUndoable，同时记进任务中心「最近操作」），撤销按批次恢复（TrashUndoBanner 的 restoreTrashBatches）。
 // 提示还在或正在撤销时本组件保持挂载，提示收起后才发 close；之后从「最近操作」撤销时本组件已经卸下，
@@ -67,16 +69,11 @@ export default {
     target() { this.start(); },
     undoToastShown() { this.closeAfterNotice(); }
   },
-  mounted() {
-    window.addEventListener('keydown', this.escape, true);
-    this.start();
-  },
-  beforeUnmount() { this.disposed = true; window.removeEventListener('keydown', this.escape, true); },
+  mounted() { this.start(); },
+  beforeUnmount() { this.disposed = true; },
   methods: {
     formatBytes,
     close() { if (!this.busy) this.$emit('close'); },
-    // 只在确认步骤里接管 Esc；其余阶段不拦别的弹窗与抽屉的 Esc。
-    escape(event) { if (this.stage === 'confirm' && event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); this.close(); } },
     // 每次都停在确认框，等用户点确认（confirm）。「同时把原文件移到废纸篓」默认不勾：触发按钮写的是
     // 「从片库移除… / 从图片库移除…」（只删记录，D-UD-08），框里默认要与它一致，移文件得用户自己勾。
     async start() {

@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import VersionCompareDialog from './VersionCompareDialog.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { COMPARE_SYNC_INTERVAL_MS } from '../utils/versionCompare.js';
 
 const inlineSession = (id, extra = {}) => ({ video_id: id, mode: 'inline', display_name: `v${id}.mp4`, inline_source: { locator_strategy: 'asset_route', locator_value: `/preview/media/${id}`, mime: 'video/mp4' }, ...extra });
@@ -346,6 +347,35 @@ describe('关闭与释放', () => {
     right.currentTime = 50;
     wrapper.vm.syncTick();
     expect(right.currentTime).toBe(50);
+  });
+
+  // 对比播放器在 window 捕获阶段接 Esc，曾经一律 stopImmediatePropagation 关掉自己：叠在它上面的对话框（关窗口时的
+  // 退出确认、应用内确认框等，打开时 teleport 到 body 末尾）永远收不到 Esc。上面有对话框时让给它，自己在最上面时才关。
+  it('上面叠着对话框时 Esc 只关那个对话框；它关掉之后下一次 Esc 才关对比播放器', async () => {
+    const { left } = await openDialog();
+    const above = mount(DialogShell, { props: { title: '还有任务在进行' }, attachTo: document.body });
+    pressEscape();
+    expect(above.emitted('close')).toHaveLength(1);
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(left.hasAttribute('src')).toBe(true);
+    above.unmount();
+
+    pressEscape();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    expect(left.hasAttribute('src')).toBe(false);
+  });
+
+  it('从对话框里打开的对比播放器在它上面：Esc 只关对比播放器，下面的对话框留着', async () => {
+    const below = mount(DialogShell, { props: { title: '版本组' }, attachTo: document.body });
+    await openDialog();
+    pressEscape();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    expect(below.emitted('close')).toBeUndefined();
+    wrapper.unmount();
+    wrapper = null;
+    pressEscape();
+    expect(below.emitted('close')).toHaveLength(1);
+    below.unmount();
   });
 
   it('关闭按钮同样释放；宿主直接卸载时也释放；释放时的 error 事件不算报错', async () => {

@@ -467,6 +467,30 @@ describe('人物筛选组合框（META-02）', () => {
     expect(wrapper.get('[data-test="person-filter-options"]').text()).toContain('人物搜索失败');
     wrapper.unmount();
   });
+
+  // Esc 只关最上面一层：候选下拉开着时 Esc 曾一路冒泡到片库页的 window 监听，下拉收起的同时把多选也清空了。
+  // 下拉开着时 Esc 只收起下拉；收起之后再按，片库页照旧清空选择。
+  it('候选下拉开着时 Esc 只收起下拉，不再传到片库页；收起之后的 Esc 照旧交给片库页', async () => {
+    api.ListPeople.mockResolvedValue(people);
+    const wrapper = mount(LibraryToolbar, { props: baseProps(), attachTo: document.body });
+    const pageEscape = vi.fn();
+    window.addEventListener('keydown', pageEscape);
+    const input = wrapper.get('[data-test="person-filter-search"]');
+    const escape = () => input.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    await input.trigger('focus');
+    await flushPromises();
+    expect(wrapper.find('[data-test="person-filter-options"]').exists()).toBe(true);
+    escape();
+    await flushPromises();
+    expect(wrapper.find('[data-test="person-filter-options"]').exists()).toBe(false);
+    expect(pageEscape).not.toHaveBeenCalled();
+
+    escape();
+    expect(pageEscape).toHaveBeenCalledTimes(1);
+    window.removeEventListener('keydown', pageEscape);
+    wrapper.unmount();
+  });
 });
 
 describe('待处理工作台的跳转目标（APP-11）', () => {
