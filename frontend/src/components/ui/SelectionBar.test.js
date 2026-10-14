@@ -2,7 +2,7 @@ import { mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { h, vShow, withDirectives } from 'vue';
 
-import SelectionBar, { selectAllMatchingLabel } from './SelectionBar.vue';
+import SelectionBar, { selectAllMatchingLabel, selectionBarZone } from './SelectionBar.vue';
 
 const mounted = [];
 function mountBar(props) {
@@ -187,13 +187,16 @@ describe('SelectionBar', () => {
   });
 });
 
-// 吸底的操作条把自己从窗口底边往上占的高度（自身高度 + 吸底的 16）写在根节点的 --selection-bar-inset 上，
-// 全局提示据此抬到它上面（AppFeedback，位置在 layering.test.js 里核对）。jsdom 没有 ResizeObserver 也不排版：
-// 这里换一个能手动通知的 ResizeObserver，并替浏览器给出操作条量出来的高度（页面被 v-show 藏起来时是 0）。
-describe('SelectionBar 把吸底占的高度写在根节点上', () => {
+// 看得见的操作条在窗口里的竖直范围（离窗口底边：top 上沿、bottom 下沿），给全局提示判断放在它下面还是抬到它上面
+// （AppFeedback，判断在 layering.test.js 里核对）。jsdom 不排版、没有 ResizeObserver：这里换一个能手动通知的
+// ResizeObserver、把 requestAnimationFrame 攒起来手动放，并替浏览器给出操作条的位置（页面被 v-show 藏起来时高度是 0）。
+describe('SelectionBar 报出自己在窗口里的竖直范围', () => {
+  const VIEWPORT = 768;
   let observers;
+  let frames;
   beforeEach(() => {
     observers = [];
+    frames = [];
     vi.stubGlobal('ResizeObserver', class {
       constructor(callback) {
         this.callback = callback;
@@ -204,49 +207,113 @@ describe('SelectionBar 把吸底占的高度写在根节点上', () => {
       unobserve(target) { this.targets.delete(target); }
       disconnect() { this.targets.clear(); }
     });
+    vi.stubGlobal('requestAnimationFrame', callback => frames.push(callback));
+    vi.stubGlobal('cancelAnimationFrame', id => { frames[id - 1] = null; });
+    vi.stubGlobal('innerHeight', VIEWPORT);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
-    document.documentElement.style.removeProperty('--selection-bar-inset');
   });
 
-  const inset = () => document.documentElement.style.getPropertyValue('--selection-bar-inset');
-  const observed = bar => observers.some(observer => observer.targets.has(bar));
-  // 浏览器排版后 ResizeObserver 报的那一下。jsdom 不加载组件样式，照样式表给操作条写上吸底的 16。
-  function layout(bar, height) {
-    bar.style.bottom = '16px';
-    bar.getBoundingClientRect = () => ({ top: 0, left: 0, right: height ? 600 : 0, bottom: height, width: height ? 600 : 0, height });
+  const zone = () => ({ ...selectionBarZone });
+  const NONE = { visible: false, top: 0, bottom: 0 };
+  const flushFrames = () => {
+    const pending = frames;
+    frames = [];
+    for (const callback of pending) callback?.();
+  };
+  // 替浏览器排版：操作条上沿在 top、高 height（0 = 藏起来）。返回量位置的次数，用来核对一帧只量一次。
+  function place(bar, top, height) {
+    bar.reads = 0;
+    bar.getBoundingClientRect = () => {
+      bar.reads += 1;
+      return { top, bottom: top + height, left: 0, right: height ? 600 : 0, width: height ? 600 : 0, height };
+    };
+  }
+  const resized = bar => {
     for (const observer of observers) if (observer.targets.has(bar)) observer.callback([{ target: bar }]);
+  };
+  // 片库的样子：内容区（.main-view）自己滚，操作条在页面区块的末尾吸底，和整页一起挂载——挂载时操作条所在的子树
+  // 还没挂进内容区（以前在那时往上找滚动区域，找不到就落到 window 上，内容区滚动时不再重新量）。
+  function mountInScroller(props = { count: 3 }) {
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    document.body.appendChild(scroller);
+    const host = document.createElement('div');
+    scroller.appendChild(host);
+    const Page = {
+      props: { count: { type: Number, default: 0 } },
+      render() { return h('section', [h('div', { class: 'rows' }), h(SelectionBar, { count: this.count })]); }
+    };
+    const wrapper = mount(Page, { props, attachTo: host });
+    mounted.push(wrapper);
+    return { wrapper, scroller, bar: () => wrapper.get('.ui-selection-bar').element };
   }
 
-  it('看得见时写上高度 + 16，折成两三行时跟着变；选中清空（操作条消失）时去掉', async () => {
-    const wrapper = mountBar({ count: 3, totalMatching: 120 });
-    const bar = wrapper.get('.ui-selection-bar').element;
-    expect(observed(bar)).toBe(true);
-    expect(inset()).toBe('');
-    layout(bar, 46);
-    expect(inset()).toBe('62px');
-    layout(bar, 90);
-    expect(inset()).toBe('106px');
-    layout(bar, 134);
-    expect(inset()).toBe('150px');
-    await wrapper.setProps({ count: 0 });
-    expect(wrapper.find('.ui-selection-bar').exists()).toBe(false);
-    expect(observed(bar)).toBe(false);
-    expect(inset()).toBe('');
+  it('吸底时下沿离底 16；折成三行时上沿跟着变', () => {
+    const { bar } = mountInScroller();
+    place(bar(), VIEWPORT - 16 - 46, 46);
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 62, bottom: 16 });
+    place(bar(), VIEWPORT - 16 - 134, 134);
+    resized(bar());
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 150, bottom: 16 });
   });
 
-  it('卸载时去掉', () => {
-    const wrapper = mountBar({ count: 2 });
-    layout(wrapper.get('.ui-selection-bar').element, 46);
-    expect(inset()).toBe('62px');
+  it('列表短、操作条跟在最后一行后面停在半屏处：报出它真实的位置', () => {
+    const { bar } = mountInScroller();
+    place(bar(), 300, 46);
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 468, bottom: 422 });
+  });
+
+  it('所在区域滚动时重新量（一帧只量一次）；窗口改大小时也重新量', () => {
+    const { bar, scroller } = mountInScroller();
+    place(bar(), 300, 46);
+    flushFrames();
+    // 往下滚：操作条从半屏处落到底部吸住。一帧里来三次 scroll，只量一次。
+    place(bar(), VIEWPORT - 16 - 46, 46);
+    for (let i = 0; i < 3; i++) scroller.dispatchEvent(new Event('scroll'));
+    expect(frames).toHaveLength(1);
+    flushFrames();
+    expect(bar().reads).toBe(1);
+    expect(zone()).toEqual({ visible: true, top: 62, bottom: 16 });
+    place(bar(), 200, 46);
+    window.dispatchEvent(new Event('resize'));
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 568, bottom: 522 });
+  });
+
+  it('选中清空（操作条消失）与卸载时撤掉监听和范围', async () => {
+    const { wrapper, scroller, bar } = mountInScroller();
+    const element = bar();
+    place(element, 300, 46);
+    flushFrames();
+    const scrollerRemove = vi.spyOn(scroller, 'removeEventListener');
+    const windowRemove = vi.spyOn(window, 'removeEventListener');
+    await wrapper.setProps({ count: 0 });
+    expect(zone()).toEqual(NONE);
+    expect(scrollerRemove).toHaveBeenCalledWith('scroll', expect.any(Function));
+    expect(windowRemove).toHaveBeenCalledWith('resize', expect.any(Function));
+    expect(observers.every(observer => !observer.targets.has(element))).toBe(true);
+    scroller.dispatchEvent(new Event('scroll'));
+    window.dispatchEvent(new Event('resize'));
+    expect(frames.filter(Boolean)).toHaveLength(0);
+
+    await wrapper.setProps({ count: 2 });
+    place(bar(), 300, 46);
+    flushFrames();
+    expect(zone().visible).toBe(true);
+    scrollerRemove.mockClear();
     mounted.splice(mounted.indexOf(wrapper), 1);
     wrapper.unmount();
-    expect(inset()).toBe('');
+    expect(zone()).toEqual(NONE);
+    expect(scrollerRemove).toHaveBeenCalledWith('scroll', expect.any(Function));
   });
 
   // 片库、图片管理、清理中心切走时只隐藏不卸载，各自的操作条还挂着：只算看得见的那条。
-  it('所在页面被 v-show 藏起来时不算；几个页面各有一条时只算看得见的，都看得见取最高的', async () => {
+  it('所在页面被 v-show 藏起来时不算；几个页面各有一条时只算看得见的，都看得见时合成一个范围', async () => {
     const Pages = {
       props: { active: { type: String, default: 'library' } },
       render() {
@@ -259,23 +326,31 @@ describe('SelectionBar 把吸底占的高度写在根节点上', () => {
     const wrapper = mount(Pages, { attachTo: document.body });
     mounted.push(wrapper);
     const barIn = page => wrapper.get(`[data-page="${page}"] .ui-selection-bar`).element;
-    // 图片管理藏着：它的操作条量出来是 0。
-    layout(barIn('library'), 90);
-    layout(barIn('photos'), 0);
-    expect(inset()).toBe('106px');
+    place(barIn('library'), VIEWPORT - 16 - 90, 90);
+    place(barIn('photos'), 0, 0);
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 106, bottom: 16 });
 
-    // 切到图片管理：片库那条变 0，图片管理那条量出实际高度。
+    // 切到图片管理：片库那条藏起来量出 0（ResizeObserver 报这一下），图片管理那条量出实际位置。
     await wrapper.setProps({ active: 'photos' });
-    layout(barIn('library'), 0);
-    layout(barIn('photos'), 46);
-    expect(inset()).toBe('62px');
+    place(barIn('library'), 0, 0);
+    place(barIn('photos'), 300, 46);
+    resized(barIn('library'));
+    resized(barIn('photos'));
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 468, bottom: 422 });
 
-    // 两条都看得见（同一页上）时取最高的；都藏起来时去掉。
-    layout(barIn('library'), 134);
-    expect(inset()).toBe('150px');
+    // 两条都看得见：合成一个范围（最高的上沿、最低的下沿）。
+    place(barIn('library'), VIEWPORT - 16 - 46, 46);
+    resized(barIn('library'));
+    flushFrames();
+    expect(zone()).toEqual({ visible: true, top: 468, bottom: 16 });
     await wrapper.setProps({ active: 'none' });
-    layout(barIn('library'), 0);
-    layout(barIn('photos'), 0);
-    expect(inset()).toBe('');
+    place(barIn('library'), 0, 0);
+    place(barIn('photos'), 0, 0);
+    resized(barIn('library'));
+    resized(barIn('photos'));
+    flushFrames();
+    expect(zone()).toEqual(NONE);
   });
 });

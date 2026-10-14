@@ -1,6 +1,6 @@
 <template>
   <div class="app-feedback">
-    <div v-if="toasts.length" class="app-toasts" role="status" aria-live="polite" data-test="app-toasts">
+    <div v-if="toasts.length" ref="stack" class="app-toasts" :style="stackStyle" role="status" aria-live="polite" data-test="app-toasts">
       <div
         v-for="toast in toasts"
         :key="toast.id"
@@ -70,7 +70,12 @@
 <script>
 import AppIcon from './ui/AppIcon.vue';
 import DialogShell from './ui/DialogShell.vue';
+import { selectionBarZone } from './ui/SelectionBar.vue';
 import { confirmTextMatches, dismissToast, feedbackState, resolveConfirm, runToastAction } from '../utils/feedback.js';
+
+// 提示条照常离窗口底边 TOAST_INSET（样式里的 var(--space-4)），抬到选择操作条上面时与它隔 TOAST_GAP（var(--space-2)）。
+export const TOAST_INSET = 16;
+export const TOAST_GAP = 8;
 
 // 全局唯一的提示宿主，挂在 App 根上。业务代码只调 utils/feedback.js 里的函数，
 // 不需要把提示状态一层层往下传。提示最多带一个动作（撤销 / 重试 / 查看）；确认框分两级，
@@ -79,14 +84,32 @@ export default {
   name: 'AppFeedback',
   components: { AppIcon, DialogShell },
   data() {
-    return { typed: '' };
+    return { typed: '', stackHeight: 0 };
   },
   computed: {
     toasts() { return feedbackState.toasts; },
+    // 吸底的选择操作条（SelectionBar 报来它离窗口底边的范围）：提示照常离底 16、往上叠到 16 + 整条的高度，
+    // 与操作条的范围（再各留 8）有交叠就抬到操作条上沿再往上 8（交给样式里的 --toast-clearance）；列表短、操作条在
+    // 半屏处时照常待在底部，在它下面。按「照常的位置」判断，抬上去以后不会再反过来。
+    toastClearance() {
+      const bar = selectionBarZone;
+      if (!bar.visible || !this.stackHeight) return 0;
+      const overlaps = bar.bottom < TOAST_INSET + this.stackHeight + TOAST_GAP && bar.top + TOAST_GAP > TOAST_INSET;
+      return overlaps ? bar.top : 0;
+    },
+    stackStyle() {
+      return this.toastClearance ? { '--toast-clearance': `${this.toastClearance}px` } : null;
+    },
     confirm() { return feedbackState.confirm; },
     canConfirm() { return confirmTextMatches(this.confirm, this.typed); }
   },
   watch: {
+    // 提示增减后量整条的内容高度（不受 max-height 截断，抬不抬都一样），给 toastClearance 判断交叠。
+    toasts: {
+      deep: true,
+      flush: 'post',
+      handler() { this.stackHeight = this.$refs.stack?.scrollHeight || 0; }
+    },
     // 换了一个确认框就清空输入；不可逆确认把焦点放进输入框。
     confirm: {
       handler(next) {
@@ -116,11 +139,11 @@ export default {
 /* 层级（tokens.css「层级」）：确认框与其他对话框同在 --z-modal，靠打开时 teleport 排到最上面；提示条在
    --z-toast，压在所有对话框与确认框之上——删除后「撤销」提示和随后弹出的确认框同时在时，提示也点得到，
    点它不会落到确认框的遮罩上把确认框关掉。平时在右下角，有对话框、全窗口层或抽屉开着时挪开（见下面几条）。
-   下沿（--toast-bottom）：平时离窗口底边 16。吸底的选择操作条看得见时（SelectionBar 把它从窗口底边往上占的高度写在
-   根节点的 --selection-bar-inset 上，折成几行都量实际高度），抬到操作条上沿再往上 8。右下角与抽屉开着时的左下角都用它；
+   下沿（--toast-bottom）：平时离窗口底边 16。照常的位置会碰到看得见的选择操作条时，脚本在这里写上 --toast-clearance
+   （操作条上沿离窗口底边多高，见 toastClearance），抬到它上面 8。右下角与抽屉开着时的左下角都用它；
    贴顶的几种位置（对话框、看图层、字幕工作台）与版本对比不受影响。 */
 .app-toasts {
-  --toast-bottom: max(var(--space-4), calc(var(--selection-bar-inset, 0px) + var(--space-2)));
+  --toast-bottom: max(var(--space-4), calc(var(--toast-clearance, 0px) + var(--space-2)));
   position: fixed;
   z-index: var(--z-toast);
   right: var(--space-4);

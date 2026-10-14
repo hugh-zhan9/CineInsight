@@ -17,6 +17,7 @@
 </template>
 
 <script>
+import { reactive } from 'vue';
 import { isTextEntryTarget } from '../../utils/keyboardShortcuts.js';
 
 // 「全选当前结果（N）」的文案（D-UD-10）：选择操作条与片库工具栏共用这一处，N 就是点了之后会选中的条数；
@@ -43,16 +44,26 @@ function isRendered(element) {
   return true;
 }
 
-// 吸底的操作条从窗口底边往上占多高（自身高度 + 吸底的下边距），写在根节点的 --selection-bar-inset 上：
-// 浮在右下 / 左下角的全局提示据此抬到它上面（AppFeedback），操作条折成几行都跟着变。片库、图片管理、清理中心
-// 切走时只隐藏（v-show）不卸载，各自的操作条还挂着：藏起来的尺寸是 0（ResizeObserver 也会报这一下），不算；
-// 看得见的有几条取最高的。没有看得见的操作条时去掉这个变量。
-const barInsets = new Map();
-function publishBarInset() {
-  const inset = Math.max(0, ...barInsets.values());
-  const style = document.documentElement.style;
-  if (inset > 0) style.setProperty('--selection-bar-inset', `${inset}px`);
-  else style.removeProperty('--selection-bar-inset');
+// 看得见的操作条在窗口里的竖直范围，按离窗口底边的距离记：top 是上沿、bottom 是下沿。全局提示据此决定照常待在
+// 底部还是抬到操作条上面（AppFeedback）。吸底时下沿离底 16；列表短时它跟在最后一行后面，可能在半屏处；
+// 操作条所在的区块后面还有别的内容时（体检、丢失媒体的分组），滚动会让它在吸底与随内容上移之间来回。
+// 跟着变的时机：操作条尺寸变（折行；页面被 v-show 藏起来时变成 0）、所在滚动区域滚动、窗口改大小，每帧最多量一次。
+// 片库、图片管理、清理中心切走时只隐藏不卸载，各自的操作条还挂着：量出来高度是 0 的不算；看得见的有几条时合成一个范围。
+export const selectionBarZone = reactive({ visible: false, top: 0, bottom: 0 });
+const barZones = new Map();
+function publishBarZone() {
+  const zones = [...barZones.values()];
+  selectionBarZone.visible = zones.length > 0;
+  selectionBarZone.top = zones.length ? Math.max(...zones.map(zone => zone.top)) : 0;
+  selectionBarZone.bottom = zones.length ? Math.min(...zones.map(zone => zone.bottom)) : 0;
+}
+
+// 操作条随着滚动的那个祖先（片库是内容区 .main-view）；都不滚时是窗口。
+function scrollOwnerOf(element) {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (/^(auto|scroll|overlay)$/.test(getComputedStyle(node).overflowY)) return node;
+  }
+  return window;
 }
 
 export default {
@@ -86,25 +97,51 @@ export default {
   mounted() { document.addEventListener('keydown', this.handleKeydown); },
   beforeUnmount() { document.removeEventListener('keydown', this.handleKeydown); },
   methods: {
-    // 操作条节点随 v-if 出现 / 消失（组件卸载时也会以 null 再调一次）：出现时开始量它的高度，消失时撤掉它占的位置。
+    // 操作条节点随 v-if 出现 / 消失（组件卸载时也会以 null 再调一次）：出现时开始跟踪它的位置，消失时撤掉监听与它的范围。
     setBarElement(element) {
       if (element === this._barElement) return;
-      this._barResize?.disconnect();
-      this._barResize = null;
+      this.stopTrackingBar();
       this._barElement = element;
-      barInsets.delete(this);
-      if (element && typeof ResizeObserver === 'function') {
-        this._barResize = new ResizeObserver(() => this.measureBar());
+      if (element) this.trackBar(element);
+      publishBarZone();
+    },
+    // 滚动区域在第一次量的时候才找：这里被调用时节点可能还在一棵没挂进页面的子树里（整页一起挂载），往上找不到它。
+    trackBar(element) {
+      if (typeof ResizeObserver === 'function') {
+        this._barResize = new ResizeObserver(this.scheduleBarMeasure);
         this._barResize.observe(element);
       }
-      publishBarInset();
+      window.addEventListener('resize', this.scheduleBarMeasure, { passive: true });
+      this.scheduleBarMeasure();
+    },
+    stopTrackingBar() {
+      this._barResize?.disconnect();
+      this._barResize = null;
+      this._barScrollOwner?.removeEventListener('scroll', this.scheduleBarMeasure);
+      this._barScrollOwner = null;
+      window.removeEventListener('resize', this.scheduleBarMeasure);
+      if (this._barFrame) cancelAnimationFrame(this._barFrame);
+      this._barFrame = 0;
+      barZones.delete(this);
+    },
+    // 滚动一帧里会来好多次：合到下一帧量一次。
+    scheduleBarMeasure() {
+      if (this._barFrame || !this._barElement) return;
+      this._barFrame = requestAnimationFrame(() => {
+        this._barFrame = 0;
+        this.measureBar();
+      });
     },
     measureBar() {
       const element = this._barElement;
-      const height = element ? element.getBoundingClientRect().height : 0;
-      if (height > 0) barInsets.set(this, height + (parseFloat(getComputedStyle(element).bottom) || 0));
-      else barInsets.delete(this);
-      publishBarInset();
+      if (element && !this._barScrollOwner && element.isConnected) {
+        this._barScrollOwner = scrollOwnerOf(element);
+        this._barScrollOwner.addEventListener('scroll', this.scheduleBarMeasure, { passive: true });
+      }
+      const rect = element?.getBoundingClientRect();
+      if (rect && rect.height > 0) barZones.set(this, { top: window.innerHeight - rect.top, bottom: window.innerHeight - rect.bottom });
+      else barZones.delete(this);
+      publishBarZone();
     },
     handleKeydown(event) {
       if (event.key !== 'Escape' || !this.clearOnEscape || !this.visible || event.defaultPrevented) return;
