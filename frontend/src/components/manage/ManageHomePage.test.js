@@ -129,6 +129,21 @@ describe('ManageHomePage', () => {
     recordScanSummary({ trigger: 'startup', result: {} });
     await flushPromises();
     expect(wrapper.findAll('[data-test="manage-change"]')).toHaveLength(3);
+    expect(wrapper.find('[data-test="manage-changes-toggle"]').exists()).toBe(false);
+  });
+
+  // 默认列前 10 条，内存里留到 50 条：「显示全部 N 条」展开，「收起」回到前 10 条。
+  it('shows the first 10 changes and expands to all kept changes', async () => {
+    for (let index = 0; index < 23; index += 1) recordScanSummary({ trigger: 'manual', result: { added: index + 1 } });
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('[data-test="manage-change"]')).toHaveLength(10);
+    const toggle = wrapper.get('[data-test="manage-changes-toggle"]');
+    expect(toggle.text()).toBe('显示全部 23 条');
+    await toggle.trigger('click');
+    expect(wrapper.findAll('[data-test="manage-change"]')).toHaveLength(23);
+    expect(wrapper.get('[data-test="manage-changes-toggle"]').text()).toBe('收起');
+    await wrapper.get('[data-test="manage-changes-toggle"]').trigger('click');
+    expect(wrapper.findAll('[data-test="manage-change"]')).toHaveLength(10);
   });
 });
 

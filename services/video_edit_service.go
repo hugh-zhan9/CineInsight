@@ -419,6 +419,12 @@ func parseEditAcknowledged(raw string) []string {
 
 // ListProjects 按 ID 倒序列出最近的项目（limit 默认 50，上限 200）。
 func (s *VideoEditService) ListProjects(ctx context.Context, limit int) ([]EditProjectSummary, error) {
+	return s.ListProjectsBefore(ctx, 0, limit)
+}
+
+// ListProjectsBefore 同 ListProjects，只列 ID 小于 beforeID 的（beforeID 为 0 不限）：工作台「加载更多」
+// 拿上一页最后一个项目的 ID 往下翻。
+func (s *VideoEditService) ListProjectsBefore(ctx context.Context, beforeID uint, limit int) ([]EditProjectSummary, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -430,7 +436,11 @@ func (s *VideoEditService) ListProjects(ctx context.Context, limit int) ([]EditP
 		return nil, err
 	}
 	var projects []models.VideoEditProject
-	if err := db.Order("id DESC").Limit(limit).Find(&projects).Error; err != nil {
+	query := db.Order("id DESC").Limit(limit)
+	if beforeID > 0 {
+		query = query.Where("id < ?", beforeID)
+	}
+	if err := query.Find(&projects).Error; err != nil {
 		return nil, err
 	}
 	summaries := make([]EditProjectSummary, 0, len(projects))

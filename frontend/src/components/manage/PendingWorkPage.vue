@@ -34,7 +34,8 @@
       </EmptyState>
       <p v-if="failedRuns > 0" class="pending-section__note" data-test="pending-ai-failed">
         另有 {{ formatCount(failedRuns) }} 个视频 AI 打标失败（不计入待处理）。
-        <button type="button" class="btn-link" data-test="pending-open-task-center" @click="$emit('open-task-center')">在任务中心查看</button>
+        <button type="button" class="btn-link" data-test="pending-open-ai-failed" @click="openAIFailedVideos">在片库管理中查看</button>
+        · <button type="button" class="btn-link" data-test="pending-open-task-center" @click="$emit('open-task-center')">任务中心</button>
       </p>
     </template>
 
@@ -156,10 +157,11 @@
           </template>
         </template>
 
-        <!-- 原工作台的脚注留作「AI 视频标签」区块的页脚：失败的打标不计入待处理，引到任务中心。 -->
+        <!-- 原工作台的脚注留作「AI 视频标签」区块的页脚：失败的打标不计入待处理，列表在片库管理「AI 打标失败」视图，另可去任务中心。 -->
         <p v-if="section.key === 'ai_video_candidates' && failedRuns > 0" class="pending-section__note" data-test="pending-ai-failed">
           另有 {{ formatCount(failedRuns) }} 个视频 AI 打标失败（不计入待处理）。
-          <button type="button" class="btn-link" data-test="pending-open-task-center" @click="$emit('open-task-center')">在任务中心查看</button>
+          <button type="button" class="btn-link" data-test="pending-open-ai-failed" @click="openAIFailedVideos">在片库管理中查看</button>
+          · <button type="button" class="btn-link" data-test="pending-open-task-center" @click="$emit('open-task-center')">任务中心</button>
         </p>
       </section>
     </div>
@@ -217,6 +219,9 @@ export const PENDING_SECTIONS = Object.freeze([
     description: '重复、同源片段、极短或低清的视频，在清理中心决定留哪份。'
   }
 ]);
+
+// 失败的 AI 打标列在片库管理的「AI 打标失败」智能视图里（脚注的数字与它同口径），命令由 App 注册（nav:smart:*）。
+export const AI_FAILED_COMMAND = 'nav:smart:ai_tag_failed';
 
 // 「本地资料有更新」智能视图（D-PC39）：列表、计数与「全部应用」都按它取。
 export const LOCAL_METADATA_FILTER = Object.freeze({ smart_view: 'local_metadata_updated' });
@@ -419,6 +424,9 @@ export default {
     this.loadLocal();
   },
   methods: {
+    openAIFailedVideos() {
+      this.$emit('run-command', AI_FAILED_COMMAND, 'AI 打标失败的视频');
+    },
     sourceState(source) {
       if (source === 'suggestions') return this.suggestions;
       if (source === 'local') return this.local;

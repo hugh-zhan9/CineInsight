@@ -30,7 +30,6 @@
     <div v-if="skipDetail || scanFailures.length" class="scan-result__details">
       <span v-if="skipDetail" class="scan-result__skips" data-test="scan-skip-breakdown">{{ skipDetail }}</span>
       <TaskFailureList :failures="scanFailures" fallback-label="扫描" data-test="scan-failures" />
-      <span v-if="scanErrors.length > 50" class="scan-result__skips">仅展示前 50 条失败明细</span>
     </div>
   </div>
 </template>
@@ -94,7 +93,7 @@ export default {
       return { success: 'success', warning: 'warning', error: 'danger' }[this.incrementalScan.state] || 'neutral';
     },
     scanFailures() {
-      return this.scanErrors.slice(0, 50).map(item => ({
+      return this.scanErrors.map(item => ({
         name: item.path || item.directory || item.operation || '扫描',
         error: String(item.error || '扫描失败').slice(0, 1000)
       }));

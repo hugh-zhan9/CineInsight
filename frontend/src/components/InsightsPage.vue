@@ -31,6 +31,7 @@
       ref="storagePanel"
       @open-video-id="$emit('open-video-id', $event)"
       @run-command="(id, label) => $emit('run-command', id, label)"
+      @open-library-missing="$emit('open-library-missing', $event)"
       @videos-changed="handleVideosChanged"
       @status-change="setStorageStatus"
     />
@@ -178,7 +179,7 @@ export default {
   name: 'InsightsPage',
   components: { AppBanner, AppTabs, BucketChart, EmptyState, PageHeader, SegmentedControl, SkeletonBlock, StorageHealthPanel },
   // busy-change：存储体检正在删除视频，App 据此不让切走（撤销条挂在本页上）。
-  emits: ['open-video-id', 'run-command', 'busy-change'],
+  emits: ['open-video-id', 'run-command', 'busy-change', 'open-library-missing'],
   props: {
     // 卷可用性由扫描目录与监听状态推出，不再单开一条后端统计。
     directories: { type: Array, default: () => [] },

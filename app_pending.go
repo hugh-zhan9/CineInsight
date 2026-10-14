@@ -30,8 +30,8 @@ type PendingWorkSummary struct {
 }
 
 // GetPendingWorkSummary 汇总各类待处理事项（D-PC27）。各项口径：
-//   - AIVideoCandidates / AIVideoFailedRuns：AITaggingService.StatusSummary 的 pending 候选数与
-//     failed 状态数（都只算未删除的视频）；
+//   - AIVideoCandidates：AITaggingService.StatusSummary 的 pending 候选数（只算未删除的视频）；
+//   - AIVideoFailedRuns：片库管理「AI 打标失败」视图（ai_tag_failed）的视频数，与点进去的列表同口径；
 //   - AIImageCandidates：GetImageAITaggingSummary 的 pending 候选数（只算活跃图片）；
 //   - SameSourceUnconfirmed：同源审阅列表同口径（status=detected 且未确认，两端视频都未删除）的总数；
 //   - FaceUnnamed / FaceAppendPending：人脸审阅面板「未命名」与「待确认追加」两类簇的数量；
@@ -55,7 +55,11 @@ func (a *App) GetPendingWorkSummary() (PendingWorkSummary, error) {
 		return fail("视频 AI 候选数量", err)
 	}
 	summary.AIVideoCandidates = int(aiSummary.Pending)
-	summary.AIVideoFailedRuns = int(aiSummary.Failed)
+	failedRuns, err := a.aiTagFailedVideoCount()
+	if err != nil {
+		return fail("视频 AI 打标失败数量", err)
+	}
+	summary.AIVideoFailedRuns = failedRuns
 
 	imageAI := a.imageAITaggingService()
 	if imageAI == nil {
@@ -172,4 +176,11 @@ func cleanupPairKey(left, right uint) [2]uint {
 		left, right = right, left
 	}
 	return [2]uint{left, right}
+}
+
+// aiTagFailedVideoCount 是视频 AI 打标失败数：按片库管理「AI 打标失败」视图计（扫描范围内、未失效），
+// 待处理页脚注与任务中心的失败数都用它，数字与「在片库管理中查看」打开的列表一致。
+func (a *App) aiTagFailedVideoCount() (int, error) {
+	count, err := a.videoService.CountLibraryVideos(services.LibraryFilter{SmartView: services.LibraryViewAITagFailed})
+	return int(count), err
 }

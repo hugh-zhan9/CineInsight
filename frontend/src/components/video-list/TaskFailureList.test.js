@@ -35,6 +35,23 @@ describe('TaskFailureList', () => {
     expect(wrapper.get('[data-test="task-failure-toggle"]').text()).toBe('收起');
   });
 
+  // 失败总数比带来的明细多（后端截在 50 条）时照实说，展开按钮也不说「全部」。
+  it('says honestly when only the first failures were kept', async () => {
+    const wrapper = mount(TaskFailureList, { props: { failures: failures(50), total: 143, limit: 3 } });
+    expect(wrapper.get('[data-test="task-failure-capped"]').text()).toBe('共 143 条失败，只保留了前 50 条明细。');
+    const toggle = wrapper.get('[data-test="task-failure-toggle"]');
+    expect(toggle.text()).toBe('展开已保留的 50 条');
+    expect(toggle.text()).not.toContain('全部');
+    await toggle.trigger('click');
+    expect(wrapper.findAll('li')).toHaveLength(50);
+  });
+
+  it('keeps the plain wording when the total matches the listed failures', () => {
+    const wrapper = mount(TaskFailureList, { props: { failures: failures(7), total: 7, limit: 3 } });
+    expect(wrapper.find('[data-test="task-failure-capped"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="task-failure-toggle"]').text()).toBe('展开全部 7 条');
+  });
+
   it('stays expanded while a running task appends failures, and resets when a new round starts over', async () => {
     const wrapper = mount(TaskFailureList, { props: { failures: failures(4), limit: 3 } });
     await wrapper.get('[data-test="task-failure-toggle"]').trigger('click');

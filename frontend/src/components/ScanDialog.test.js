@@ -206,4 +206,16 @@ describe('加入扫描目录前先确认', () => {
     expect(result.text()).toContain('a.mkv：权限不足');
     expect(result.text()).toContain('b.mkv：读取失败');
   });
+
+  it('失败超过 50 条也全部列出（后端不截断，这里也不截）', async () => {
+    const errors = Array.from({ length: 75 }, (_, index) => ({ path: `/share/videos/f${index + 1}.mkv`, error: '读取失败' }));
+    api.SyncDirectoryWithProgress.mockResolvedValueOnce({ scanned: 75, errors });
+    await pick('/share/videos');
+    await wrapper.vm.startScan();
+    await flushPromises();
+    expect(wrapper.vm.scanFailures).toHaveLength(75);
+    await wrapper.get('[data-test="task-failure-toggle"]').trigger('click');
+    expect(wrapper.findAll('[data-test="scan-dialog-failures"] li')).toHaveLength(75);
+    expect(wrapper.text()).toContain('f75.mkv：读取失败');
+  });
 });

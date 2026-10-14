@@ -71,12 +71,15 @@ describe('完整度页签（D-MC-02）', () => {
     expect(wrapper.get('[data-test="completeness-item-video-thumbnail"]').text()).toContain('浏览片库时自动生成');
   });
 
-  it('待处理：本地资料有更新跳到现有视图，读取出错只展示', async () => {
+  it('待处理：本地资料有更新与读取出错都跳到片库管理的对应视图', async () => {
     const wrapper = await mountPanel();
     expect(wrapper.get('[data-test="completeness-item-video-nfo_update"] [data-test="completeness-count"]').text()).toBe('4 部 · 2%');
     await wrapper.get('[data-test="completeness-go-video-nfo_update"]').trigger('click');
-    expect(wrapper.emitted('run-command')).toEqual([['library.openLocalMetadataUpdates', '查看本地资料有更新的视频']]);
-    expect(wrapper.find('[data-test="completeness-go-video-nfo_error"]').exists()).toBe(false);
+    await wrapper.get('[data-test="completeness-go-video-nfo_error"]').trigger('click');
+    expect(wrapper.emitted('run-command')).toEqual([
+      ['library.openLocalMetadataUpdates', '查看本地资料有更新的视频'],
+      ['nav:smart:local_metadata_error', '查看本地资料读取出错的视频']
+    ]);
     expect(wrapper.emitted('open-library-missing')).toBeUndefined();
   });
 

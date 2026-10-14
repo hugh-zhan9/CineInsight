@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -978,6 +979,52 @@ func (s *SubtitleService) ListSubtitleJobs(limit int) ([]SubtitleJobItem, error)
 	if err := db.Order("updated_at DESC").Order("id DESC").Limit(limit).Find(&jobs).Error; err != nil {
 		return nil, err
 	}
+	names, err := subtitleJobVideoNames(db, jobs)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]SubtitleJobItem, 0, len(jobs))
+	for _, job := range jobs {
+		items = append(items, subtitleJobItemFrom(job, names[job.VideoID]))
+	}
+	return items, nil
+}
+
+// ListSubtitleJobsWithOpen 给任务中心用：最近更新的 recent 条，另加全部待确认、排队中与运行中的任务
+// （不受 recent 限制）。待确认的只能在任务中心处理，不能被后来的任务挤出列表。顺序同 ListSubtitleJobs。
+func (s *SubtitleService) ListSubtitleJobsWithOpen(recent int) ([]SubtitleJobItem, error) {
+	db, err := subtitleJobsDB()
+	if err != nil {
+		return nil, err
+	}
+	if recent <= 0 {
+		recent = subtitleJobHistoryKeep
+	}
+	var jobs []models.SubtitleJob
+	if err := db.Order("updated_at DESC").Order("id DESC").Limit(recent).Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	seen := make(map[uint]struct{}, len(jobs))
+	for _, job := range jobs {
+		seen[job.ID] = struct{}{}
+	}
+	var open []models.SubtitleJob
+	if err := db.Where("status IN ?", []string{
+		string(SubtitleQueueTaskStatusNeedsConfirmation), string(SubtitleQueueTaskStatusQueued), string(SubtitleQueueTaskStatusRunning),
+	}).Order("updated_at DESC").Order("id DESC").Find(&open).Error; err != nil {
+		return nil, err
+	}
+	for _, job := range open {
+		if _, ok := seen[job.ID]; !ok {
+			jobs = append(jobs, job)
+		}
+	}
+	sort.SliceStable(jobs, func(i, j int) bool {
+		if !jobs[i].UpdatedAt.Equal(jobs[j].UpdatedAt) {
+			return jobs[i].UpdatedAt.After(jobs[j].UpdatedAt)
+		}
+		return jobs[i].ID > jobs[j].ID
+	})
 	names, err := subtitleJobVideoNames(db, jobs)
 	if err != nil {
 		return nil, err

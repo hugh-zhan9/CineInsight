@@ -711,7 +711,7 @@ func imageSemanticIndexRun(status services.ImageSemanticIndexStatus) batchRun {
 }
 
 // taskCenterAITagging：视频 AI 打标没有内存里的「本轮」状态，运行与否只看登记表；上一轮给的是
-// 按状态累计的完成数与失败数（StatusSummary，与待处理汇总同一口径），数据库不可读时不给。
+// 按状态累计的完成数（StatusSummary）与失败数（「AI 打标失败」视图，与待处理汇总同一口径），数据库不可读时不给。
 func (a *App) taskCenterAITagging(src *taskCenterSources) taskCenterKeyState {
 	state := taskCenterKeyState{canStart: a.aiTaggingService != nil}
 	if a.aiTaggingService == nil || src.dbUnavailable != "" {
@@ -723,8 +723,15 @@ func (a *App) taskCenterAITagging(src *taskCenterSources) taskCenterKeyState {
 		src.warn("视频 AI 打标状态读取失败")
 		return state
 	}
-	if summary.Completed+summary.Failed > 0 {
-		state.lastRun = &TaskLastRun{Succeeded: int(summary.Completed), Failed: int(summary.Failed), Failures: []string{}}
+	// 失败数按片库管理「AI 打标失败」视图计（与待处理页同口径），前端据此给「在片库管理中查看」。
+	failed, err := a.aiTagFailedVideoCount()
+	if err != nil {
+		log.Printf("API GetTaskCenterSnapshot ai tagging failed count err=%v", err)
+		src.warn("视频 AI 打标状态读取失败")
+		return state
+	}
+	if int(summary.Completed)+failed > 0 {
+		state.lastRun = &TaskLastRun{Succeeded: int(summary.Completed), Failed: failed, Failures: []string{}}
 	}
 	return state
 }

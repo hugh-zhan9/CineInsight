@@ -77,6 +77,9 @@ describe('存储体检', () => {
     // 图片还没分析过：说明打开清理审阅会自动开始。
     expect(wrapper.get('[data-test="storage-reclaim-image"]').text()).toContain('还没分析过');
     expect(wrapper.get('[data-test="storage-probe-note"]').text()).toContain('还有 2 部视频没有技术信息');
+    // 没有技术信息的视频在片库管理的缺失筛选「技术信息」里能看到。
+    await wrapper.get('[data-test="storage-open-unprobed"]').trigger('click');
+    expect(wrapper.emitted('open-library-missing')).toEqual([[{ kind: 'video', field: 'technical' }]]);
     expect(wrapper.text()).toContain('没看过 · 2023/1/2 入库');
     wrapper.unmount();
   });
@@ -297,7 +300,8 @@ describe('存储体检的删除保护（审查 I-2 / I-3）', () => {
     api.GetStorageReport.mockResolvedValue(report({ unwatched: { count: 900, bytes: 0, savings: 0, items: many, has_more: true } }));
     const wrapper = await mountPanel();
     expect(wrapper.find('[data-test="storage-unwatched-more"]').exists()).toBe(false);
-    expect(wrapper.get('[data-test="storage-unwatched-capped"]').text()).toContain('最多列出前 500 部');
+    expect(wrapper.get('[data-test="storage-unwatched-capped"]').text())
+      .toBe('共 900 部，这里最多只列出前 500 部，其余 400 部没有列出；调高门槛可以缩小范围。');
     wrapper.unmount();
   });
 });

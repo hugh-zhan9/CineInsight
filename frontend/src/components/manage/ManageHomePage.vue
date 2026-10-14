@@ -41,6 +41,13 @@
         </li>
       </ul>
       <p v-else class="recap-muted" data-test="manage-changes-empty">本次打开应用以来还没有新的扫描、下载查重或备份。</p>
+      <button
+        v-if="allChanges.length > MANAGE_CHANGES_SHOWN"
+        type="button"
+        class="btn btn--secondary btn--sm manage-home__changes-toggle"
+        data-test="manage-changes-toggle"
+        @click="changesExpanded = !changesExpanded"
+      >{{ changesExpanded ? '收起' : `显示全部 ${allChanges.length} 条` }}</button>
     </section>
   </section>
 </template>
@@ -109,11 +116,15 @@ export default {
       reclaim: { ...blankBlock(), video: null, image: null },
       tasks: { ...blankBlock(), running: [] },
       disks: { ...blankBlock(), directories: [], watcher: null },
-      generation: 0
+      generation: 0,
+      // 「最近的变化」默认列前 MANAGE_CHANGES_SHOWN 条，内存里最多留 50 条（SESSION_CHANGE_LIMIT），展开看全部。
+      changesExpanded: false,
+      MANAGE_CHANGES_SHOWN
     };
   },
   computed: {
-    changes() { return sessionChanges().slice(0, MANAGE_CHANGES_SHOWN); },
+    allChanges() { return sessionChanges(); },
+    changes() { return this.changesExpanded ? this.allChanges : this.allChanges.slice(0, MANAGE_CHANGES_SHOWN); },
     cards() {
       const card = (key, label, block, describe) => {
         if (block.loading && !block.ready) return { key, label, loading: true, value: '…', unit: '', note: '正在读取' };
@@ -195,6 +206,7 @@ export default {
 .manage-home > :deep(.ui-page-header) { margin-bottom: 0; }
 .manage-home__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
 .manage-home__changes { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.manage-home__changes-toggle { justify-self: start; }
 /* 整行可点的变化记录：沿用 .btn 的焦点环与禁用口径，版式由这里接管。 */
 .manage-home__change {
   display: grid;

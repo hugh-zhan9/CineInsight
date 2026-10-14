@@ -101,9 +101,11 @@ import SkeletonBlock from '../ui/SkeletonBlock.vue';
 // 「缺得最多的目录」一次取几个（后端默认 10）。
 const DIRECTORY_LIMIT = 10;
 
-// 待处理项里能直接打开现有视图的：本地资料有更新 → 片库的「本地资料有更新」视图。
+// 待处理项都能直接打开片库管理的现有视图：本地资料有更新 → 「本地资料有更新」视图；读取出错 → 「本地资料读取出错」
+// 视图（与这里的数同口径，命令由 App 注册）。
 const PENDING_COMMANDS = {
-  nfo_update: { id: 'library.openLocalMetadataUpdates', label: '查看本地资料有更新的视频' }
+  nfo_update: { id: 'library.openLocalMetadataUpdates', label: '查看本地资料有更新的视频' },
+  nfo_error: { id: 'nav:smart:local_metadata_error', label: '查看本地资料读取出错的视频' }
 };
 
 // 不能直接去处理的项给一句说明。

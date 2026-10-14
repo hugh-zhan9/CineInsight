@@ -216,7 +216,7 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 		return src
 	}
 	if a.subtitleService != nil {
-		jobs, err := a.subtitleService.ListSubtitleJobs(taskCenterRecentPerKind)
+		jobs, err := a.subtitleService.ListSubtitleJobsWithOpen(taskCenterRecentPerKind)
 		if err != nil {
 			log.Printf("API GetTaskCenterSnapshot list subtitle jobs err=%v", err)
 			src.warn("字幕任务记录读取失败")

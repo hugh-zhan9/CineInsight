@@ -80,7 +80,7 @@
         data-test="proxy-task-cancel"
         @click="cancelTask"
       >取消</button>
-      <TaskFailureList :failures="failedResultItems" key-prefix="proxy-" data-test="proxy-failures" />
+      <TaskFailureList :failures="failedResultItems" :total="Number(status?.failed || 0)" key-prefix="proxy-" data-test="proxy-failures" />
     </div>
   </div>
 </template>

@@ -59,7 +59,7 @@
         data-test="face-run-now"
         @click="runNow"
       >忽略空闲立即运行</button>
-      <TaskFailureList :failures="analysisFailures" key-prefix="face-" data-test="face-analysis-failures" fallback-label="媒体" />
+      <TaskFailureList :failures="analysisFailures" :total="Number(analysisStatus?.failed || 0)" key-prefix="face-" data-test="face-analysis-failures" fallback-label="媒体" />
     </div>
 
     <div class="setting-item">

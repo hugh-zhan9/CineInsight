@@ -128,3 +128,25 @@ describe('任务进度用统一的进度条（D-UD-11）', () => {
     wrapper.unmount();
   });
 });
+
+// 失败明细改用共用的 TaskFailureList：不再只露 5 条、能展开；明细比失败数少时照实说。
+describe('图片任务的失败明细', () => {
+  it('可以展开全部带来的明细，截断时写明只保留了前几条', async () => {
+    const failures = Array.from({ length: 12 }, (_, index) => ({ image_id: index + 1, name: `p${index + 1}.jpg`, code: 'ai_timeout' }));
+    api.GetImageAITaggingStatus.mockResolvedValue({ running: false, completed: true, failed: 80, failures });
+    api.GetImageEXIFBackfillStatus.mockResolvedValue({ running: false, completed: true, failed: 1, failures: [{ image_id: 9, name: '', error: 'bad exif' }] });
+    const wrapper = await mountPanel();
+
+    const tagging = wrapper.get('[data-test="image-ai-tagging-failures"]');
+    expect(tagging.findAll('li')).toHaveLength(3);
+    expect(tagging.text()).toContain('p1.jpg：ai_timeout');
+    expect(tagging.get('[data-test="task-failure-capped"]').text()).toBe('共 80 条失败，只保留了前 12 条明细。');
+    await tagging.get('[data-test="task-failure-toggle"]').trigger('click');
+    expect(wrapper.get('[data-test="image-ai-tagging-failures"]').findAll('li')).toHaveLength(12);
+
+    const exif = wrapper.get('[data-test="image-exif-backfill-failures"]');
+    expect(exif.text()).toContain('图片 #9：bad exif');
+    expect(exif.find('[data-test="task-failure-capped"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+});

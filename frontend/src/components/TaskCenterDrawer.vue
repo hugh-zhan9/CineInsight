@@ -82,11 +82,19 @@
               <p v-if="lastRunText(item)" class="task-item__last" :data-test="`task-item-last-${item.key}`">{{ lastRunText(item) }}</p>
               <p v-for="(note, index) in itemNotes(item)" :key="`${item.key}-note-${index}`" class="task-item__note" :data-test="`task-item-note-${item.key}`">{{ note }}</p>
               <details v-if="failures(item).length" class="task-item__failures" :data-test="`task-item-failures-${item.key}`">
-                <summary>失败明细 {{ failures(item).length }} 条</summary>
+                <summary>失败明细 {{ failures(item).length }} 条<template v-if="failuresTruncated(item)">（共 {{ item.last_run.failed }} 条失败，只保留了前 {{ failures(item).length }} 条明细）</template></summary>
                 <ul>
                   <li v-for="(failure, index) in failures(item)" :key="`${item.key}-failure-${index}`" :title="failure">{{ failure }}</li>
                 </ul>
               </details>
+              <p v-if="failureLink(item)" class="task-item__note">
+                <button
+                  type="button"
+                  class="btn-link"
+                  :data-test="`task-item-failure-link-${item.key}`"
+                  @click="openFailureLink(item)"
+                >{{ failureLink(item).label }}</button>
+              </p>
             </li>
           </ul>
         </section>
@@ -165,6 +173,13 @@ const ITEM_SECTIONS = [
 ];
 
 const ITEM_ACTION_LABELS = { start: '启动', cancel: '取消', run_now: '立即运行' };
+
+// 有失败时能在片库管理里看到全部失败对象的任务：视频 AI 打标 → 「AI 打标失败」视图（失败数与它同口径）；
+// 技术信息 → 缺失筛选「技术信息」（探测失败的视频都在里面，另含还没探测的）。明细只保留前 50 条，这里看全部。
+const FAILURE_LINKS = {
+  ai_tagging: { command: 'nav:smart:ai_tag_failed', label: '在片库管理中查看' },
+  technical: { missing: 'technical', label: '在片库管理中查看缺技术信息的视频' }
+};
 
 // 片库页后台任务状态条原有的几种说法（D-P3-05 收进任务中心，文案照搬）。
 const PREPARING_TEXT = '正在统计待处理项…';
@@ -256,7 +271,7 @@ export default {
   props: {
     open: { type: Boolean, default: false }
   },
-  emits: ['close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit'],
+  emits: ['close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit', 'open-library-missing'],
   data() {
     return {
       snapshot: { items: [], recent: [], warnings: [] },
@@ -474,6 +489,28 @@ export default {
     },
     failures(item) {
       return asArray(item.last_run?.failures);
+    },
+    // 后端明细截在 50 条，失败数是全部：多出来的照实说。
+    failuresTruncated(item) {
+      return Number(item.last_run?.failed || 0) > this.failures(item).length;
+    },
+    failureLink(item) {
+      return Number(item.last_run?.failed || 0) > 0 ? FAILURE_LINKS[item.key] || null : null;
+    },
+    async openFailureLink(item) {
+      const link = FAILURE_LINKS[item.key];
+      if (!link) return;
+      this.$emit('close');
+      if (link.missing) {
+        this.$emit('open-library-missing', { kind: 'video', field: link.missing });
+        return;
+      }
+      const command = findCommand(link.command);
+      if (!command || !isCommandEnabled(command)) {
+        notifyError('片库管理暂时打不开，请稍后再试');
+        return;
+      }
+      try { await command.run(); } catch (_) { notifyError('打开片库管理失败，请稍后再试'); }
     },
     // 只列出前端确实有绑定的动作；后端给了而前端没有绑定的（例如尚无零参绑定的 retry_failed）不渲染。
     itemActions(item) {

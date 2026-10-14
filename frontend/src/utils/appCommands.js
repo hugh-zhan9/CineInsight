@@ -233,6 +233,8 @@ const COMMAND_SMART_VIEWS = [
   { value: 'untagged', label: '未打标签' },
   { value: 'no_subtitle', label: '无字幕' },
   { value: 'local_metadata_updated', label: '本地资料有更新' },
+  { value: 'local_metadata_error', label: '本地资料读取出错' },
+  { value: 'ai_tag_failed', label: 'AI 打标失败' },
   { value: 'stale', label: '路径失效' }
 ];
 
@@ -241,7 +243,8 @@ const COMMAND_SMART_VIEWS = [
 // 点赞、最近播放（按最近一次播放倒序）在三期集成时补回海报墙。
 export const VIDEO_BROWSE_SMART_VIEWS = Object.freeze(['', 'unwatched', 'continue_watching', 'watched', 'favorites', 'liked', 'recently_played']);
 
-// 片库管理认得的智能视图（D-P3-03：全部、未打标签、无字幕、本地资料有更新、路径失效）。保存视图或命令带来别的视图时，
+// 片库管理认得的智能视图（D-P3-03：全部、未打标签、无字幕、本地资料有更新、路径失效；另有完整度与待处理/任务中心
+// 点进来的本地资料读取出错、AI 打标失败）。保存视图或命令带来别的视图时，
 // 片库管理退回「全部」并提示一次（VideoListPage）。
 export const LIBRARY_MANAGE_SMART_VIEWS = Object.freeze(COMMAND_SMART_VIEWS.filter(view => !view.viewer).map(view => view.value));
 

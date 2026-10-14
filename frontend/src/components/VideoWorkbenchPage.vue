@@ -7,7 +7,10 @@
         :selected-id="selectedId"
         :busy="busy"
         :error="listError"
+        :has-more="listHasMore"
+        :loading-more="listLoadingMore"
         @select="selectProject"
+        @load-more="loadMoreProjects"
         @refresh="refreshAll"
         @cancel="cancelExport"
         @requeue="requeueFromList"
@@ -81,7 +84,7 @@
 <script>
 import {
   AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
-  ListEditProjects, PreflightEditProject, QueueEditProject, RequeueEditProject, UpdateEditRecipe
+  ListEditProjects, ListEditProjectsBefore, PreflightEditProject, QueueEditProject, RequeueEditProject, UpdateEditRecipe
 } from '../../wailsjs/go/main/App';
 import EditExportPanel from './video-workbench/EditExportPanel.vue';
 import EditProjectList from './video-workbench/EditProjectList.vue';
@@ -102,6 +105,10 @@ import './video-workbench/workbench.css';
 
 const EDITORS = { merge: 'MergeEditor', trim_intro: 'TrimIntroEditor', hd_replace: 'HDReplaceEditor' };
 const LIST_LIMIT = 50;
+
+function asList(value) {
+  return Array.isArray(value) ? value : [];
+}
 const LIST_REFRESH_DELAY_MS = 800;
 
 // 视频工作台页（视频编辑合同「界面」）。左栏项目列表，右栏按类型编辑、预检导出与结果。
@@ -122,6 +129,10 @@ export default {
     return {
       projects: [],
       listError: '',
+      // 「加载更多」翻过的页数：之后的刷新按这么多页重读，翻出来的旧项目不会被刷新冲掉。
+      listPages: 1,
+      listHasMore: false,
+      listLoadingMore: false,
       selectedId: 0,
       project: null,
       recipe: null,
@@ -204,12 +215,43 @@ export default {
     async loadList() {
       const generation = this.listGeneration.next();
       try {
-        const list = await ListEditProjects(LIST_LIMIT);
+        // 按 ID 倒序一页 LIST_LIMIT 个；翻过几页就重读几页（拿上一页最后一个 ID 往下取）。
+        let list = asList(await ListEditProjects(LIST_LIMIT));
+        let more = list.length === LIST_LIMIT;
+        for (let page = 1; page < this.listPages && more; page++) {
+          const next = asList(await ListEditProjectsBefore(list[list.length - 1].id, LIST_LIMIT));
+          list = list.concat(next);
+          more = next.length === LIST_LIMIT;
+        }
         if (!this.listGeneration.isCurrent(generation)) return;
-        this.projects = Array.isArray(list) ? list : [];
+        this.projects = list;
+        this.listHasMore = more;
         this.listError = '';
       } catch (err) {
         if (this.listGeneration.isCurrent(generation)) this.listError = `读取编辑项目失败：${editErrorText(err)}`;
+      }
+    },
+    // 列表末尾的「加载更多」：只取下一页接在后面；期间有刷新时以刷新为准（它已按新的页数重读）。
+    async loadMoreProjects() {
+      const last = this.projects[this.projects.length - 1];
+      if (!this.listHasMore || this.listLoadingMore || !last) return;
+      this.listPages += 1;
+      this.listLoadingMore = true;
+      const generation = this.listGeneration.next();
+      try {
+        const next = asList(await ListEditProjectsBefore(last.id, LIST_LIMIT));
+        if (!this.listGeneration.isCurrent(generation)) return;
+        const seen = new Set(this.projects.map(project => project.id));
+        this.projects = this.projects.concat(next.filter(project => !seen.has(project.id)));
+        this.listHasMore = next.length === LIST_LIMIT;
+        this.listError = '';
+      } catch (err) {
+        if (this.listGeneration.isCurrent(generation)) {
+          this.listPages -= 1;
+          this.listError = `读取更多编辑项目失败：${editErrorText(err)}`;
+        }
+      } finally {
+        this.listLoadingMore = false;
       }
     },
     // 进度事件可能很密：列表最多每 800 毫秒重读一次。

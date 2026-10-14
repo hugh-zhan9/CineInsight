@@ -44,6 +44,10 @@ const (
 	LibraryViewStale            = "stale"
 	// LibraryViewLocalMetadataUpdated：本地 NFO/元数据有更新待应用（D-PC39）。
 	LibraryViewLocalMetadataUpdated = "local_metadata_updated"
+	// LibraryViewLocalMetadataError：本地 NFO/元数据读取出错（完整度「待处理」的 nfo_error 同一口径）。
+	LibraryViewLocalMetadataError = "local_metadata_error"
+	// LibraryViewAITagFailed：视频 AI 打标失败（ai_tagging_states.status = failed），待处理页与任务中心的失败数按它计。
+	LibraryViewAITagFailed = "ai_tag_failed"
 
 	// StaleReasonUnknown 是 stale_reason 筛选里「原因未记录」（空原因）的取值（D-PC06）。
 	StaleReasonUnknown = "unknown"
@@ -182,11 +186,15 @@ type LibrarySubtitleHit struct {
 	Segment subtitleparser.Segment `json:"segment"`
 }
 
+// aiTagFailedVideoSQL 是「AI 打标失败」视图的判定：打标状态行为 failed。StatusSummary 的 Failed 数不看
+// 扫描范围与失效，片库列表看；待处理页与任务中心的失败数改用这一视图计数，数字与点进去的列表同口径。
+const aiTagFailedVideoSQL = "EXISTS (SELECT 1 FROM ai_tagging_states ats WHERE ats.video_id = videos.id AND ats.status = '" + models.AITaggingStateStatusFailed + "')"
+
 var validLibraryViews = map[string]struct{}{
 	LibraryViewAll: {}, LibraryViewFavorites: {}, LibraryViewLiked: {}, LibraryViewContinueWatching: {},
 	LibraryViewUnwatched: {}, LibraryViewWatched: {}, LibraryViewRecentlyAdded: {},
 	LibraryViewRecentlyPlayed: {}, LibraryViewUntagged: {}, LibraryViewNoSubtitle: {},
-	LibraryViewStale: {}, LibraryViewLocalMetadataUpdated: {},
+	LibraryViewStale: {}, LibraryViewLocalMetadataUpdated: {}, LibraryViewLocalMetadataError: {}, LibraryViewAITagFailed: {},
 }
 
 var validStaleReasons = map[string]struct{}{
@@ -445,6 +453,10 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 		query = query.Where("NOT " + hasAnySubtitleSQL)
 	case LibraryViewLocalMetadataUpdated:
 		query = query.Where("EXISTS (SELECT 1 FROM video_local_metadata_states lms WHERE lms.video_id = videos.id AND lms.status = ?)", LocalMetadataStateUpdateAvailable)
+	case LibraryViewLocalMetadataError:
+		query = query.Where(videoPendingSQL[MetadataFieldNFOError])
+	case LibraryViewAITagFailed:
+		query = query.Where(aiTagFailedVideoSQL)
 	case LibraryViewStale:
 		query = query.Where("videos.is_stale = ?", true)
 		switch filter.StaleReason {

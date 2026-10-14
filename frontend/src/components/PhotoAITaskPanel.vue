@@ -18,11 +18,7 @@
         <ProgressBar v-if="taggingProgressRatio !== null" class="image-task-bar" :value="taggingProgressRatio" />
         <span v-if="taggingWaitingText" class="image-task-waiting-idle" data-test="image-ai-tagging-waiting-idle">{{ taggingWaitingText }}</span>
         <span v-if="taggingError" data-test="image-ai-tagging-error">{{ taggingError }}</span>
-        <ul v-if="taggingFailures.length" class="image-task-failures" data-test="image-ai-tagging-failures">
-          <li v-for="failure in taggingFailures" :key="`tag-${failure.image_id}`">
-            {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.code || '未知错误' }}）
-          </li>
-        </ul>
+        <TaskFailureList :failures="taggingFailures" :total="Number(taggingStatus?.failed || 0)" key-prefix="tag-" fallback-label="图片" data-test="image-ai-tagging-failures" />
       </div>
       <div class="image-task-actions">
         <button
@@ -65,11 +61,7 @@
         <ProgressBar v-if="exifProgressRatio !== null" class="image-task-bar" :value="exifProgressRatio" />
         <span v-if="exifWaitingText" class="image-task-waiting-idle" data-test="image-exif-backfill-waiting-idle">{{ exifWaitingText }}</span>
         <span v-if="exifError" data-test="image-exif-backfill-error">{{ exifError }}</span>
-        <ul v-if="exifFailures.length" class="image-task-failures" data-test="image-exif-backfill-failures">
-          <li v-for="failure in exifFailures" :key="`exif-${failure.image_id}`">
-            {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.error || '未知错误' }}）
-          </li>
-        </ul>
+        <TaskFailureList :failures="exifFailures" :total="Number(exifStatus?.failed || 0)" key-prefix="exif-" fallback-label="图片" data-test="image-exif-backfill-failures" />
       </div>
       <div class="image-task-actions">
         <button
@@ -112,11 +104,7 @@
         <ProgressBar v-if="phashProgressRatio !== null" class="image-task-bar" :value="phashProgressRatio" />
         <span v-if="phashWaitingText" class="image-task-waiting-idle" data-test="image-phash-backfill-waiting-idle">{{ phashWaitingText }}</span>
         <span v-if="phashError" data-test="image-phash-backfill-error">{{ phashError }}</span>
-        <ul v-if="phashFailures.length" class="image-task-failures" data-test="image-phash-backfill-failures">
-          <li v-for="failure in phashFailures" :key="`phash-${failure.image_id}`">
-            {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.error || '未知错误' }}）
-          </li>
-        </ul>
+        <TaskFailureList :failures="phashFailures" :total="Number(phashStatus?.failed || 0)" key-prefix="phash-" fallback-label="图片" data-test="image-phash-backfill-failures" />
       </div>
       <div class="image-task-actions">
         <button
@@ -165,11 +153,7 @@
         </span>
         <span v-if="semanticStatus?.unavailable">{{ semanticStatus.unavailable }}</span>
         <span v-if="semanticError" data-test="image-semantic-index-error">{{ semanticError }}</span>
-        <ul v-if="semanticFailures.length" class="image-task-failures" data-test="image-semantic-index-failures">
-          <li v-for="failure in semanticFailures" :key="`sem-${failure.image_id}`">
-            {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.code || '未知错误' }}）
-          </li>
-        </ul>
+        <TaskFailureList :failures="semanticFailures" :total="Number(semanticStatus?.failed || 0)" key-prefix="sem-" fallback-label="图片" data-test="image-semantic-index-failures" />
       </div>
       <div class="image-task-actions">
         <button
@@ -200,11 +184,15 @@ import {
   StartImagePerceptualHashBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
 import ProgressBar from './ui/ProgressBar.vue';
+import TaskFailureList from './video-list/TaskFailureList.vue';
 import { idleGateWaitingText, isIdleGateNotWaitingError } from '../utils/idleScheduling.js';
 
 // 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPage）。
 const POLL_INTERVAL_MS = 1000;
-const MAX_FAILURES_SHOWN = 5;
+
+function withErrorText(failures, field) {
+  return (Array.isArray(failures) ? failures : []).map(failure => ({ ...failure, error: failure?.[field] || '未知错误' }));
+}
 
 // 页内只显示本页正在做的这件事（D-UD-11）：进度用统一的 ProgressBar，比例 0–1。
 function progressRatio(status) {
@@ -215,7 +203,7 @@ function progressRatio(status) {
 
 export default {
   name: 'PhotoAITaskPanel',
-  components: { ProgressBar },
+  components: { ProgressBar, TaskFailureList },
   data() {
     return {
       taggingStatus: null,
@@ -280,10 +268,12 @@ export default {
     semanticProgressRatio() { return progressRatio(this.semanticStatus); },
     exifProgressRatio() { return progressRatio(this.exifStatus); },
     phashProgressRatio() { return progressRatio(this.phashStatus); },
-    taggingFailures() { return (this.taggingStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
-    semanticFailures() { return (this.semanticStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
-    exifFailures() { return (this.exifStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
-    phashFailures() { return (this.phashStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); }
+    // 失败明细交给共用的 TaskFailureList（默认露前几条、其余可展开；带来的明细比失败数少时照实说）。
+    // 打标与语义索引的失败只有错误码，没有错误文本。
+    taggingFailures() { return withErrorText(this.taggingStatus?.failures, 'code'); },
+    semanticFailures() { return withErrorText(this.semanticStatus?.failures, 'code'); },
+    exifFailures() { return withErrorText(this.exifStatus?.failures, 'error'); },
+    phashFailures() { return withErrorText(this.phashStatus?.failures, 'error'); }
   },
   mounted() {
     this._alive = true;
@@ -513,7 +503,6 @@ export default {
 }
 .image-task-status--error { border-color: var(--danger-border); background: var(--danger-soft); }
 .image-task-status span { color: var(--text-secondary); font-size: var(--fs-caption); }
-.image-task-failures { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: var(--fs-caption); }
 .image-task-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .image-task-status span.image-task-waiting-idle { color: var(--warning-text); }
 </style>

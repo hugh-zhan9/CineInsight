@@ -304,6 +304,7 @@
 	    :directories="directories"
 	    @open-video-id="openVideoByID($event, { from: 'insights' })"
 	    @run-command="runPendingCommand"
+	    @open-library-missing="openMissingFilter"
 	    @videos-changed="handleVideosChangedElsewhere"
 	    @busy-change="insightsBusy = $event"
 	  />
@@ -375,6 +376,7 @@
       @open-video="openVideoByID($event, { from: 'task-center' })"
       @open-consolidation="openConsolidationTask"
       @open-video-edit="openVideoEditProject"
+      @open-library-missing="openMissingFilter"
     />
     <QuitConfirmDialog />
     <!-- 版本对比播放器：任何地方调 openVersionCompare(左, 右) 就在这里打开；每次打开是一次新会话（key）。 -->

@@ -127,7 +127,7 @@
             data-test="storage-unwatched-more"
             @click="showMore('unwatched')"
           >显示更多（还有 {{ report.unwatched.count - unwatchedItems.length }} 部）</button>
-          <p v-else-if="report.unwatched.has_more" class="storage-muted storage-more" data-test="storage-unwatched-capped">最多列出前 {{ MAX_LIST }} 部，可以调高门槛缩小范围。</p>
+          <p v-else-if="report.unwatched.has_more" class="storage-muted storage-more" data-test="storage-unwatched-capped">共 {{ report.unwatched.count }} 部，这里最多只列出前 {{ MAX_LIST }} 部，其余 {{ report.unwatched.count - unwatchedItems.length }} 部没有列出；调高门槛可以缩小范围。</p>
           <!-- 选择操作条（D-UD-10）：有勾选才出现，只处理勾选的；「全选当前结果（N）」的 N 是列出的部数。
                移到废纸篓前确不确认看设置「删除前确认」（默认开）；做完由删除宿主给「撤销」。 -->
           <SelectionBar
@@ -168,6 +168,12 @@
             data-test="storage-start-probe"
             @click="startProbe"
           >{{ probeStarting ? '启动中…' : '补全技术信息' }}</button>
+          <button
+            type="button"
+            class="btn btn--secondary btn--sm"
+            data-test="storage-open-unprobed"
+            @click="$emit('open-library-missing', { kind: 'video', field: 'technical' })"
+          >在片库管理中查看</button>
         </p>
         <div class="storage-panel">
           <ul v-if="transcodeItems.length" class="storage-list">
@@ -192,7 +198,7 @@
             data-test="storage-transcode-more"
             @click="showMore('transcode')"
           >显示更多（还有 {{ report.transcode.count - transcodeItems.length }} 部）</button>
-          <p v-else-if="report.transcode.has_more" class="storage-muted storage-more" data-test="storage-transcode-capped">最多列出可省空间最多的前 {{ MAX_LIST }} 部。</p>
+          <p v-else-if="report.transcode.has_more" class="storage-muted storage-more" data-test="storage-transcode-capped">共 {{ report.transcode.count }} 部，这里最多只列出可省空间最多的前 {{ MAX_LIST }} 部，其余 {{ report.transcode.count - transcodeItems.length }} 部没有列出。</p>
         </div>
       </section>
 
@@ -259,9 +265,10 @@ const STATE_TEXT = {
 export default {
   name: 'StorageHealthPanel',
   components: { AppBanner, AppIcon, BucketChart, DialogShell, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
-  // open-video-id：打开片库详情；run-command：按固定命令 ID 打开清理中心；
+  // open-video-id：打开片库详情；run-command：按固定命令 ID 打开清理中心；open-library-missing：片库管理的缺失筛选
+  // （没有技术信息的视频 → 缺失「技术信息」）；
   // status-change：{ loading, processing }，宿主据此显示刷新状态、删除进行中不让离开。
-  emits: ['open-video-id', 'run-command', 'status-change'],
+  emits: ['open-video-id', 'run-command', 'status-change', 'open-library-missing'],
   props: {
     // 宿主的 @videos-changed：这里删除或撤销删除了视频，片库与顶栏计数据此刷新。声明成 prop 而不是放进 emits：
     // 离开体检页之后再从提示或「最近操作」撤销时本面板已经卸下，Vue 会丢掉它的 $emit，拿着这个监听才能照样通知。
