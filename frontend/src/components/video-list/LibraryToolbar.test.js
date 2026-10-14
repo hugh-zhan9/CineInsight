@@ -469,8 +469,9 @@ describe('人物筛选组合框（META-02）', () => {
   });
 
   // Esc 只关最上面一层：候选下拉开着时 Esc 曾一路冒泡到片库页的 window 监听，下拉收起的同时把多选也清空了。
-  // 下拉开着时 Esc 只收起下拉；收起之后再按，片库页照旧清空选择。
-  it('候选下拉开着时 Esc 只收起下拉，不再传到片库页；收起之后的 Esc 照旧交给片库页', async () => {
+  // 下拉开着时 Esc 只收起下拉、不往外传；收起之后再按（框里没字）照常往外传（片库页对文本框里的 Esc 不清空多选，
+  // 外层的任务中心抽屉之类照常收到）。
+  it('候选下拉开着时 Esc 只收起下拉，不再传到片库页；收起之后的 Esc 照常往外传', async () => {
     api.ListPeople.mockResolvedValue(people);
     const wrapper = mount(LibraryToolbar, { props: baseProps(), attachTo: document.body });
     const pageEscape = vi.fn();
@@ -489,6 +490,80 @@ describe('人物筛选组合框（META-02）', () => {
     escape();
     expect(pageEscape).toHaveBeenCalledTimes(1);
     window.removeEventListener('keydown', pageEscape);
+    wrapper.unmount();
+  });
+
+  // 浏览器里 search 框的 Esc：页面没拦（preventDefault）时清空文字并发 input 事件（Chrome / WebKit 原生行为，
+  // 已在 headless Chrome 核对）。这里照样模拟，才看得出 input 事件把下拉又弹出来。
+  function pressEscapeLikeBrowser(input, init = {}) {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init });
+    input.dispatchEvent(event);
+    if (!event.defaultPrevented && !event.isComposing && input.type === 'search' && input.value) {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return event;
+  }
+
+  // 2026-10-14：Esc 一下只做一件事——下拉开着时只收起下拉（字留着，下拉不被原生清空的 input 事件再弹出来）；
+  // 下拉收着、框里有字时清空文字（下拉不弹出来，候选按空关键字重取备用）。
+  it('Esc：下拉开着只收起下拉、字留着；下拉收着时清空文字、下拉不再弹出', async () => {
+    api.ListPeople.mockResolvedValue(people);
+    const wrapper = mount(LibraryToolbar, { props: baseProps(), attachTo: document.body });
+    const pageEscape = vi.fn();
+    window.addEventListener('keydown', pageEscape);
+    const input = wrapper.get('[data-test="person-filter-search"]');
+    const menuOpen = () => wrapper.find('[data-test="person-filter-options"]').exists();
+
+    await input.trigger('focus');
+    await input.setValue('张');
+    await flushPromises();
+    expect(menuOpen()).toBe(true);
+
+    const first = pressEscapeLikeBrowser(input.element);
+    await flushPromises();
+    expect(menuOpen()).toBe(false);
+    expect(input.element.value).toBe('张');
+    expect(wrapper.vm.personKeyword).toBe('张');
+    expect(first.defaultPrevented).toBe(true);
+    expect(pageEscape).not.toHaveBeenCalled();
+
+    api.ListPeople.mockClear();
+    const second = pressEscapeLikeBrowser(input.element);
+    await flushPromises();
+    expect(input.element.value).toBe('');
+    expect(wrapper.vm.personKeyword).toBe('');
+    expect(menuOpen()).toBe(false);
+    expect(second.defaultPrevented).toBe(true);
+    expect(api.ListPeople).toHaveBeenCalledWith('', '', 0, 20);
+
+    // 框里没字、下拉收着：不拦，交给外层。
+    const third = pressEscapeLikeBrowser(input.element);
+    await flushPromises();
+    expect(third.defaultPrevented).toBe(false);
+    expect(menuOpen()).toBe(false);
+    window.removeEventListener('keydown', pageEscape);
+    wrapper.unmount();
+  });
+
+  // 输入法组词期间的按键归输入法：Esc 取消组词、回车上屏、方向键挑候选字，都不当成人物筛选的操作。
+  it('输入法组词期间的 Esc、回车、方向键不动下拉、文字与已选人物', async () => {
+    api.ListPeople.mockResolvedValue(people);
+    const wrapper = mount(LibraryToolbar, { props: baseProps(), attachTo: document.body });
+    const input = wrapper.get('[data-test="person-filter-search"]');
+    await input.trigger('focus');
+    await input.setValue('zh');
+    await flushPromises();
+    for (const key of ['ArrowDown', 'Enter', 'Escape']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, isComposing: true });
+      input.element.dispatchEvent(event);
+      await flushPromises();
+      expect(event.defaultPrevented, key).toBe(false);
+    }
+    expect(wrapper.emitted('update:selectedPeople')).toBeUndefined();
+    expect(wrapper.find('[data-test="person-filter-options"]').exists()).toBe(true);
+    expect(wrapper.vm.personKeyword).toBe('zh');
+    expect(wrapper.vm.personActiveIndex).toBe(0);
     wrapper.unmount();
   });
 });
