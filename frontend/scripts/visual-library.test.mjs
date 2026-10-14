@@ -42,9 +42,11 @@ assert.match(handler, /\/preview\/thumbnail\//, 'asset handler should route thum
 assert.match(photoPage, /\.photo-viewer\s*{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/s, 'photo viewer should give its stage a definite row height');
 assert.match(photoPage, /\.photo-viewer__stage\s*{[^}]*min-height:\s*0/s, 'photo viewer stage should not grow past the viewport');
 assert.match(photoPage, /\.photo-viewer__img\s*{[^}]*max-height:\s*100%[^}]*object-fit:\s*contain/s, 'photo viewer image should letterbox instead of overflowing');
-// 图片页切走只隐藏不卸载，滚动位置才能留住。观看侧「图片」与管理侧「图片管理」共用这一个实例（D-UI-09）。
+// 图片页切走只隐藏不卸载，滚动位置才能留住。图片管理（PhotoLibraryPage）只在「图片管理」上显示；观看侧「图片」是另一个实例，
+// 照片流 PhotoBrowsePage（D-P2-08），同样首次进入才挂载、之后只隐藏。
 assert.match(appShell, /<PhotoLibraryPage[^>]*v-show="photoPageVisible"/s, 'photo page should stay mounted across tab switches');
-assert.match(appShell, /photoPageVisible\(\)\s*{\s*return this\.currentPage === 'photos' \|\| this\.currentPage === 'photos-manage';/, 'photos and photos-manage should share the one mounted photo page');
+assert.match(appShell, /photoPageVisible\(\)\s*{\s*return this\.currentPage === 'photos-manage';/, 'the photo management page shows only on photos-manage');
+assert.match(appShell, /<PhotoBrowsePage[^>]*v-show="currentPage === 'photos'"/s, 'the viewer photo stream should stay mounted across tab switches and show only on photos');
 assert.match(photoPage, /pageActive\(active\)/, 'photo page should react to becoming active again');
 assert.match(photoPage, /restoreScrollPosition\(\)\s*{/, 'photo page should restore the shared scroll position');
 

@@ -28,7 +28,7 @@ import { recordBackgroundTasks } from './sessionChanges.js';
 // 观看与管理两套导航（D-UI-02、D-UI-09）：key 与 App.vue 的 currentPage 一致，每个页面 key 只属于一个区域；
 // 顶栏只显示当前区域那一套，命令面板列出两边全部页面（APP-12、APP-14：两边读同一份清单，不会各自漏页）。
 // 「视频」是观看侧的海报墙（VideoBrowsePage，D-P2-01），「片库管理」是常挂载的片库页（VideoListPage），两页筛选各自独立；
-// 「图片」与「图片管理」仍是同一个常挂载实例的两个 key，key 只决定顶栏归属。
+// 「图片」是观看侧的照片流（PhotoBrowsePage，D-P2-08），「图片管理」是图片库管理页（PhotoLibraryPage），两页筛选各自独立。
 // requiresBrowserBridge：只在设置里开启了浏览器插件桥接时显示（「下载」页）。
 // 「片单」是一个页面（D-P2-04，四个标签），不再是下拉；原来的四个页面 key 是它的别名，见下面的 LIST_TABS。
 export const VIEWER_NAV_GROUPS = [
@@ -261,7 +261,7 @@ export function smartViewTarget(value, area) {
 
 // 固定命令 ID → 宿主页（详细设计 §6.1）。命令由宿主页（或它的常挂载子组件）注册；宿主页可能
 // 还没挂载（人物页、图片页按需挂载），所以跳转前先切到宿主页、等它挂载完再按 ID 执行。
-// 片库与图片库的这些命令都是维护动作，宿主页记管理侧的 key（D-UI-03）：同一个常挂载实例，切过去即进管理区。
+// 片库与图片库的这些命令都是维护动作，宿主页记管理侧的 key（D-UI-03）：切过去即进管理区。
 // 两条清理命令的宿主是清理中心（D-P3-02），由清理中心页注册。
 export const COMMAND_HOST_PAGES = {
   'library.openCleanup': CLEANUP_PAGE,

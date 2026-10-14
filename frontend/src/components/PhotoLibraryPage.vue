@@ -1,6 +1,7 @@
 <template>
   <main class="photo-library">
-    <PageHeader class="photo-library__header" title="图片" subtitle="独立扫描入库的本地图片库，可筛选、查看与管理。" />
+    <!-- 本页只属于管理侧「图片管理」（观看侧「图片」是照片流 PhotoBrowsePage，D-P2-08）。 -->
+    <PageHeader class="photo-library__header" title="图片管理" subtitle="独立扫描入库的本地图片库，可筛选、查看与管理。" />
 
     <section class="photo-toolbar glass-surface">
       <div class="photo-toolbar__controls">
@@ -2202,7 +2203,7 @@ export default {
       this.ratingDraft = image.personal_rating == null ? '' : image.personal_rating;
       this.loadViewerDetail(image.id);
     },
-    // 从别的页面（观看回顾）跳来定位一张图：已在当前结果里就直接打开查看器；否则回到照片流、
+    // 从别的页面（观看侧照片流的「在图片管理中打开」）跳来定位一张图：已在当前结果里就直接打开查看器；否则回到照片流、
     // 清掉其余筛选、按文件名搜这一张，载入后打开。找不到（已删除、被隐藏）返回 false 并提示。
     async locateImage(target) {
       const id = Number(target?.id || 0);

@@ -175,7 +175,11 @@
         </section>
 
         <section class="recap-section" data-test="entity-person-images">
-          <header class="recap-section__head"><h3><AppIcon name="images" /> 相关图片</h3><small v-if="personImageCount">{{ personImageCount }} 张</small></header>
+          <header class="recap-section__head">
+            <h3><AppIcon name="images" /> 相关图片</h3><small v-if="personImageCount">{{ personImageCount }} 张</small>
+            <!-- 「去图片」（D-P2-08）：去观看侧照片流，只看这个人的照片（人物筛选）。 -->
+            <button v-if="images.items.length" type="button" class="btn-link entity-browse__images-all" data-test="entity-person-images-open-photos" @click="openPersonPhotos">去图片</button>
+          </header>
           <AppBanner v-if="images.error" tone="danger" :title="images.error" data-test="entity-person-images-error">
             <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="entity-person-images-retry" @click="loadImages(entityToken, { reset: !images.items.length })">重试</button></template>
           </AppBanner>
@@ -467,7 +471,7 @@ export default {
   },
   // open-video(id)：进整页详情；play-video({ id, startAtMs })：进整页详情并在应用内从这一刻起播；
   // open-image(image)：去图片页看这一张；edit-in-manage({ kind, id?, name? })：去管理侧「人物与作品集」，带 id 时定位到它；
-  // navigate(pageKey)：空状态的下一步（去图片）。
+  // navigate(pageKey, params?)：空状态的下一步（去图片）；相关图片的「去图片」带上 { personId, personName }（照片流按这个人筛选）。
   emits: ['open-video', 'play-video', 'open-image', 'edit-in-manage', 'navigate'],
   data() {
     return {
@@ -768,6 +772,11 @@ export default {
     playNext() {
       if (this.nextRequest) this.$emit('play-video', { ...this.nextRequest });
     },
+    // 「去图片」：去观看侧照片流，只看这个人的照片（D-P2-08，App 的 navigateTo('photos', { personId })）。
+    openPersonPhotos() {
+      const id = Number(this.selected?.id || 0);
+      if (id) this.$emit('navigate', 'photos', { personId: id, personName: this.selectedName });
+    },
     // 「在管理中编辑」：去管理侧「人物与作品集」并定位到这个对象；target 为空时只切过去（空列表的下一步）。
     editInManage(target) {
       const payload = { kind: this.kind };
@@ -972,6 +981,7 @@ export default {
 /* 人物作品海报墙 */
 .entity-browse__posters { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: var(--space-4) 14px; }
 .entity-browse__strip-more { align-self: center; justify-self: start; }
+.entity-browse__images-all { margin-left: auto; }
 
 /* 作品集各部：编号 · 缩略图 · 片名与事实 · 状态；下一部描主色边。 */
 .entity-browse__works { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }

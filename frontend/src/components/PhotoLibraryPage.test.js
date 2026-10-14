@@ -2085,7 +2085,8 @@ describe('PhotoLibraryPage 统一设计（D-UD-06 / D-UD-08 / D-UD-13 / D-UD-14�
   it('页面根部有统一页头，标签筛选是筛选芯片', async () => {
     api.GetImageTags.mockResolvedValue([{ id: 5, name: '风景' }]);
     const wrapper = await mountPage();
-    expect(wrapper.get('h1').text()).toBe('图片');
+    // 本页只属于管理侧（观看侧「图片」是照片流，D-P2-08），页头与导航同名。
+    expect(wrapper.get('h1').text()).toBe('图片管理');
     const chip = wrapper.get('[data-test="photo-tag-filter"] .ui-filter-chip__toggle');
     expect(chip.attributes('aria-pressed')).toBe('false');
     await chip.trigger('click');

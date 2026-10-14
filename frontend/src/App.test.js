@@ -1312,13 +1312,15 @@ it('回顾页首次进入才挂载；点标签去「视频」海报墙按该标�
   await flushPromises();
   expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).props('navigationRequest')).toEqual({ tagId: 6, token: 2 });
 
-  await wrapper.setData({ photosMounted: true });
+  // 点图片进观看侧照片流（D-P2-08），由它定位那一张；图片管理不挂载。
+  await wrapper.setData({ photoBrowseMounted: true });
   const locate = vi.fn();
-  wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.locateImage = locate;
+  wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.locateImage = locate;
   wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-image', { id: 11, name: 'p.jpg' });
   await flushPromises();
   expect(wrapper.vm.currentPage).toBe('photos');
   expect(locate).toHaveBeenCalledWith({ id: 11, name: 'p.jpg' });
+  expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).exists()).toBe(false);
 
   wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-entity', { type: 'person', id: 8, name: '甲' });
   await flushPromises();
@@ -1399,7 +1401,7 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
   });
 
   // 二期（D-P2-01）：「视频」是独立的海报墙（首次进入才挂载、之后只隐藏）；片库页常挂载，只在「片库管理」上显示。
-  it('「视频」是海报墙、「片库管理」是常挂载的片库页，各自一个实例；「图片」与「图片管理」共用同一实例', async () => {
+  it('「视频」是海报墙、「片库管理」是常挂载的片库页，各自一个实例', async () => {
     const wrapper = await mountApp();
     const library = wrapper.findComponent({ name: 'VideoListPage' }).vm;
     expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).exists()).toBe(false);
@@ -1422,13 +1424,8 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
     expect(wrapper.findComponent({ name: 'VideoBrowsePage' }).isVisible()).toBe(false);
 
     await wrapper.get('[data-test="nav-photos-manage"]').trigger('click');
-    const photos = wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm;
     expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).props('pageActive')).toBe(true);
     expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(false);
-    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
-    await wrapper.get('[data-test="nav-photos"]').trigger('click');
-    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm).toBe(photos);
-    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).props('pageActive')).toBe(true);
   });
 
   it('片库页不可见时启动扫描照常进行，命令面板与待处理跳转仍能打开片库宿主命令', async () => {
@@ -1776,9 +1773,9 @@ describe('人物与作品集：观看页只看、编辑去管理侧（D-P2-06）
     expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props()).toMatchObject({ videoId: 31, startAtMs: 754000 });
     expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['collections']);
 
-    await wrapper.setData({ currentPage: 'people', photosMounted: true });
+    await wrapper.setData({ currentPage: 'people', photoBrowseMounted: true });
     const locate = vi.fn();
-    wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.locateImage = locate;
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.locateImage = locate;
     const person = wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(page => page.props('kind') === 'person');
     person.vm.$emit('open-image', { id: 11, name: 'p.jpg' });
     await flushPromises();
@@ -2534,5 +2531,154 @@ describe('「视频」海报墙的接线（D-P2-01）', () => {
     wrapper.findComponent({ name: 'VideoBrowsePage' }).vm.$emit('navigate', 'settings');
     await flushPromises();
     expect(wrapper.vm.currentPage).toBe('settings');
+  });
+});
+
+// D-P2-08：「图片」是观看侧照片流（PhotoBrowsePage），「图片管理」仍是 PhotoLibraryPage；两页各一个实例、筛选各自独立，
+// 各自只在自己的页面上显示。点图片、「去图片」都进照片流；「在图片管理中打开」进管理页定位；别处改了图片时照片流收到新的版本号。
+describe('观看侧照片流的接线（D-P2-08）', () => {
+  it('「图片」挂照片流、「图片管理」挂管理页：首次进入才挂载，切走只隐藏，互不跟着显示', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.findComponent({ name: 'PhotoBrowsePage' }).exists()).toBe(false);
+    await wrapper.get('[data-test="nav-photos"]').trigger('click');
+    const browse = wrapper.findComponent({ name: 'PhotoBrowsePage' });
+    expect(browse.props('pageActive')).toBe(true);
+    expect(browse.isVisible()).toBe(true);
+    // 管理页不再跟着「图片」挂载（它的批量、删除、打标签、AI、目录都不出现在观看侧）。
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).exists()).toBe(false);
+
+    await enterManage(wrapper);
+    await wrapper.get('[data-test="nav-photos-manage"]').trigger('click');
+    const manage = wrapper.findComponent({ name: 'PhotoLibraryPage' });
+    expect(manage.props('pageActive')).toBe(true);
+    expect(manage.isVisible()).toBe(true);
+    expect(wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm).toBe(browse.vm);
+    expect(wrapper.findComponent({ name: 'PhotoBrowsePage' }).props('pageActive')).toBe(false);
+    expect(wrapper.findComponent({ name: 'PhotoBrowsePage' }).isVisible()).toBe(false);
+
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    await wrapper.get('[data-test="nav-photos"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm).toBe(browse.vm);
+    expect(wrapper.findComponent({ name: 'PhotoBrowsePage' }).props('pageActive')).toBe(true);
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm).toBe(manage.vm);
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).props('pageActive')).toBe(false);
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).isVisible()).toBe(false);
+  });
+
+  it('回顾、人物、作品集里点图片：进照片流并交给它定位那一张，图片管理不参与', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'recap', photoBrowseMounted: true });
+    const locate = vi.fn();
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.locateImage = locate;
+    wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-image', { id: 11, name: 'p.jpg' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(locate).toHaveBeenLastCalledWith({ id: 11, name: 'p.jpg' });
+
+    for (const [page, kind] of [['people', 'person'], ['collections', 'collection']]) {
+      await wrapper.setData({ currentPage: page });
+      const entity = wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(item => item.props('kind') === kind);
+      entity.vm.$emit('open-image', { id: 12, name: `${kind}.jpg` });
+      await flushPromises();
+      expect(wrapper.vm.currentPage).toBe('photos');
+      expect(locate).toHaveBeenLastCalledWith({ id: 12, name: `${kind}.jpg` });
+    }
+    expect(locate).toHaveBeenCalledTimes(3);
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).exists()).toBe(false);
+  });
+
+  it('照片流「在图片管理中打开」：进图片管理（管理区）并交给管理页定位那一张', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'photos', photosMounted: true });
+    const locate = vi.fn();
+    wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.locateImage = locate;
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.$emit('open-in-manage', { id: 7, name: 'a.jpg' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
+    expect(wrapper.vm.area).toBe('manage');
+    expect(locate).toHaveBeenCalledWith({ id: 7, name: 'a.jpg' });
+  });
+
+  it('人物页「去图片」带上人物：navigateTo(\'photos\', { personId }) 作为一次性参数交给照片流；不带参数的切页不改它', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'people' });
+    const person = wrapper.findAllComponents({ name: 'EntityBrowsePage' }).find(page => page.props('kind') === 'person');
+    person.vm.$emit('navigate', 'photos', { personId: 5, personName: '甲' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('photos');
+    const browse = () => wrapper.findComponent({ name: 'PhotoBrowsePage' });
+    expect(browse().props('navigationRequest')).toEqual({ personId: 5, personName: '甲', token: 1 });
+
+    wrapper.vm.navigateTo('home');
+    wrapper.vm.navigateTo('photos');
+    await flushPromises();
+    expect(browse().props('navigationRequest')).toEqual({ personId: 5, personName: '甲', token: 1 });
+  });
+
+  it('别处改了图片，照片流收到新的版本号：离开图片管理、清理中心删除或撤销、数据维护撤销图片批量编辑、标签转人物', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'photos', photosMounted: true });
+    const manage = wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm;
+    manage.handleCleanupDeleted = vi.fn();
+    manage.markImagesChanged = vi.fn();
+    manage.handleTagPersonConverted = vi.fn();
+    const version = () => wrapper.findComponent({ name: 'PhotoBrowsePage' }).props('imagesVersion');
+    const start = version();
+
+    // 只是进去不算，离开图片管理才算（那里删除、收藏、扫描、打标签都可能改了图片）。
+    await wrapper.setData({ currentPage: 'photos-manage' });
+    expect(version()).toBe(start);
+    await wrapper.setData({ currentPage: 'cleanup' });
+    expect(version()).toBe(start + 1);
+
+    wrapper.findComponent({ name: 'CleanupCenterPage' }).vm.$emit('images-changed');
+    await flushPromises();
+    expect(manage.handleCleanupDeleted).toHaveBeenCalledOnce();
+    expect(version()).toBe(start + 2);
+
+    await wrapper.setData({ currentPage: 'data-care' });
+    wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('videos-changed', { removedIDs: [], kind: 'image' });
+    await flushPromises();
+    expect(manage.markImagesChanged).toHaveBeenCalledOnce();
+    expect(version()).toBe(start + 3);
+    // 视频的改动不惊动照片流。
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.handleVideosChangedElsewhere = vi.fn();
+    wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('videos-changed', { removedIDs: [3] });
+    await flushPromises();
+    expect(version()).toBe(start + 3);
+
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('person-converted', { tag_id: 4, person: { id: 9 } });
+    await flushPromises();
+    expect(manage.handleTagPersonConverted).toHaveBeenCalledOnce();
+    expect(version()).toBe(start + 4);
+  });
+
+  it('照片流里改了收藏或评分：并到图片管理已加载的那一张上；管理页还没挂载时什么也不做', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'photos' });
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.$emit('image-changed', { id: 3, is_favorite: true });
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).exists()).toBe(false);
+
+    await wrapper.setData({ photosMounted: true });
+    const patch = vi.fn();
+    wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.patchImage = patch;
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.$emit('image-changed', { id: 3, personal_rating: 8 });
+    expect(patch).toHaveBeenCalledWith({ id: 3, personal_rating: 8 });
+  });
+
+  it('照片流的 navigate（空图片库「去图片管理添加目录」）与人物芯片走 App 的切页与打开人物', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'photos' });
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.$emit('open-person', { id: 8, name: '甲' });
+    // 与命令面板打开人物同一个入口：同一拍切到人物页并把要打开的人交给它（交完即清空）。
+    expect(wrapper.vm.currentPage).toBe('people');
+    expect(wrapper.vm.entityFocus.person).toEqual({ id: 8, name: '甲' });
+    await flushPromises();
+
+    await wrapper.setData({ currentPage: 'photos' });
+    wrapper.findComponent({ name: 'PhotoBrowsePage' }).vm.$emit('navigate', 'photos-manage');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
   });
 });
