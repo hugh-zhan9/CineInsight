@@ -359,8 +359,14 @@ export default {
     canGeneratePreviewProxy() {
       return ['proxy-preparing', 'proxy-manual'].includes(this.previewSession?.mode) && !this.previewProxy.pending;
     },
+    // 编辑区开着：读到了字幕，不在读取中，也不在状态页上（没有字幕、编码待转换、只有内嵌字幕、读取失败都会写 loadError）。
+    editorOpen() {
+      return !this.loading && !this.loadError;
+    },
+    // 只有编辑区开着时才谈得上「有未保存修改」。未保存标记（baselineSignature）只在读到字幕时设，状态页上没有能改的字幕：
+    // 以前那里标题栏写着「有未保存修改」，关闭、刷新都要先确认丢弃并不存在的修改；丢弃修改后刷新、文件却读不出来时也一样。
     isDirty() {
-      return entriesSignature(this.entries) !== this.baselineSignature;
+      return this.editorOpen && entriesSignature(this.entries) !== this.baselineSignature;
     },
     activeEntryIndex() {
       const time = this.currentTimeMs;
