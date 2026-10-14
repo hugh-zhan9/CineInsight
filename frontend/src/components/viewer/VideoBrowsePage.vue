@@ -117,7 +117,7 @@
       <AppBanner v-if="progressBlock.error" tone="danger" title="读取「追到哪了」失败" :message="progressBlock.error" data-test="browse-progress-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="browse-progress-retry" @click="loadProgress">重试</button></template>
       </AppBanner>
-      <div v-else-if="progressBlock.loading && !progressCards.length" class="recap-strip video-browse__progress-strip" aria-busy="true" data-test="browse-progress-loading">
+      <div v-else-if="progressSkeleton" class="recap-strip video-browse__progress-strip" aria-busy="true" data-test="browse-progress-loading">
         <SkeletonBlock v-for="n in 5" :key="n" shape="poster" :lines="2" />
       </div>
       <div v-if="progressCards.length" class="recap-strip video-browse__progress-strip">
@@ -286,8 +286,10 @@
 // - 列表：SearchLibraryVideoPage，collapse_versions 恒为 true（版本组一张卡），每批 60，接近底部自动加载下一批；
 //   总数另取 CountLibraryVideos（按卡片计），失败只是不显示数字。每次换条件换代，晚到的旧结果丢掉。
 // - 海报墙按行窗口化（2026-10-14，utils/photoGrid.js 的行布局，与图片库同一套）：只渲染视口附近的行，上下占位撑住
-//   总高；列数跟墙宽走，宽度变了、同一次浏览里卡片增删，视口顶部那张卡都留在原处；方向键挪焦点，目标行没渲染时先滚进视口。
-// - 「追到哪了」：ListCollectionProgress({ continue_only: true })，独立加载、独立失败，没有数据不显示；页面切回来时重取。
+//   总高；列数跟墙宽走，宽度变了、同一次浏览里卡片增删、墙上面的「追到哪了」变高变矮，视口顶部那张卡都留在原处；
+//   方向键挪焦点，目标行没渲染时先滚进视口。
+// - 「追到哪了」：ListCollectionProgress({ continue_only: true })，独立加载、独立失败，没有数据不显示；页面切回来时重取，
+//   重取期间保持上一次的样子（只有第一次取和出错后重试出骨架）。
 // - 随机播放与今晚看什么：randomPlaybackMixin（与片库管理同一套流程、条件与排除表）。
 // - navigationRequest：App 的 navigateTo('videos', { keyword | watch | tagId }) 带来的一次新浏览——筛选回到默认再套上参数
 //   （排序保留），滚动回到顶部。
@@ -446,7 +448,8 @@ export default {
       list: emptyList(),
       versionGroups: {},
       totalCount: null,
-      progressBlock: { loading: false, error: '', items: [] },
+      // loaded：上一次取成功了，条带现在显示的就是结果（空就是不显示）。
+      progressBlock: { loading: false, error: '', items: [], loaded: false },
       posterFailed: {},
       menu: null,
       menuAnchor: null,
@@ -511,8 +514,13 @@ export default {
     progressCards() {
       return (this.progressBlock.items || []).map(collectionProgressCard).filter(Boolean);
     },
+    // 骨架只在条带还没有结果可显示时出（第一次取、出错后重试）。回到本页重取时条带保持上一次的样子、结果出来再换：
+    // 上一次就是空的，这一次也多半是空的，先闪出一排骨架再收起只会把下面的墙推下去又拉回来。
+    progressSkeleton() {
+      return this.progressBlock.loading && !this.progressBlock.loaded && !this.progressCards.length;
+    },
     progressVisible() {
-      return Boolean(this.progressBlock.error || (this.progressBlock.loading && !this.progressCards.length) || this.progressCards.length);
+      return Boolean(this.progressBlock.error || this.progressSkeleton || this.progressCards.length);
     },
     wallWindowed() { return this.wallGeometry.width > 0; },
     // 行布局只看条数与几何（卡片等高、不分组）：翻页追加、拿掉失效卡时重建，O(行数)；滚动时只做二分。
@@ -542,8 +550,9 @@ export default {
       if (this.applyNavigationRequest(request)) this.reloadNow();
     },
     // 滚动宿主（.main-view）是各页共用的：离开前记下位置，切回来等内容够高再放回去（与图片页同一做法）。
-    // 隐藏期间不跟滚动与宽度（滚的是别的页面，宽度报 0）；离开时视口顶部那张卡（_wallAnchor）留着，
-    // 回来时窗口宽度变了、或整页详情里把它前面的卡标成失效拿掉了，就按那张卡放回，否则原样放回离开时的位置。
+    // 隐藏期间不跟滚动与宽度（滚的是别的页面，宽度报 0）；离开时视口顶部那张卡（_wallAnchor）留着，回来时按那张卡
+    // 放回——窗口宽度变了、墙上面的「追到哪了」高度变了、或整页详情里把它前面的卡标成失效拿掉了都照样落在它上面；
+    // 视口还在墙上面（没有锚点）时原样放回离开时的位置。回来后重取的「追到哪了」结果出来再变高变矮，由 progressBlock 侦听接着放回。
     pageActive(active) {
       if (!active) {
         this.closeMenu();
@@ -558,10 +567,17 @@ export default {
         if (!owner) return;
         this.cancelScrollRestore();
         this.attachWall();
-        const target = this.wallAnchorTarget(this._wallAnchor, this.measureWall()) ?? this.savedScrollTop;
+        this.measureWall();
+        const target = this.wallAnchorTarget(this._wallAnchor, true) ?? this.savedScrollTop;
         this.syncWindow(target);
         this._cancelScrollRestore = restoreScrollWhenReachable(owner, target);
       });
+    },
+    // 「追到哪了」条带出现、收起、骨架换成卡片或出错横幅，下面的墙整体跟着上下挪（回到本页时重取，结果晚于放回位置到达）：
+    // DOM 更新完再看墙顶挪没挪，挪了就把视口顶部那张卡放回原处。
+    progressBlock: {
+      flush: 'post',
+      handler() { this.keepWallAnchorInPlace(); }
     },
     // 同一次浏览里卡片增删（翻页追加、失效的卡拿掉）：渲染前就按新的行布局定好窗口，视口顶部那张卡挪了位置就把它放回原处；
     // 渲染后再量一次（第一批卡片出来时才量得到片名那一块的真实高度）。换条件（reloadNow 换代）不放回。
@@ -762,10 +778,10 @@ export default {
       this.progressBlock = { ...this.progressBlock, loading: true, error: '' };
       try {
         const items = await ListCollectionProgress({ collection_ids: [], continue_only: true, limit: VIDEO_BROWSE_PROGRESS_LIMIT });
-        if (token === this._tokens.progress) this.progressBlock = { loading: false, error: '', items: items || [] };
+        if (token === this._tokens.progress) this.progressBlock = { loading: false, error: '', items: items || [], loaded: true };
       } catch (err) {
         if (token === this._tokens.progress) {
-          this.progressBlock = { ...this.progressBlock, loading: false, error: translateBackendError(err?.message || err) };
+          this.progressBlock = { ...this.progressBlock, loading: false, error: translateBackendError(err?.message || err), loaded: false };
         }
       }
     },
@@ -821,7 +837,8 @@ export default {
       return true;
     },
     // 按滚动位置算出要渲染的行（滚动事件直接调它）；给了 targetTop 就按那个位置算——要先把那几行渲染出来再滚过去。
-    // 顺带记下视口顶部那张卡（_wallAnchor，带上这次浏览的代次），宽度变化、卡片增删、离开再回来时按它放回。
+    // 顺带记下视口顶部那张卡（_wallAnchor，带上这次浏览的代次与当时的墙顶），宽度变化、卡片增删、墙被上面的条带推动、
+    // 离开再回来时按它放回。
     syncWindow(targetTop) {
       const owner = this._wallOwner;
       if (!owner || !this.pageActive || !this.wallWindowed) return;
@@ -843,10 +860,10 @@ export default {
       }
       const anchor = capturePhotoViewportAnchor({ layout: this.wallLayout, scrollTop, listTop });
       const video = anchor && this.list.items[anchor.itemIndex];
-      this._wallAnchor = video ? { ...anchor, id: video.id, token: this._tokens.list } : null;
+      this._wallAnchor = video ? { ...anchor, id: video.id, token: this._tokens.list, listTop } : null;
     },
-    // 锚点那张卡要放回的 scrollTop：几何变了，或它在列表里挪了位置（前面有卡被拿掉）时才需要；
-    // 用不着、它已不在列表里、或是上一次浏览（换过条件）的锚点时返回 null。
+    // 锚点那张卡要放回的 scrollTop（按当前墙顶算）：几何变了（geometryChanged；墙顶挪了、回到本页时调用方也传真），
+    // 或它在列表里挪了位置（前面有卡被拿掉）时才需要；用不着、它已不在列表里、或是上一次浏览（换过条件）的锚点时返回 null。
     wallAnchorTarget(anchor, geometryChanged) {
       if (!anchor || anchor.token !== this._tokens.list || !this.wallWindowed) return null;
       const itemIndex = this.list.items.findIndex(video => video.id === anchor.id);
@@ -863,6 +880,16 @@ export default {
         owner.scrollTop = top;
         this.syncWindow();
       });
+    },
+    // 墙上面的东西变了高度、墙顶挪了（与记下锚点时比）：视口顶部那张卡放回原处。墙顶没动、没有锚点（视口还在墙上面，
+    // 条带就在眼前，跟着它挪是对的）、页面隐藏时不动。只比墙顶，不比 scrollTop：用户刚滚过、滚动事件还没到时不会被拉回去。
+    keepWallAnchorInPlace() {
+      const anchor = this._wallAnchor;
+      if (!anchor || !this.pageActive || !this._wallOwner || Math.abs(this.wallListTop() - anchor.listTop) < 0.5) return;
+      const target = this.wallAnchorTarget(anchor, true);
+      if (target === null) return;
+      this.cancelScrollRestore();
+      this.scrollWallTo(target);
     },
     // 墙宽变了（窗口缩放），或第一次量到真卡片：重定列数与卡片高度，视口顶部那张卡留在原处。
     refreshWallGeometry() {

@@ -716,7 +716,8 @@ describe('VideoBrowsePage poster wall windowing', () => {
   const many = n => Array.from({ length: n }, (_, index) => video(index + 1));
   let resizeObservers;
 
-  function wallHost({ width = 980, viewport = 600, caption = 45 } = {}) {
+  // aboveWall()：墙上面另外多出的高度（默认没有），按当时的 DOM 算——「追到哪了」条带出现、消失、换成骨架都会把墙推上推下。
+  function wallHost({ width = 980, viewport = 600, caption = 45, aboveWall = () => 0 } = {}) {
     const host = document.createElement('div');
     host.className = 'main-view';
     const geometry = { width, viewport, scrollTop: 0 };
@@ -726,7 +727,7 @@ describe('VideoBrowsePage poster wall windowing', () => {
     const rect = (top, w, h) => ({ top, bottom: top + h, left: 0, right: w, width: w, height: h, x: 0, y: top });
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       if (this === host) return rect(0, geometry.width, geometry.viewport);
-      if (this.classList.contains('video-browse__wall')) return rect(WALL_TOP - geometry.scrollTop, geometry.width, 0);
+      if (this.classList.contains('video-browse__wall')) return rect(WALL_TOP + aboveWall() - geometry.scrollTop, geometry.width, 0);
       if (this.classList.contains('video-browse__card')) {
         const columns = Math.floor((geometry.width + 16) / 166);
         const cardWidth = (geometry.width - 16 * (columns - 1)) / columns;
@@ -970,6 +971,135 @@ describe('VideoBrowsePage poster wall windowing', () => {
     await flushPromises();
     expect(host.scrollTop).toBeCloseTo(WALL_TOP + 37 * 310.5 + 100 * 286.5 / 270, 6);
     expect(cardIndexes(wrapper)).toContain(300);
+  });
+
+  describe('追到哪了 above the wall', () => {
+    // 条带：卡片或骨架一排 300px，只有出错横幅时 80px；不显示时 0。
+    const STRIP = 300;
+    const BANNER = 80;
+    const stripHeight = () => {
+      if (!document.querySelector('[data-test="browse-progress"]')) return 0;
+      return document.querySelector('.video-browse__progress-strip') ? STRIP : BANNER;
+    };
+    const pending = () => {
+      let resolve;
+      api.ListCollectionProgress.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+      return value => resolve(value);
+    };
+
+    // 2026-10-14 F3 遗留问题 2：整页详情期间窗口宽度变了、条带一直没有数据，回来时条带先出一排骨架、结果出来再收起，
+    // 墙在放回位置的途中被推下去又拉回来，最后差一排。
+    it('lands on the remembered card after a width change while 追到哪了 stays empty, without a skeleton on the reload', async () => {
+      const { wrapper, host, scroll, geometry } = await mountWall(600, { aboveWall: stripHeight });
+      expect(wrapper.find('[data-test="browse-progress"]').exists()).toBe(false);
+      await scroll(WALL_TOP + 50 * PITCH + 100);
+      await wrapper.setProps({ pageActive: false });
+      geometry.width = 1400;
+      await scroll(0);
+      const settle = pending();
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      // 8 列、行距 310.5：第 300 张在第 37 行，行内偏移按行高比例换算（同上一条）。
+      const expected = WALL_TOP + 37 * 310.5 + 100 * 286.5 / 270;
+      settle([]);
+      await flushPromises();
+      expect(host.scrollTop).toBeCloseTo(expected, 6);
+      expect(cardIndexes(wrapper)).toContain(300);
+    });
+
+    it('shows no skeleton while re-fetching a strip that was empty, but does on the first load and when retrying after an error', async () => {
+      const first = pending();
+      const { wrapper } = await mountWall(600, { aboveWall: stripHeight });
+      expect(wrapper.find('[data-test="browse-progress-loading"]').exists()).toBe(true);
+      first([]);
+      await flushPromises();
+      expect(wrapper.find('[data-test="browse-progress"]').exists()).toBe(false);
+
+      await wrapper.setProps({ pageActive: false });
+      const again = pending();
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      expect(wrapper.find('[data-test="browse-progress"]').exists()).toBe(false);
+      again(Promise.reject('数据库不可用'));
+      await flushPromises();
+      expect(wrapper.get('[data-test="browse-progress-error"]').text()).toContain('数据库不可用');
+
+      const retry = pending();
+      await wrapper.get('[data-test="browse-progress-retry"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-test="browse-progress-loading"]').exists()).toBe(true);
+      retry([progress(1)]);
+      await flushPromises();
+      expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(1);
+    });
+
+    it('keeps the remembered card when the strip empties or fills in after coming back', async () => {
+      api.ListCollectionProgress.mockResolvedValueOnce([progress(1)]);
+      const { wrapper, host, scroll, geometry } = await mountWall(600, { aboveWall: stripHeight });
+      expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(1);
+      await scroll(WALL_TOP + STRIP + 50 * PITCH + 100);
+
+      // 整页详情里看完了那个作品集：回来后重取的结果是空的，条带收起、墙整体上移，视口顶部仍是第 300 张、行内偏移不变。
+      await wrapper.setProps({ pageActive: false });
+      await scroll(0);
+      const emptied = pending();
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      expect(host.scrollTop).toBe(WALL_TOP + STRIP + 50 * PITCH + 100);
+      emptied([]);
+      await flushPromises();
+      expect(wrapper.find('[data-test="browse-progress"]').exists()).toBe(false);
+      expect(host.scrollTop).toBe(WALL_TOP + 50 * PITCH + 100);
+      expect(cardIndexes(wrapper)).toContain(300);
+
+      // 又开始看另一个作品集：回来后条带出现、墙整体下移，同样跟着放回。
+      await wrapper.setProps({ pageActive: false });
+      await scroll(0);
+      const filled = pending();
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      expect(host.scrollTop).toBe(WALL_TOP + 50 * PITCH + 100);
+      filled([progress(2)]);
+      await flushPromises();
+      expect(host.scrollTop).toBe(WALL_TOP + STRIP + 50 * PITCH + 100);
+
+      // 结果到了但墙顶没动（条带还是一排卡）：不碰滚动位置——用户刚滚过、滚动事件还没派发时不被拉回记下的那张卡。
+      await wrapper.setProps({ pageActive: false });
+      const same = pending();
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      geometry.scrollTop += 500;
+      same([progress(3)]);
+      await flushPromises();
+      expect(host.scrollTop).toBe(WALL_TOP + STRIP + 50 * PITCH + 600);
+
+      // 视口还在墙上面（没有锚点）时条带变化不挪滚动位置。
+      await scroll(40);
+      api.ListCollectionProgress.mockResolvedValueOnce([]);
+      await wrapper.setProps({ pageActive: false });
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      expect(host.scrollTop).toBe(40);
+    });
+
+    it('puts the card back by the wall, not the raw scroll position, when the strip changed height before the restore', async () => {
+      // 离开时条带是出错横幅（80px）；回来重试时换成骨架（300px），放回位置时墙已经比离开时低了 220px。
+      api.ListCollectionProgress.mockRejectedValueOnce('数据库不可用');
+      const { wrapper, host, scroll } = await mountWall(600, { aboveWall: stripHeight });
+      expect(wrapper.find('[data-test="browse-progress-error"]').exists()).toBe(true);
+      await scroll(WALL_TOP + BANNER + 50 * PITCH + 100);
+      await wrapper.setProps({ pageActive: false });
+      await scroll(0);
+      const settle = pending();
+      await wrapper.setProps({ pageActive: true });
+      await flushPromises();
+      expect(wrapper.find('[data-test="browse-progress-loading"]').exists()).toBe(true);
+      expect(host.scrollTop).toBe(WALL_TOP + STRIP + 50 * PITCH + 100);
+      settle([]);
+      await flushPromises();
+      expect(host.scrollTop).toBe(WALL_TOP + 50 * PITCH + 100);
+      expect(cardIndexes(wrapper)).toContain(300);
+    });
   });
 
   it('a new query starts from the top instead of re-anchoring', async () => {

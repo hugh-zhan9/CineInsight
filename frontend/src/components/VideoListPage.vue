@@ -591,6 +591,15 @@ export function readLibraryLayout() {
   if (LIBRARY_LAYOUTS.includes(stored)) return { layout: stored, removed: false };
   return { layout: 'list', removed: stored === 'wall' };
 }
+// 不收文字的 input：勾选框（列表行的选择框）、单选、按钮、滑杆等。焦点在它们上时 Esc 仍是页面级的「取消选择」。
+const NON_TEXT_INPUT_TYPES = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'range', 'color', 'file', 'hidden']);
+// 焦点在可编辑元素里：文字输入框（搜索框、人物筛选等）、多行文本、下拉选择、可编辑区域。这时 Esc 只归那个控件
+// （search 框清空文字、输入法取消组词等原生行为），页面不拿它去清空多选。
+export function isEditableKeyTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  if (target.closest('textarea, select, [role="textbox"], [contenteditable]:not([contenteditable="false"])')) return true;
+  return target.tagName === 'INPUT' && !NON_TEXT_INPUT_TYPES.has(String(target.type || '').toLowerCase());
+}
 // 原地刷新每次请求的条数上限：后端分页接口超过 200 会退回默认值，语义检索封顶 100。
 const IN_PLACE_REFRESH_PAGE_LIMIT = 100;
 
@@ -1086,9 +1095,11 @@ export default {
 	    this.openAITagReviewDialog();
 	  }
 	},
+	// 页面级单键：Esc 取消选择、J/K 与动作键作用于键盘焦点行。焦点在文本框等可编辑元素里时都不接
+	// （动作键由 shortcutActionForEvent 挡，Esc 在这里挡），按键归那个控件。
 	handleLibraryShortcut(event) {
 	  if (!this.pageActive || this.previewOpen || this.rowMenu.video || document.querySelector('[role="dialog"]')) return;
-	  if (event.key === 'Escape' && this.selectedVideoIds.length > 0) {
+	  if (event.key === 'Escape' && this.selectedVideoIds.length > 0 && !isEditableKeyTarget(event.target)) {
 	    event.preventDefault();
 	    this.clearSelection();
 	    return;
