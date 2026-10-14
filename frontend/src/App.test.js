@@ -41,7 +41,9 @@ beforeEach(() => {
   api.GetDatabaseSwitchStatus.mockResolvedValue({ running: false, completed: false, failed: false });
   api.ListDownloadTasks.mockResolvedValue([]);
   api.GetPendingWorkSummary.mockResolvedValue({ total: 0 });
-  api.GetStartupBackendGuard.mockResolvedValue({ blocked: false, previous_location: '', config_files: [], data_dir_config: '' });
+  api.GetStartupBackendGuard.mockResolvedValue({
+    blocked: false, reason: '', previous_location: '', config_files: [], data_dir_config: '', config_snippet: '', pg_host_empty_in_launch_env: false
+  });
   // jsdom 的 hasFocus 行为随实现变动，前后台用例自己钉住它。
   document.hasFocus = vi.fn(() => true);
   resetFeedback();
@@ -1171,11 +1173,15 @@ describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
     '/Applications/析微影策.app/Contents/MacOS/.env',
     '/Applications/析微影策.app/Contents/Resources/.env'
   ];
+  const SNIPPET = 'DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=db.local\nPG_PORT=5432\nPG_USER=me\nPG_PASSWORD=（在这里填密码）\nPG_DB=cine\n';
   const blockedGuard = () => ({
     blocked: true,
+    reason: 'previous_postgres',
     previous_location: 'me@db.local:5432/cine',
     config_files: CONFIG_PATHS.map((path, index) => ({ path, exists: index === 3 })),
-    data_dir_config: '/Users/me/.CineInsight/.env'
+    data_dir_config: '/Users/me/.CineInsight/.env',
+    config_snippet: SNIPPET,
+    pg_host_empty_in_launch_env: false
   });
 
   // 确认框由 AppFeedback 画（shallowMount 下是桩），这里读 feedbackState、用 resolveConfirm 作答。
@@ -1202,9 +1208,13 @@ describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
     expect(files.map(file => file.findComponent({ name: 'AppBadge' }).text())).toEqual(['不存在', '不存在', '不存在', '存在']);
     expect(files.map(file => file.findComponent({ name: 'AppBadge' }).props('tone'))).toEqual(['neutral', 'neutral', 'neutral', 'success']);
     const hint = page.get('[data-test="startup-guard-data-dir-hint"]').text();
-    expect(hint).toContain('/Users/me/.CineInsight/.env');
-    expect(hint).toContain('PG_HOST');
-    expect(hint).toContain('写好后点「重新打开」');
+    expect(hint).toContain('把下面这段存成 /Users/me/.CineInsight/.env');
+    expect(hint).toContain('在 PG_PASSWORD 一行填上密码');
+    expect(hint).toContain('然后点「重新打开」');
+    expect(hint).not.toContain('补全空着的几项');
+    // 配置块原样显示（pre 保留换行），是应用内切换写下的同一格式。
+    expect(page.get('[data-test="startup-guard-snippet"]').element.textContent).toBe(SNIPPET);
+    expect(page.find('[data-test="startup-guard-launch-env"]').exists()).toBe(false);
     expect(page.get('[data-test="startup-guard-use-sqlite"]').text()).toBe('这次改用本机 SQLite…');
     expect(page.get('[data-test="startup-guard-reopen"]').text()).toBe('重新打开');
     expect(wrapper.text()).not.toContain('backend_fallback_blocked');
@@ -1213,6 +1223,71 @@ describe('数据库后端回落保护的启动出错页（D-DBG-03）', () => {
     expect(wrapper.find('[data-test="startup-error-postgres-hint"]').exists()).toBe(false);
     expect(wrapper.findComponent({ name: 'VideoListPage' }).exists()).toBe(false);
     expect(api.GetDatabaseSwitchStatus).not.toHaveBeenCalled();
+  });
+
+  it('按数据目录推断拦下（还没有记录）时说「看起来之前用的是 PostgreSQL」，不提上次的位置，配置块留空待补全', async () => {
+    const emptySnippet = 'DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=\nPG_PORT=\nPG_USER=\nPG_PASSWORD=（在这里填密码）\nPG_DB=\n';
+    api.GetStartupError.mockResolvedValue('backend_fallback_blocked: 数据目录里有之前使用留下的数据……');
+    api.GetStartupBackendGuard.mockResolvedValue({ ...blockedGuard(), reason: 'inferred_postgres', previous_location: '', config_snippet: emptySnippet });
+    const wrapper = await mountApp();
+    const summary = wrapper.get('[data-test="startup-guard-summary"]').text();
+    expect(summary).toContain('数据目录里有之前使用留下的数据（缩略图、备份等），但本机 SQLite 库文件不存在');
+    expect(summary).toContain('看起来之前用的是 PostgreSQL');
+    expect(summary).not.toContain('上次用的是');
+    expect(wrapper.get('[data-test="startup-guard-data-dir-hint"]').text()).toContain('补全空着的几项');
+    expect(wrapper.get('[data-test="startup-guard-snippet"]').element.textContent).toBe(emptySnippet);
+  });
+
+  it('启动环境里有空的 PG_HOST 时说清是它挡住了配置文件', async () => {
+    api.GetStartupError.mockResolvedValue(BLOCKED_ERROR);
+    api.GetStartupBackendGuard.mockResolvedValue({ ...blockedGuard(), pg_host_empty_in_launch_env: true });
+    const wrapper = await mountApp();
+    const banner = wrapper.findComponent({ name: 'AppBanner' });
+    expect(banner.attributes('data-test')).toBe('startup-guard-launch-env');
+    expect(banner.props('tone')).toBe('warning');
+    expect(banner.props('title')).toBe('启动环境里的 PG_HOST 是空的');
+    expect(banner.props('message')).toContain('配置文件不会覆盖已有的变量');
+    expect(banner.props('message')).toContain('launchctl unsetenv PG_HOST');
+  });
+
+  describe('配置块的「复制」', () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    afterEach(() => {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else delete navigator.clipboard;
+      window.getSelection()?.removeAllRanges();
+    });
+    const setClipboard = value => Object.defineProperty(navigator, 'clipboard', { value, configurable: true });
+
+    it('写进剪贴板后按钮改成「已复制」', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard({ writeText });
+      const wrapper = await mountBlocked();
+      await wrapper.get('[data-test="startup-guard-copy"]').trigger('click');
+      await flushPromises();
+      expect(writeText).toHaveBeenCalledWith(SNIPPET);
+      expect(wrapper.get('[data-test="startup-guard-copy"]').text()).toBe('已复制');
+      expect(wrapper.find('[data-test="startup-guard-copy-fallback"]').exists()).toBe(false);
+    });
+
+    it('剪贴板写不进去时选中整段并提示按 ⌘C', async () => {
+      setClipboard({ writeText: vi.fn().mockRejectedValue(new Error('NotAllowedError')) });
+      const wrapper = await mountBlocked();
+      document.body.appendChild(wrapper.element);
+      await wrapper.get('[data-test="startup-guard-copy"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.get('[data-test="startup-guard-copy-fallback"]').text()).toContain('已经选中了上面这段，按 ⌘C 复制');
+      expect(wrapper.get('[data-test="startup-guard-copy"]').text()).toBe('复制');
+      expect(window.getSelection().toString()).toBe(SNIPPET);
+    });
+
+    it('没有剪贴板接口时同样退到选中整段', async () => {
+      setClipboard(undefined);
+      const wrapper = await mountBlocked();
+      await wrapper.get('[data-test="startup-guard-copy"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-test="startup-guard-copy-fallback"]').exists()).toBe(true);
+    });
   });
 
   it('上次的位置读不到时只说「上次用的是 PostgreSQL」，不留空括号', async () => {

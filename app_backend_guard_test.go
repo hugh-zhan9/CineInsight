@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"video-master/database"
+	"video-master/internal/appdata"
 )
 
 // D-DBG-04：数据库后端回落保护的两个绑定。记录本身的读写与「拦下才可改」在 database 包里测
@@ -94,8 +97,22 @@ func TestDBG04GetStartupBackendGuardDefaultsToNotBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"blocked":false,"previous_location":"","config_files":[],"data_dir_config":""}`
+	want := `{"blocked":false,"reason":"","previous_location":"","config_files":[],"data_dir_config":"","config_snippet":"","pg_host_empty_in_launch_env":false}`
 	if string(encoded) != want {
 		t.Fatalf("未拦下时的结果不对: %s want %s", encoded, want)
+	}
+}
+
+// D-DBG-02 首次运行缺口的前提：database.Init 之前（NewApp）不会建出任何「只有数据库用起来之后才会出现」的目录，
+// 否则全新安装第一次启动就会被当成之前用过 PostgreSQL 而拦下。
+func TestDBG02NewAppCreatesNoPostDatabaseArtifacts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_ = NewApp()
+	dataDir := filepath.Join(home, appdata.DirName)
+	for _, name := range database.PostDatabaseArtifactDirs() {
+		if _, err := os.Stat(filepath.Join(dataDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("NewApp 不应建出 %s: %v", name, err)
+		}
 	}
 }

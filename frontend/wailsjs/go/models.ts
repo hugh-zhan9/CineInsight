@@ -16,9 +16,12 @@ export namespace database {
 	}
 	export class StartupBackendGuard {
 	    blocked: boolean;
+	    reason: string;
 	    previous_location: string;
 	    config_files: BackendConfigFile[];
 	    data_dir_config: string;
+	    config_snippet: string;
+	    pg_host_empty_in_launch_env: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new StartupBackendGuard(source);
@@ -27,9 +30,12 @@ export namespace database {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.blocked = source["blocked"];
+	        this.reason = source["reason"];
 	        this.previous_location = source["previous_location"];
 	        this.config_files = this.convertValues(source["config_files"], BackendConfigFile);
 	        this.data_dir_config = source["data_dir_config"];
+	        this.config_snippet = source["config_snippet"];
+	        this.pg_host_empty_in_launch_env = source["pg_host_empty_in_launch_env"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

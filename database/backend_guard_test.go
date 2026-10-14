@@ -9,9 +9,13 @@ import (
 	"testing"
 	"time"
 	"video-master/internal/appdata"
+
+	"github.com/joho/godotenv"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
-// 数据库后端回落保护（D-DBG-01..04）。
+// 数据库后端回落保护（D-DBG-01..05）。
 
 // guardInitEnv 把 Init 隔离到临时家目录（数据目录 <HOME>/.CineInsight，不碰开发机上真实的
 // ~/.CineInsight），清掉选库相关的环境变量，启动缓存与全局句柄在结束时还原。返回数据目录（未创建）。
@@ -33,10 +37,26 @@ func guardInitEnv(t *testing.T) string {
 
 func writeRecordForTest(t *testing.T, dataDir string, backend Backend, location string) {
 	t.Helper()
+	writeStateForTest(t, dataDir, BackendState{Backend: backend, Location: location, UpdatedAt: time.Now().Format(time.RFC3339)})
+}
+
+func writeStateForTest(t *testing.T, dataDir string, state BackendState) {
+	t.Helper()
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeBackendState(dataDir, backend, location, time.Now()); err != nil {
+	if err := writeBackendState(dataDir, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeArtifactForTest 在数据目录下的某个「只有数据库用起来之后才会出现」的目录里放一个文件。
+func writeArtifactForTest(t *testing.T, dataDir, directory string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dataDir, directory), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, directory, "1.jpg"), []byte("jpg"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -63,30 +83,39 @@ func dirEntryNames(t *testing.T, dir string) []string {
 	return names
 }
 
-// D-DBG-02 判定表：只有「本次是走默认得到的 SQLite、上次是 PostgreSQL」才拦。
+// D-DBG-02 判定表：有记录时只有「本次是走默认得到的 SQLite、上次是 PostgreSQL」才拦；没有记录时只有
+// 「走默认得到的 SQLite、库文件不存在、数据目录里却有只有数据库用起来之后才会出现的数据」才拦。
 func TestDBG02FallbackDecisionTable(t *testing.T) {
 	postgres := &BackendState{Backend: BackendPostgres, Location: "me@db.local:5432/cine"}
 	sqlite := &BackendState{Backend: BackendSQLite, Location: "/data/library.db"}
+	const (
+		record   = BackendGuardReasonPreviousPostgres
+		inferred = BackendGuardReasonInferredPostgres
+	)
 	cases := []struct {
-		name     string
-		resolved Backend
-		explicit bool
-		previous *BackendState
-		want     bool
+		name string
+		in   backendGuardInput
+		want string
 	}{
-		{"隐式 SQLite + 上次 postgres → 拦", BackendSQLite, false, postgres, true},
-		{"显式 sqlite + 上次 postgres → 放", BackendSQLite, true, postgres, false},
-		{"隐式 SQLite + 没有记录 → 放", BackendSQLite, false, nil, false},
-		{"隐式 SQLite + 上次 sqlite → 放", BackendSQLite, false, sqlite, false},
-		{"隐式 SQLite + 记录里后端为空 → 放", BackendSQLite, false, &BackendState{}, false},
-		{"本次 postgres（PG_HOST 推出）+ 上次 postgres → 放", BackendPostgres, false, postgres, false},
-		{"本次 postgres（新出现 PG_HOST）+ 上次 sqlite → 放", BackendPostgres, false, sqlite, false},
-		{"本次显式 postgres + 没有记录 → 放", BackendPostgres, true, nil, false},
+		{"隐式 SQLite + 上次 postgres → 拦", backendGuardInput{resolved: BackendSQLite, previous: postgres}, record},
+		{"隐式 SQLite + 上次 postgres（库文件在、有缓存也一样）→ 拦", backendGuardInput{resolved: BackendSQLite, previous: postgres, sqliteExists: true, postDatabaseArtifacts: true}, record},
+		{"显式 sqlite + 上次 postgres → 放", backendGuardInput{resolved: BackendSQLite, explicit: true, previous: postgres}, ""},
+		{"隐式 SQLite + 没有记录（全新安装）→ 放", backendGuardInput{resolved: BackendSQLite}, ""},
+		{"隐式 SQLite + 上次 sqlite → 放", backendGuardInput{resolved: BackendSQLite, previous: sqlite}, ""},
+		{"隐式 SQLite + 上次 sqlite（库文件没了、有缓存）→ 放", backendGuardInput{resolved: BackendSQLite, previous: sqlite, postDatabaseArtifacts: true}, ""},
+		{"隐式 SQLite + 记录里后端为空 → 放", backendGuardInput{resolved: BackendSQLite, previous: &BackendState{}, postDatabaseArtifacts: true}, ""},
+		{"本次 postgres（PG_HOST 推出）+ 上次 postgres → 放", backendGuardInput{resolved: BackendPostgres, previous: postgres}, ""},
+		{"本次 postgres（新出现 PG_HOST）+ 上次 sqlite → 放", backendGuardInput{resolved: BackendPostgres, previous: sqlite}, ""},
+		{"本次显式 postgres + 没有记录 + 有缓存 → 放", backendGuardInput{resolved: BackendPostgres, explicit: true, postDatabaseArtifacts: true}, ""},
+		{"没有记录 + 库文件不存在 + 有缓存 → 按推断拦", backendGuardInput{resolved: BackendSQLite, postDatabaseArtifacts: true}, inferred},
+		{"没有记录 + 库文件在 + 有缓存 → 放", backendGuardInput{resolved: BackendSQLite, sqliteExists: true, postDatabaseArtifacts: true}, ""},
+		{"没有记录 + 库文件不存在 + 没有缓存 → 放", backendGuardInput{resolved: BackendSQLite}, ""},
+		{"没有记录 + 显式 sqlite + 有缓存 → 放", backendGuardInput{resolved: BackendSQLite, explicit: true, postDatabaseArtifacts: true}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldBlockBackendFallback(tc.resolved, tc.explicit, tc.previous); got != tc.want {
-				t.Fatalf("判定错误: got=%v want=%v", got, tc.want)
+			if got := backendFallbackBlockReason(tc.in); got != tc.want {
+				t.Fatalf("判定错误: got=%q want=%q", got, tc.want)
 			}
 		})
 	}
@@ -97,19 +126,22 @@ func TestDBG01BackendStateRoundTripSQLite(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("SQLITE_PATH", "")
 	now := time.Date(2026, 10, 14, 9, 30, 0, 0, time.FixedZone("CST", 8*3600))
-	if err := writeBackendState(dataDir, BackendSQLite, backendLocation(BackendSQLite, dataDir), now); err != nil {
+	if err := writeBackendState(dataDir, newBackendState(BackendSQLite, dataDir, now)); err != nil {
 		t.Fatalf("写记录失败: %v", err)
 	}
 	state := readRecordForTest(t, dataDir)
 	want := BackendState{Backend: BackendSQLite, Location: filepath.Join(dataDir, DefaultSQLiteFileName), UpdatedAt: "2026-10-14T09:30:00+08:00"}
-	if state == nil || *state != want {
+	if state == nil || state.Postgres != nil || state.Backend != want.Backend || state.Location != want.Location || state.UpdatedAt != want.UpdatedAt {
 		t.Fatalf("记录不对: %#v want %#v", state, want)
 	}
 	if names := dirEntryNames(t, dataDir); len(names) != 1 || names[0] != BackendStateFileName {
 		t.Fatalf("原子写不应留下临时文件: %v", names)
 	}
+	if info, err := os.Stat(filepath.Join(dataDir, BackendStateFileName)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("记录应是 0600: %v err=%v", info.Mode().Perm(), err)
+	}
 	// 再写一次是整份替换，不是追加。
-	if err := writeBackendState(dataDir, BackendPostgres, "me@db.local:5432/cine", now); err != nil {
+	if err := writeBackendState(dataDir, BackendState{Backend: BackendPostgres, Location: "me@db.local:5432/cine"}); err != nil {
 		t.Fatal(err)
 	}
 	if state := readRecordForTest(t, dataDir); state.Backend != BackendPostgres || state.Location != "me@db.local:5432/cine" {
@@ -145,13 +177,42 @@ func TestDBG01PostgresRecordOmitsPassword(t *testing.T) {
 	if state.Backend != BackendPostgres || state.Location != "me@db.local:5433/cine" {
 		t.Fatalf("PostgreSQL 记录不对: %#v", state)
 	}
+	// 出错页预填配置块要的连接项（D-DBG-05）：没给 PG_SSLMODE 时不记。
+	if state.Postgres == nil || *state.Postgres != (BackendStatePostgres{Host: "db.local", Port: "5433", User: "me", DBName: "cine"}) {
+		t.Fatalf("PostgreSQL 连接项不对: %#v", state.Postgres)
+	}
 	if _, err := time.Parse(time.RFC3339, state.UpdatedAt); err != nil {
 		t.Fatalf("updated_at 应为 RFC3339: %q err=%v", state.UpdatedAt, err)
 	}
-	// 没给端口时与连接口径一致，记成 5432。
+	// 没给端口时与连接口径一致，记成 5432；显式给了 PG_SSLMODE 才记。
 	t.Setenv("PG_PORT", "")
-	if got := backendLocation(BackendPostgres, dataDir); got != "me@db.local:5432/cine" {
-		t.Fatalf("默认端口应记成 5432: %s", got)
+	t.Setenv("PG_SSLMODE", "require")
+	next := newBackendState(BackendPostgres, dataDir, time.Now())
+	if next.Location != "me@db.local:5432/cine" || next.Postgres.Port != "5432" || next.Postgres.SSLMode != "require" {
+		t.Fatalf("默认端口应记成 5432、显式的 sslmode 应记下: %#v %#v", next, next.Postgres)
+	}
+}
+
+// 较早写下的记录（没有 postgres 一项）照常读：上次位置照旧，连接项按不知道处理，配置块里留空。
+func TestDBG01ReadsRecordWithoutPostgresFields(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"backend":"postgres","location":"me@db.local:5432/cine","updated_at":"2026-10-14T09:30:00+08:00"}`
+	if err := os.WriteFile(filepath.Join(dataDir, BackendStateFileName), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := readRecordForTest(t, dataDir)
+	if state.Backend != BackendPostgres || state.Location != "me@db.local:5432/cine" || state.Postgres != nil {
+		t.Fatalf("较早的记录应照常读: %#v", state)
+	}
+	if err := Init(); !errors.Is(err, ErrBackendFallbackBlocked) {
+		t.Fatalf("较早的记录同样按上次 postgres 拦: %v", err)
+	}
+	guard := StartupGuard()
+	if guard.PreviousLocation != "me@db.local:5432/cine" || guard.ConfigSnippet != BackendConfigSnippet(nil) {
+		t.Fatalf("没有连接项时配置块留空: %#v", guard)
 	}
 }
 
@@ -159,7 +220,10 @@ func TestDBG01PostgresRecordOmitsPassword(t *testing.T) {
 // 错误带 backend_fallback_blocked: 前缀；出错页要的信息（上次位置、读过的配置文件、推荐位置）记下来。
 func TestDBG02InitBlocksImplicitSQLiteAfterPostgres(t *testing.T) {
 	dataDir := guardInitEnv(t)
-	writeRecordForTest(t, dataDir, BackendPostgres, "me@db.local:5432/cine")
+	writeStateForTest(t, dataDir, BackendState{
+		Backend: BackendPostgres, Location: "me@db.local:5432/cine", UpdatedAt: time.Now().Format(time.RFC3339),
+		Postgres: &BackendStatePostgres{Host: "db.local", Port: "5432", User: "me", DBName: "cine"},
+	})
 	// 数据目录下的 .env 存在但没给后端（与选库无关的内容）：列表里标为存在，判定不受影响。
 	dataDirConfig := filepath.Join(dataDir, BackendConfigFileName)
 	if err := os.WriteFile(dataDirConfig, []byte("# 用户自己的配置\n"), 0o600); err != nil {
@@ -192,8 +256,13 @@ func TestDBG02InitBlocksImplicitSQLiteAfterPostgres(t *testing.T) {
 	}
 
 	guard := StartupGuard()
-	if !guard.Blocked || guard.PreviousLocation != "me@db.local:5432/cine" || guard.DataDirConfig != dataDirConfig {
+	if !guard.Blocked || guard.Reason != BackendGuardReasonPreviousPostgres || guard.PreviousLocation != "me@db.local:5432/cine" ||
+		guard.DataDirConfig != dataDirConfig || guard.PGHostEmptyInLaunchEnv {
 		t.Fatalf("回落保护结果不对: %#v", guard)
+	}
+	wantSnippet := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=db.local\nPG_PORT=5432\nPG_USER=me\nPG_PASSWORD=（在这里填密码）\nPG_DB=cine\n"
+	if guard.ConfigSnippet != wantSnippet {
+		t.Fatalf("配置块应按记录预填:\n%s\nwant\n%s", guard.ConfigSnippet, wantSnippet)
 	}
 	wantPaths := envConfigPaths(dataDir)
 	if len(guard.ConfigFiles) != len(wantPaths) {
@@ -372,4 +441,230 @@ func TestDBG04AcceptSQLiteAfterFallbackBlock(t *testing.T) {
 			t.Fatalf("应打开 SQLite 库: %v", err)
 		}
 	})
+}
+
+// D-DBG-02 首次运行缺口：只认那几个目录、且里面至少有一项；日志、用户的 .env、记录、空目录都不算。
+func TestDBG02PostDatabaseArtifactsDetection(t *testing.T) {
+	dataDir := t.TempDir()
+	if hasPostDatabaseArtifacts(dataDir) {
+		t.Fatal("空的数据目录不算")
+	}
+	if hasPostDatabaseArtifacts(filepath.Join(dataDir, "missing")) {
+		t.Fatal("不存在的数据目录不算")
+	}
+	for _, name := range []string{"app.log", BackendConfigFileName, BackendStateFileName} {
+		if err := os.WriteFile(filepath.Join(dataDir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range postDatabaseArtifactDirs {
+		if err := os.MkdirAll(filepath.Join(dataDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hasPostDatabaseArtifacts(dataDir) {
+		t.Fatal("日志、.env、记录与空目录都不算")
+	}
+	for _, name := range postDatabaseArtifactDirs {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeArtifactForTest(t, dir, name)
+			if !hasPostDatabaseArtifacts(dir) {
+				t.Fatalf("%s 里有东西应算", name)
+			}
+		})
+	}
+}
+
+// D-DBG-02 首次运行缺口：全新安装（数据目录还没有，或只有 database.Init 之前就可能出现的东西）不拦，打开后写下记录。
+func TestDBG02FirstRunFreshInstallIsNotBlocked(t *testing.T) {
+	t.Run("数据目录还没有", func(t *testing.T) {
+		dataDir := guardInitEnv(t)
+		if err := Init(); err != nil {
+			t.Fatalf("全新安装不应被拦: %v", err)
+		}
+		if state := readRecordForTest(t, dataDir); state == nil || state.Backend != BackendSQLite {
+			t.Fatalf("打开后应写下记录: %#v", state)
+		}
+	})
+	t.Run("只有空目录、日志与用户的 .env", func(t *testing.T) {
+		dataDir := guardInitEnv(t)
+		for _, name := range postDatabaseArtifactDirs {
+			if err := os.MkdirAll(filepath.Join(dataDir, name), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dataDir, "app.log"), []byte("log"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("# 用户自己的配置\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Init(); err != nil {
+			t.Fatalf("没有只在数据库用起来之后才出现的数据时不应被拦: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dataDir, DefaultSQLiteFileName)); err != nil {
+			t.Fatalf("应建出 SQLite 库: %v", err)
+		}
+	})
+}
+
+// D-DBG-02 首次运行缺口：没有记录、本机库文件不存在、数据目录里却有缩略图等数据 → 按推断拦下，不建库文件；
+// 出错页说不出上次的位置，配置块留空；「这次改用本机 SQLite」之后重新启动放行。
+func TestDBG02FirstRunBlocksWhenDataExistsWithoutLibrary(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	writeArtifactForTest(t, dataDir, "thumbnails")
+	err := Init()
+	if !errors.Is(err, ErrBackendFallbackBlocked) || !strings.HasPrefix(err.Error(), BackendFallbackBlockedReason+": ") {
+		t.Fatalf("应按推断拦下: %v", err)
+	}
+	if !strings.Contains(err.Error(), "看起来之前用的是 PostgreSQL") {
+		t.Fatalf("推断拦下的说明不对: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, DefaultSQLiteFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("被拦下时不应创建 SQLite 库文件: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, BackendStateFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("被拦下时不应写记录: %v", statErr)
+	}
+	guard := StartupGuard()
+	if !guard.Blocked || guard.Reason != BackendGuardReasonInferredPostgres || guard.PreviousLocation != "" || guard.ConfigSnippet != BackendConfigSnippet(nil) {
+		t.Fatalf("推断拦下的结果不对: %#v", guard)
+	}
+
+	if err := AcceptSQLiteAfterFallbackBlock(); err != nil {
+		t.Fatalf("推断拦下后同样可以改用本机 SQLite: %v", err)
+	}
+	resetBackendStartupForTest(t)
+	if err := Init(); err != nil {
+		t.Fatalf("改用本机 SQLite 之后（记录是 sqlite）重新启动应放行: %v", err)
+	}
+}
+
+// D-DBG-02 首次运行缺口：库文件在（之前就是这个本机库），或显式选了 sqlite，都不拦。
+func TestDBG02FirstRunNotBlockedWhenLibraryExistsOrExplicit(t *testing.T) {
+	t.Run("库文件在", func(t *testing.T) {
+		dataDir := guardInitEnv(t)
+		writeArtifactForTest(t, dataDir, "image-thumbnails")
+		// 0 字节的文件就是一个空的 SQLite 库。
+		if err := os.WriteFile(filepath.Join(dataDir, DefaultSQLiteFileName), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := Init(); err != nil {
+			t.Fatalf("库文件在时不应被拦: %v", err)
+		}
+	})
+	t.Run("显式 sqlite", func(t *testing.T) {
+		dataDir := guardInitEnv(t)
+		writeArtifactForTest(t, dataDir, "media-details")
+		t.Setenv("DB_BACKEND", "sqlite")
+		if err := Init(); err != nil {
+			t.Fatalf("显式 sqlite 不应被拦: %v", err)
+		}
+		if state := readRecordForTest(t, dataDir); state.Backend != BackendSQLite {
+			t.Fatalf("打开后应写下记录: %#v", state)
+		}
+	})
+}
+
+// D-DBG-03：启动环境里有空的 PG_HOST（加载配置文件之前就在）时，出错页要能说清是它挡住了配置文件。
+func TestDBG03ReportsEmptyPGHostInLaunchEnv(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	writeRecordForTest(t, dataDir, BackendPostgres, "me@db.local:5432/cine")
+	t.Setenv("PG_HOST", " ")
+	if err := Init(); !errors.Is(err, ErrBackendFallbackBlocked) {
+		t.Fatalf("空的 PG_HOST 走的是默认 SQLite，应被拦: %v", err)
+	}
+	if !StartupGuard().PGHostEmptyInLaunchEnv {
+		t.Fatal("应报告启动环境里的 PG_HOST 是空值")
+	}
+}
+
+// D-DBG-05：配置块是应用内切换写下的同一格式（带 PREVIOUS_BACKEND，启动时整份采用），按记录预填，密码永远是占位。
+func TestDBG05ConfigSnippetPrefillsFromRecord(t *testing.T) {
+	full := BackendConfigSnippet(&BackendStatePostgres{Host: "db.local", Port: "5433", User: "me", DBName: "cine", SSLMode: "require"})
+	wantFull := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=db.local\nPG_PORT=5433\nPG_USER=me\nPG_PASSWORD=（在这里填密码）\nPG_DB=cine\nPG_SSLMODE=require\n"
+	if full != wantFull {
+		t.Fatalf("预填的配置块不对:\n%s\nwant\n%s", full, wantFull)
+	}
+	empty := BackendConfigSnippet(nil)
+	wantEmpty := "DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\nPG_HOST=\nPG_PORT=\nPG_USER=\nPG_PASSWORD=（在这里填密码）\nPG_DB=\n"
+	if empty != wantEmpty {
+		t.Fatalf("不知道连接项时应留空、不写 PG_SSLMODE:\n%s", empty)
+	}
+	values, err := godotenv.Unmarshal(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !BackendConfigAdoptable(values) || values[BackendConfigKey] != "postgres" {
+		t.Fatalf("配置块必须是启动时会采用的格式: %v", values)
+	}
+}
+
+// D-DBG-03 + D-DBG-05 的出口：被拦下后把出错页给的配置块（填上密码）存成数据目录下的 .env，下次启动不再被拦，
+// 按 PostgreSQL 去连（测试里连一个没人监听的端口，得到的是连接错误而不是拦截），也不建 SQLite 库文件。
+func TestDBG05SnippetSavedAsDataDirConfigUnblocksNextStart(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	writeStateForTest(t, dataDir, BackendState{
+		Backend: BackendPostgres, Location: "me@127.0.0.1:1/cine", UpdatedAt: time.Now().Format(time.RFC3339),
+		Postgres: &BackendStatePostgres{Host: "127.0.0.1", Port: "1", User: "me", DBName: "cine"},
+	})
+	if err := Init(); !errors.Is(err, ErrBackendFallbackBlocked) {
+		t.Fatalf("应先被拦下: %v", err)
+	}
+	snippet := strings.Replace(StartupGuard().ConfigSnippet, configSnippetPasswordPlaceholder, "s3cret", 1)
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte(snippet), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟「重新打开」：新进程的启动缓存是空的。
+	resetBackendStartupForTest(t)
+	err := Init()
+	if err == nil {
+		t.Fatal("测试端口上没有 PostgreSQL，应得到连接错误")
+	}
+	if errors.Is(err, ErrBackendFallbackBlocked) || StartupGuard().Blocked {
+		t.Fatalf("存好配置块之后不应再被拦: %v", err)
+	}
+	if ActiveBackend() != BackendPostgres || os.Getenv("PG_HOST") != "127.0.0.1" || os.Getenv("PG_PASSWORD") != "s3cret" {
+		t.Fatalf("应按配置块去连 PostgreSQL: backend=%s PG_HOST=%q", ActiveBackend(), os.Getenv("PG_HOST"))
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, DefaultSQLiteFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("不应创建 SQLite 库文件: %v", statErr)
+	}
+	if state := readRecordForTest(t, dataDir); state.Backend != BackendPostgres || state.Location != "me@127.0.0.1:1/cine" {
+		t.Fatalf("连接失败时记录不应改动: %#v", state)
+	}
+}
+
+// D-DBG-01：ApplySchema 失败（库打开了、建表失败）时记录不动——只有库真正可用之后才记。
+func TestDBG01FailedApplySchemaLeavesRecordUnchanged(t *testing.T) {
+	dataDir := guardInitEnv(t)
+	writeRecordForTest(t, dataDir, BackendPostgres, "me@db.local:5432/cine")
+	before, err := os.ReadFile(filepath.Join(dataDir, BackendStateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 一张缺列的 videos 表：ApplySchema 开头清理重复视频时查 path / deleted_at 就失败。
+	broken, err := gorm.Open(sqlite.Open(filepath.Join(dataDir, DefaultSQLiteFileName)), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := broken.Exec("CREATE TABLE videos (id INTEGER PRIMARY KEY)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, err := broken.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
+	t.Setenv("DB_BACKEND", "sqlite")
+	if err := Init(); err == nil {
+		t.Fatal("建表失败时 Init 应返回错误")
+	}
+	after, err := os.ReadFile(filepath.Join(dataDir, BackendStateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("ApplySchema 失败时记录不应改动:\nbefore %s\nafter  %s", before, after)
+	}
 }

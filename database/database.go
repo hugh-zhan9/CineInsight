@@ -182,11 +182,15 @@ func resolveStartupBackend(dataDir string) (Backend, error) {
 	defer backendStartup.mu.Unlock()
 	if backendStartup.resolved {
 		if backendStartup.guard.Blocked {
-			return "", backendFallbackBlockedError(backendStartup.guard.PreviousLocation)
+			return "", backendFallbackBlockedError(backendStartup.guard)
 		}
 		return backendStartup.backend, nil
 	}
 	_, fromProcessEnv := os.LookupEnv(BackendConfigKey)
+	// 同一时刻（加载任何配置文件之前）看启动环境里的 PG_HOST：存在但为空时，配置文件里的 PG_HOST 都写不进来
+	// （godotenv 不覆盖已有变量），出错页要说清是它挡住了配置文件（D-DBG-03）。
+	launchPGHost, launchPGHostSet := os.LookupEnv("PG_HOST")
+	pgHostEmptyInLaunchEnv := launchPGHostSet && strings.TrimSpace(launchPGHost) == ""
 	loadEnvConfig(dataDir)
 	backend, err := ResolveBackend(backendEnvFromOS())
 	if err != nil {
@@ -198,19 +202,34 @@ func resolveStartupBackend(dataDir string) (Backend, error) {
 	backendStartup.dataDir = dataDir
 
 	// 「显式」= 加载完所有配置文件后 DB_BACKEND 非空（进程环境或任一配置文件给出，含应用内切换写下的）。
-	explicit := strings.TrimSpace(os.Getenv(BackendConfigKey)) != ""
+	input := backendGuardInput{resolved: backend, explicit: strings.TrimSpace(os.Getenv(BackendConfigKey)) != ""}
 	previous, readErr := readBackendState(dataDir)
 	if readErr != nil {
 		log.Printf("读取上次使用的数据库后端失败，按没有记录处理 err=%v", readErr)
 	}
-	if shouldBlockBackendFallback(backend, explicit, previous) {
-		backendStartup.guard = StartupBackendGuard{
-			Blocked:          true,
-			PreviousLocation: previous.Location,
-			ConfigFiles:      startupConfigFiles(dataDir),
-			DataDirConfig:    filepath.Join(dataDir, BackendConfigFileName),
+	input.previous = previous
+	// 首次运行缺口（没有记录）的两项只在可能用得上时才去看文件系统。
+	if previous == nil && backend == BackendSQLite && !input.explicit {
+		_, statErr := os.Stat(SQLitePath(dataDir))
+		input.sqliteExists = statErr == nil
+		input.postDatabaseArtifacts = !input.sqliteExists && hasPostDatabaseArtifacts(dataDir)
+	}
+	if reason := backendFallbackBlockReason(input); reason != "" {
+		guard := StartupBackendGuard{
+			Blocked:                true,
+			Reason:                 reason,
+			ConfigFiles:            startupConfigFiles(dataDir),
+			DataDirConfig:          filepath.Join(dataDir, BackendConfigFileName),
+			PGHostEmptyInLaunchEnv: pgHostEmptyInLaunchEnv,
 		}
-		return "", backendFallbackBlockedError(previous.Location)
+		var previousPostgres *BackendStatePostgres
+		if previous != nil {
+			guard.PreviousLocation = previous.Location
+			previousPostgres = previous.Postgres
+		}
+		guard.ConfigSnippet = BackendConfigSnippet(previousPostgres)
+		backendStartup.guard = guard
+		return "", backendFallbackBlockedError(guard)
 	}
 	return backend, nil
 }

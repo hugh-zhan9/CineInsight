@@ -54,13 +54,24 @@
     <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue' })" />
 
     <div v-if="startupError" class="startup-error-view">
-      <!-- 回落保护（D-DBG-03）：上次用的是 PostgreSQL、这次没读到它的配置，没有打开本机库。读到保护结果之前
-           两张卡片都不画，被拦下时不先闪一下「数据库连接失败」；其他启动错误照旧是下面那张卡片。 -->
+      <!-- 回落保护（D-DBG-03..05）：上次用的是 PostgreSQL（或按数据目录推断如此）、这次没读到它的配置，没有打开本机库。
+           读到保护结果之前两张卡片都不画，被拦下时不先闪一下「数据库连接失败」；其他启动错误照旧是下面那张卡片。 -->
       <div v-if="startupGuard.blocked" class="startup-error-card" data-test="startup-guard">
         <h2>没有读到 PostgreSQL 配置，已停下</h2>
-        <p class="startup-error-text" data-test="startup-guard-summary">
+        <p v-if="startupGuardInferred" class="startup-error-text" data-test="startup-guard-summary">
+          数据目录里有之前使用留下的数据（缩略图、备份等），但本机 SQLite 库文件不存在，这次也没有读到 PostgreSQL 配置。看起来之前用的是 PostgreSQL，为了不打开一个空的本机库，已经停下。
+        </p>
+        <p v-else class="startup-error-text" data-test="startup-guard-summary">
           上次用的是 PostgreSQL{{ startupGuard.previous_location ? `（${startupGuard.previous_location}）` : '' }}，这次没有读到 PostgreSQL 配置，为了不打开一个空的本机库，已经停下。数据还在 PostgreSQL 里。
         </p>
+        <AppBanner
+          v-if="startupGuard.pg_host_empty_in_launch_env"
+          class="startup-guard-banner"
+          tone="warning"
+          title="启动环境里的 PG_HOST 是空的"
+          message="应用启动时就带着一个空的 PG_HOST 变量（例如用 launchctl setenv 设过），配置文件不会覆盖已有的变量，下面所有配置文件里的 PG_HOST 都被它挡住了。先去掉它（例如 launchctl unsetenv PG_HOST），再重新打开。"
+          data-test="startup-guard-launch-env"
+        />
         <h3 class="startup-guard-heading">这次读过的配置文件（按优先级从高到低）</h3>
         <ul class="startup-guard-files" data-test="startup-guard-config-files">
           <li v-for="file in startupGuard.config_files" :key="file.path" class="startup-guard-file" data-test="startup-guard-config-file">
@@ -68,9 +79,18 @@
             <AppBadge :tone="file.exists ? 'success' : 'neutral'">{{ file.exists ? '存在' : '不存在' }}</AppBadge>
           </li>
         </ul>
+        <h3 class="startup-guard-heading">把 PostgreSQL 配置存进数据目录</h3>
         <p class="startup-error-hint" data-test="startup-guard-data-dir-hint">
-          推荐把 PostgreSQL 配置（PG_HOST、PG_PORT、PG_USER、PG_PASSWORD、PG_DB）写进数据目录下的
-          <code class="startup-guard-path">{{ startupGuard.data_dir_config }}</code>，写好后点「重新打开」。
+          把下面这段存成 <code class="startup-guard-path">{{ startupGuard.data_dir_config }}</code>（这个文件已经有了时，用这几行替换其中同名的行），在 PG_PASSWORD 一行填上密码{{ startupGuardInferred ? '、补全空着的几项' : '' }}，然后点「重新打开」。这个位置不随应用更新被替换。
+        </p>
+        <div class="startup-guard-snippet">
+          <pre ref="startupGuardSnippet" class="startup-guard-snippet__text" data-test="startup-guard-snippet">{{ startupGuard.config_snippet }}</pre>
+          <button type="button" class="btn btn--secondary btn--sm startup-guard-snippet__copy" data-test="startup-guard-copy" @click="copyStartupGuardSnippet">
+            {{ startupGuardCopy === 'copied' ? '已复制' : '复制' }}
+          </button>
+        </div>
+        <p v-if="startupGuardCopy === 'selected'" class="startup-error-hint" role="status" data-test="startup-guard-copy-fallback">
+          没能写进剪贴板，已经选中了上面这段，按 ⌘C 复制。
         </p>
         <p class="startup-error-hint">
           也可以这次改用本机 SQLite：会打开本机数据库，它可能是空的；PostgreSQL 里的数据不受影响。
@@ -424,6 +444,7 @@ import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
 import DialogShell from './components/ui/DialogShell.vue';
 import AppBadge from './components/ui/AppBadge.vue';
+import AppBanner from './components/ui/AppBanner.vue';
 import AppSpinner from './components/ui/AppSpinner.vue';
 import SystemHealthPanel from './components/SystemHealthPanel.vue';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
@@ -458,9 +479,12 @@ function hasActiveDownloads(tasks) {
 function startupGuardFrom(guard) {
   return {
     blocked: guard?.blocked === true,
+    reason: String(guard?.reason || ''),
     previous_location: String(guard?.previous_location || ''),
     config_files: Array.isArray(guard?.config_files) ? guard.config_files : [],
-    data_dir_config: String(guard?.data_dir_config || '')
+    data_dir_config: String(guard?.data_dir_config || ''),
+    config_snippet: String(guard?.config_snippet || ''),
+    pg_host_empty_in_launch_env: guard?.pg_host_empty_in_launch_env === true
   };
 }
 
@@ -471,7 +495,7 @@ export default {
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
-    DialogShell, AppBadge, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
+    DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
   data() {
@@ -530,6 +554,8 @@ export default {
       // 回落保护（D-DBG-03）：被拦下时出错页换成专门说明；startupGuardChecked 之前两张卡片都不画。
       startupGuard: startupGuardFrom(null),
       startupGuardChecked: false,
+      // 配置块的「复制」：'' 没点过；copied 已写进剪贴板；selected 剪贴板不可用，已选中整段让用户自己复制。
+      startupGuardCopy: '',
       // 「待重启」遮罩（D-PC55）。
       relaunchRequired: false,
       relaunchMessage: '',
@@ -688,6 +714,10 @@ export default {
     }
   },
   computed: {
+    // 回落保护按数据目录推断拦下（还没有记录，D-DBG-02 首次运行缺口）：说不出上次的位置，配置块留空。
+    startupGuardInferred() {
+      return this.startupGuard.reason === 'inferred_postgres';
+    },
     // 任务指示的读屏文字（接在导航名后面）：按钮上只看得到转圈、数字和红点。
     taskIndicatorStatus() {
       const { running, failed } = this.taskCenterBadge;
@@ -774,6 +804,24 @@ export default {
       });
       if (!confirmed) return;
       await this.runRelaunch(AcceptSQLiteAfterFallbackBlock);
+    },
+    // 回落保护出错页的配置块「复制」（D-DBG-05）：写剪贴板失败（WebView 没给权限等）时选中整段，让用户按 ⌘C。
+    async copyStartupGuardSnippet() {
+      this.startupGuardCopy = '';
+      try {
+        await navigator.clipboard.writeText(this.startupGuard.config_snippet);
+        this.startupGuardCopy = 'copied';
+      } catch {
+        const element = this.$refs.startupGuardSnippet;
+        const selection = window.getSelection?.();
+        if (element && selection) {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        this.startupGuardCopy = 'selected';
+      }
     },
     // 调一个以重启收尾的绑定（RelaunchApp、AcceptSQLiteAfterFallbackBlock）：没能自动重启时把原因留在 relaunchError。
     async runRelaunch(call) {
@@ -1560,6 +1608,33 @@ export default {
 }
 .startup-guard-diagnostics {
   margin-right: auto;
+}
+.startup-guard-banner {
+  margin-top: var(--space-4);
+}
+.startup-guard-snippet {
+  position: relative;
+  margin-top: var(--space-3);
+}
+.startup-guard-snippet__text {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  padding-right: 88px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--surface-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1.7;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+.startup-guard-snippet__copy {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
 }
 
 </style>

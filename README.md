@@ -164,6 +164,20 @@ PG_SSLMODE=disable
 PG_TIMEZONE=Asia/Shanghai
 ```
 
+配置放在哪：进程环境变量最优先，其次依次是数据目录下的 `~/.CineInsight/.env`、工作目录下的 `.env`、应用包里的 `.env`（`Contents/MacOS/.env`、`Contents/Resources/.env`）；配置文件不覆盖已有的变量。打包的应用请把 PostgreSQL 配置放进 `~/.CineInsight/.env`——应用包里的 `.env` 会在重新安装时被替换掉。这份文件只有带 `PREVIOUS_BACKEND` 才会被采用（应用内切换后端写的就是这个格式），所以手写时用：
+
+```bash
+DB_BACKEND=postgres
+PREVIOUS_BACKEND=sqlite
+PG_HOST=127.0.0.1
+PG_PORT=5432
+PG_USER=video
+PG_PASSWORD=your_password
+PG_DB=video_master
+```
+
+回落保护：应用记得上次打开的是哪个后端（`~/.CineInsight/backend-state.json`，不含密码）。上次是 PostgreSQL、这次却没读到 PostgreSQL 配置时（或者还没有这份记录，但数据目录里已有缩略图、备份等数据而本机库文件不存在），应用不会悄悄打开一个空的 SQLite 库，而是停在启动出错页：列出这次读过的配置文件，给出按上次连接预填、可以直接存成 `~/.CineInsight/.env` 的配置块（填上密码后「重新打开」），或者确认后「这次改用本机 SQLite」。
+
 语义搜索只在 PostgreSQL 后端可用，需要安装 `pgvector` 扩展，并要求当前数据库用户可执行 `CREATE EXTENSION vector`（或由管理员预先安装）。SQLite 后端或扩展不可用时只有语义功能不可用，片库其他能力不受影响。
 
 ### 备份与恢复
