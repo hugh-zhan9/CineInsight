@@ -1,6 +1,7 @@
 <template>
   <div id="app" class="app-shell glass-app-shell">
-    <div class="header">
+    <!-- 读到启动状态之前（startupChecked）外壳什么都不画，正常启动的各部分跟着 appReady 出来。 -->
+    <div v-if="startupChecked" class="header">
       <div class="header-left">
         <h1>析微影策</h1>
       </div>
@@ -49,8 +50,8 @@
       <div v-if="libraryCountsText" class="header-counts">{{ libraryCountsText }}</div>
     </div>
 
-    <WallpaperStatusBar v-if="!startupError" />
-    <PlaybackQueuePanel v-if="!startupError" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue' })" />
+    <WallpaperStatusBar v-if="appReady" />
+    <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue' })" />
 
     <div v-if="startupError" class="startup-error-view">
       <div class="startup-error-card">
@@ -69,7 +70,7 @@
       </div>
     </div>
 
-    <div v-else ref="mainView" class="main-view">
+    <div v-else-if="appReady" ref="mainView" class="main-view">
       <!-- 观看首页（D-UI-04）：默认落地页；首次进入才挂载，之后只隐藏，「返回」回来时滚动位置还在。 -->
       <HomePage
         v-if="homeMounted"
@@ -288,7 +289,7 @@
 
     <!-- 命令面板（⌘K 或 ⌘⇧P，D-UD-03）：不新增顶栏按钮，只有快捷键这一个入口 -->
     <CommandPalette
-      v-if="!startupError"
+      v-if="appReady"
       :open="commandPaletteOpen"
       :open-video="openVideoFromCommand"
       :navigate="navigateTo" :open-entity="openRecapEntity" :open-video-at="openVideoAt"
@@ -298,7 +299,7 @@
 
     <!-- 任务中心常挂载（关着也在），顶栏任务指示才能跟着事件走。待处理角标由 App 自己定时读（refreshPendingWorkTotal）。 -->
     <TaskCenterDrawer
-      v-if="!startupError"
+      v-if="appReady"
       :open="taskCenterOpen"
       @close="taskCenterOpen = false"
       @badge-change="taskCenterBadge = $event"
@@ -309,7 +310,7 @@
     <QuitConfirmDialog />
     <!-- 版本对比播放器：任何地方调 openVersionCompare(左, 右) 就在这里打开；每次打开是一次新会话（key）。 -->
     <VersionCompareDialog
-      v-if="!startupError && versionCompare.open"
+      v-if="appReady && versionCompare.open"
       :key="versionCompare.session"
       :left-video-id="versionCompare.leftVideoID"
       :right-video-id="versionCompare.rightVideoID"
@@ -461,6 +462,9 @@ export default {
       tags: [],
       directories: [],
       startupError: '',
+      // GetStartupError 读回来之前为 false：这时还不知道是正常进观看首页（影院深色）还是启动失败页（跟随系统主题），
+      // 先按哪一种画，另一种情况下第一屏都会闪一下，所以外壳先不画（见 appReady）。
+      startupChecked: false,
       startupDiagnosticsOpen: false,
       // 启动错误页按当前后端给提示（D-PC58）：sqlite / postgres，读不到时为空串（按 Postgres 口径提示）。
       startupBackend: '',
@@ -502,8 +506,15 @@ export default {
     // 前后台上报（D-013）：后端据此决定长任务终态要不要发系统通知。
     // 放在最前面，数据库连不上时也要报——通知开关与库无关。
     this.attachForegroundReporting();
-    this.startupError = await GetStartupError();
+    try {
+      this.startupError = await GetStartupError();
+    } finally {
+      // 读取本身失败时照旧按正常启动画出外壳（与以前一样），错误照旧抛出。
+      this.startupChecked = true;
+    }
     if (this.startupError) {
+      // 启动失败页跟随系统主题（读不到设置，settings.theme 停在 system）：在下一次渲染之前定好，不先按浅色画一帧。
+      this.followSystemTheme();
       // 后端状态只读配置、不需要数据库连接，连不上库时也能拿到。
       try {
         const status = await GetDatabaseBackendStatus();
@@ -511,7 +522,6 @@ export default {
       } catch {
         this.startupBackend = '';
       }
-      this.applyTheme();
       return;
     }
 
@@ -545,13 +555,7 @@ export default {
       notify(`下载的《${payload?.title || '视频'}》片库里已有${what}，可以到「下载」页处理。`);
     });
     
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    this.systemTheme = mediaQuery.matches ? 'dark' : 'light';
-    this.applyTheme();
-    mediaQuery.addEventListener('change', e => {
-      this.systemTheme = e.matches ? 'dark' : 'light';
-      this.applyTheme();
-    });
+    this.followSystemTheme();
 
     if (this.settings.auto_scan_on_startup) {
       if (this.directories.length > 0) {
@@ -623,10 +627,14 @@ export default {
     area() {
       return pageArea(this.currentPage) || 'viewer';
     },
+    // 读到启动状态、且不是启动失败时才画正常的外壳与页面（startupChecked）。
+    appReady() {
+      return this.startupChecked && !this.startupError;
+    },
     // 观看区（含「视频」「图片」与整页详情）不论系统深浅都用影院深色，管理区跟随系统主题（D-UD-02）。
-    // 启动失败页不属于哪个区，跟随系统主题。
+    // 启动失败页不属于哪个区，跟随系统主题；读到启动状态之前也不开，那时只画底色（与系统一致，见 index.html）。
     cinemaSurface() {
-      return !this.startupError && this.area === 'viewer';
+      return this.appReady && this.area === 'viewer';
     },
     visibleNavGroups() {
       return (this.area === 'manage' ? MANAGE_NAV_GROUPS : VIEWER_NAV_GROUPS)
@@ -1126,6 +1134,16 @@ export default {
     applyTheme() {
       const theme = this.settings.theme === 'system' ? this.systemTheme : this.settings.theme;
       document.documentElement.setAttribute('data-theme', theme);
+    },
+    // 读一次系统深浅并套用，之后随系统切换（settings.theme 为 system 时才看得出）。正常启动与启动失败页都走这里。
+    followSystemTheme() {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      this.systemTheme = mediaQuery.matches ? 'dark' : 'light';
+      this.applyTheme();
+      mediaQuery.addEventListener('change', e => {
+        this.systemTheme = e.matches ? 'dark' : 'light';
+        this.applyTheme();
+      });
     },
     async loadSettings() {
       try {

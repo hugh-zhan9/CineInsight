@@ -115,7 +115,7 @@ export default {
 <style scoped>
 /* 层级（tokens.css「层级」）：确认框与其他对话框同在 --z-modal，靠打开时 teleport 排到最上面；提示条在
    --z-toast，压在所有对话框与确认框之上——删除后「撤销」提示和随后弹出的确认框同时在时，提示也点得到，
-   点它不会落到确认框的遮罩上把确认框关掉。 */
+   点它不会落到确认框的遮罩上把确认框关掉。平时在右下角，有对话框开着时挪到左上角（见下一条）。 */
 .app-toasts {
   position: fixed;
   z-index: var(--z-toast);
@@ -127,6 +127,19 @@ export default {
   max-width: min(420px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
   overflow-y: auto;
+}
+
+/* 有对话框开着时（BaseModal 的遮罩 .modal-overlay 在页面里），提示挪到左上角、只占窗口上半截，让开对话框的动作。
+   对话框都居中，DialogShell 的动作是底部一排（「取消」在左、主操作在右）和右上角 ×：底部那一排总在窗口中线以下
+   （带按钮的对话框最矮也比两倍底栏高），× 总在右半边，所以左上角的上半截最多压到标题或正文开头。
+   留在右下角时，高的对话框连一条提示都会盖住主操作；挪到右上角压 ×、左下角压「取消」。
+   层级不变，「撤销」照样点得到；放不下时提示条在上半截里滚动（top 16 + 这里的高度 = 中线以上 8px）。 */
+body:has(.modal-overlay) .app-toasts {
+  top: var(--space-4);
+  right: auto;
+  bottom: auto;
+  left: var(--space-4);
+  max-height: calc(50vh - 24px);
 }
 
 .app-toast {

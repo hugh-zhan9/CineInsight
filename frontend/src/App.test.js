@@ -1,4 +1,6 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
@@ -2382,6 +2384,90 @@ describe('观看区用影院表面（D-UD-02）', () => {
     api.GetStartupError.mockResolvedValue('数据库未初始化');
     await mountApp();
     expect(cinema()).toBe(false);
+  });
+
+  // 启动失败时第一屏先闪一下影院深色（2026-10-14 UI 遗留 F2）：GetStartupError 读回来之前默认页 home 已按观看区
+  // 打开影院表面、画出首页。读到之前什么都不画、不开影院表面；读到正常启动才开，读到启动失败不开。
+  function deferStartup() {
+    let resolve;
+    api.GetStartupError.mockReturnValue(new Promise(done => { resolve = done; }));
+    return value => resolve(value);
+  }
+
+  it('读到启动状态之前不开影院表面、不画外壳与页面；读到正常启动再打开', async () => {
+    const resolveStartup = deferStartup();
+    const wrapper = shallowMount(App);
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    expect(cinema()).toBe(false);
+    expect(wrapper.find('.header').exists()).toBe(false);
+    expect(wrapper.find('.main-view').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(false);
+    expect(wrapper.find('.startup-error-view').exists()).toBe(false);
+
+    resolveStartup('');
+    await flushPromises();
+    expect(cinema()).toBe(true);
+    expect(wrapper.find('.header').exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(true);
+  });
+
+  it('读到启动失败：第一次画出来的就是启动失败页，影院表面始终没开、首页没挂过', async () => {
+    const resolveStartup = deferStartup();
+    // body 的 class 每变一次记下变之前的值：影院表面哪怕只开过一瞬也看得出来。
+    const before = [];
+    const observer = new MutationObserver(records => records.forEach(record => before.push(record.oldValue || '')));
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+    const wrapper = shallowMount(App);
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(false);
+    resolveStartup('数据库未初始化');
+    await flushPromises();
+    observer.disconnect();
+    expect(cinema()).toBe(false);
+    expect(before.filter(value => value.split(/\s+/).includes('surface-cinema'))).toEqual([]);
+    expect(wrapper.find('.startup-error-view').exists()).toBe(true);
+    expect(wrapper.find('.header').exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(false);
+  });
+
+  // App 读到启动状态之前只画底色：index.html 在应用脚本之前就按系统深浅定好 data-theme，深色系统下不先闪浅色。
+  it('index.html 在应用脚本之前按系统深浅设 data-theme', () => {
+    const html = readFileSync(join(process.cwd(), 'index.html'), 'utf8');
+    const inline = html.match(/<script>([\s\S]*?)<\/script>/);
+    expect(inline).toBeTruthy();
+    expect(inline.index).toBeLessThan(html.indexOf('src="./src/main.js"'));
+    for (const dark of [true, false]) {
+      window.matchMedia = vi.fn(query => ({ matches: query === '(prefers-color-scheme: dark)' && dark }));
+      document.documentElement.removeAttribute('data-theme');
+      new Function(inline[1])();
+      expect(document.documentElement.getAttribute('data-theme')).toBe(dark ? 'dark' : 'light');
+    }
+  });
+
+  it('读启动状态本身失败时照旧按正常启动画出外壳（与改动前一致），错误照旧交给 Vue 的错误处理', async () => {
+    api.GetStartupError.mockRejectedValue(new Error('ipc broken'));
+    const errorHandler = vi.fn();
+    const wrapper = shallowMount(App, { global: { config: { errorHandler } } });
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    expect(errorHandler).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('.header').exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(true);
+    expect(cinema()).toBe(true);
+  });
+
+  it('启动失败页跟随系统深浅：深色系统下在等后端状态之前就是深色，系统切换时跟着变', async () => {
+    let onSchemeChange;
+    window.matchMedia = vi.fn(() => ({ matches: true, addEventListener: (_event, handler) => { onSchemeChange = handler; }, removeEventListener: vi.fn() }));
+    api.GetStartupError.mockResolvedValue('数据库未初始化');
+    api.GetDatabaseBackendStatus.mockReturnValueOnce(new Promise(() => {}));
+    document.documentElement.removeAttribute('data-theme');
+    await mountApp();
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    onSchemeChange({ matches: false });
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });
 });
 
