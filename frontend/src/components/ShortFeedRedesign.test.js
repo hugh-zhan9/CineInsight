@@ -385,6 +385,58 @@ describe('D-MW-03 移到废纸篓：不确认、不撤销', () => {
     wrapper.unmount();
   });
 
+  it('删除很慢时在标签面板里新建标签：删完换到下一条后，标签照样建好但不挂到下一条上', async () => {
+    let finishDelete;
+    let finishCreate;
+    server({ handlers: {
+      '/short-api/items/video/1/delete': () => new Promise(resolve => { finishDelete = () => resolve(jsonResponse(200, {})); }),
+      '/short-api/tags': call => (call.method === 'POST' ? new Promise(resolve => { finishCreate = () => resolve(jsonResponse(200, { id: 77, name: '新标签' })); }) : null)
+    } });
+    const wrapper = await mountApp();
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-delete"]'));
+    await click((await openMore(wrapper)).querySelector('[data-test="short-feed-more-tags"]'));
+    wrapper.vm.tagKeyword = '新标签';
+    await flushPromises();
+    const creating = wrapper.vm.createTagFromKeyword();
+    await flushPromises();
+    finishDelete();
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    finishCreate();
+    await creating;
+    await flushPromises();
+    expect(callsTo('/tag')).toEqual([]);
+    expect(wrapper.vm.feedTags.map(item => item.id)).toContain(77);
+    wrapper.unmount();
+  });
+
+  it('长按到点之前换到了下一条：这次长按作废，不给换上来的那一条点赞 + 收藏', async () => {
+    let releaseNext;
+    let nextCount = 0;
+    server({ handlers: { '/short-api/feed/next': () => {
+      nextCount += 1;
+      if (nextCount === 1) return jsonResponse(200, video(1));
+      if (nextCount === 2) return jsonResponse(404, { code: 'no_eligible_videos', message: '没有' });
+      return new Promise(resolve => { releaseNext = () => resolve(jsonResponse(200, video(2))); });
+    } } });
+    const wrapper = await mountApp();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const swipe = wrapper.vm.nextVideo(1);
+    await flushPromises();
+    // 手指按在还显示着的第 1 条上；650ms 到点之前第 2 条取回来了。
+    wrapper.vm.startLongPressAt(100, 100);
+    vi.advanceTimersByTime(300);
+    releaseNext();
+    await swipe;
+    await flushPromises();
+    expect(wrapper.vm.currentVideo.id).toBe(2);
+    vi.advanceTimersByTime(400);
+    await flushPromises();
+    expect(callsTo('/like')).toEqual([]);
+    expect(callsTo('/favorite')).toEqual([]);
+    wrapper.unmount();
+  });
+
   it('同一条在历史里出现两次（范围很小时会重复）：删掉后两处都摘掉，停在后面那一条或取新的', async () => {
     server({ next: [video(1), video(2), video(1), video(3)] });
     const wrapper = await mountApp();

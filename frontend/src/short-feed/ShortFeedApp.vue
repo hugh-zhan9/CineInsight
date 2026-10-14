@@ -586,8 +586,12 @@ export default {
       if (!video) return;
       // 更多、评分、标签面板操作的是当前这一条：当前条目换了（删除完成后前进、历史裁掉了正看着的那条…）就收起，
       // 免得面板里的操作落到换上来的那一条上（D-MW-03 没有确认与撤销兜底）。范围面板与条目无关，留着。
+      // 还没到点的长按（点赞 + 收藏）同理作废：按下时看的是上一条。
       const key = itemKey(video);
-      if (this.sheet && this.sheet !== 'scope' && key !== this.activeKey) this.sheet = null;
+      if (key !== this.activeKey) {
+        if (this.sheet && this.sheet !== 'scope') this.sheet = null;
+        this.cancelLongPress();
+      }
       this.activeKey = key;
       this.statusText = unsupportedStatusText(video);
       // 每次划到一条都是一次新的观看：累计播放从零算起，越过阈值才记（D-PC43）。
@@ -1138,12 +1142,15 @@ export default {
     async createTagFromKeyword() {
       const name = this.tagKeyword.trim();
       if (!name || !this.currentVideo || this.creatingTag) return;
+      const target = itemKey(this.currentVideo);
       this.creatingTag = true;
       try {
         const tag = await createFeedTag(name);
         if (!this.feedTags.some(item => item.id === tag.id)) {
           this.feedTags = [...this.feedTags, tag].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
         }
+        // 新建的这段时间里当前条目换了（删除完成后前进）：标签照样建好，但不挂到换上来的那一条上。
+        if (itemKey(this.currentVideo) !== target) return;
         if (!this.isTagAttached(tag.id)) await this.toggleTag(tag);
         else this.tagKeyword = '';
       } catch (err) {
