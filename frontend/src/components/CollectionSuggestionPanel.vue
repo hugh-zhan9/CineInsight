@@ -25,7 +25,7 @@
     <div v-if="status.running" class="suggestion-progress" data-test="collection-suggestion-progress">
       <ProgressBar
         :value="status.total > 0 ? status.scanned / status.total : null"
-        :label="`正在按文件名分析剧集… 已扫 ${status.scanned} / ${status.total}${status.matched ? ` · 命中 ${status.matched} 个文件` : ''}`"
+        :label="`正在按文件夹和文件名分析剧集… 已扫 ${status.scanned} / ${status.total}${status.matched ? ` · 命中 ${status.matched} 个文件` : ''}`"
       />
     </div>
     <p v-else-if="status.last_error" class="suggestion-progress suggestion-progress--error" role="alert" data-test="collection-suggestion-error">
@@ -38,7 +38,7 @@
         v-else-if="!suggestions.length"
         class="suggestion-empty"
         title="还没有可确认的剧集候选"
-        message="候选按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。同一扫描根下同名系列凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。"
+        message="候选先按文件夹认：一个文件夹里的多集、带「第一周 / Season 2 / 01-基础篇」这类章节子文件夹的父文件夹各算一组；只有一部片的文件夹、大分类文件夹、名字没意义或与人物同名的文件夹不算。其余散放的文件按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。"
         data-test="collection-suggestion-empty"
       />
       <template v-else>
@@ -58,6 +58,10 @@
         </nav>
 
         <div v-if="activeSuggestion" class="suggestion-detail">
+          <!-- 2026-10-14 修订 D-023：按文件夹成组的候选标出是哪个文件夹（同名分季目录合并在扫描根下时显示扫描根）。 -->
+          <p v-if="activeSuggestion.basis === 'folder'" class="suggestion-folder-basis" data-test="collection-suggestion-folder">
+            按文件夹：{{ activeSuggestion.folder || activeSuggestion.scan_root }}
+          </p>
           <!-- D-PC38：已确认作品集的系列又出现新集，候选是「追加到现有作品集」，不再新建（META-15）。 -->
           <template v-if="isAppend(activeSuggestion)">
             <p class="suggestion-append-target" data-test="collection-suggestion-append-target">
@@ -424,6 +428,7 @@ export default {
 .suggestion-list__item.btn.active { border-color: var(--accent-border); background: var(--accent-soft); }
 .suggestion-list__name { display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: var(--fs-secondary); }
 .suggestion-append-target { margin: 0 0 6px; color: var(--text-primary); font-size: var(--fs-secondary); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+.suggestion-folder-basis { margin: 0 0 6px; color: var(--text-secondary); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .suggestion-list__meta { overflow: hidden; color: var(--text-muted); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
 
 .suggestion-detail { min-width: 0; flex: 1; overflow-y: auto; padding: 14px 18px; }

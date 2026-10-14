@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -42,6 +43,9 @@ var (
 const (
 	suggestionKindNew    = "new"
 	suggestionKindAppend = "append"
+
+	suggestionBasisFolder   = "folder"
+	suggestionBasisFilename = "filename"
 )
 
 // collectionSuggestionPageSize 是分析时取视频的分页大小。
@@ -55,7 +59,7 @@ type CollectionSuggestionStatus struct {
 	// Total 是本轮要扫的活跃视频数，Scanned 是已解析的条数。
 	Total   int `json:"total"`
 	Scanned int `json:"scanned"`
-	// Matched 是解析出剧集模式的视频数；Pending 是本轮结束后待审阅的候选数。
+	// Matched 是解析出剧集模式、或被文件夹候选收下的视频数；Pending 是本轮结束后待审阅的候选数。
 	Matched   int        `json:"matched"`
 	Pending   int        `json:"pending"`
 	LastError string     `json:"last_error"`
@@ -93,6 +97,11 @@ type CollectionSuggestionView struct {
 	MemberCount          int                              `json:"member_count"`
 	Members              []CollectionSuggestionMemberView `json:"members"`
 	CreatedAt            time.Time                        `json:"created_at" ts_type:"string"`
+	// Basis 是成组依据：folder（按文件夹）或 filename（按文件名），由 normalized_series 的 "dir:" 前缀判定。
+	Basis string `json:"basis"`
+	// Folder 只在按文件夹的候选上有值：成员的共同目录（相对扫描根、`/` 分隔），供面板显示；
+	// 共同目录就是扫描根（同名分季目录合并在根下）时为空。
+	Folder string `json:"folder"`
 }
 
 // CollectionSuggestionService 分析剧集候选并把确认动作转成作品集写入。
@@ -240,6 +249,10 @@ type suggestionCandidate struct {
 	members          []models.CollectionSuggestionMember
 	// targetCollectionID 非空表示追加候选（kind=append）：members 只含尚未入集的新成员。
 	targetCollectionID *uint
+	// folderOrdered 表示按文件夹成组：成员顺序与位置已由 buildFolderSuggestionGroups 排好，不再按集号重排。
+	folderOrdered bool
+	// filenameSeries 只在文件夹组上有：成员按文件名解析出的系列（规范化名）→ 个数，用来认回按文件名忽略过的系列。
+	filenameSeries map[string]int
 }
 
 // analyzeOnce 跑完一轮分析：解析 → 分组 → 排除 → 与记忆比对 → upsert pending。
@@ -251,7 +264,7 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	groups := make(map[string]*suggestionCandidate)
+	perRoot := make(map[string][]folderSuggestionVideo)
 	var cursor uint
 	for {
 		if err := ctx.Err(); err != nil {
@@ -277,19 +290,10 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 				continue
 			}
 			parsed := ParseEpisodeFromFileName(fileNameStem(video.Name))
-			if !parsed.OK {
-				continue
+			if parsed.OK {
+				matched++
 			}
-			matched++
-			key := root + "\x00" + parsed.NormalizedSeries
-			group, exists := groups[key]
-			if !exists {
-				group = &suggestionCandidate{scanRoot: root, seriesName: parsed.Series, normalizedSeries: parsed.NormalizedSeries}
-				groups[key] = group
-			}
-			group.members = append(group.members, models.CollectionSuggestionMember{
-				VideoID: video.ID, Season: parsed.Season, Episode: parsed.Episode,
-			})
+			perRoot[root] = append(perRoot[root], folderSuggestionVideo{ID: video.ID, Name: video.Name, Path: video.Path, Parsed: parsed})
 		}
 		scanned := len(videos)
 		s.update(func(status *CollectionSuggestionStatus) {
@@ -304,6 +308,14 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 		return nil
 	}
 
+	persons, err := suggestionPersonNames(ctx)
+	if err != nil {
+		return err
+	}
+	groups, folderOnly := groupSuggestionCandidates(perRoot, persons)
+	if folderOnly > 0 {
+		s.update(func(status *CollectionSuggestionStatus) { status.Matched += folderOnly })
+	}
 	collected, err := videoCollectionIndex(ctx)
 	if err != nil {
 		return err
@@ -318,6 +330,10 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 		if _, dismissed := dismissedKeys[suggestionDismissKey(group.scanRoot, group.normalizedSeries)]; dismissed {
 			continue
 		}
+		// 文件夹组里多数文件按文件名属于一个已忽略的系列（按文件夹成组之前忽略的）：同样不再提。
+		if group.folderOrdered && folderGroupIsDismissedSeries(group, dismissedKeys) {
+			continue
+		}
 		var targetCollectionID *uint
 		group.members, targetCollectionID = splitSuggestionMembers(group.members, collected)
 		if targetCollectionID == nil && len(group.members) < 2 {
@@ -326,8 +342,12 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 		if targetCollectionID != nil && len(group.members) < 1 {
 			continue
 		}
-		sortSuggestionMembers(group.members)
-		assignSuggestionPositions(group.members)
+		if group.folderOrdered {
+			renumberFolderSuggestionPositions(group.members)
+		} else {
+			sortSuggestionMembers(group.members)
+			assignSuggestionPositions(group.members)
+		}
 		group.targetCollectionID = targetCollectionID
 		if targetCollectionID != nil {
 			group.fingerprint = suggestionAppendFingerprint(group.members, *targetCollectionID)
@@ -352,6 +372,101 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 	}
 	s.update(func(status *CollectionSuggestionStatus) { status.Pending = pending })
 	return nil
+}
+
+// groupSuggestionCandidates 先按文件夹成组，被文件夹候选收下的视频不再参与按文件名的分组，
+// 其余视频照旧按 (扫描根, 规范化系列名) 成组（2026-10-14 修订 D-023）。第二个返回值是
+// 文件名没解析出剧集、但被文件夹候选收下的视频数，计入 Matched。
+func groupSuggestionCandidates(perRoot map[string][]folderSuggestionVideo, persons map[string]struct{}) ([]*suggestionCandidate, int) {
+	var groups []*suggestionCandidate
+	folderOnly := 0
+	for root, videos := range perRoot {
+		claimed := make(map[uint]struct{})
+		parsedSeries := make(map[uint]string, len(videos))
+		for _, video := range videos {
+			if video.Parsed.OK {
+				parsedSeries[video.ID] = video.Parsed.NormalizedSeries
+			}
+		}
+		for _, folder := range buildFolderSuggestionGroups(root, videos, persons) {
+			candidate := &suggestionCandidate{scanRoot: root, seriesName: folder.Name, normalizedSeries: folder.NormalizedKey,
+				folderOrdered: true, filenameSeries: make(map[string]int)}
+			for _, member := range folder.Members {
+				claimed[member.VideoID] = struct{}{}
+				if series, ok := parsedSeries[member.VideoID]; ok {
+					candidate.filenameSeries[series]++
+				}
+				candidate.members = append(candidate.members, models.CollectionSuggestionMember{
+					VideoID: member.VideoID, Season: member.Season, Episode: member.Episode, Position: member.Position,
+				})
+			}
+			groups = append(groups, candidate)
+		}
+		bySeries := make(map[string]*suggestionCandidate)
+		for _, video := range videos {
+			if _, taken := claimed[video.ID]; taken {
+				if !video.Parsed.OK {
+					folderOnly++
+				}
+				continue
+			}
+			if !video.Parsed.OK {
+				continue
+			}
+			group, exists := bySeries[video.Parsed.NormalizedSeries]
+			if !exists {
+				group = &suggestionCandidate{scanRoot: root, seriesName: video.Parsed.Series, normalizedSeries: video.Parsed.NormalizedSeries}
+				bySeries[video.Parsed.NormalizedSeries] = group
+				groups = append(groups, group)
+			}
+			group.members = append(group.members, models.CollectionSuggestionMember{
+				VideoID: video.ID, Season: video.Parsed.Season, Episode: video.Parsed.Episode,
+			})
+		}
+	}
+	return groups, folderOnly
+}
+
+// folderGroupIsDismissedSeries：至少一半成员按文件名属于同一个系列，且这个系列（同一扫描根）被忽略过。
+func folderGroupIsDismissedSeries(group *suggestionCandidate, dismissedKeys map[string]struct{}) bool {
+	for series, count := range group.filenameSeries {
+		if count*2 < len(group.members) {
+			continue
+		}
+		if _, dismissed := dismissedKeys[suggestionDismissKey(group.scanRoot, series)]; dismissed {
+			return true
+		}
+	}
+	return false
+}
+
+// renumberFolderSuggestionPositions 在剔除已入集成员后把位置重新压成稠密排名，顺序与同集共用关系不变。
+func renumberFolderSuggestionPositions(members []models.CollectionSuggestionMember) {
+	position, previous := 0, 0
+	for index := range members {
+		if index == 0 || members[index].Position != previous {
+			position++
+		}
+		previous = members[index].Position
+		members[index].Position = position
+	}
+}
+
+// suggestionPersonNames 读出人物的显示名与原名（规范化后）：名字与之相同的文件夹不当作品集。
+func suggestionPersonNames(ctx context.Context) (map[string]struct{}, error) {
+	var people []models.Person
+	if err := database.DB.WithContext(ctx).Select("display_name", "original_name").Find(&people).Error; err != nil {
+		return nil, fmt.Errorf("读取人物名用于文件夹候选: %w", err)
+	}
+	names := make(map[string]struct{}, len(people)*2)
+	for _, person := range people {
+		for _, name := range []string{person.DisplayName, person.OriginalName} {
+			if key := normalizeLocalMetadataName(name); key != "" {
+				names[key] = struct{}{}
+			}
+		}
+	}
+	return names, nil
 }
 
 // persistCandidates 把本轮候选落库，返回待审阅候选数。
@@ -395,7 +510,7 @@ func (s *CollectionSuggestionService) persistCandidates(ctx context.Context, can
 					continue
 				}
 				pending++
-				if row.ScanRoot == candidate.scanRoot && row.SeriesName == candidate.seriesName {
+				if row.ScanRoot == candidate.scanRoot && row.SeriesName == candidate.seriesName && row.NormalizedSeries == candidate.normalizedSeries {
 					continue
 				}
 				// 目录改名或文件改名后系列名会变，成员没变就还是同一条候选。
@@ -405,6 +520,15 @@ func (s *CollectionSuggestionService) persistCandidates(ctx context.Context, can
 					"normalized_series": candidate.normalizedSeries,
 				}).Error; err != nil {
 					return fmt.Errorf("更新剧集候选: %w", err)
+				}
+				if row.NormalizedSeries != candidate.normalizedSeries {
+					// 同一批成员换了成组依据（按文件名 ↔ 按文件夹），集号与顺序跟着换。
+					if err := tx.Where("suggestion_id = ?", row.ID).Delete(&models.CollectionSuggestionMember{}).Error; err != nil {
+						return fmt.Errorf("更新剧集候选成员: %w", err)
+					}
+					if err := insertSuggestionMembers(tx, row.ID, candidate.members); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -420,13 +544,8 @@ func (s *CollectionSuggestionService) persistCandidates(ctx context.Context, can
 			if err := tx.Create(&suggestion).Error; err != nil {
 				return fmt.Errorf("写入剧集候选: %w", err)
 			}
-			members := make([]models.CollectionSuggestionMember, 0, len(candidate.members))
-			for _, member := range candidate.members {
-				member.SuggestionID = suggestion.ID
-				members = append(members, member)
-			}
-			if err := tx.Create(&members).Error; err != nil {
-				return fmt.Errorf("写入剧集候选成员: %w", err)
+			if err := insertSuggestionMembers(tx, suggestion.ID, candidate.members); err != nil {
+				return err
 			}
 			pending++
 		}
@@ -436,6 +555,18 @@ func (s *CollectionSuggestionService) persistCandidates(ctx context.Context, can
 		return 0, err
 	}
 	return pending, nil
+}
+
+func insertSuggestionMembers(tx *gorm.DB, suggestionID uint, candidateMembers []models.CollectionSuggestionMember) error {
+	members := make([]models.CollectionSuggestionMember, 0, len(candidateMembers))
+	for _, member := range candidateMembers {
+		member.SuggestionID = suggestionID
+		members = append(members, member)
+	}
+	if err := tx.Create(&members).Error; err != nil {
+		return fmt.Errorf("写入剧集候选成员: %w", err)
+	}
+	return nil
 }
 
 // List 返回待审阅候选，成员按 position 排序并附上活跃视频的文件名与缩略图。
@@ -462,6 +593,11 @@ func (s *CollectionSuggestionService) List() ([]CollectionSuggestionView, error)
 			MemberCount: len(members),
 			Members:     members,
 			CreatedAt:   suggestion.CreatedAt,
+			Basis:       suggestionBasisFilename,
+		}
+		if strings.HasPrefix(suggestion.NormalizedSeries, folderSuggestionKeyPrefix) {
+			view.Basis = suggestionBasisFolder
+			view.Folder = suggestionMembersFolder(suggestion.ScanRoot, members)
 		}
 		if suggestion.TargetCollectionID != nil {
 			// 追加候选：单集也值得提；目标作品集已被删除的，等下一轮分析重算。
@@ -812,6 +948,29 @@ func suggestionMemberViews(suggestionID uint) ([]CollectionSuggestionMemberView,
 		})
 	}
 	return views, nil
+}
+
+// suggestionMembersFolder 是成员所在目录的共同上级（相对扫描根、`/` 分隔）；就是扫描根时返回空。
+func suggestionMembersFolder(scanRoot string, members []CollectionSuggestionMemberView) string {
+	common := ""
+	for index, member := range members {
+		rel, err := filepath.Rel(scanRoot, filepath.Dir(member.Path))
+		if err != nil {
+			return ""
+		}
+		rel = filepath.ToSlash(rel)
+		if index == 0 {
+			common = rel
+			continue
+		}
+		for common != "." && common != rel && !strings.HasPrefix(rel, common+"/") {
+			common = path.Dir(common)
+		}
+	}
+	if common == "." || common == ".." || strings.HasPrefix(common, "../") {
+		return ""
+	}
+	return common
 }
 
 func countActiveVideosForSuggestions(ctx context.Context) (int, error) {

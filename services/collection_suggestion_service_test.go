@@ -688,3 +688,111 @@ func TestCollectionSuggestionWithoutScanRootsProducesNothing(t *testing.T) {
 		t.Fatalf("没有扫描根时不该有候选: %#v", views)
 	}
 }
+
+func createNestedSuggestionVideo(t *testing.T, root, rel string) models.Video {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	video := models.Video{Name: filepath.Base(path), Path: path, Directory: filepath.Dir(path), Size: 1, Duration: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建测试视频失败 rel=%s: %v", rel, err)
+	}
+	return video
+}
+
+// 2026-10-14 修订 D-023：文件夹结构与文件名一起判断。课程目录按章节成一组（basis=folder），
+// 散放在扫描根下的剧集照旧按文件名成组，人物名文件夹不提；忽略按文件夹记住，新增一集也不再提。
+func TestCollectionSuggestionAnalyzeGroupsByFolderAndFileName(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := createSuggestionScanRoot(t, t.TempDir())
+	week2 := createNestedSuggestionVideo(t, root, "训练营/第二周/03 作业.mp4")
+	week1b := createNestedSuggestionVideo(t, root, "训练营/第一周/02 环境.mp4")
+	week1a := createNestedSuggestionVideo(t, root, "训练营/第一周/01 开营.mp4")
+	showA := createSuggestionVideo(t, root, "Show.S01E01.mkv")
+	showB := createSuggestionVideo(t, root, "Show.S01E02.mkv")
+	createNestedSuggestionVideo(t, root, "张三/a.mp4")
+	createNestedSuggestionVideo(t, root, "张三/b.mp4")
+	if err := database.DB.Create(&models.Person{DisplayName: "张三"}).Error; err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+
+	svc := newSuggestionService(t)
+	done := make(chan CollectionSuggestionStatus, 1)
+	svc.SetEventEmitter(func(status CollectionSuggestionStatus) {
+		if !status.Running {
+			select {
+			case done <- status:
+			default:
+			}
+		}
+	})
+	if _, err := svc.Analyze(context.Background()); err != nil {
+		t.Fatalf("启动剧集分析失败: %v", err)
+	}
+	var final CollectionSuggestionStatus
+	select {
+	case final = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("剧集分析未在预期时间内结束: %#v", svc.Status())
+	}
+	if !final.Completed || final.Scanned != 7 || final.Matched != 5 || final.Pending != 2 {
+		t.Fatalf("终态统计不符: %#v", final)
+	}
+	views, err := svc.List()
+	if err != nil {
+		t.Fatalf("读取剧集候选失败: %v", err)
+	}
+	if len(views) != 2 {
+		t.Fatalf("应有文件夹与文件名各一组: %#v", views)
+	}
+	byBasis := map[string]CollectionSuggestionView{views[0].Basis: views[0], views[1].Basis: views[1]}
+	folder, filename := byBasis["folder"], byBasis["filename"]
+	if folder.SeriesName != "训练营" || folder.Folder != "训练营" {
+		t.Fatalf("文件夹候选不符: %#v", folder)
+	}
+	if got := suggestionMemberIDs(folder); len(got) != 3 || got[0] != week1a.ID || got[1] != week1b.ID || got[2] != week2.ID {
+		t.Fatalf("文件夹候选应按章节再按文件排: %v", got)
+	}
+	if folder.Members[2].Season == nil || *folder.Members[2].Season != 2 || folder.Members[2].Episode == nil || *folder.Members[2].Episode != 3 {
+		t.Fatalf("章节号应写进季、开头序号写进集: %#v", folder.Members[2])
+	}
+	if filename.SeriesName != "Show" || filename.Folder != "" {
+		t.Fatalf("文件名候选不符: %#v", filename)
+	}
+	if got := suggestionMemberIDs(filename); len(got) != 2 || got[0] != showA.ID || got[1] != showB.ID {
+		t.Fatalf("散放剧集照旧按文件名成组: %v", got)
+	}
+
+	if err := svc.Dismiss(folder.ID); err != nil {
+		t.Fatalf("忽略文件夹候选失败: %v", err)
+	}
+	createNestedSuggestionVideo(t, root, "训练营/第三周/04 复盘.mp4")
+	views = analyzeSuggestionsOnce(t, svc)
+	if len(views) != 1 || views[0].Basis != "filename" {
+		t.Fatalf("忽略过的文件夹新增一集也不该再提: %#v", views)
+	}
+}
+
+// 按文件夹成组之前用户按文件名忽略过的系列：文件夹组里多数文件还是这个系列（含之后新增的集）时不再提。
+func TestCollectionSuggestionFolderGroupHonoursDismissedFilenameSeries(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := createSuggestionScanRoot(t, t.TempDir())
+	parsed := ParseEpisodeFromFileName("某剧 第1集")
+	if !parsed.OK {
+		t.Fatalf("测试前提：文件名应能解析出系列")
+	}
+	dismissed := models.CollectionSuggestion{ScanRoot: root, SeriesName: parsed.Series, NormalizedSeries: parsed.NormalizedSeries,
+		Status: models.CollectionSuggestionStatusDismissed, Fingerprint: "dismissed-before-folder-grouping",
+		DismissKey: suggestionDismissKey(root, parsed.NormalizedSeries)}
+	if err := database.DB.Create(&dismissed).Error; err != nil {
+		t.Fatalf("写入已忽略候选失败: %v", err)
+	}
+	for _, rel := range []string{"某剧/某剧 第1集.mp4", "某剧/某剧 第2集.mp4", "某剧/某剧 第3集.mp4"} {
+		createNestedSuggestionVideo(t, root, rel)
+	}
+	createNestedSuggestionVideo(t, root, "另一部/片花一.mp4")
+	createNestedSuggestionVideo(t, root, "另一部/片花二.mp4")
+	views := analyzeSuggestionsOnce(t, newSuggestionService(t))
+	if len(views) != 1 || views[0].Folder != "另一部" {
+		t.Fatalf("忽略过的系列不该换成文件夹组再出现，别的文件夹照常: %#v", views)
+	}
+}
