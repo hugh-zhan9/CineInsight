@@ -501,7 +501,8 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress } from '../utils/watchProgress.js';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -2397,8 +2398,9 @@ export default {
       const origin = this.watchProgressOrigin(videoID, progress?.origin);
       const reportedDuration = Number(progress?.durationSeconds);
       const duration = Number.isFinite(reportedDuration) && reportedDuration > 0 ? reportedDuration : 0;
+      const pending = UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
       const save = async () => {
-        const updated = await UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
+        const updated = await pending;
         await this.applyVideoStateChange(updated);
       };
       this._watchProgressPromise = (this._watchProgressPromise || Promise.resolve())

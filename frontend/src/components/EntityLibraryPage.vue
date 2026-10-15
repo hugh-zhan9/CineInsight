@@ -213,9 +213,10 @@
 </template>
 
 <script>
+import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress } from '../utils/watchProgress.js';
 import {
   CreateCollection, CreatePerson, DeletePerson, GetCollectionDetail, GetPersonDeletionImpact, GetPersonDetail, GetPersonImages, ListCollections, ListPeople,
-  MergePeople, OpenDirectory, PlayVideo, PreviewExternally, UpdateVideoWatchProgress, RevealImage, RemovePersonImage
+  MergePeople, OpenDirectory, PreviewExternally, RevealImage, RemovePersonImage
 } from '../../wailsjs/go/main/App';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
@@ -765,7 +766,8 @@ export default {
       const origin = WATCH_PROGRESS_ORIGINS.includes(progress?.origin) ? progress.origin : 'resume';
       const reportedDuration = Number(progress?.durationSeconds);
       const duration = Number.isFinite(reportedDuration) && reportedDuration > 0 ? reportedDuration : 0;
-      const save = () => UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
+      const pending = UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
+      const save = () => pending;
       this._watchProgressPromise = (this._watchProgressPromise || Promise.resolve()).then(save).catch(err => { this.error = `保存观看进度失败：${err}`; });
     },
     async handleCollectionDeleted() { this.closeEntity(); await this.reload(); },

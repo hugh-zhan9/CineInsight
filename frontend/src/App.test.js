@@ -65,7 +65,10 @@ afterEach(() => {
 });
 
 async function mountApp() {
-  const wrapper = shallowMount(App);
+  const wrapper = shallowMount(App, { global: { stubs: { HomePage: {
+    name: 'HomePage', props: ['pageActive'], emits: ['open-video', 'navigate', 'open-person'],
+    methods: { clearPendingTonight() {}, replacePlayedTonight() {} }, template: '<div />'
+  } } } });
   mountedWrappers.push(wrapper);
   await flushPromises();
   return wrapper;
@@ -3063,4 +3066,28 @@ describe('观看侧照片流的接线（D-P2-08）', () => {
     await flushPromises();
     expect(wrapper.vm.currentPage).toBe('photos-manage');
   });
+});
+
+
+it('详情播放通知交给常挂载的首页，仅替换对应今晚推荐', async () => {
+  const wrapper = await mountApp();
+  const home = wrapper.findComponent({ name: 'HomePage' });
+  const replace = vi.fn();
+  home.vm.replacePlayedTonight = replace;
+  api.GetVideosByIDs.mockResolvedValue([{ id: 7, name: '7.mp4' }]);
+  home.vm.$emit('open-video', 7);
+  await flushPromises();
+  wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('playback-started', 7);
+  expect(replace).toHaveBeenCalledWith(7);
+});
+
+
+it('从其他入口打开详情会清除旧的今晚来源标记', async () => {
+  const wrapper = await mountApp();
+  const clear = vi.fn();
+  wrapper.findComponent({ name: 'HomePage' }).vm.clearPendingTonight = clear;
+  wrapper.vm.openVideo({ id: 7 }, { from: 'home' });
+  expect(clear).not.toHaveBeenCalled();
+  wrapper.vm.openVideo({ id: 7 }, { from: 'videos' });
+  expect(clear).toHaveBeenCalledTimes(1);
 });

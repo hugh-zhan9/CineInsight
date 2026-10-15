@@ -627,3 +627,86 @@ describe('HomePage view-all', () => {
     expect(dialog.find('[data-test="view-all-more"]').exists()).toBe(false);
   });
 });
+
+
+describe('HomePage 播放后的推荐补位', () => {
+  const ids = wrapper => wrapper.vm.tonightBlock.items.map(item => item.video.id);
+  it('只打开不换；开始播放后只替换原槽位，重复通知不再抽取', async () => {
+    const wrapper = await mountPage();
+    await wrapper.findAll('[data-test="home-tonight-item"]')[1].trigger('click');
+    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+    api.SuggestTonightVideos.mockResolvedValue([suggestion(14)]);
+    await wrapper.vm.replacePlayedTonight(12);
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [11, 12, 13] }), 1);
+    expect(ids(wrapper)).toEqual([11, 14, 13]);
+    await wrapper.vm.replacePlayedTonight(12);
+    await wrapper.vm.replacePlayedTonight(13); // 没有从今晚看什么打开的片不换。
+    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片1');
+  });
+
+  it('大图来自今晚看什么且播放了它时，大图与对应推荐一起替换', async () => {
+    api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [] });
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="home-hero-open"]').trigger('click');
+    api.SuggestTonightVideos.mockResolvedValue([suggestion(14)]);
+    await wrapper.vm.replacePlayedTonight(11);
+    await flushPromises();
+    expect(ids(wrapper)).toEqual([14, 12, 13]);
+    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片14');
+  });
+
+  it.each(['empty', 'failed'])('候选 %s 保留旧卡片并说明', async mode => {
+    const wrapper = await mountPage();
+    await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
+    if (mode === 'empty') api.SuggestTonightVideos.mockResolvedValue([]);
+    else api.SuggestTonightVideos.mockRejectedValue(new Error('读取失败'));
+    await wrapper.vm.replacePlayedTonight(11);
+    expect(ids(wrapper)).toEqual([11, 12, 13]);
+    expect(wrapper.get(mode === 'empty' ? '[data-test="home-tonight-notice"]' : '[data-test="home-tonight-error"]').text()).not.toBe('');
+  });
+
+  it('两项先后开始播放时串行补位，第二次排除第一项的新候选', async () => {
+    const wrapper = await mountPage();
+    await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
+    let finish;
+    api.SuggestTonightVideos.mockReturnValueOnce(new Promise(resolve => { finish = resolve; })).mockResolvedValueOnce([suggestion(15)]);
+    const first = wrapper.vm.replacePlayedTonight(11);
+    await wrapper.findAll('[data-test="home-tonight-item"]')[1].trigger('click');
+    const second = wrapper.vm.replacePlayedTonight(12);
+    await flushPromises();
+    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
+    finish([suggestion(14)]);
+    await Promise.all([first, second]);
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [14, 12, 13] }), 1);
+    expect(ids(wrapper)).toEqual([14, 15, 13]);
+  });
+
+  it('换批后不采用迟到的单项替换', async () => {
+    const wrapper = await mountPage();
+    await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
+    let finish;
+    api.SuggestTonightVideos.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const replacing = wrapper.vm.replacePlayedTonight(11);
+    await flushPromises();
+    api.SuggestTonightVideos.mockResolvedValueOnce([suggestion(21), suggestion(22), suggestion(23)]);
+    await wrapper.vm.loadTonight({ reroll: true });
+    finish([suggestion(14)]);
+    await replacing;
+    expect(ids(wrapper)).toEqual([21, 22, 23]);
+  });
+});
+
+
+it('今晚打开但没播放，返回后从其他入口播放同一部不补位', async () => {
+  const wrapper = await mountPage();
+  await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
+  await wrapper.setProps({ pageActive: false });
+  await wrapper.setProps({ pageActive: true });
+  await wrapper.vm.replacePlayedTonight(11);
+  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+  await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
+  wrapper.vm.openVideo(video(11));
+  await wrapper.vm.replacePlayedTonight(11);
+  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+});

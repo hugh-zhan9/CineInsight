@@ -128,6 +128,7 @@
     <div v-else-if="appReady" ref="mainView" class="main-view">
       <!-- 观看首页（D-UI-04）：默认落地页；首次进入才挂载，之后只隐藏，「返回」回来时滚动位置还在。 -->
       <HomePage
+        ref="homePage"
         v-if="homeMounted"
         v-show="currentPage === 'home'"
         :page-active="currentPage === 'home'"
@@ -144,6 +145,7 @@
         :bookmark="detailRoute.bookmark"
         @ready="handleDetailReady"
         @video-state-changed="handleDetailVideoStateChange"
+        @playback-started="$refs.homePage?.replacePlayedTonight($event)"
         @back="goBackFromDetail"
         @open-video="openVideoByID($event, { from: 'video-detail' })"
         @navigate="navigateTo"
@@ -1165,7 +1167,7 @@ export default {
     // 观看区的调用方进整页详情；管理区维持「切到片库管理 + 详情抽屉」。startAtMs 是起播位置（毫秒，可缺省）。
     openVideo(video, { from, startAtMs = null } = {}) {
       if (!video?.id) return false;
-      if (opensVideoDetail(from, this.currentPage)) return this.openVideoDetail(video.id, { startAtMs });
+      if (opensVideoDetail(from, this.currentPage)) return this.openVideoDetail(video.id, { startAtMs, fromHome: from === 'home' });
       return this.openVideoInLibraryManage(video, startAtMs);
     },
     async openVideoInLibraryManage(video, startAtMs = null) {
@@ -1179,7 +1181,8 @@ export default {
     // 进整页详情：先记下来源（页面 key、参数、共用滚动容器的位置）再切页，切成了才压栈（D-UI-10）。
     // 详情本身是来源时（相关推荐）参数就是它展示的那部片。新打开的详情从顶部看起。
     // bookmark：观看笔记的书签定位带上整段区间 { start_ms, end_ms, source_token }，详情页据此只播这一段。
-    openVideoDetail(videoID, { startAtMs = null, bookmark = null } = {}) {
+    openVideoDetail(videoID, { startAtMs = null, bookmark = null, fromHome = false } = {}) {
+      if (!fromHome) this.$refs.homePage?.clearPendingTonight();
       const id = Number(videoID);
       if (!Number.isInteger(id) || id <= 0) return false;
       this.supersedeVideoOpen();

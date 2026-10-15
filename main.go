@@ -54,6 +54,9 @@ func main() {
 		},
 		Mac: &mac.Options{
 			TitleBar: mac.TitleBarHiddenInset(),
+			Preferences: &mac.Preferences{
+				FullscreenEnabled: mac.Enabled,
+			},
 			About: &mac.AboutInfo{
 				Title:   "析微影策",
 				Message: "智能视频管理系统",

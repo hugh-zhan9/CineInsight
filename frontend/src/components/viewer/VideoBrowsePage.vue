@@ -300,6 +300,7 @@
 </template>
 
 <script>
+import { playVideoAfterProgress as PlayVideo } from '../../utils/watchProgress.js';
 // 视频海报墙（UI 二期 D-P2-01，详细设计 §3.1）：观看侧的「视频」页，只做浏览。
 // - 筛选状态归本页（不与片库管理共享）：片名搜索（file 模式）、观看状态（对应智能视图）、标签、人物、排序；
 //   页面常挂载（App 里 v-show），切走再回来筛选、已加载的卡片和滚动位置都在。
@@ -315,8 +316,7 @@
 //   （排序保留），滚动回到顶部。
 // 事件：open-video(id) 进整页详情（App 按 from='videos' 分流）；navigate(key) 去别的页面（空片库的「去添加扫描目录」）。
 import {
-  CountLibraryVideos, ListCollectionProgress, ListCollectionProgressPage, ListPeople, ListRecentlyPlayedWithFilter, PlayVideo,
-  SearchLibraryVideoPage
+  CountLibraryVideos, ListCollectionProgress, ListCollectionProgressPage, ListPeople, ListRecentlyPlayedWithFilter, SearchLibraryVideoPage
 } from '../../../wailsjs/go/main/App';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import TonightPickerDialog from '../TonightPickerDialog.vue';

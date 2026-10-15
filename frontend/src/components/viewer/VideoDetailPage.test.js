@@ -24,10 +24,11 @@ enableAutoUnmount(afterEach);
 const PlayerStub = {
   name: 'InlineVideoPlayer',
   props: ['videoId', 'session', 'startTimeMs', 'resumePositionSeconds', 'bookmarkRange', 'autoplay', 'durationSeconds'],
-  emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end'],
+  emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end', 'playback-started'],
   data: () => ({ proxyBusy: false, proxyPending: false, proxyError: '', proxyNotice: '', proxyCreateLabel: '生成播放代理', showsProxyState: false, position: 0, proxyCalls: 0, playCalls: 0 }),
   methods: {
     currentTime() { return this.position; },
+    pauseAndReportProgress() { this.$emit('watch-progress', { videoID: this.videoId, positionSeconds: this.position, durationSeconds: 600, completed: false, origin: 'resume' }); },
     play() { this.playCalls += 1; return Promise.resolve(); },
     createPlaybackProxy() { this.proxyCalls += 1; }
   },
@@ -638,4 +639,102 @@ describe('VideoDetailPage video-state-changed', () => {
     expect(stateEvents(wrapper)).toEqual([{ id: 5, changes: { is_stale: true, stale_reason: 'offline_root' } }]);
     expect(wrapper.get('[data-test="detail-action-error"]').text()).toBe('硬盘没有连接');
   });
+});
+
+
+describe('VideoDetailPage 最新断点', () => {
+  it('普通应用内播放重新读取最新断点，已看完时从头播', async () => {
+    api.GetVideoDetails.mockResolvedValue(detailsFor(5, { video: { watch_position_seconds: 30 } }));
+    const wrapper = await mountPage();
+    api.GetVideoDetails.mockResolvedValue(detailsFor(5, { video: { watch_position_seconds: 120 } }));
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    await flushPromises();
+    expect(player(wrapper).props('resumePositionSeconds')).toBe(120);
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    api.GetVideoDetails.mockResolvedValue(detailsFor(5, { video: { watch_position_seconds: 0, is_watched: true } }));
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    await flushPromises();
+    expect(player(wrapper).props('resumePositionSeconds')).toBe(0);
+  });
+
+  it('切到直接播放前补报当前位置，并等进度写入完成', async () => {
+    const wrapper = await mountPage({ startAtMs: 1000 });
+    player(wrapper).vm.position = 42;
+    let resolveSave;
+    api.UpdateVideoWatchProgress.mockReturnValue(new Promise(resolve => { resolveSave = resolve; }));
+    const playing = wrapper.vm.playExternally();
+    await flushPromises();
+    expect(api.UpdateVideoWatchProgress).toHaveBeenCalledWith(5, 42, 600, false, 'resume');
+    expect(api.PlayVideo).not.toHaveBeenCalled();
+    resolveSave(baseVideo(5, { watch_position_seconds: 42 }));
+    await playing;
+    expect(api.PlayVideo).toHaveBeenCalledWith(5);
+  });
+
+  it('保存失败时不从旧断点启动外部播放器', async () => {
+    const wrapper = await mountPage({ startAtMs: 1000 });
+    player(wrapper).vm.position = 42;
+    api.UpdateVideoWatchProgress.mockRejectedValue(new Error('write failed'));
+    await wrapper.vm.playExternally();
+    expect(api.PlayVideo).not.toHaveBeenCalled();
+    expect(wrapper.vm.actionError).toContain('保存观看进度失败');
+    api.UpdateVideoWatchProgress.mockResolvedValue(baseVideo(5, { watch_position_seconds: 42 }));
+    await wrapper.vm.playExternally();
+    expect(api.PlayVideo).toHaveBeenCalledWith(5);
+  });
+
+  it('读取最新断点失败时给出提示，不用页面旧值起播', async () => {
+    const wrapper = await mountPage();
+    api.GetVideoDetails.mockRejectedValue(new Error('read failed'));
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    await flushPromises();
+    expect(api.GetPreviewSession).not.toHaveBeenCalled();
+    expect(wrapper.vm.actionError).toContain('读取最新观看进度失败');
+  });
+
+  it('读取期间收起播放器，迟到的结果不再打开播放', async () => {
+    const wrapper = await mountPage();
+    let resolveRead;
+    api.GetVideoDetails.mockReturnValue(new Promise(resolve => { resolveRead = resolve; }));
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="detail-inline-play"]').trigger('click');
+    resolveRead(detailsFor(5, { video: { watch_position_seconds: 123 } }));
+    await flushPromises();
+    expect(player(wrapper).exists()).toBe(false);
+    expect(api.GetPreviewSession).not.toHaveBeenCalled();
+  });
+});
+
+
+it('向首页转发实际内嵌播放及外部启动成功，外部失败不通知', async () => {
+  const wrapper = await mountPage({ startAtMs: 1000 });
+  expect(wrapper.emitted('playback-started')).toBeUndefined();
+  player(wrapper).vm.$emit('playback-started', 5);
+  expect(wrapper.emitted('playback-started')).toEqual([[5]]);
+  api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: false, user_message: '失败' });
+  await wrapper.vm.playExternally();
+  expect(wrapper.emitted('playback-started')).toHaveLength(1);
+  api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: true, video: baseVideo(5) });
+  await wrapper.vm.playExternally();
+  expect(wrapper.emitted('playback-started')).toEqual([[5], [5]]);
+});
+
+
+it('关闭详情后立刻重新进入同一视频，等待旧实例最后一笔保存', async () => {
+  const old = await mountPage({ startAtMs: 1000 });
+  player(old).vm.position = 42;
+  let finish;
+  api.UpdateVideoWatchProgress.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  old.unmount();
+  await flushPromises();
+  const fresh = await mountPage();
+  api.GetVideoDetails.mockClear();
+  await fresh.get('[data-test="detail-inline-play"]').trigger('click');
+  await flushPromises();
+  expect(api.GetVideoDetails).not.toHaveBeenCalled();
+  api.GetVideoDetails.mockResolvedValue(detailsFor(5, { video: { watch_position_seconds: 42 } }));
+  finish(baseVideo(5, { watch_position_seconds: 42 }));
+  await flushPromises();
+  expect(player(fresh).props('resumePositionSeconds')).toBe(42);
 });

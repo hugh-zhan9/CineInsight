@@ -24,6 +24,7 @@
   - preview-session-stale（videoID）：只在受控时发，宿主应重取会话。
   - preview-externally（videoID）：用户点了「用系统播放器预览」，宿主调 PreviewExternally。
   - bookmark-range-end（bookmarkRange）：播到书签区间末尾，已暂停。
+  - playback-started（videoID）：首次触发 playing，播放确实开始；同一会话暂停后恢复不重复。
 
   组件内部负责：有效观看（越过 viewThreshold 或看完时 RecordViewEvent inline_view，每个观看会话一次）、悬停进度条的
   seek 预览图、内嵌报错时给出系统播放器与生成播放代理两条路、代理排队进度与完成后切回内嵌（playback-proxy-state）。
@@ -33,7 +34,7 @@
   同时在等的自动代理已有 2 部时请求被拒，显示一句提示。用户在这次预览里删掉代理后不当场自动重建。
   同一时间只有一个内嵌播放器在播（utils/activePlayer.js）：本组件开始播放时会暂停上一个。
 
-  宿主可调的方法：play()（返回 video.play() 的 Promise）、pause()、currentTime()（秒）、scrollIntoView(options)、
+  宿主可调的方法：play()（返回 video.play() 的 Promise）、pause()、pauseAndReportProgress()（暂停并同步补报，宿主可等待保存后切到外部播放）、currentTime()（秒）、scrollIntoView(options)、
   createPlaybackProxy()、deletePlaybackProxy()（先确认）。
   宿主可读的状态：playbackProxy、proxyBusy、proxyError、proxyNotice、proxyTracking、proxyPending、proxyProgressText、
   proxyCreateLabel（生成失败或取消的提示由宿主决定放在哪里，抽屉放在技术信息区块）；seekPreview、viewSession、bookmarkRangeActive。
@@ -46,7 +47,7 @@
   <div class="inline-player surface-cinema">
     <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
     <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
-      <div class="preview-drawer__player-shell">
+      <div ref="playerShell" class="preview-drawer__player-shell">
         <video
           ref="videoElement"
           :key="previewMediaGeneration"
@@ -57,6 +58,7 @@
           :muted="true"
           @loadedmetadata="handleLoadedMetadata"
           @play="handlePlay"
+          @playing="handlePlaying"
           @timeupdate="handleTimeUpdate"
           @seeking="handleSeeking"
           @pause="handlePause"
@@ -65,6 +67,8 @@
         >
           <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
         </video>
+        <button type="button" class="btn btn--secondary inline-player__fullscreen" data-test="inline-player-fullscreen" :aria-pressed="isFullscreen" @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏' }}</button>
+        <p v-if="fullscreenError" class="inline-player__fullscreen-error" role="alert">{{ fullscreenError }}</p>
         <div
           v-if="activeSeekSprite"
           class="preview-drawer__seek-track"
@@ -147,10 +151,11 @@ export default {
     autoplay: { type: Boolean, default: false },
     durationSeconds: { type: Number, default: 0 }
   },
-  emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end'],
+  emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end', 'playback-started'],
   data() {
     return {
       ownSession: null,
+      isFullscreen: false, fullscreenError: '',
       previewMediaGeneration: 0,
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false, autoplayPending: false,
       // 本次观看会话（D-PC43）：整个对象换掉时可被宿主读到，里面的累计量高频变化，不做响应式。
@@ -267,6 +272,9 @@ export default {
     this._autoProxy = null;
   },
   mounted() {
+    document.addEventListener('fullscreenchange', this.syncFullscreen);
+    document.addEventListener('webkitfullscreenchange', this.syncFullscreen);
+    window.addEventListener('keydown', this.handleFullscreenKey, true);
     // 代理队列的排位与完成（D-PC26）：本项完成后自动重取预览会话。
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('playback-proxy-state', status => this.applyProxyStatus(status, { fromEvent: true }));
@@ -275,6 +283,10 @@ export default {
     this.resetForVideo();
   },
   beforeUnmount() {
+    this.leaveFullscreen();
+    document.removeEventListener('fullscreenchange', this.syncFullscreen);
+    document.removeEventListener('webkitfullscreenchange', this.syncFullscreen);
+    window.removeEventListener('keydown', this.handleFullscreenKey, true);
     this.clearSeekSpriteRetry(); this.emitWatchProgress(true, false); this.resetVideoElement();
     this.cancelAutoProxy();
     releaseActivePlayer(this._activeHandle);
@@ -282,9 +294,46 @@ export default {
   },
   methods: {
     formatDuration,
+    ownsFullscreen() {
+      const element = document.fullscreenElement || document.webkitFullscreenElement;
+      return !!element && element === this.$refs.playerShell;
+    },
+    syncFullscreen() { this.isFullscreen = this.ownsFullscreen(); },
+    async leaveFullscreen() {
+      if (!this.ownsFullscreen()) return;
+      try {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else await document.webkitExitFullscreen();
+      } catch {
+        this.fullscreenError = '无法退出全屏，请按 Esc 重试。';
+      }
+    },
+    async toggleFullscreen() {
+      this.fullscreenError = '';
+      if (this.ownsFullscreen()) return this.leaveFullscreen();
+      const shell = this.$refs.playerShell;
+      try {
+        if (shell.requestFullscreen) await shell.requestFullscreen();
+        else if (shell.webkitRequestFullscreen) await shell.webkitRequestFullscreen();
+        else this.fullscreenError = '当前环境不支持全屏播放。';
+      } catch {
+        this.fullscreenError = '无法切换全屏，请重试。';
+      }
+    },
+    handleFullscreenKey(event) {
+      if (event.key !== 'Escape' || !this.ownsFullscreen()) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      this.leaveFullscreen();
+    },
     // ===== 宿主可调 =====
     play() { return this.$refs.videoElement?.play(); },
     pause() { this.$refs.videoElement?.pause(); },
+    // 切走之前同步发出最后位置；随后到达的原生 pause / 卸载事件不再重复写旧位置。
+    pauseAndReportProgress() {
+      this.pause();
+      this.emitWatchProgress(true, false);
+      this.hasPlaybackStarted = false;
+    },
     currentTime() { return Number(this.$refs.videoElement?.currentTime || 0); },
     scrollIntoView(options) { this.$refs.videoElement?.scrollIntoView?.(options); },
     isCurrentRequest(videoID, token) {
@@ -509,6 +558,11 @@ export default {
       if (!session.origin) session.origin = detailPlaybackOrigin(this.playbackStartOptions());
       session.accumulator.breakSegment();
     },
+    handlePlaying() {
+      if (!this.viewSession || this.viewSession.started) return;
+      this.viewSession.started = true;
+      this.$emit('playback-started', this.viewSession.videoID);
+    },
     // 暂停与拖动都断开当前一段累计：之后的一大步不能被墙钟放行成「播放」。
     handlePause() {
       releaseActivePlayer(this._activeHandle);
@@ -545,7 +599,7 @@ export default {
       if (this.resettingVideo) return;
       this.maybeRecordView(completed);
       if (!this.hasPlaybackStarted && !completed) return; const video = this.$refs.videoElement; const positionSeconds = Number(video?.currentTime || 0);
-      if (!Number.isFinite(positionSeconds) || positionSeconds <= 0) return; const now = Date.now(); if (!force && now - this.lastProgressEmittedAt < 10000) return;
+      if (!Number.isFinite(positionSeconds) || positionSeconds < 0) return; const now = Date.now(); if (!force && now - this.lastProgressEmittedAt < 10000) return;
       this.lastProgressEmittedAt = now;
       // 起播来源（D-PC42）：从断点 resume、从片头 start、从字幕命中或指定时间 jump；时长未知传 0，
       // 后端只在库内时长未知时采用它。
@@ -626,6 +680,10 @@ export default {
 <style scoped>
 /* 根是一层网格：放进固定最小高度的容器（抽屉的播放器区块）时，占位框与以前一样撑满整块。 */
 .inline-player { display: grid; background: var(--player-bg); }
+.inline-player__fullscreen { position: absolute; z-index: 3; top: var(--space-3); right: var(--space-3); }
+.inline-player__fullscreen-error { position: absolute; z-index: 3; top: var(--space-3); left: var(--space-3); margin: 0; padding: var(--space-2); color: var(--media-badge-fg); background: var(--media-badge-bg); }
+.preview-drawer__player-shell:fullscreen { width: 100%; height: 100%; aspect-ratio: auto; }
+.preview-drawer__player-shell:-webkit-full-screen { width: 100%; height: 100%; aspect-ratio: auto; }
 .preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
 .preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text-primary) 28%, transparent); cursor: default; }
 .preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; background: color-mix(in srgb, var(--text-primary) 58%, transparent); content: ''; }

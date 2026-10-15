@@ -612,3 +612,137 @@ describe('InlineVideoPlayer 第三轮评审：解码失败后的请求同样受�
     expect(wrapper.emitted('preview-externally')).toEqual([[6]]);
   });
 });
+
+
+describe('InlineVideoPlayer 全屏', () => {
+  function installFullscreen() {
+    let current = null;
+    vi.spyOn(document, 'fullscreenElement', 'get').mockImplementation(() => current);
+    const request = vi.fn(function () { current = this; document.dispatchEvent(new Event('fullscreenchange')); return Promise.resolve(); });
+    const exit = vi.fn(() => { current = null; document.dispatchEvent(new Event('fullscreenchange')); return Promise.resolve(); });
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', { configurable: true, value: request });
+    Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exit });
+    return { request, exit };
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+  });
+  afterEach(() => {
+    delete HTMLElement.prototype.requestFullscreen;
+    delete document.exitFullscreen;
+    delete document.fullscreenElement;
+  });
+
+  it('全屏只包含播放器；进入、按钮退出与系统退出均同步状态，不重建视频或改变播放位置', async () => {
+    const { request, exit } = installFullscreen();
+    const wrapper = await mountPlayer();
+    const video = wrapper.get('video').element;
+    const player = fakePlayer(video);
+    player.currentTime = 42;
+    const button = wrapper.get('[data-test="inline-player-fullscreen"]');
+    await button.trigger('click');
+    expect(request.mock.instances[0]).toBe(wrapper.get('.preview-drawer__player-shell').element);
+    expect(button.text()).toBe('退出全屏');
+    expect(button.attributes('aria-pressed')).toBe('true');
+    await button.trigger('click');
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(button.text()).toBe('全屏');
+    await button.trigger('click');
+    await document.exitFullscreen();
+    await flushPromises();
+    expect(button.text()).toBe('全屏');
+    expect(wrapper.get('video').element).toBe(video);
+    expect(player.currentTime).toBe(42);
+    expect(video.pause).not.toHaveBeenCalled();
+  });
+
+  it('请求被拒时显示错误，不假报已经全屏', async () => {
+    const { request } = installFullscreen();
+    request.mockRejectedValue(new Error('denied'));
+    const wrapper = await mountPlayer();
+    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain('无法切换全屏');
+    expect(wrapper.get('[data-test="inline-player-fullscreen"]').text()).toBe('全屏');
+  });
+
+  it('离开播放器时退出自己开启的全屏', async () => {
+    const { exit } = installFullscreen();
+    const wrapper = await mountPlayer();
+    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1);
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it('Esc 退出全屏且不让宿主抽屉收到同一次按键', async () => {
+    const { exit } = installFullscreen();
+    const wrapper = await mountPlayer();
+    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    const hostKey = vi.fn();
+    document.addEventListener('keydown', hostKey);
+    try {
+      const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      document.dispatchEvent(event);
+      await flushPromises();
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+      expect(hostKey).not.toHaveBeenCalled();
+      expect(wrapper.get('[data-test="inline-player-fullscreen"]').text()).toBe('全屏');
+    } finally {
+      document.removeEventListener('keydown', hostKey);
+    }
+  });
+
+  it('其他元素全屏时，卸载播放器不退出它的全屏', async () => {
+    const { exit } = installFullscreen();
+    const wrapper = await mountPlayer();
+    await document.body.requestFullscreen();
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1);
+    expect(exit).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('InlineVideoPlayer 播放通知与切换', () => {
+  it('仅实际开始播放时通知一次，暂停后恢复不重复', async () => {
+    const wrapper = await mountPlayer();
+    const video = wrapper.get('video');
+    fakePlayer(video.element);
+    await video.trigger('play');
+    expect(wrapper.emitted('playback-started')).toBeUndefined();
+    await video.trigger('playing');
+    await video.trigger('pause');
+    await video.trigger('play');
+    await video.trigger('playing');
+    expect(wrapper.emitted('playback-started')).toEqual([[1]]);
+  });
+
+  it('切到外部播放同步补报，迟到的暂停与卸载不再写旧位置', async () => {
+    const progress = vi.fn();
+    const wrapper = await mountPlayer({ onWatchProgress: progress });
+    const video = wrapper.get('video');
+    const state = fakePlayer(video.element, { duration: 600 });
+    await video.trigger('play');
+    state.currentTime = 42;
+    wrapper.vm.pauseAndReportProgress();
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(progress.mock.calls[0][0].positionSeconds).toBe(42);
+    await video.trigger('pause');
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1);
+    expect(progress).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+it('已经开始播放后拖回片头，关闭仍保存零秒断点', async () => {
+  const progress = vi.fn();
+  const wrapper = await mountPlayer({ resumePositionSeconds: 42, onWatchProgress: progress });
+  const video = wrapper.get('video');
+  const state = fakePlayer(video.element, { duration: 600 });
+  await video.trigger('loadedmetadata');
+  await video.trigger('play');
+  state.currentTime = 0;
+  wrapper.vm.pauseAndReportProgress();
+  expect(progress).toHaveBeenCalledWith(expect.objectContaining({ positionSeconds: 0, origin: 'resume' }));
+});

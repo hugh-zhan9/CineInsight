@@ -389,11 +389,12 @@
 </template>
 
 <script>
+import { playVideoAfterProgress as PlayVideo } from '../utils/watchProgress.js';
 import {
   AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
   GetPersonImages, RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonImage, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
   SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
-  UpdateVideoRating, PlayVideo, SetVideoFavorite, SetVideoLiked, SetVideoWatched, GetSubtitleSegments
+  UpdateVideoRating, SetVideoFavorite, SetVideoLiked, SetVideoWatched, GetSubtitleSegments
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft, validateYearDraft } from '../utils/mediaDetails.js';
 import { resumePosition } from '../utils/watchState.js';
@@ -1130,6 +1131,7 @@ export default {
       const videoID = Number(current.id); const entryToken = this._entryLoadToken;
       this.actionBusy = 'play'; this.actionError = '';
       try {
+        this.player?.pauseAndReportProgress();
         const result = await PlayVideo(videoID);
         this.$emit('playback-attempted', result);
         if (result && result.dispatch_succeeded === false && this.isCurrentVideoRequest(videoID, entryToken)) {

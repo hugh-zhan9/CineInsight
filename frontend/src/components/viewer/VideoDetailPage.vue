@@ -31,6 +31,7 @@
               :autoplay="!bookmarkSourceMismatch"
               :duration-seconds="Number(video.duration) || 0"
               @watch-progress="saveWatchProgress"
+              @playback-started="$emit('playback-started', $event)"
               @preview-externally="previewExternally"
               @preview-session-stale="reloadSession(true)"
               @bookmark-range-end="bookmarkRangeFinished = true"
@@ -181,6 +182,7 @@
 </template>
 
 <script>
+import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress, waitForVideoWatchProgress } from '../../utils/watchProgress.js';
 // 观看侧整页详情（D-UI-05、D-UI-06、D-UI-08；详细设计「整页详情」）。
 // 数据：GetVideoDetails 一次取齐（含 artwork.has_poster/has_fanart、人物、作品集、标签）；
 //   相关推荐 = 本片人物在抽屉人物详情里的作品（GetPersonDetail）；版本 = 片库页同一份 version_groups 汇总
@@ -189,9 +191,8 @@
 // 内嵌播放：InlineVideoPlayer 受控模式（会话归本页，BookmarkPanel 记位置也要它）；带 startAtMs 进来时自动在应用内起播。
 // 返回、相关推荐、标签、人物与作品集都只发事件，页面切换与返回栈归 App（D-UI-07、D-UI-10）。
 import {
-  GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetSubtitleSegments, GetVideoDetails, PlayVideo, PreviewExternally,
-  SearchLibraryVideoPage, SetVideoFavorite, SetVideoWatched, UpdateVideoRating, UpdateVideoWatchProgress
-} from '../../../wailsjs/go/main/App';
+  GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetSubtitleSegments, GetVideoDetails, PreviewExternally,
+  SearchLibraryVideoPage, SetVideoFavorite, SetVideoWatched, UpdateVideoRating, } from '../../../wailsjs/go/main/App';
 import BookmarkPanel from '../BookmarkPanel.vue';
 import QueueActionButton from '../QueueActionButton.vue';
 import QuoteCardDialog from '../QuoteCardDialog.vue';
@@ -249,7 +250,7 @@ export default {
   // ready：每次挂载只发一次——主详情读到并渲染之后（读取失败、没有视频 ID 也发），宿主据此还原滚动等；
   // video-state-changed({ id, changes })：收藏、已看、评分、进度保存成功，或「播放」失败并标了失效之后，
   // changes 是变了的字段（videoDetail.js 的 STATE_CHANGE_FIELDS / playbackStaleChanges），宿主拿去更新片库行。
-  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed'],
+  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
   data() {
     return {
       loading: false, error: '', details: null, posterFailed: false,
@@ -322,6 +323,7 @@ export default {
     this.load();
   },
   beforeUnmount() {
+    this.closePlayer();
     this._loadToken = (this._loadToken || 0) + 1;
   },
   methods: {
@@ -426,8 +428,8 @@ export default {
     },
     // ===== 内嵌播放（InlineVideoPlayer，D-UI-11）=====
     setPlayer(player) { this.player = player; },
-    // 展开播放器：起播参数这一刻定下来。没指定时刻时按断点续播（与抽屉同一个 resumePosition）。
-    openPlayer({ startTimeMs = null, bookmarkRange = null } = {}) {
+    // 展开播放器：普通播放等保存完成后重读断点；指定时刻沿用字幕/书签入口。
+    async openPlayer({ startTimeMs = null, bookmarkRange = null } = {}) {
       if (!this.video) return;
       this.playerStart = {
         startTimeMs: startTimeMs === null || startTimeMs === undefined ? null : Number(startTimeMs),
@@ -437,9 +439,31 @@ export default {
       this.bookmarkRangeFinished = false;
       if (this.playerOpen) return;
       this.playerOpen = true;
-      this.reloadSession(false);
+      const request = this._playerRequest = (this._playerRequest || 0) + 1;
+      const videoID = Number(this.video.id);
+      // 普通续播以此刻的库内进度为准：外部播放可能已更新断点，上一轮关闭也可能还在保存。
+      if (startTimeMs == null && !bookmarkRange) {
+        try {
+          await waitForVideoWatchProgress(videoID);
+          if (request !== this._playerRequest) return;
+          const latest = await GetVideoDetails(videoID);
+          if (request !== this._playerRequest) return;
+          if (!latest?.video) throw new Error('视频已不在片库中');
+          this.mergeVideo(videoID, stateChanges('progress', latest.video));
+          this.playerStart = { startTimeMs: null, resumePositionSeconds: resumePosition(latest.video) };
+        } catch (err) {
+          if (request === this._playerRequest) {
+            this.closePlayer();
+            this.actionError = `读取最新观看进度失败：${errorText(err)}`;
+          }
+          return;
+        }
+      }
+      if (request === this._playerRequest) this.reloadSession(false);
     },
     closePlayer() {
+      this.player?.pauseAndReportProgress();
+      this._playerRequest = (this._playerRequest || 0) + 1;
       this._sessionToken = (this._sessionToken || 0) + 1;
       this.playerOpen = false; this.session = null; this.player = null;
       this.bookmarkRange = null; this.bookmarkRangeFinished = false;
@@ -470,13 +494,14 @@ export default {
       const origin = WATCH_PROGRESS_ORIGINS.includes(progress?.origin) ? progress.origin : 'resume';
       const reported = Number(progress?.durationSeconds);
       const duration = Number.isFinite(reported) && reported > 0 ? reported : 0;
+      const pending = UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
       const save = async () => {
-        const updated = await UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
+        const updated = await pending;
         this.mergeVideo(videoID, updated);
         if (updated) this.emitStateChange(videoID, stateChanges('progress', updated));
       };
       this._progressChain = (this._progressChain || Promise.resolve()).then(save)
-        .catch(err => { this.actionError = `保存观看进度失败：${errorText(err)}`; });
+        .catch(err => { this.actionError = `保存观看进度失败：${errorText(err)}`; return false; });
       return this._progressChain;
     },
     async previewExternally() {
@@ -535,7 +560,14 @@ export default {
       const token = this._loadToken;
       this.actionBusy = 'play'; this.actionError = '';
       try {
+        this.player?.pauseAndReportProgress();
+        try { await waitForVideoWatchProgress(videoID); } catch (err) {
+          this.actionError = `保存观看进度失败：${errorText(err)}`;
+          return;
+        }
+        if (!this.isCurrentLoad(token)) return;
         const result = await PlayVideo(videoID);
+        if (result?.dispatch_succeeded) this.$emit('playback-started', videoID);
         // 播放失败并已标失效：片库行改成失效态（与片库页 markPlaybackFailureStale 同一口径）。
         const stale = playbackStaleChanges(result);
         if (stale) this.emitStateChange(videoID, stale);

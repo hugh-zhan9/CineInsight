@@ -7,7 +7,7 @@
         <HeroHeader :title="hero.title" :meta="hero.meta" :heading-level="2" title-data-test="home-hero-title" meta-data-test="home-hero-meta">
           <template #eyebrow><RecapIcon :name="hero.icon" /> {{ hero.eyebrow }}</template>
           <template #actions>
-            <button type="button" class="btn btn--primary" data-test="home-hero-open" @click="openVideo(hero.video)"><AppIcon name="play" /> 打开详情</button>
+            <button type="button" class="btn btn--primary" data-test="home-hero-open" @click="hero.from === 'tonight' ? openTonightVideo(hero.video) : openVideo(hero.video)"><AppIcon name="play" /> 打开详情</button>
           </template>
         </HeroHeader>
       </div>
@@ -93,7 +93,7 @@
           :title="videoTitle(item.video)"
           :subtitle="(item.reasons || []).join(' · ')"
           data-test="home-tonight-item"
-          @open="openVideo(item.video)"
+          @open="openTonightVideo(item.video)"
         />
       </div>
     </section>
@@ -288,7 +288,7 @@ export default {
   name: 'HomePage',
   components: { AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、追到哪了、最近添加、想看已在库、本月回顾；期间可能看过片），
-  // 取回之前保留现有内容。今晚看什么只在「换一批」时重抽，大图定下后不再换。
+  // 取回之前保留现有内容。今晚看什么整批只在「换一批」时重抽，播放后单项补位；大图仅对应推荐被补位时更新。
   props: { pageActive: { type: Boolean, default: true } },
   // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey, params?)：回顾页、片库、设置，
   // 「查看全部」带 { watch } 去「视频」页。
@@ -306,7 +306,7 @@ export default {
       viewAll: '',
       recapBlock: { loading: true, loaded: false, error: '', result: null },
       heroArtwork: { id: 0, hasFanart: null },
-      // 第一次挑出来的大图（ready 的那一份）：之后回到首页、换一批都不换它。
+      // 第一次挑出来的大图（ready 的那一份）：返回与换批不换它，播放后的对应推荐补位时更新。
       heroLock: null
     };
   },
@@ -387,6 +387,7 @@ export default {
         return;
       }
       this.attachScrollWatch();
+      this.clearPendingTonight();
       this.refresh();
     },
     // 任一块的数据变了（重取开始、结果到了）或大图换了状态：DOM 更新完看视口顶部那一块挪没挪，挪了就放回原处。
@@ -397,12 +398,14 @@ export default {
   },
   created() {
     this._tokens = {};
+    this._openedTonight = new Set();
   },
   mounted() {
     if (this.pageActive) this.attachScrollWatch();
     this.load();
   },
   beforeUnmount() {
+    this._disposed = true;
     this.detachScrollWatch();
     for (const key of Object.keys(this._tokens)) this._tokens[key]++;
   },
@@ -459,7 +462,10 @@ export default {
       this[name] = { ...this[name], loading: true, error: '' };
       try {
         const patch = await fetch();
-        if (token === this._tokens[name]) this[name] = { ...this[name], ...patch, loading: false, loaded: true };
+        if (token === this._tokens[name]) {
+          this[name] = { ...this[name], ...patch, loading: false, loaded: true };
+          return true;
+        }
       } catch (err) {
         if (token === this._tokens[name]) this[name] = { ...this[name], loading: false, loaded: false, error: `读取${label}失败：${translateBackendError(err?.message || err)}` };
       }
@@ -527,6 +533,39 @@ export default {
       if (this.tonightBlock.loading) return null;
       return this.loadTonight({ reroll: true });
     },
+    openTonightVideo(video) {
+      if (!video?.id || video.available === false) return;
+      this.clearPendingTonight();
+      this._openedTonight.add(Number(video.id));
+      this.openVideo(video, true);
+    },
+    clearPendingTonight() { this._openedTonight.clear(); },
+    // 打开详情本身不消耗推荐。宿主收到实际开始播放后回调；同一推荐只处理一次，补位串行避免抽到重复项。
+    replacePlayedTonight(videoID) {
+      const id = Number(videoID);
+      if (!this._openedTonight.delete(id)) return;
+      const replace = async () => {
+        if (this._disposed) return;
+        const previous = this.tonightBlock.items;
+        if (!previous.some(item => Number(item.video.id) === id)) return;
+        let replacement = null;
+        const applied = await this.runBlock('tonightBlock', '今晚看什么', async () => {
+          const request = { filter: {}, ...randomConditionFields(DEFAULT_RANDOM_CONDITIONS), exclude_ids: previous.map(item => Number(item.video.id)) };
+          replacement = (await SuggestTonightVideos(request, 1))?.[0];
+          if (!replacement) return { notice: '符合条件的候选都在这里了，没有更多可换的。' };
+          return {
+            items: previous.map(item => Number(item.video.id) === id ? replacement : item),
+            first: Number(this.tonightBlock.first?.video.id) === id ? replacement : this.tonightBlock.first,
+            notice: ''
+          };
+        });
+        if (applied && replacement && this.heroLock?.from === 'tonight' && Number(this.heroLock.video.id) === id) {
+          this.heroLock = { state: 'ready', from: 'tonight', video: replacement.video, reasons: replacement.reasons || [] };
+        }
+      };
+      this._tonightReplacement = (this._tonightReplacement || Promise.resolve()).then(replace);
+      return this._tonightReplacement;
+    },
     // 大图的背景图状态来自详情（artwork.has_fanart）；读不到详情就当没有背景图，用画面帧。
     async loadHeroArtwork(id) {
       const token = (this._tokens.heroArtwork = (this._tokens.heroArtwork || 0) + 1);
@@ -540,8 +579,9 @@ export default {
       }
       if (token === this._tokens.heroArtwork) this.heroArtwork = { id, hasFanart };
     },
-    openVideo(video) {
+    openVideo(video, fromTonight = false) {
       if (!video?.id || video.available === false) return;
+      if (!fromTonight) this.clearPendingTonight();
       this.$emit('open-video', Number(video.id));
     },
     openPerson(entity) {
