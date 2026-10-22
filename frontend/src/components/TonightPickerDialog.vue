@@ -18,9 +18,10 @@
       </span>
     </form>
     <p class="help-text">和「随机播放」是同一套条件与算法：按播放次数均衡随机，播放越少越容易被抽到，最近 {{ recentLimit }} 次随机播放过的不参与；这里改的条件也会用于「随机播放」。时长按整片计算，0 表示不限，有上限时排除时长未知的视频。</p>
+    <RecommendationFeedback :expanded="queried && !loading && !items.length" @changed="load()" />
     <p v-if="error" role="alert" class="tonight-picker__error" data-test="tonight-error">{{ error }}</p>
     <p v-else-if="notice" class="help-text" role="status" data-test="tonight-notice">{{ notice }}</p>
-    <p v-else-if="queried && !loading && !items.length" class="empty-hint" role="status" data-test="tonight-empty">没有符合全部条件的视频，可调整时间、观看状态或片库筛选。</p>
+    <p v-else-if="queried && !loading && !items.length" class="empty-hint" role="status" data-test="tonight-empty">没有符合全部条件的视频，可调整时间、观看状态或片库筛选，并在管理推荐反馈中查看与撤销暂避。</p>
     <div class="tonight-picker__results">
       <article v-for="item in items" :key="item.video.id" data-test="tonight-result">
         <RelatedVideoItem :video="item.video" action-label="播放" @open="$emit('preview', item.video)" @action="$emit('play', item.video)" />
@@ -30,12 +31,14 @@
           </span>
         </div>
         <p class="help-text">{{ item.reasons.join(' · ') }}</p>
+        <RecommendationFeedback :video="item.video" @changed="load()" />
       </article>
     </div>
   </DialogShell>
 </template>
 
 <script>
+import RecommendationFeedback from './RecommendationFeedback.vue';
 import { SuggestTonightVideos } from '../../wailsjs/go/main/App';
 import DialogShell from './ui/DialogShell.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
@@ -48,7 +51,7 @@ const TONIGHT_LIMIT = 6;
 // 条件改动回写给片库页（随机播放主键随之改用），播放候选仍是普通播放。
 export default {
   name: 'TonightPickerDialog',
-  components: { DialogShell, RelatedVideoItem },
+  components: { DialogShell, RelatedVideoItem, RecommendationFeedback },
   props: {
     filter: { type: Object, required: true },
     // 共用的随机条件 { watchState, favoritesOnly, maxMinutes }，只在打开时读一次。

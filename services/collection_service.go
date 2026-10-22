@@ -381,6 +381,9 @@ func (s *CollectionService) DeleteCollection(collectionID uint) error {
 		if err := tx.Where("collection_id = ?", collectionID).Delete(&models.CollectionVideo{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("collection_id = ?", collectionID).Delete(&models.CollectionSeasonExpectation{}).Error; err != nil {
+			return err
+		}
 		// 引用它的规则动作失效：删账本行、去掉动作，没剩动作的规则停用（D-RA-05）。
 		if err := dropAutomationRuleTargetTx(tx, automationWriteCollection, collectionID); err != nil {
 			return err

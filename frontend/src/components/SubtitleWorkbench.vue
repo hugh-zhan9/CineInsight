@@ -12,11 +12,13 @@
           <span :class="['subtitle-workbench__dirty', { 'subtitle-workbench__dirty--active': isDirty }]">
             {{ isDirty ? '有未保存修改' : '已保存' }}
           </span>
+          <button type="button" class="btn btn--secondary btn--sm" @click="openExtraction">提取内嵌文字字幕…</button>
           <button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reloadDocument">刷新</button>
           <button data-test="close-workbench" type="button" class="btn-icon" aria-label="关闭" title="关闭（Esc）" @click="requestClose"><AppIcon name="close" :size="20" /></button>
         </div>
       </header>
 
+      <SubtitleExtractDialog v-if="extracting" :video-id="Number(video.id || video.ID)" @close="extracting = false" @saved="extracted" />
       <div v-if="loading" class="subtitle-workbench__state">正在读取外置 SRT…</div>
       <!-- 还没有字幕（D-PC15、MEDIA-06）：不是死胡同，可以新建空白字幕，保存时才创建文件。 -->
       <div v-else-if="loadErrorCode === 'subtitle_missing'" class="subtitle-workbench__state" data-test="workbench-missing">
@@ -256,6 +258,7 @@
 </template>
 
 <script>
+import SubtitleExtractDialog from './SubtitleExtractDialog.vue';
 import {
   ConvertSubtitleToUTF8,
   CreateBlankSubtitleDocument,
@@ -311,13 +314,14 @@ function isEntryTextEditor(target) {
 
 export default {
   name: 'SubtitleWorkbench',
-  components: { AppIcon },
+  components: { SubtitleExtractDialog, AppIcon },
   props: {
     video: { type: Object, required: true }
   },
   emits: ['close', 'saved'],
   data() {
     return {
+      extracting: false,
       loading: true,
       loadError: '',
       loadErrorCode: '',
@@ -511,6 +515,8 @@ export default {
     window.removeEventListener('keydown', this.handleShortcut);
   },
   methods: {
+    async openExtraction() { if (this.isDirty && !await confirmAction({ title: "提取内嵌字幕", message: "保存提取结果后会替换当前字幕，未保存的编辑将丢弃。继续？" })) return; this.extracting = true; },
+    async extracted(result) { this.extracting = false; await this.loadWorkbench(); if (result.status === "saved_index_pending") this.operationMessage = result.message; this.$emit("saved", { video_id: this.video.id, status: result.status }); },
     async loadWorkbench() {
       this.loading = true;
       this.loadError = '';

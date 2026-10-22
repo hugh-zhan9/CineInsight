@@ -83,6 +83,7 @@ const SOURCE_LABELS = {
   'video:desktop_random': '随机播放',
   'video:inline_view': '应用内观看',
   'video:queue_view': '待播队列观看',
+  'video:desktop_controlled_view': 'IINA 精确同步观看',
   'video:mobile_feed': '手机端',
   'video:jellyfin_view': 'Jellyfin',
   'video:legacy': '历史补记',

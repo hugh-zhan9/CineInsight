@@ -23,11 +23,21 @@ func TestPlaybackShutdownDoesNotReopenAfterMigrationRecovery(t *testing.T) {
 	}
 }
 
+// Each fixture owns its process-wide admission leases. Production deliberately
+// keeps them closed in relaunch-pending state; ending a test must release them.
 func releasePlaybackAfterShutdownTest(a *App) {
 	a.playbackLifecycleMu.Lock()
 	a.playbackShuttingDown = false
+	formal, controlled := a.playbackMaintenanceRelease, a.playbackControlledRelease
+	a.playbackMaintenanceRelease = nil
+	a.playbackControlledRelease = nil
 	a.playbackLifecycleMu.Unlock()
-	a.releasePlaybackMaintenance()
+	if controlled != nil {
+		controlled()
+	}
+	if formal != nil {
+		formal()
+	}
 }
 
 func TestPlaybackShutdownClosesBeforeWaitingForMigration(t *testing.T) {

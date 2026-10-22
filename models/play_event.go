@@ -25,6 +25,6 @@ type PlayEvent struct {
 	VideoID   uint      `gorm:"not null;index:idx_play_events_video_played,priority:1" json:"video_id"`
 	Video     Video     `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
 	PlayedAt  time.Time `gorm:"not null;index:idx_play_events_video_played,priority:2;index:idx_play_events_played_at" json:"played_at" ts_type:"string"`
-	Source    string    `gorm:"size:16;not null" json:"source"`
+	Source    string    `gorm:"size:32;not null" json:"source"`
 	CreatedAt time.Time `json:"created_at" ts_type:"string"`
 }

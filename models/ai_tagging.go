@@ -86,17 +86,18 @@ type AITagApprovalRecord struct {
 
 // AITaggingState tracks worker idempotency and why a video was skipped or retried.
 type AITaggingState struct {
-	ID                  uint       `gorm:"primarykey" json:"id"`
-	VideoID             uint       `gorm:"uniqueIndex" json:"video_id"`
-	Video               Video      `gorm:"constraint:OnDelete:CASCADE;" json:"video"`
-	Status              string     `gorm:"index:idx_ai_tagging_states_status_processed,priority:1;not null;default:'pending'" json:"status"`
-	SkipReason          string     `json:"skip_reason"`
-	EvidenceFingerprint string     `gorm:"index" json:"evidence_fingerprint"`
-	AttemptCount        int        `gorm:"default:0" json:"attempt_count"`
-	LastError           string     `gorm:"type:text" json:"last_error"`
-	LastProcessedAt     *time.Time `gorm:"index:idx_ai_tagging_states_status_processed,priority:2" json:"last_processed_at,omitempty" ts_type:"string"`
-	CreatedAt           time.Time  `json:"created_at" ts_type:"string"`
-	UpdatedAt           time.Time  `json:"updated_at" ts_type:"string"`
+	FailureRetrySourceVersion string     `gorm:"size:64;not null;default:''" json:"-"`
+	ID                        uint       `gorm:"primarykey" json:"id"`
+	VideoID                   uint       `gorm:"uniqueIndex" json:"video_id"`
+	Video                     Video      `gorm:"constraint:OnDelete:CASCADE;" json:"video"`
+	Status                    string     `gorm:"index:idx_ai_tagging_states_status_processed,priority:1;not null;default:'pending'" json:"status"`
+	SkipReason                string     `json:"skip_reason"`
+	EvidenceFingerprint       string     `gorm:"index" json:"evidence_fingerprint"`
+	AttemptCount              int        `gorm:"default:0" json:"attempt_count"`
+	LastError                 string     `gorm:"type:text" json:"last_error"`
+	LastProcessedAt           *time.Time `gorm:"index:idx_ai_tagging_states_status_processed,priority:2" json:"last_processed_at,omitempty" ts_type:"string"`
+	CreatedAt                 time.Time  `json:"created_at" ts_type:"string"`
+	UpdatedAt                 time.Time  `json:"updated_at" ts_type:"string"`
 }
 
 // AITagAgentStep stores one sanitized agent decision without raw media or transcript text.

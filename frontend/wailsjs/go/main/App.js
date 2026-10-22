@@ -230,12 +230,20 @@ export function CancelSubtitleEnginePreparation() {
   return window['go']['main']['App']['CancelSubtitleEnginePreparation']();
 }
 
+export function CancelSubtitleExtraction(arg1) {
+  return window['go']['main']['App']['CancelSubtitleExtraction'](arg1);
+}
+
 export function CancelSubtitleTask(arg1) {
   return window['go']['main']['App']['CancelSubtitleTask'](arg1);
 }
 
 export function CancelSubtitleTranslation(arg1) {
   return window['go']['main']['App']['CancelSubtitleTranslation'](arg1);
+}
+
+export function CancelTaskFailureRetry(arg1) {
+  return window['go']['main']['App']['CancelTaskFailureRetry'](arg1);
 }
 
 export function CancelTechnicalBackfill() {
@@ -300,6 +308,14 @@ export function ConfirmQuit() {
 
 export function ConfirmSameSourceRelation(arg1) {
   return window['go']['main']['App']['ConfirmSameSourceRelation'](arg1);
+}
+
+export function ConfirmSubtitleExtraction(arg1) {
+  return window['go']['main']['App']['ConfirmSubtitleExtraction'](arg1);
+}
+
+export function ConfirmTaskFailureRetry(arg1) {
+  return window['go']['main']['App']['ConfirmTaskFailureRetry'](arg1);
 }
 
 export function ControlPlaybackQueue(arg1, arg2) {
@@ -606,8 +622,16 @@ export function GetCollectionDetail(arg1) {
   return window['go']['main']['App']['GetCollectionDetail'](arg1);
 }
 
+export function GetCollectionEpisodeReport(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetCollectionEpisodeReport'](arg1, arg2, arg3);
+}
+
 export function GetCollectionSuggestionStatus() {
   return window['go']['main']['App']['GetCollectionSuggestionStatus']();
+}
+
+export function GetControlledPlaybackState() {
+  return window['go']['main']['App']['GetControlledPlaybackState']();
 }
 
 export function GetDatabaseBackendStatus() {
@@ -790,6 +814,10 @@ export function GetPlaybackQueue(arg1) {
   return window['go']['main']['App']['GetPlaybackQueue'](arg1);
 }
 
+export function GetPlaybackSubtitle(arg1) {
+  return window['go']['main']['App']['GetPlaybackSubtitle'](arg1);
+}
+
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
 }
@@ -876,6 +904,10 @@ export function GetTagUsageCounts(arg1) {
 
 export function GetTaskCenterSnapshot() {
   return window['go']['main']['App']['GetTaskCenterSnapshot']();
+}
+
+export function GetTaskFailureRetryResults(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetTaskFailureRetryResults'](arg1, arg2, arg3);
 }
 
 export function GetTechnicalBackfillStatus() {
@@ -986,6 +1018,10 @@ export function ListEnhancementTasks(arg1) {
   return window['go']['main']['App']['ListEnhancementTasks'](arg1);
 }
 
+export function ListExtractableSubtitleTracks(arg1) {
+  return window['go']['main']['App']['ListExtractableSubtitleTracks'](arg1);
+}
+
 export function ListFaceClusterPage(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListFaceClusterPage'](arg1, arg2, arg3);
 }
@@ -1004,6 +1040,10 @@ export function ListImageAITagCandidatePage(arg1, arg2, arg3, arg4, arg5) {
 
 export function ListImageAITagCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListImageAITagCandidates'](arg1, arg2, arg3);
+}
+
+export function ListImageAnniversaries(arg1) {
+  return window['go']['main']['App']['ListImageAnniversaries'](arg1);
 }
 
 export function ListImageFolderGroups(arg1) {
@@ -1046,6 +1086,10 @@ export function ListRecentlyPlayedWithFilter(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListRecentlyPlayedWithFilter'](arg1, arg2, arg3, arg4);
 }
 
+export function ListRecommendationFeedback() {
+  return window['go']['main']['App']['ListRecommendationFeedback']();
+}
+
 export function ListSameSourceRelations(arg1, arg2) {
   return window['go']['main']['App']['ListSameSourceRelations'](arg1, arg2);
 }
@@ -1068,6 +1112,14 @@ export function ListSubtitleBackups(arg1) {
 
 export function ListTagPersonConversions(arg1) {
   return window['go']['main']['App']['ListTagPersonConversions'](arg1);
+}
+
+export function ListTaskFailureRuns(arg1) {
+  return window['go']['main']['App']['ListTaskFailureRuns'](arg1);
+}
+
+export function ListTaskFailures(arg1) {
+  return window['go']['main']['App']['ListTaskFailures'](arg1);
 }
 
 export function ListTrashEntries(arg1) {
@@ -1254,8 +1306,16 @@ export function PreviewMetadataBatchEdit(arg1) {
   return window['go']['main']['App']['PreviewMetadataBatchEdit'](arg1);
 }
 
+export function PreviewSubtitleExtraction(arg1) {
+  return window['go']['main']['App']['PreviewSubtitleExtraction'](arg1);
+}
+
 export function PreviewTagPersonConversion(arg1) {
   return window['go']['main']['App']['PreviewTagPersonConversion'](arg1);
+}
+
+export function PreviewTaskFailureRetry(arg1) {
+  return window['go']['main']['App']['PreviewTaskFailureRetry'](arg1);
 }
 
 export function PurgeTrashEntries(arg1, arg2) {
@@ -1494,6 +1554,10 @@ export function RevealImage(arg1) {
   return window['go']['main']['App']['RevealImage'](arg1);
 }
 
+export function RevokeRecommendationFeedback(arg1, arg2) {
+  return window['go']['main']['App']['RevokeRecommendationFeedback'](arg1, arg2);
+}
+
 export function RunAutomationRules(arg1) {
   return window['go']['main']['App']['RunAutomationRules'](arg1);
 }
@@ -1602,6 +1666,14 @@ export function SetCollectionCover(arg1, arg2) {
   return window['go']['main']['App']['SetCollectionCover'](arg1, arg2);
 }
 
+export function SetCollectionEpisodeAssignments(arg1, arg2) {
+  return window['go']['main']['App']['SetCollectionEpisodeAssignments'](arg1, arg2);
+}
+
+export function SetCollectionSeasonExpectation(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetCollectionSeasonExpectation'](arg1, arg2, arg3, arg4);
+}
+
 export function SetImageFavorite(arg1, arg2) {
   return window['go']['main']['App']['SetImageFavorite'](arg1, arg2);
 }
@@ -1612,6 +1684,10 @@ export function SetImageRating(arg1, arg2) {
 
 export function SetPersonAvatar(arg1, arg2) {
   return window['go']['main']['App']['SetPersonAvatar'](arg1, arg2);
+}
+
+export function SetRecommendationFeedback(arg1) {
+  return window['go']['main']['App']['SetRecommendationFeedback'](arg1);
 }
 
 export function SetShortFeedEnabled(arg1) {
@@ -1716,6 +1792,10 @@ export function StartSemanticIndex(arg1) {
 
 export function StartTechnicalBackfill() {
   return window['go']['main']['App']['StartTechnicalBackfill']();
+}
+
+export function StopControlledPlayback() {
+  return window['go']['main']['App']['StopControlledPlayback']();
 }
 
 export function StopPlaybackQueue(arg1) {

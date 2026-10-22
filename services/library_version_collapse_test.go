@@ -251,7 +251,7 @@ func TestLibraryCollapseSkipsStaleAndSoftDeletedMembers(t *testing.T) {
 	}
 }
 
-// 合同：随机、最近播放、继续观看、旧数组接口等文件级入口一律忽略 collapse_versions。
+// 文件级入口保持全部文件；D-F03 随机按作品抽样，两者都不受 collapse_versions 展示开关影响。
 func TestLibraryCollapseIgnoredByFileLevelConsumers(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	ctx := context.Background()
@@ -278,12 +278,8 @@ func TestLibraryCollapseIgnoredByFileLevelConsumers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	picked, err := service.PickRandomVideos(RandomPlayRequest{Filter: on}, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for label, videos := range map[string][]models.Video{
-		"最近播放": recent, "继续观看": continuing.Videos, "旧数组接口": legacy, "随机取样": picked.Videos,
+		"最近播放": recent, "继续观看": continuing.Videos, "旧数组接口": legacy,
 	} {
 		ids := make([]uint, 0, len(videos))
 		for _, video := range videos {
@@ -291,6 +287,17 @@ func TestLibraryCollapseIgnoredByFileLevelConsumers(t *testing.T) {
 		}
 		requireUintSlice(t, label+"应返回全部文件", sortedIDs(ids), want)
 	}
+	// 作品抽样不随片库卡片的折叠偏好改变；同一组只有一个首选代表。
+	for _, collapse := range []bool{false, true} {
+		picked, err := service.PickRandomVideos(RandomPlayRequest{Filter: LibraryFilter{CollapseVersions: collapse}}, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(picked.Videos) != 1 || picked.Videos[0].ID != a.ID {
+			t.Fatalf("collapse_versions=%v 应抽中一个作品的首选版本 %d，实际 %+v", collapse, a.ID, picked.Videos)
+		}
+	}
+
 }
 
 // 保存视图不持久化聚合开关：表里没有这一列，模型上也没有这个字段。

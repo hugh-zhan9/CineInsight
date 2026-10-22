@@ -487,6 +487,10 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 			}
 		}
 
+		if err := mergeRecommendationTagFeedback(tx, uniqueSources, targetTagID); err != nil {
+			return err
+		}
+
 		// 规则动作与规则账本里的来源标签一并改成目标标签（D-RA-05）；要按合并前的关系判断账本的
 		// inserted，所以排在改写关系之前。
 		if err := rewriteAutomationRuleTagTargetsTx(tx, uniqueSources, targetTagID); err != nil {

@@ -36,7 +36,7 @@ type LibraryStatsWatchDay struct {
 	Date  string `json:"date"`
 	Count int64  `json:"count"`
 	// BySource 是当天事件按来源的拆分（各项之和等于 Count），供热力图按来源分列图例与提示。
-	// desktop_play / desktop_random 是「启动播放」，inline_view 与 mobile_feed 是越过阈值的有效观看。
+	// desktop_play / desktop_random 是「启动播放」，inline_view、queue_view、desktop_controlled_view、mobile_feed 等为有效观看。
 	BySource map[string]int64 `json:"by_source"`
 }
 

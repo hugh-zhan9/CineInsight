@@ -31,38 +31,53 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
-	playbackLifecycleMu        sync.Mutex
-	playbackMaintenanceRelease func()
-	playbackShuttingDown       bool
-	playbackQueueMu            sync.RWMutex
-	playbackQueue              *services.PlaybackQueueService
-	playbackQueueEmit          func(uint64)
-	ctx                        context.Context
-	videoService               *services.VideoService
-	thumbnailService           *services.ThumbnailService
-	tagService                 *services.TagService
-	settingsService            *services.SettingsService
-	backupService              *services.BackupService
-	databaseSwitchService      *services.DatabaseSwitchService
-	directoryService           *services.DirectoryService
-	subtitleService            *services.SubtitleService
-	subtitleWorkbench          *services.SubtitleWorkbenchService
-	cleanupService             *services.CleanupService
-	subtitleSearchService      *services.SubtitleSearchService
-	aiTaggingService           *services.AITaggingService
-	aiQualityService           *services.AIQualityService
-	shortFeedService           *services.ShortFeedService
-	personService              *services.PersonService
-	collectionService          *services.CollectionService
-	watchlistService           *services.WatchlistService
-	collectionSuggestions      *services.CollectionSuggestionService
-	videoDetailService         *services.VideoDetailService
-	libraryStatsService        *services.LibraryStatsService
-	storageReportService       *services.StorageReportService
-	localMetadata              *services.LocalMetadataService
-	mediaProbeService          *services.MediaProbeService
-	technicalBackfill          *services.TechnicalBackfillService
-	perceptualHash             *services.PerceptualHashService
+	functionalTransitionMu         sync.Mutex
+	functionalMu                   sync.Mutex
+	functionalInitialized          bool
+	functionalPaused               bool
+	functionalShuttingDown         bool
+	functionalContext              context.Context
+	functionalCancel               context.CancelFunc
+	functionalActive               sync.WaitGroup
+	taskFailures                   *services.TaskFailureService
+	taskFailureInitError           string
+	playbackControlledRelease      func()
+	playbackControlledCleanupError error
+	playbackQueueQuiesced          bool                                       // owned by playbackQueueMu
+	playbackQueueCleanupToken      string                                     // binds explicit cleanup retry to the retained instance
+	playbackQueueClose             func(*services.PlaybackQueueService) error // deterministic lifecycle test seam
+	playbackLifecycleMu            sync.Mutex
+	playbackMaintenanceRelease     func()
+	playbackShuttingDown           bool
+	playbackQueueMu                sync.RWMutex
+	playbackQueue                  *services.PlaybackQueueService
+	playbackQueueEmit              func(uint64)
+	ctx                            context.Context
+	videoService                   *services.VideoService
+	thumbnailService               *services.ThumbnailService
+	tagService                     *services.TagService
+	settingsService                *services.SettingsService
+	backupService                  *services.BackupService
+	databaseSwitchService          *services.DatabaseSwitchService
+	directoryService               *services.DirectoryService
+	subtitleService                *services.SubtitleService
+	subtitleWorkbench              *services.SubtitleWorkbenchService
+	cleanupService                 *services.CleanupService
+	subtitleSearchService          *services.SubtitleSearchService
+	aiTaggingService               *services.AITaggingService
+	aiQualityService               *services.AIQualityService
+	shortFeedService               *services.ShortFeedService
+	personService                  *services.PersonService
+	collectionService              *services.CollectionService
+	watchlistService               *services.WatchlistService
+	collectionSuggestions          *services.CollectionSuggestionService
+	videoDetailService             *services.VideoDetailService
+	libraryStatsService            *services.LibraryStatsService
+	storageReportService           *services.StorageReportService
+	localMetadata                  *services.LocalMetadataService
+	mediaProbeService              *services.MediaProbeService
+	technicalBackfill              *services.TechnicalBackfillService
+	perceptualHash                 *services.PerceptualHashService
 	// mediaWorkSlot 是转封装、帧哈希回填、人脸抽帧共享的重媒体处理槽（D-007）：
 	// 容量 1，三条流水线在处理每一项之前各自取一次。新增重 ffmpeg 任务请复用它，
 	// 不要各建一个——各建一个等于没有限制。
@@ -390,6 +405,9 @@ func (a *App) startup(ctx context.Context) {
 	if err := a.imageService.ReconcileImageTrashEntries(); err != nil {
 		log.Printf("App startup image trash reconciliation failed err=%v", err)
 	}
+	if err := a.initializeFunctionalPolish(); err != nil {
+		log.Printf("失败诊断初始化未完成: %v", err)
+	}
 	a.subtitleService.SetContext(ctx) // Inject context
 	// Background workers can still emit while the app is tearing down; the frontend is gone by then.
 	emit := func(event string, data any) {
@@ -398,6 +416,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 		runtime.EventsEmit(ctx, event, data)
 	}
+	a.wireFunctionalPolish(emit)
 	a.wireStartupHooks(emit)
 	a.startDataCare(ctx, emit)
 	a.playbackQueueEmit = func(sequence uint64) { emit("playback-queue-state", sequence) }
@@ -449,7 +468,7 @@ func (a *App) startup(ctx context.Context) {
 	} else {
 		log.Printf("App startup short-video tag sync tag=%d added=%d removed=%d", result.TagID, result.Added, result.Removed)
 	}
-	a.aiTaggingService.Start(ctx)
+	a.startDiagnosticOwner(ctx)
 	// 想看片单的在线补全：先把进程重启后残留的 running 刷回 pending，再起 worker。
 	a.watchlistService.StartEnrichment(ctx)
 	// UI 二期：后台对账片名排序键（§2.3），再给全部未关联的想看条目跑一轮片库自动关联（D-P2-03）；
@@ -642,7 +661,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	// A cancelled migration runs recovery before releasing restoreMu. Close
 	// playback permanently first, so that recovery cannot admit another player.
-	a.quiescePlaybackForShutdown()
+	if err := a.quiescePlaybackForShutdown(); err != nil {
+		log.Printf("播放器退出清理未完成: %v", services.WithoutAbsolutePaths(err))
+	}
 	if a.wallpaperService != nil {
 		a.wallpaperService.Close()
 	}
@@ -652,6 +673,7 @@ func (a *App) shutdown(ctx context.Context) {
 	a.restoreMu.Lock()
 	a.restoreTerminal = true
 	a.restoreMu.Unlock()
+	a.stopFunctionalPolish(true)
 	a.stopAIReviewApprovals()
 	if err := a.stopCleanupConsolidationAndWait(); err != nil {
 		log.Printf("集中整理退出收尾失败 err=%v", err)
@@ -761,6 +783,10 @@ func (a *App) shutdown(ctx context.Context) {
 		a.browserDownloads.Wait()
 	}
 	a.closeLogFile()
+	services.SetSubtitleChangedListener(nil)
+	if a.videoService != nil {
+		a.videoService.SetControlledPlaybackListener(nil)
+	}
 }
 
 // startShortFeedServer 起手机端服务。调用方必须持有手机端生命周期锁（withShortFeedLifecycle，

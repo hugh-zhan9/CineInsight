@@ -23,6 +23,8 @@ import (
 )
 
 type VideoService struct {
+	controlledMu             sync.Mutex
+	controlled               *controlledPlayback
 	scanSyncMu               sync.Mutex
 	mediaProbe               *MediaProbeService
 	scanDirectoryWithOptions func(string, bool) ([]ScannedFile, error)

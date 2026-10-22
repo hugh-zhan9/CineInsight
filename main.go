@@ -25,6 +25,9 @@ func main() {
 		defer database.Close()
 		// 在 wails.Run 之前：darwin 上 OnStartup 与页面加载并发，前端一加载就会查询中断的字幕任务。
 		app.markInterruptedSubtitleJobs()
+		if err := app.initializeFunctionalPolish(); err != nil {
+			log.Printf("失败诊断恢复失败，批量重试不可用: %v", err)
+		}
 	}
 
 	// 默认禁用日志，设置页开启后再写入

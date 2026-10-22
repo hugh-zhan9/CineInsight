@@ -302,3 +302,11 @@ describe('InsightsPage 概览重取（2026-10-12 复审）', () => {
     wrapper.unmount();
   });
 });
+it('names precise IINA viewing in source statistics', async () => {
+  const fixture = { ...baseStats, total_play_events: 1, plays_by_source: { desktop_controlled_view: 1 } };
+  GetLibraryInsights.mockResolvedValueOnce(fixture);
+  const wrapper = mountWith(fixture);
+  await flushPromises();
+  expect(wrapper.text()).toContain('IINA 精确同步观看');
+  wrapper.unmount();
+});

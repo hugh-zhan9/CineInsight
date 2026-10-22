@@ -192,6 +192,7 @@ func (w *SubtitleFileWriter) replaceWithMode(ctx context.Context, videoID uint, 
 		// 字幕已经换好，清理旧备份失败不该让这次写入报失败。
 		_ = w.pruneBackups(videoID)
 	}
+	notifySubtitleChanged()
 	return result, nil
 }
 

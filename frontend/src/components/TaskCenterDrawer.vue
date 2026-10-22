@@ -78,11 +78,12 @@
                 <ProgressBar class="task-item__bar" :value="progressPercent(item) / 100" />
                 <span class="task-item__progress-text">{{ item.progress.done }}/{{ item.progress.total }}</span>
               </div>
+              <TaskFailureDetails v-if="['ai_tagging', 'technical', 'proxy'].includes(item.key)" :task-key="item.key" />
               <p v-if="runCountsText(item)" class="task-item__last" :data-test="`task-item-run-counts-${item.key}`">{{ runCountsText(item) }}</p>
               <p v-if="lastRunText(item)" class="task-item__last" :data-test="`task-item-last-${item.key}`">{{ lastRunText(item) }}</p>
               <p v-for="(note, index) in itemNotes(item)" :key="`${item.key}-note-${index}`" class="task-item__note" :data-test="`task-item-note-${item.key}`">{{ note }}</p>
               <details v-if="failures(item).length" class="task-item__failures" :data-test="`task-item-failures-${item.key}`">
-                <summary>失败明细 {{ failures(item).length }} 条<template v-if="failuresTruncated(item)">（共 {{ item.last_run.failed }} 条失败，只保留了前 {{ failures(item).length }} 条明细）</template></summary>
+                <summary>失败明细 {{ failures(item).length }} 条<template v-if="failuresTruncated(item)">（共 {{ item.last_run.failed }} 条失败，<template v-if="['ai_tagging', 'technical', 'proxy'].includes(item.key)">摘要显示前 {{ failures(item).length }} 条，请展开完整失败记录</template><template v-else>只保留了前 {{ failures(item).length }} 条明细</template>）</template></summary>
                 <ul>
                   <li v-for="(failure, index) in failures(item)" :key="`${item.key}-failure-${index}`" :title="failure">{{ failure }}</li>
                 </ul>
@@ -140,6 +141,7 @@
 </template>
 
 <script>
+import TaskFailureDetails from './TaskFailureDetails.vue';
 import {
   CancelBrowserDownloadTask, CancelEditProject, CancelEnhancementTask, CancelSubtitleTask, CreatePlaybackProxy, AddDownloadDirectoryToScan,
   GetTaskCenterSnapshot, OpenDirectory, ReimportDownload, ResolveSubtitleJob, RetryDownload, RetryEnhancementTask, RevealDownload
@@ -217,7 +219,7 @@ const RECENT_STATUS_LABELS = {
   download: {
     queued: '排队中', running: '下载中', importing: '入库中', done: '已完成', failed: '失败', canceled: '已取消', interrupted: '已中断'
   },
-  proxy: { running: '生成中', cancelled: '已取消', ...PLAYBACK_PROXY_CODE_LABELS },
+  proxy: { running: '生成中', cancelled: '已取消', retry_source_changed: '源文件变化，已跳过', ...PLAYBACK_PROXY_CODE_LABELS },
   video_edit: EDIT_STATUS_LABELS
 };
 
@@ -266,7 +268,7 @@ export function relativeTimeText(at, now = Date.now()) {
 // 撤销走同一条记录（recentOperations.undo），失败时记录留着并提示原因。
 export default {
   name: 'TaskCenterDrawer',
-  components: { AppBanner, AppIcon, AppTabs, EmptyState, ProgressBar, SystemHealthPanel },
+  components: { TaskFailureDetails, AppBanner, AppIcon, AppTabs, EmptyState, ProgressBar, SystemHealthPanel },
   mixins: [runtimeEventsMixin],
   props: {
     open: { type: Boolean, default: false }

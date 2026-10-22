@@ -42,21 +42,24 @@ type TechnicalBackfillStatus struct {
 }
 
 type technicalBackfillCandidate struct {
-	ID   uint
-	Name string
+	SourceVersion string
+	ID            uint
+	Name          string
 }
 
 type TechnicalBackfillService struct {
-	probe          *MediaProbeService
-	loadCandidates func(context.Context) ([]technicalBackfillCandidate, error)
-	syncVideoTag   func(uint) error
-	mu             sync.Mutex
-	status         TechnicalBackfillStatus
-	cancel         context.CancelFunc
-	emitter        func(TechnicalBackfillStatus)
-	worker         sync.WaitGroup
-	registry       *BackgroundTaskRegistry
-	pauseHook      TaskPauseHook
+	beforeFailureClaim func(*gorm.DB)
+	failureRecorder    taskFailureRecorder
+	probe              *MediaProbeService
+	loadCandidates     func(context.Context) ([]technicalBackfillCandidate, error)
+	syncVideoTag       func(uint) error
+	mu                 sync.Mutex
+	status             TechnicalBackfillStatus
+	cancel             context.CancelFunc
+	emitter            func(TechnicalBackfillStatus)
+	worker             sync.WaitGroup
+	registry           *BackgroundTaskRegistry
+	pauseHook          TaskPauseHook
 	// probedObserver 在某条视频补探测成功后收到 id，供规则队列再评估一次（D-RA-05）。
 	probedObserver func(uint)
 }
@@ -135,6 +138,7 @@ func (s *TechnicalBackfillService) start(parent context.Context, hook TaskPauseH
 		return status, nil
 	}
 	s.pauseHook = hook
+	s.failureRecorder.begin()
 	now := time.Now()
 	s.status = TechnicalBackfillStatus{
 		Running:   true,
@@ -245,6 +249,7 @@ func (s *TechnicalBackfillService) prepareAndRun(ctx context.Context) {
 }
 
 func (s *TechnicalBackfillService) failPreparation(err error) {
+	s.failureRecorder.finish(false)
 	s.mu.Lock()
 	s.status.Running = false
 	s.status.Preparing = false
@@ -281,6 +286,14 @@ func (s *TechnicalBackfillService) run(ctx context.Context, candidates []technic
 			s.recordFailure(candidate, fmt.Errorf("reload video: %w", err))
 			continue
 		}
+		if candidate.SourceVersion != "" {
+			fp, err := mediaProbeStat(video.Path)
+			if err != nil || videoSourceVersion(video.ID, fp.size, fp.modTimeNS) != candidate.SourceVersion {
+				s.recordSkipped()
+				s.failureRecorder.notice("技术信息重试已跳过源文件发生变化的视频，请重新分析")
+				continue
+			}
+		}
 		fresh, err := videoTechnicalSnapshotIsFresh(ctx, video)
 		if err != nil {
 			s.recordFailure(candidate, err)
@@ -290,7 +303,19 @@ func (s *TechnicalBackfillService) run(ctx context.Context, candidates []technic
 			s.recordSkipped()
 			continue
 		}
-		if err := s.probe.Refresh(ctx, candidate.ID); err != nil {
+		var probeErr error
+		if candidate.SourceVersion != "" {
+			probeErr = s.probe.RefreshForSource(ctx, candidate.ID, candidate.SourceVersion)
+		} else {
+			probeErr = s.probe.Refresh(ctx, candidate.ID)
+		}
+		if err := probeErr; err != nil {
+			if candidate.SourceVersion != "" && errors.Is(err, ErrMediaProbeSourceChanged) {
+				s.recordSkipped()
+				s.failureRecorder.notice("技术信息重试已跳过源文件发生变化的视频，请重新分析")
+				continue
+			}
+
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				break
 			}
@@ -349,6 +374,7 @@ func (s *TechnicalBackfillService) recordSuccess() {
 }
 
 func (s *TechnicalBackfillService) recordFailure(candidate technicalBackfillCandidate, err error) {
+	s.failureRecorder.record(candidate.ID, "", "probe_failed", err.Error())
 	s.updateItem(func(status *TechnicalBackfillStatus) {
 		status.Processed++
 		status.Failed++
@@ -371,6 +397,7 @@ func (s *TechnicalBackfillService) updateItem(update func(*TechnicalBackfillStat
 }
 
 func (s *TechnicalBackfillService) finish(cancelled bool) {
+	s.failureRecorder.finish(cancelled)
 	s.mu.Lock()
 	s.status.Running = false
 	s.status.Preparing = false

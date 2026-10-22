@@ -74,7 +74,7 @@ export default {
       return item.video_id && item.source_available ? `/preview/thumbnail/${item.video_id}` : '';
     },
     formatDate(value) { if (!value || String(value).startsWith('0001-01-01')) return '日期未知'; const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleString() : '日期未知'; },
-    sourceName(value) { return ({ desktop_play: '外部播放启动', desktop_random: '随机播放启动', mobile_feed: '手机端历史播放', legacy: '旧版播放记录', queue_view: '队列观看', inline_view: '应用内记录', jellyfin_view: 'Jellyfin记录' })[value] || '播放记录'; },
+    sourceName(value) { return ({ desktop_play: '外部播放启动', desktop_random: '随机播放启动', mobile_feed: '手机端历史播放', legacy: '旧版播放记录', queue_view: '队列观看', desktop_controlled_view: 'IINA 精确同步观看', inline_view: '应用内记录', jellyfin_view: 'Jellyfin记录' })[value] || '播放记录'; },
     reset() { this.cursor = null; this.cursors = []; this.items = []; this.hasMore = false; this.load(); this.loadReview(); },
     async loadReview() {
       const generation = ++this.reviewGeneration; this.review = null; this.reviewError = '';

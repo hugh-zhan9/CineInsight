@@ -100,3 +100,8 @@ describe('ViewingNotesPage most-watched label', () => {
     expect(wrapper.get('[data-test="diary-most-watched-title"]').text()).toBe(title);
   });
 });
+it('identifies controlled desktop viewing as its own source', async () => {
+  const wrapper = shallowMount(ViewingNotesPage);
+  await flushPromises();
+  expect(wrapper.vm.sourceName('desktop_controlled_view')).toBe('IINA 精确同步观看');
+});

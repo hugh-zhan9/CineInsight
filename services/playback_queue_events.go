@@ -41,6 +41,11 @@ func (s *PlaybackQueueService) report(ctx context.Context, event InlineQueueEven
 		if r == nil || r.failed || r.player != player || r.token != event.Token || r.lease == nil || r.lease.video.ID != event.VideoID || r.lease.sourceVersion() != event.SourceVersion {
 			return ErrQueueChanged
 		}
+		if player == "iina" {
+			if err := validateQueueIINASource(ctx, r.lease); err != nil {
+				return s.failLocked(ctx, "queue_source_changed", "原片已改变，请重新播放")
+			}
+		}
 		if event.Seq <= r.seq {
 			return ErrQueueStaleEvent
 		}

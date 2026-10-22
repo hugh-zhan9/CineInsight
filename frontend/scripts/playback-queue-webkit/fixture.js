@@ -1,24 +1,34 @@
 import { createApp, h, nextTick } from 'vue';
+import InlineVideoPlayer from '../../src/components/player/InlineVideoPlayer.vue';
 import QueueInlinePlayer from '../../src/components/QueueInlinePlayer.vue';
 import PlaybackQueuePanel from '../../src/components/PlaybackQueuePanel.vue';
 import '../../src/styles/tokens.css';
 import '../../src/styles/components.css';
 const reports = [];
+const subtitles = [{start_ms:100,end_ms:2800,text:'Hello <world>\n你好'}];
+const subtitleRequests=[];
 let controls = 0;
 let maintenance = false;
 const session = (token = 'a', paused = true) => ({ token, video_id: 1, source_version: token, locator: './clip.mp4', mime: 'video/mp4', start_seconds: 0, duration: 3, view_cycle: 1, control_sequence: ++controls, desired_paused: paused });
 window.go = { main: { App: new Proxy({}, { get: (_, method) => async (...args) => {
+  if (method === 'GetPlaybackSubtitle') { subtitleRequests.push(args[0]); return {status:'ready',cues:subtitles}; }
+  if (method === 'GetPlaybackProxy') return null;
+  if (method === 'GetPlaybackProxyStatus') return {running:false,queued:0,results:[]};
   if (method === 'ReportInlineQueuePlayback') { reports.push(args[0]); return; }
   if (method === 'GetPlaybackQueue' && maintenance) throw new Error('queue_unavailable: 数据库正在恢复或切换，暂时无法读取');
   if (method === 'GetPlaybackQueue') return { state: { revision: 1, player: 'inline', autoplay: false, status: 'paused', active_token: 'panel' }, items: Array.from({ length: 50 }, (_, i) => ({ id: i+1, title: `待播影片 ${i+1}`, video_id: i+1, source_available: true })), current: { id: 1, video_id: 1, title: '原生队列播放' }, total: 10000, has_more: true, cursor_id: 50, cursor_position: 50, sequence: 1, capabilities: [{ player: 'inline', available: true, autoplay: true }], session: session('panel') };
   return [];
 } }) } };
-const root = createApp({ data: () => ({ mode: 'player', session: session(), open: true }), render() { return this.mode === 'player' ? h(QueueInlinePlayer, { session: this.session, key: this.session.token }) : h(PlaybackQueuePanel, { ref: 'panel', open: this.open, onClose: () => { this.open = false; } }); } }).mount('#app');
+const root = createApp({ data: () => ({ mode: 'player', session: session(), open: true, detail: {video_id:1,mode:'inline',source_version:'detail-source',inline_source:{locator_value:'./clip.mp4',mime:'video/mp4'}} }), render() { if (this.mode === 'detail') return h(InlineVideoPlayer,{ref:'detail',videoId:1,session:this.detail}); return this.mode === 'player' ? h(QueueInlinePlayer, { session: this.session, key: this.session.token }) : h(PlaybackQueuePanel, { ref: 'panel', open: this.open, onClose: () => { this.open = false; } }); } }).mount('#app');
 const assert = (value, message) => { if (!value) throw new Error(message); };
 const until = async (test, label) => { window.progress = label; const end = Date.now()+8000; while (!test() && Date.now()<end) { await new Promise(resolve => setTimeout(resolve, 20)); await nextTick(); } assert(test(), label); };
 window.fixture = { async run() {
   await until(() => document.querySelector('video')?.readyState >= 1, 'queue metadata');
-  let video = document.querySelector('video'); assert(video.paused && video.currentTime < .05, 'initial zero/paused');
+  let video = document.querySelector('video');
+  await until(() => video.textTracks[0]?.cues?.length===1,'queue Blob track loaded');
+  assert(video.textTracks[0].cues[0].getCueAsHTML().textContent==='Hello <world>\n你好','queue subtitle literal bilingual text');
+  assert(subtitleRequests[0].queue_token==='a','queue token passed');
+  assert(video.paused && video.currentTime < .05, 'initial zero/paused');
   root.session = session('a', false); await until(() => video.currentTime > .4, 'actual playback');
   video.pause(); await until(() => video.paused && reports.some(e => e.kind === 'paused'), 'native pause');
   root.session = session('a', false); await until(() => !video.paused && video.currentTime > .6, 'resume after native pause with same desired flag');
@@ -34,12 +44,21 @@ window.fixture = { async run() {
   await until(() => document.querySelector('video') !== old && document.querySelector('video')?.readyState >= 1, 'new token new element');
   old.dispatchEvent(new Event('ended')); await nextTick(); await new Promise(resolve => setTimeout(resolve, 50));
   assert(reports.slice(count).every(e => e.token === 'b'), 'retired source emitted into new session');
-  root.mode = 'panel'; await until(() => document.querySelectorAll('[data-test^="queue-item-"]').length === 50 && document.querySelector('video')?.readyState >= 1, 'bounded queue panel');
+  root.mode = 'panel'; await until(() => document.querySelectorAll('li[data-test^="queue-item-"]').length === 50 && document.querySelector('video')?.readyState >= 1, 'bounded queue panel');
   const width = document.querySelector('[data-test="queue-panel"]').getBoundingClientRect().width; assert(width > 700 && width < innerWidth, 'queue panel width');
   video = document.querySelector('video'); root.open = false; await nextTick();
   assert(document.querySelector('video') === video && !document.querySelector('[data-test="queue-panel"]'), 'closing list destroyed playback');
   await video.play(); await until(() => video.currentTime > .25, 'player survives list close');
   maintenance = true; await root.$refs.panel.load(); await until(() => !document.querySelector('video'), 'maintenance unmounts buffered player'); assert(video.paused, 'maintenance did not pause detached video');
-  window.results = { passed: true, engine: navigator.userAgent, realDecodedMedia: true, naturalEnds: 2, queueRows: 50, queueTotal: 10000, panelWidth: width, cases: ['zero-start', 'pause-not-end', 'native-external-control-interleave', 'seek-not-end', 'natural-end', 'native-rewatch', 'fixed-token-identity', 'retired-element', 'bounded-page', 'close-list-keeps-player', 'maintenance-stops-buffered-player'] };
+  root.mode='detail'; await until(()=>document.querySelector('video')?.textTracks[0]?.cues?.length===1,'detail Blob track loaded');
+  video=document.querySelector('video'); await video.play(); await until(()=>video.currentTime>.3,'detail actual playback');video.pause();
+  const position=video.currentTime; const originalVideo=video;
+  const offset=document.querySelector('[aria-label="字幕偏移（秒）"]');offset.value='0.5';offset.dispatchEvent(new Event('input',{bubbles:true}));
+  await until(()=>video.textTracks[0]?.cues?.[0]?.startTime===.6,'subtitle offset changes cue');
+  assert(document.querySelector('video')===originalVideo && Math.abs(video.currentTime-position)<.05,'subtitle update reset media');
+  root.detail={...root.detail,inline_source:{...root.detail.inline_source,locator_value:'./clip.mp4?reload=1'}};
+  await until(()=>document.querySelector('video')!==originalVideo && document.querySelector('video')?.textTracks[0]?.cues?.length===1,'same source version new element receives subtitle track');
+  assert(subtitleRequests.some(request=>request.source_version==='detail-source' && !request.queue_token),'detail subtitle source identity');
+  window.results = { passed: true, engine: navigator.userAgent, realDecodedMedia: true, naturalEnds: 2, queueRows: 50, queueTotal: 10000, panelWidth: width, cases: ['zero-start', 'pause-not-end', 'native-external-control-interleave', 'seek-not-end', 'natural-end', 'native-rewatch', 'fixed-token-identity', 'retired-element', 'bounded-page', 'close-list-keeps-player', 'maintenance-stops-buffered-player','queue-blob-subtitle','detail-blob-subtitle','bilingual-literal-text','subtitle-offset-preserves-video','same-source-new-video-track'] };
 } };
 window.ready = true;

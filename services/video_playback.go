@@ -162,11 +162,17 @@ func (s *VideoService) launchFormalPlaybackFrom(db *gorm.DB, video *models.Video
 	// 也可以要求从头播——那种情况下走 iina-cli 显式关掉续播。
 	resumeMode := PlaybackResumeModeResume
 	var settings models.Settings
-	if err := db.Select("playback_resume_mode").First(&settings).Error; err == nil {
+	if err := db.Select("playback_resume_mode", "desktop_player").First(&settings).Error; err == nil {
 		resumeMode = settings.PlaybackResumeMode
 	}
 	if err := ctx.Err(); err != nil {
 		return s.buildPlaybackFailureResultFrom(db, video, "playback_interrupted", err.Error(), false)
+	}
+	if settings.DesktopPlayer == "iina_controlled" && ctx.Value(controlledDispatchBypassKey{}) != true {
+		if err := s.startControlledPlayback(ctx, video.ID); err != nil {
+			return s.buildPlaybackFailureResultFrom(db, video, "controlled_playback_failed", err.Error(), false)
+		}
+		return nil
 	}
 	if err := launchPlaybackContext(ctx, video, resumeMode); err != nil {
 		return s.buildPlaybackFailureResultFrom(db, video, "dispatch_failed", err.Error(), false)

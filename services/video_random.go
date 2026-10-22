@@ -3,12 +3,14 @@ package services
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"gorm.io/gorm"
 	"log"
 	"math"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,10 @@ type RandomPlayRequest struct {
 func normalizeRandomPlayRequest(request RandomPlayRequest) (RandomPlayRequest, error) {
 	// 「缺失某项」不是随机条件（D-MC-03）：片库带着它时随机照样在其余条件里抽。
 	request.Filter.Missing = ""
+	request.ExcludeIDs = uniqueUintIDs(request.ExcludeIDs)
+	if len(request.ExcludeIDs) > 100 {
+		request.ExcludeIDs = request.ExcludeIDs[len(request.ExcludeIDs)-100:]
+	}
 	request.WatchState = strings.TrimSpace(request.WatchState)
 	if request.WatchState == "" {
 		request.WatchState = RandomWatchAny
@@ -59,6 +65,9 @@ type videoScoreRow struct {
 	PlayCount       int
 	RandomPlayCount int
 	LastPlayedAt    *time.Time
+	workScore       *float64
+	feedbackFactor  float64
+	workWatched     bool
 }
 
 func (s *VideoService) getRandomPlayConfigFrom(db *gorm.DB) (float64, int, error) {
@@ -83,42 +92,20 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 
 func (s *VideoService) playRandomVideoFrom(db *gorm.DB) (*PlaybackAttemptResult, error) {
 	randomCommits.flush()
-	// 获取播放权重配置
-	var settings models.Settings
-	if err := db.First(&settings).Error; err != nil {
-		return nil, fmt.Errorf("获取设置失败: %w", err)
-	}
-	playWeight := settings.PlayWeight
-	if playWeight < 0.1 {
-		playWeight = 0.1
-	}
-	halfLifeDays := normalizeRandomHalfLifeDays(settings.RandomHalfLifeDays)
-
-	// 仅查询计算权重所需的最少字段，避免全量加载
-	var rows []videoScoreRow
-	if err := db.Model(&models.Video{}).
-		Select("id, play_count, random_play_count, last_played_at").
-		Find(&rows).Error; err != nil {
+	pool, err := s.collectRandomCandidatesFrom(db, RandomPlayRequest{})
+	if err != nil {
 		return nil, err
 	}
-
-	if len(rows) == 0 {
-		return &PlaybackAttemptResult{
-			DispatchSucceeded: false,
-			ReasonCode:        "no_videos",
-			UserMessage:       "随机播放失败：当前没有可播放的视频记录。",
-		}, nil
-	}
-
-	return s.playRandomFromRowsFrom(db, rows, playWeight, halfLifeDays, time.Now(), "按全库均衡权重选择")
+	return s.playRandomFromRowsFrom(db, pool.rows, pool.playWeight, pool.halfLifeDays, time.Now(), "按作品均衡权重选择")
 }
 
 // randomCandidatePool 是筛选内随机的候选集合，随机播放、随机取样与今晚看什么共用同一份边界、条件和权重配置。
 type randomCandidatePool struct {
-	request      RandomPlayRequest
-	rows         []videoScoreRow
-	playWeight   float64
-	halfLifeDays int
+	request         RandomPlayRequest
+	rows            []videoScoreRow
+	playWeight      float64
+	halfLifeDays    int
+	feedbackSummary string
 }
 
 // collectRandomCandidatesFrom 按请求的筛选与随机条件组装候选行。
@@ -132,22 +119,29 @@ func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPl
 			return nil, err
 		}
 	}
+	var pool *randomCandidatePool
+	err = db.Transaction(func(tx *gorm.DB) error {
+		var collectErr error
+		pool, collectErr = s.collectRandomWorks(tx, request, time.Now())
+		return collectErr
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return pool, err
+}
+
+// collectRandomWorks uses one read snapshot for identities, accessible history and eligible files.
+func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest, now time.Time) (*randomCandidatePool, error) {
 	playWeight, halfLifeDays, err := s.getRandomPlayConfigFrom(db)
 	if err != nil {
 		return nil, err
 	}
-	query := db.Model(&models.Video{}).
-		Select("videos.id, videos.play_count, videos.random_play_count, videos.last_played_at").
-		Where("videos.is_stale = ?", false)
-	query, err = applyLibraryFilter(query, request.Filter, time.Now())
+	query := db.Model(&models.Video{}).Select("videos.id, videos.play_count, videos.random_play_count, videos.last_played_at").Where("videos.is_stale = ?", false)
+	fileFilter := request.Filter
+	if fileFilter.SmartView == LibraryViewUnwatched || fileFilter.SmartView == LibraryViewWatched {
+		fileFilter.SmartView = ""
+	}
+	query, err = applyLibraryFilter(query, fileFilter, now)
 	if err != nil {
 		return nil, err
-	}
-	switch request.WatchState {
-	case RandomWatchUnwatched:
-		query = query.Where("videos.is_watched = ?", false)
-	case RandomWatchWatched:
-		query = query.Where("videos.is_watched = ?", true)
 	}
 	if request.FavoritesOnly {
 		query = query.Where("videos.is_favorite = ?", true)
@@ -155,18 +149,131 @@ func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPl
 	if request.MaxDurationSeconds > 0 {
 		query = query.Where("videos.duration > 0 AND videos.duration <= ?", request.MaxDurationSeconds)
 	}
-	excludeIDs := uniqueUintIDs(request.ExcludeIDs)
-	if len(excludeIDs) > 100 {
-		excludeIDs = excludeIDs[len(excludeIDs)-100:]
-	}
-	if len(excludeIDs) > 0 {
-		query = query.Where("videos.id NOT IN ?", excludeIDs)
-	}
-	var rows []videoScoreRow
-	if err := query.Find(&rows).Error; err != nil {
+	var eligible []videoScoreRow
+	if err := query.Find(&eligible).Error; err != nil {
 		return nil, err
 	}
-	return &randomCandidatePool{request: request, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays}, nil
+	historyQuery, err := applyScanScope(db.Model(&models.Video{}).Select("videos.id, videos.is_watched, videos.play_count, videos.random_play_count, videos.last_played_at"), true)
+	if err != nil {
+		return nil, err
+	}
+	var history []struct {
+		ID              uint
+		IsWatched       bool
+		PlayCount       int
+		RandomPlayCount int
+		LastPlayedAt    *time.Time
+	}
+	if err := historyQuery.Find(&history).Error; err != nil {
+		return nil, err
+	}
+	var members []models.VideoVersionMember
+	memberQuery := db.Select("video_id, group_id, position").Where("video_id IN (?)", historyQuery.Select("videos.id"))
+	if len(request.ExcludeIDs) > 0 {
+		memberQuery = memberQuery.Or("video_id IN ?", request.ExcludeIDs)
+	}
+	if err := memberQuery.Find(&members).Error; err != nil {
+		return nil, err
+	}
+	membership := make(map[uint]models.VideoVersionMember, len(members))
+	for _, member := range members {
+		membership[member.VideoID] = member
+	}
+	type workKey struct {
+		group bool
+		id    uint
+	}
+	key := func(id uint) workKey {
+		if member, ok := membership[id]; ok {
+			return workKey{true, member.GroupID}
+		}
+		return workKey{false, id}
+	}
+	watched := map[workKey]bool{}
+	scores := map[workKey]float64{}
+	for _, video := range history {
+		k := key(video.ID)
+		watched[k] = watched[k] || video.IsWatched
+		score := decayedPlayScore(videoScoreRow{ID: video.ID, PlayCount: video.PlayCount, RandomPlayCount: video.RandomPlayCount, LastPlayedAt: video.LastPlayedAt}, playWeight, halfLifeDays, now)
+		if score > scores[k] {
+			scores[k] = score
+		}
+	}
+	var feedback []models.RecommendationFeedback
+	feedbackQuery, err := recommendationTargetScope(db.Model(&models.RecommendationFeedback{}), db)
+	if err != nil {
+		return nil, err
+	}
+	if err := feedbackQuery.Where("expires_at IS NULL OR expires_at > ?", now).Find(&feedback).Error; err != nil {
+		return nil, err
+	}
+	downTags := []uint{}
+	snoozed := map[workKey]bool{}
+	for _, item := range feedback {
+		switch item.TargetKind {
+		case "work_group":
+			snoozed[workKey{true, item.TargetID}] = true
+		case "work_video":
+			snoozed[key(item.TargetID)] = true
+		case "tag":
+			downTags = append(downTags, item.TargetID)
+		}
+	}
+	downWorks := map[workKey]bool{}
+	if len(downTags) > 0 {
+		var tagged []uint
+		if err := db.Table("video_tags").Where("tag_id IN ?", downTags).Where("video_id IN (?)", historyQuery.Select("videos.id")).Distinct("video_id").Pluck("video_id", &tagged).Error; err != nil {
+			return nil, err
+		}
+		for _, id := range tagged {
+			downWorks[key(id)] = true
+		}
+	}
+	excluded := map[workKey]bool{}
+	for _, id := range request.ExcludeIDs {
+		excluded[key(id)] = true
+	}
+	sort.Slice(eligible, func(i, j int) bool {
+		pi, pj := membership[eligible[i].ID].Position, membership[eligible[j].ID].Position
+		if pi != pj {
+			return pi < pj
+		}
+		return eligible[i].ID < eligible[j].ID
+	})
+	seen := map[workKey]bool{}
+	suppressed := map[workKey]bool{}
+	downweighted := 0
+	rows := make([]videoScoreRow, 0, len(eligible))
+	for _, video := range eligible {
+		k := key(video.ID)
+		if seen[k] || excluded[k] {
+			continue
+		}
+		if request.WatchState == RandomWatchUnwatched && watched[k] || request.WatchState == RandomWatchWatched && !watched[k] {
+			continue
+		}
+		// Smart views remain hard conditions, including contradictions with explicit work state.
+		if request.Filter.SmartView == LibraryViewUnwatched && watched[k] || request.Filter.SmartView == LibraryViewWatched && !watched[k] {
+			continue
+		}
+		if snoozed[k] {
+			suppressed[k] = true
+			continue
+		}
+		seen[k] = true
+		factor := 1.0
+		if downWorks[k] {
+			factor = 0.5
+			downweighted++
+		}
+		score := scores[k]
+		rows = append(rows, videoScoreRow{ID: video.ID, PlayCount: video.PlayCount, RandomPlayCount: video.RandomPlayCount, LastPlayedAt: video.LastPlayedAt, workScore: &score, feedbackFactor: factor, workWatched: watched[k]})
+	}
+	summary := ""
+	if len(suppressed) > 0 || downweighted > 0 {
+		summary = fmt.Sprintf("当前范围已暂避 %d 部作品，%d 部候选因所选标签减少推荐；可在今晚看什么中管理推荐反馈", len(suppressed), downweighted)
+	}
+	return &randomCandidatePool{request: request, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays, feedbackSummary: summary}, nil
 }
 
 // PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放（D-PC43、R10）。
@@ -188,7 +295,7 @@ func (s *VideoService) playRandomVideoWithFilterFrom(db *gorm.DB, request Random
 	if err != nil {
 		return nil, err
 	}
-	reason := randomSelectionReason(pool.request)
+	reason := randomPoolReason(pool)
 	if len(pool.rows) == 0 {
 		return &PlaybackAttemptResult{
 			DispatchSucceeded: false,
@@ -364,7 +471,7 @@ func (s *VideoService) PickRandomVideos(request RandomPlayRequest, count int) (*
 	if err != nil {
 		return nil, err
 	}
-	reason := randomSelectionReason(pool.request)
+	reason := randomPoolReason(pool)
 	if len(videos) == 0 {
 		return &RandomPickResult{
 			Videos:          []models.Video{},
@@ -438,6 +545,14 @@ func weightedSampleWithoutReplacement(weights []float64, totalWeight float64, co
 		picked = append(picked, selected)
 	}
 	return picked
+}
+
+func randomPoolReason(pool *randomCandidatePool) string {
+	reason := randomSelectionReason(pool.request)
+	if pool.feedbackSummary != "" {
+		reason += "；" + pool.feedbackSummary
+	}
+	return reason
 }
 
 // randomSelectionReason 用一句话说明这次随机的条件；request 须已经过 normalizeRandomPlayRequest。
@@ -526,12 +641,18 @@ func randomSelectionWeights(rows []videoScoreRow, playWeight float64, halfLifeDa
 	totalWeight := 0.0
 	for index, score := range scores {
 		weights[index] = maxScore - score + 1.0
+		if rows[index].feedbackFactor > 0 {
+			weights[index] *= rows[index].feedbackFactor
+		}
 		totalWeight += weights[index]
 	}
 	return weights, totalWeight
 }
 
 func decayedPlayScore(row videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) float64 {
+	if row.workScore != nil {
+		return *row.workScore
+	}
 	base := float64(row.PlayCount)*playWeight + float64(row.RandomPlayCount)
 	if halfLifeDays <= 0 || row.LastPlayedAt == nil || !now.After(*row.LastPlayedAt) {
 		return base

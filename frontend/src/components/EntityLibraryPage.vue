@@ -38,6 +38,7 @@
       </PageHeader>
     </template>
 
+    <CollectionEpisodePanel v-if="selectedEntity && !isPeople && !isFacesTab" :collection-id="Number(selectedEntity.id)" />
     <section v-if="!selectedEntity" class="entity-library__create glass-surface">
       <input ref="createName" v-model="createForm.name" :placeholder="isPeople ? '显示姓名' : '作品集名称'" :aria-label="isPeople ? '新人物的显示姓名' : '新作品集的名称'" maxlength="200" />
       <input v-model="createForm.secondary" :placeholder="isPeople ? '原始姓名（可空）' : '简介（可空）'" :aria-label="isPeople ? '新人物的原始姓名' : '新作品集的简介'" :maxlength="isPeople ? 200 : 4000" />
@@ -213,6 +214,7 @@
 </template>
 
 <script>
+import CollectionEpisodePanel from './CollectionEpisodePanel.vue';
 import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress } from '../utils/watchProgress.js';
 import {
   CreateCollection, CreatePerson, DeletePerson, GetCollectionDetail, GetPersonDeletionImpact, GetPersonDetail, GetPersonImages, ListCollections, ListPeople,
@@ -263,7 +265,7 @@ const COMMAND_SCOPE = 'entities-manage';
 // - focusEntity（观看页「在管理中编辑」）：{ id, name }，在对应的标签上打开这个对象并连编辑抽屉一起打开，置一次即消费。
 export default {
   name: 'EntityLibraryPage',
-  components: { AppBanner, AppIcon, AppTabs, EmptyState, FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PageHeader, PersonMediaDeleteDialog, SkeletonBlock },
+  components: { CollectionEpisodePanel, AppBanner, AppIcon, AppTabs, EmptyState, FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PageHeader, PersonMediaDeleteDialog, SkeletonBlock },
   // open-video(video)：点了某部相关视频，App 按管理区分流（片库管理 + 详情抽屉）。update:tab(key)：用户点了标签。
   emits: ['open-video', 'update:tab'],
   props: {

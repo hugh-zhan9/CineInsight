@@ -117,5 +117,12 @@ func AllModels() []interface{} {
 		&DataHealthReport{},
 		// UI 二期想看关联（D-P2-03）：外键指向 watchlist_entries 与 videos，两者都排在前面。
 		&WatchlistVideoLink{},
+		// Functional polish: diagnostic rows retain logical media references;
+		// episode corrections reference the existing composite membership key.
+		&RecommendationFeedback{},
+		&TaskFailureRun{},
+		&TaskFailureItem{},
+		&CollectionEpisodeAssignment{},
+		&CollectionSeasonExpectation{},
 	}
 }

@@ -192,6 +192,9 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 		running:       map[string]bool{},
 		waiting:       map[string]string{},
 	}
+	for _, warning := range a.functionalPolishWarnings() {
+		src.warn(warning)
+	}
 	if warning := a.cleanupConsolidationWarning(); warning != "" {
 		src.warn(warning)
 	}
@@ -474,7 +477,7 @@ func proxyRecentJobs(status services.PlaybackProxyStatus) []TaskRecentJob {
 func playbackProxyResultFailed(code string) bool {
 	switch code {
 	case services.PlaybackProxyCodeCreated, services.PlaybackProxyCodeAlreadyExists,
-		services.PlaybackProxyCodeInProgress, services.PlaybackProxyCodeCancelled:
+		services.PlaybackProxyCodeInProgress, services.PlaybackProxyCodeCancelled, services.PlaybackProxyCodeRetrySourceChanged:
 		return false
 	}
 	return true

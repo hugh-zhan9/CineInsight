@@ -605,3 +605,39 @@ func TestVersionGroupCleanupSurvivesFailedWriteAndReportsNotFound(t *testing.T) 
 		t.Fatalf("revision 过期应仍是冲突: %v", err)
 	}
 }
+
+func TestVersionIdentityChangesNotifyDerivedLibraryLinksAfterCommit(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewVersionGroupService()
+	ctx := context.Background()
+	a, b, c := seedVersionVideo(t, "notify-a", nil), seedVersionVideo(t, "notify-b", nil), seedVersionVideo(t, "notify-c", nil)
+	notifications := []string{}
+	SetLibraryMatchInputListener(func(reason string) { notifications = append(notifications, reason) })
+	defer SetLibraryMatchInputListener(nil)
+	group, err := svc.Create(ctx, []uint{a.ID, b.ID}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifications) != 1 {
+		t.Fatal(notifications)
+	}
+	group, err = svc.AddMembers(ctx, group.GroupID, group.Revision, []uint{c.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifications) != 2 {
+		t.Fatal(notifications)
+	}
+	if _, err := svc.RemoveMember(ctx, group.GroupID, group.Revision-1, c.ID); err == nil {
+		t.Fatal("stale revision accepted")
+	}
+	if len(notifications) != 2 {
+		t.Fatal("failed write emitted identity change")
+	}
+	if err := svc.Dissolve(ctx, group.GroupID, group.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifications) != 3 {
+		t.Fatal(notifications)
+	}
+}

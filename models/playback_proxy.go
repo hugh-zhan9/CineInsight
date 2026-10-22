@@ -24,9 +24,10 @@ const (
 // 源指纹是 size + mtime_ns，与缩略图、pHash、技术快照同一口径。预览与手机端在
 // 命中代理之前都要 os.Stat 源文件比对一次；不一致就连文件带行一起删掉。
 type VideoPlaybackProxy struct {
-	ID      uint  `gorm:"primarykey" json:"id"`
-	VideoID uint  `gorm:"not null;uniqueIndex:idx_video_playback_proxies_video" json:"video_id"`
-	Video   Video `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	FailureRetryClaim string `gorm:"size:64;not null;default:''" json:"-"`
+	ID                uint   `gorm:"primarykey" json:"id"`
+	VideoID           uint   `gorm:"not null;uniqueIndex:idx_video_playback_proxies_video" json:"video_id"`
+	Video             Video  `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
 	// SourceSize / SourceModTimeNS 是生成这份代理时源文件的指纹。
 	SourceSize      int64 `gorm:"not null" json:"source_size"`
 	SourceModTimeNS int64 `gorm:"not null" json:"source_mod_time_ns"`

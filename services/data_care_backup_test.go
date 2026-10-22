@@ -166,18 +166,33 @@ func TestDataCareBackupQuickCheckFailureIsNotPublished(t *testing.T) {
 	}
 }
 
-// corruptSQLiteTail 把库文件最后几页写成乱码：表页坏掉但库仍能打开，quick_check 报问题。
+// corruptSQLiteTail damages an actual application B-tree page, leaving sqlite_schema
+// readable. Guessing the final pages can hit schema overflow pages as models grow.
 func corruptSQLiteTail(t *testing.T, path string) {
 	t.Helper()
+	db, closeDB, err := openSQLiteReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootPage, pageSize int64
+	if err := db.Raw("SELECT rootpage FROM sqlite_master WHERE type = 'table' AND substr(name,1,7) <> 'sqlite_' AND rootpage > 1 ORDER BY CASE WHEN name = 'videos' THEN 0 ELSE 1 END, name LIMIT 1").Scan(&rootPage).Error; err != nil {
+		closeDB()
+		t.Fatal(err)
+	}
+	if err := db.Raw("PRAGMA page_size").Scan(&pageSize).Error; err != nil {
+		closeDB()
+		t.Fatal(err)
+	}
+	closeDB()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := len(data) - 3*4096; index < len(data); index++ {
-		if index > 4096 {
-			data[index] = byte(index*7 + 13)
-		}
+	offset := (rootPage - 1) * pageSize
+	if rootPage <= 1 || pageSize <= 0 || offset < 0 || offset >= int64(len(data)) {
+		t.Fatalf("invalid data B-tree fixture page=%d size=%d", rootPage, pageSize)
 	}
+	data[offset] = 0xff // invalid B-tree page type; do not alter any schema page
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -1,17 +1,29 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"golang.org/x/text/unicode/norm"
 )
 
-var subtitleFileMutationLocks [64]sync.Mutex
+type subtitleFileMutex struct{ contextMutex }
+
+func (m *subtitleFileMutex) TryLock() bool {
+	m.init()
+	select {
+	case <-m.token:
+		return true
+	default:
+		return false
+	}
+}
+
+var subtitleFileMutationLocks [64]subtitleFileMutex
 
 // lockSubtitleFile 按规范化后的 .srt 路径加锁：movie.mp4 与 movie.mkv 共用 movie.srt，
 // 必须互斥，所以锁的键是字幕文件而不是视频 ID。
@@ -33,6 +45,16 @@ func lockSubtitleFile(srtPath string) func() {
 	lock := &subtitleFileMutationLocks[subtitleFileLockBucket(srtPath)]
 	lock.Lock()
 	return lock.Unlock
+}
+
+// lockSubtitleFileContext shares the same path buckets as every existing subtitle writer.
+// A cancelled waiter leaves no parked goroutine and never acquires the lock later.
+func lockSubtitleFileContext(ctx context.Context, srtPath string) (func(), error) {
+	lock := &subtitleFileMutationLocks[subtitleFileLockBucket(srtPath)]
+	if err := lock.LockContext(ctx); err != nil {
+		return nil, err
+	}
+	return lock.Unlock, nil
 }
 
 // subtitleFileLockKey 把字幕路径规整成锁的键：Clean → Unicode NFC → 小写。

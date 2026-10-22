@@ -73,6 +73,7 @@ type VideoLocalMetadataState struct {
 
 // VideoTechnicalMetadata records the last successful local probe and the last attempt.
 type VideoTechnicalMetadata struct {
+	FailureRetryClaim          string     `gorm:"size:64;not null;default:''" json:"-"`
 	VideoID                    uint       `gorm:"primaryKey;autoIncrement:false" json:"video_id"`
 	Video                      Video      `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
 	FormatName                 string     `gorm:"type:text;not null;default:''" json:"format_name"`

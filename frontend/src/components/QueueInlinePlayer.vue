@@ -3,16 +3,19 @@
     <video ref="video" :src="identity.locator" controls playsinline preload="metadata" data-test="queue-inline-video"
       @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @timeupdate="progress" @ended="ended" @error="failed" />
+    <PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :video-element="() => $refs.video" />
     <p v-if="error" role="alert" data-test="queue-inline-error">{{ error }}</p>
   </div>
 </template>
 <script>
+import PlaybackSubtitleControls from './player/PlaybackSubtitleControls.vue';
 import { GetPlaybackQueue, ReportInlineQueuePlayback } from '../../wailsjs/go/main/App';
 import { claimActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
 const DESYNC_MESSAGE = '播放状态与待播队列不同步，已暂停。请停止队列后重新播放此项。';
 const STALE_MESSAGE = '播放器已重新载入，已暂停。请在队列中重新播放此项。';
 export default {
   name: 'QueueInlinePlayer',
+  components: { PlaybackSubtitleControls },
   props: { session: { type: Object, required: true } },
   emits: ['error'],
   data() {

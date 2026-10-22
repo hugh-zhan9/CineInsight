@@ -11,6 +11,11 @@
       <p class="help-text">开启后，每次启动应用都会自动同步磁盘文件变动并补全元数据。</p>
     </div>
     <div class="setting-item">
+      <label>桌面播放器</label>
+      <select v-model="form.desktop_player" class="select-input"><option value="system">系统默认播放器</option><option value="iina_controlled">IINA 精确同步</option></select>
+      <p class="help-text">精确同步会打开应用管理的独立 IINA 窗口，按实际播放记录进度；不可用时明确提示。队列播放期间请先停止队列。</p>
+      <button type="button" class="btn btn--secondary" @click="stopControlled">停止精确同步播放</button>
+      <p v-if="controlledError" role="alert">{{ controlledError }}</p>
       <label>点「播放」时的续播口径</label>
       <select v-model="form.playback_resume_mode" class="select-input" data-test="playback-resume-mode">
         <option value="resume">接着上次的位置播</option>
@@ -188,11 +193,13 @@
 </template>
 
 <script>
+import { StopControlledPlayback } from '../../../wailsjs/go/main/App';
 import { SelectDirectory } from '../../../wailsjs/go/main/App';
 
 // 自动化与扫描分区。两份扫描黑名单以换行分隔存在设置字段里，这里带着它们的
 // 增删逻辑一起搬过来；选目录失败的提示交回页面顶部的保存状态栏。
 export default {
+ data: () => ({controlledError: ''}),
   name: 'AutomationSection',
   props: {
     form: { type: Object, required: true }
@@ -207,6 +214,7 @@ export default {
     }
   },
   methods: {
+    async stopControlled() {this.controlledError='';try{await StopControlledPlayback();}catch(error){this.controlledError=String(error)}},
     async addScanExcludeDirectory() {
       try {
         const path = await SelectDirectory();

@@ -150,6 +150,7 @@ function normalizeSceneIntervalSeconds(value) {
 
 export function normalizeSettingsForm(settings) {
   const form = { ...(settings || {}) };
+  form.desktop_player = form.desktop_player || 'system';
   if (!form.video_extensions || String(form.video_extensions).trim() === '') {
     form.video_extensions = DEFAULT_VIDEO_EXTENSIONS;
   }
@@ -209,6 +210,7 @@ export function buildSettingsPayload(form) {
     random_half_life_days: Math.max(0, Number(form.random_half_life_days) || 0),
     auto_scan_on_startup: form.auto_scan_on_startup,
     playback_resume_mode: form.playback_resume_mode || 'resume',
+    desktop_player: form.desktop_player || 'system',
     auto_technical_backfill: form.auto_technical_backfill,
     auto_perceptual_hash: form.auto_perceptual_hash,
     auto_cleanup_analysis: form.auto_cleanup_analysis,

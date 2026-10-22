@@ -2,11 +2,11 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -173,6 +173,7 @@ type watchlistLinkVideo struct {
 
 // watchlistLinkSet 是一批条目的关联读取结果。
 type watchlistLinkSet struct {
+	matchingWorks   map[uint]map[int64]uint
 	links           map[uint][]watchlistLinkRow // 条目 → 可见关联（活跃视频、作品没被解除），按关联时间升序
 	videos          map[uint]watchlistLinkVideo // 可见关联涉及的活跃视频
 	dismissedVideos map[uint][]uint             // 条目 → dismissed 行的视频 ID
@@ -289,14 +290,16 @@ func loadWatchlistLinks(db *gorm.DB, entries []models.WatchlistEntry) (*watchlis
 			doubanIDs = append(doubanIDs, id)
 		}
 		sort.Strings(doubanIDs)
-		var rows []models.MovieVideoLink
-		if err := db.Select("douban_id", "video_id", "created_at").
-			Where("douban_id IN ?", doubanIDs).Order("id ASC").Find(&rows).Error; err != nil {
-			return nil, fmt.Errorf("读取榜单关联失败: %w", err)
-		}
-		for _, row := range rows {
-			for _, entryID := range byDouban[row.DoubanID] {
-				add(watchlistLinkRow{EntryID: entryID, VideoID: row.VideoID, Origin: models.WatchlistLinkOriginManual, LinkedAt: row.CreatedAt})
+		for start := 0; start < len(doubanIDs); start += 500 {
+			var rows []models.MovieVideoLink
+			if err := db.Select("douban_id", "video_id", "created_at").
+				Where("douban_id IN ?", doubanIDs[start:min(start+500, len(doubanIDs))]).Order("id ASC").Find(&rows).Error; err != nil {
+				return nil, fmt.Errorf("读取榜单关联失败: %w", err)
+			}
+			for _, row := range rows {
+				for _, entryID := range byDouban[row.DoubanID] {
+					add(watchlistLinkRow{EntryID: entryID, VideoID: row.VideoID, Origin: models.WatchlistLinkOriginManual, LinkedAt: row.CreatedAt})
+				}
 			}
 		}
 	}
@@ -327,7 +330,21 @@ func loadWatchlistLinks(db *gorm.DB, entries []models.WatchlistEntry) (*watchlis
 			set.videos[row.ID] = row
 		}
 	}
+	validWorks, err := watchlistMatchingWorks(db, entries)
+	if err != nil {
+		return nil, err
+	}
+	set.matchingWorks = validWorks
 	for key, row := range merged {
+		if row.Origin == models.WatchlistLinkOriginAuto {
+			targets := validWorks[key.entry]
+			if len(targets) != 1 {
+				continue
+			}
+			if _, ok := targets[workKeyOf(key.video, groups)]; !ok {
+				continue
+			}
+		}
 		if _, active := set.videos[key.video]; !active {
 			continue
 		}
@@ -349,7 +366,12 @@ func loadWatchlistLinks(db *gorm.DB, entries []models.WatchlistEntry) (*watchlis
 }
 
 // ListLibraryState 返回这些条目的片库关联状态（最多 200 个）；不存在的条目不出现在结果里。
-func (s *WatchlistService) ListLibraryState(entryIDs []uint) (map[uint]WatchlistLibraryState, error) {
+func (s *WatchlistService) ListLibraryState(entryIDs []uint) (result map[uint]WatchlistLibraryState, err error) {
+	err = database.DB.Transaction(func(tx *gorm.DB) error { result, err = listWatchlistLibraryState(tx, entryIDs); return err }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return
+}
+
+func listWatchlistLibraryState(db *gorm.DB, entryIDs []uint) (map[uint]WatchlistLibraryState, error) {
 	ids := uniqueUintIDs(entryIDs)
 	if len(ids) > watchlistLibraryStateMaxEntries {
 		return nil, fmt.Errorf("一次最多查询 %d 条想看记录的片库状态", watchlistLibraryStateMaxEntries)
@@ -359,10 +381,10 @@ func (s *WatchlistService) ListLibraryState(entryIDs []uint) (map[uint]Watchlist
 		return result, nil
 	}
 	var entries []models.WatchlistEntry
-	if err := database.DB.Select("id", "source_name", "source_item_id").Where("id IN ?", ids).Find(&entries).Error; err != nil {
+	if err := db.Select("id", "title", "year", "source_name", "source_item_id").Where("id IN ?", ids).Find(&entries).Error; err != nil {
 		return nil, fmt.Errorf("读取想看片单失败: %w", err)
 	}
-	set, err := loadWatchlistLinks(database.DB, entries)
+	set, err := loadWatchlistLinks(db, entries)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +402,7 @@ func (s *WatchlistService) ListLibraryState(entryIDs []uint) (map[uint]Watchlist
 			GroupID uint
 			VideoID uint
 		}
-		if err := database.DB.Table("video_version_members").Select("group_id", "video_id").
+		if err := db.Table("video_version_members").Select("group_id", "video_id").
 			Where("group_id IN ?", uniqueUintIDs(dismissedGroups)).Scan(&rows).Error; err != nil {
 			return nil, fmt.Errorf("读取版本组成员失败: %w", err)
 		}
@@ -601,13 +623,18 @@ func (s *WatchlistService) ListInLibraryPage(offset, limit int) (*WatchlistInLib
 }
 
 // listWatchlistInLibrary 返回全部符合条件的条目，按关联时间倒序（同一时刻条目 ID 大的在前）。
-func listWatchlistInLibrary() ([]WatchlistInLibraryItem, error) {
+func listWatchlistInLibrary() (items []WatchlistInLibraryItem, err error) {
+	err = database.DB.Transaction(func(tx *gorm.DB) error { items, err = listWatchlistInLibrarySnapshot(tx); return err }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return
+}
+
+func listWatchlistInLibrarySnapshot(db *gorm.DB) ([]WatchlistInLibraryItem, error) {
 	var entries []models.WatchlistEntry
-	if err := database.DB.Select("id", "title", "kind", "year", "poster_path", "source_name", "source_item_id").
+	if err := db.Select("id", "title", "kind", "year", "poster_path", "source_name", "source_item_id").
 		Order("id ASC").Find(&entries).Error; err != nil {
 		return nil, fmt.Errorf("读取想看片单失败: %w", err)
 	}
-	set, err := loadWatchlistLinks(database.DB, entries)
+	set, err := loadWatchlistLinks(db, entries)
 	if err != nil {
 		return nil, err
 	}
@@ -628,7 +655,7 @@ func listWatchlistInLibrary() ([]WatchlistInLibraryItem, error) {
 			targetIDs = append(targetIDs, chosen.VideoID)
 		}
 	}
-	works, err := loadPlayableWorks(database.DB, targetIDs)
+	works, err := loadPlayableWorks(db, targetIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -681,7 +708,7 @@ func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, err
 		groupIDs = append(groupIDs, group)
 	}
 	byGroup := map[uint]playableWork{}
-	if len(groupIDs) > 0 {
+	for _, groupChunk := range chunkUintIDs(uniqueUintIDs(groupIDs), 500) {
 		var members []struct {
 			GroupID      uint
 			ID           uint
@@ -693,7 +720,7 @@ func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, err
 		if err := db.Table("video_version_members AS vm").
 			Select("vm.group_id AS group_id, v.id AS id, v.display_title AS display_title, v.name AS name, v.is_watched AS is_watched, v.is_stale AS is_stale").
 			Joins("JOIN videos v ON v.id = vm.video_id AND v.deleted_at IS NULL").
-			Where("vm.group_id IN ?", uniqueUintIDs(groupIDs)).
+			Where("vm.group_id IN ?", groupChunk).
 			Order("vm.group_id ASC").Order("vm.position ASC").Order("vm.video_id ASC").
 			Scan(&members).Error; err != nil {
 			return nil, fmt.Errorf("读取版本组成员失败: %w", err)
@@ -708,9 +735,11 @@ func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, err
 				byGroup[member.GroupID] = playableWork{representative: watchlistLinkVideo{ID: member.ID, DisplayTitle: member.DisplayTitle, Name: member.Name, IsWatched: member.IsWatched}}
 			}
 		}
-		for group, work := range byGroup {
-			work.watched = watchedGroups[group]
-			byGroup[group] = work
+		for _, group := range groupChunk {
+			if work, ok := byGroup[group]; ok {
+				work.watched = watchedGroups[group]
+				byGroup[group] = work
+			}
 		}
 	}
 	var singles []watchlistLinkVideo
@@ -720,11 +749,13 @@ func loadPlayableWorks(db *gorm.DB, videoIDs []uint) (map[uint]playableWork, err
 			ungrouped = append(ungrouped, id)
 		}
 	}
-	if len(ungrouped) > 0 {
+	for _, singleChunk := range chunkUintIDs(ungrouped, 500) {
+		var batch []watchlistLinkVideo
 		if err := db.Model(&models.Video{}).Select("id", "display_title", "name", "is_watched", "is_stale").
-			Where("id IN ? AND is_stale = ?", ungrouped, false).Scan(&singles).Error; err != nil {
+			Where("id IN ? AND is_stale = ?", singleChunk, false).Scan(&batch).Error; err != nil {
 			return nil, fmt.Errorf("读取关联视频失败: %w", err)
 		}
+		singles = append(singles, batch...)
 	}
 	for _, single := range singles {
 		result[single.ID] = playableWork{representative: single, watched: single.IsWatched}
@@ -856,15 +887,30 @@ func (s *WatchlistService) runLibraryMatchRound(ctx context.Context, entryIDs []
 		return 0, nil
 	}
 	db := database.DB.WithContext(ctx)
-	query := db.Select("id", "title", "year", "source_name", "source_item_id").
-		Where("year > 0 AND title <> ''")
-	if entryIDs != nil {
-		query = query.Where("id IN ?", entryIDs)
+	linked := 0
+	consume := func(entries []models.WatchlistEntry) error {
+		count, err := s.reconcileLibraryMatchBatch(db, entries)
+		linked += count
+		return err
 	}
-	var entries []models.WatchlistEntry
-	if err := query.Order("id ASC").Find(&entries).Error; err != nil {
-		return 0, fmt.Errorf("读取想看片单失败: %w", err)
+	if entryIDs == nil {
+		var entries []models.WatchlistEntry
+		err := db.Select("id", "title", "year", "source_name", "source_item_id").Order("id ASC").FindInBatches(&entries, 500, func(_ *gorm.DB, _ int) error { return consume(entries) }).Error
+		return linked, err
 	}
+	for _, chunk := range chunkUintIDs(uniqueUintIDs(entryIDs), 500) {
+		var entries []models.WatchlistEntry
+		if err := db.Select("id", "title", "year", "source_name", "source_item_id").Where("id IN ?", chunk).Order("id ASC").Find(&entries).Error; err != nil {
+			return linked, err
+		}
+		if err := consume(entries); err != nil {
+			return linked, err
+		}
+	}
+	return linked, nil
+}
+
+func (s *WatchlistService) reconcileLibraryMatchBatch(db *gorm.DB, entries []models.WatchlistEntry) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
 	}
@@ -872,97 +918,98 @@ func (s *WatchlistService) runLibraryMatchRound(ctx context.Context, entryIDs []
 	if err != nil {
 		return 0, err
 	}
-	byKey := map[string][]*watchlistMatchCandidate{}
-	candidates := make([]*watchlistMatchCandidate, 0, len(entries))
-	years := map[int]struct{}{}
+	targetsByEntry := set.matchingWorks
+	oldByEntry := map[uint][]models.WatchlistVideoLink{}
+	ids := make([]uint, 0, len(entries))
 	for _, entry := range entries {
-		if len(set.links[entry.ID]) > 0 {
-			continue
+		ids = append(ids, entry.ID)
+	}
+	oldIDs := []uint{}
+	for _, chunk := range chunkUintIDs(ids, 500) {
+		var rows []models.WatchlistVideoLink
+		if err := db.Where("watchlist_entry_id IN ? AND origin = ?", chunk, models.WatchlistLinkOriginAuto).Find(&rows).Error; err != nil {
+			return 0, err
 		}
-		normalized := normalizeLibraryTitle(entry.Title)
-		if normalized == "" {
-			continue
-		}
-		candidate := &watchlistMatchCandidate{entry: entry, hits: map[uint]struct{}{}}
-		key := normalized + "|" + strconv.Itoa(entry.Year)
-		byKey[key] = append(byKey[key], candidate)
-		candidates = append(candidates, candidate)
-		years[entry.Year] = struct{}{}
-	}
-	if len(candidates) == 0 {
-		return 0, nil
-	}
-	yearList := make([]int, 0, len(years))
-	for year := range years {
-		yearList = append(yearList, year)
-	}
-	sort.Ints(yearList)
-	var batch []models.Video
-	err = db.Model(&models.Video{}).
-		Select("id", "name", "display_title", "original_title", "year").
-		Where("is_stale = ? AND year IN ?", false, yearList).
-		FindInBatches(&batch, 1000, func(_ *gorm.DB, _ int) error {
-			for _, video := range batch {
-				if video.Year == nil {
-					continue
-				}
-				seen := map[string]bool{}
-				for _, field := range libraryMatchFields(video) {
-					if seen[field] {
-						continue
-					}
-					seen[field] = true
-					for _, candidate := range byKey[field+"|"+strconv.Itoa(*video.Year)] {
-						candidate.hits[video.ID] = struct{}{}
-					}
-				}
-			}
-			return nil
-		}).Error
-	if err != nil {
-		return 0, fmt.Errorf("匹配片库失败: %w", err)
-	}
-	hitIDs := make([]uint, 0)
-	for _, candidate := range candidates {
-		for id := range candidate.hits {
-			hitIDs = append(hitIDs, id)
+		for _, row := range rows {
+			oldByEntry[row.WatchlistEntryID] = append(oldByEntry[row.WatchlistEntryID], row)
+			oldIDs = append(oldIDs, row.VideoID)
 		}
 	}
-	works, err := loadPlayableWorks(db, hitIDs)
-	if err != nil {
-		return 0, err
-	}
-	hitGroups, err := videoGroupsOf(db, hitIDs)
+	groups, err := videoGroupsOf(db, oldIDs)
 	if err != nil {
 		return 0, err
 	}
 	linked := 0
-	for _, candidate := range candidates {
-		targets := map[int64]uint{}
-		for id := range candidate.hits {
-			if work, ok := works[id]; ok {
-				targets[workKeyOf(id, hitGroups)] = work.representative.ID
+	for _, entry := range entries {
+		targets := targetsByEntry[entry.ID]
+		stale := []models.WatchlistVideoLink{}
+		for _, row := range oldByEntry[entry.ID] {
+			_, matches := targets[workKeyOf(row.VideoID, groups)]
+			if len(targets) != 1 || !matches {
+				stale = append(stale, row)
 			}
 		}
-		if len(targets) != 1 {
-			continue // 没命中，或命中不止一部作品：留给「片库中可能已有」由用户确认
+		var target uint
+		if len(set.links[entry.ID]) == 0 && len(targets) == 1 {
+			for key, id := range targets {
+				if _, dismissed := set.dismissedWorks[entry.ID][key]; !dismissed {
+					target = id
+				}
+			}
 		}
-		for workKey, target := range targets {
-			if _, dismissed := set.dismissedWorks[candidate.entry.ID][workKey]; dismissed {
-				continue // 这部作品（任一版本）被这个条目解除过
+		if len(stale) == 0 && target == 0 {
+			continue
+		}
+		if hook := s.match.beforeAutoWrite; hook != nil {
+			id := target
+			if id == 0 {
+				id = stale[0].VideoID
 			}
-			if hook := s.match.beforeAutoWrite; hook != nil {
-				hook(candidate.entry.ID, target)
+			hook(entry.ID, id)
+		}
+		created := false
+		err := db.Transaction(func(tx *gorm.DB) error {
+			for _, row := range stale {
+				result := tx.Where("id = ? AND origin = ? AND updated_at = ?", row.ID, models.WatchlistLinkOriginAuto, row.UpdatedAt).Delete(&models.WatchlistVideoLink{})
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected == 0 {
+					return nil
+				} // a concurrent manual decision wins this round
 			}
-			created, err := writeAutoWatchlistLink(db, candidate.entry.ID, target)
+			if target == 0 {
+				return nil
+			}
+			members, err := workMembersOf(tx, target)
 			if err != nil {
-				return linked, err
+				return err
 			}
-			if created {
-				linked++
+			var blockers int64
+			if err := tx.Model(&models.WatchlistVideoLink{}).Where("watchlist_entry_id = ? AND (origin = ? OR (origin = ? AND video_id IN ?))", entry.ID, models.WatchlistLinkOriginManual, models.WatchlistLinkOriginDismissed, members).Count(&blockers).Error; err != nil {
+				return err
 			}
+			if blockers > 0 {
+				return nil
+			}
+			var video models.Video
+			if err := tx.Select("id", "is_stale").First(&video, target).Error; err != nil {
+				return err
+			}
+			if video.IsStale {
+				return nil
+			}
+			created, err = writeAutoWatchlistLink(tx, entry.ID, target)
+			return err
+		})
+		if err != nil {
+			return linked, err
+		}
+		if created {
+			linked++
 		}
 	}
+
 	return linked, nil
 }
 

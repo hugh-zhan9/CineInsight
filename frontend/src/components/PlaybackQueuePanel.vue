@@ -12,6 +12,7 @@
       <button type="button" class="btn btn--secondary btn--sm" @click="$emit('open-video', snapshot.current.video_id)">原片详情</button>
     </div>
     <p v-if="error" role="alert" data-test="queue-error">{{ error }} <button type="button" class="btn btn--secondary btn--sm" @click="load(cursor, history)">刷新</button></p>
+    <button v-if="cleanupPending" type="button" class="btn btn--secondary btn--sm" data-test="queue-cleanup-retry" :disabled="busy" @click="stop">重试停止队列</button>
     <p v-if="snapshot?.warning" role="alert">{{ snapshot.warning }}</p>
     <p v-if="snapshot?.state.last_error_message" role="alert">{{ snapshot.state.last_error_message }}</p>
     <QueueInlinePlayer v-if="snapshot?.session" :key="snapshot.session.token" :session="snapshot.session" @error="error = $event" />
@@ -63,7 +64,7 @@ export default {
   name: 'PlaybackQueuePanel',
   components: { DialogShell, QueueInlinePlayer }, mixins: [runtimeEventsMixin],
   props: { open: Boolean }, emits: ['open', 'close', 'open-video'],
-  data: () => ({ snapshot: null, error: '', unavailable: false, loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [], thumbFailed: {} }),
+  data: () => ({ snapshot: null, error: '', unavailable: false, cleanupPending: false, cleanupToken: '', loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [], thumbFailed: {} }),
   mounted() { this.registerRuntimeEvent('playback-queue-state', () => this.load(this.cursor, this.history)); this.load(); },
   beforeUnmount() { this.generation++; },
   watch: { open(value) { if (value) this.load(this.cursor, this.history); } },
@@ -78,12 +79,16 @@ export default {
       try {
         const result = await GetPlaybackQueue({ ...cursor, limit: 50 });
         if (generation !== this.generation) return;
-        this.snapshot = result; this.cursor = { ...cursor }; this.history = [...history]; this.error = ''; this.unavailable = false;
+        this.snapshot = result; this.cursor = { ...cursor }; this.history = [...history]; this.error = ''; this.unavailable = false; this.cleanupPending = false; this.cleanupToken = '';
       } catch (error) {
         if (generation !== this.generation) return;
         if (String(error).includes('queue_changed') && cursor.cursor_id) return this.load();
-        this.error = String(error);
-        if (/queue_unavailable|playback_quiesced/.test(this.error)) { this.unavailable = true; if (this.snapshot) this.snapshot = { ...this.snapshot, session: null }; }
+        const message = String(error);
+        const cleanup = message.match(/queue_cleanup_pending:([a-f0-9]{32}):(.+)$/);
+        this.cleanupPending = Boolean(cleanup);
+        this.cleanupToken = cleanup?.[1] || '';
+        this.error = cleanup ? cleanup[2] : message;
+        if (cleanup || /queue_unavailable|playback_quiesced/.test(message)) { this.unavailable = true; if (this.snapshot) this.snapshot = { ...this.snapshot, session: null }; }
       } finally { if (generation === this.generation) this.loading = false; }
     },
     async perform(action) {
@@ -95,7 +100,7 @@ export default {
     edit(change) { const expected_revision = this.snapshot.state.revision; return this.perform(() => EditPlaybackQueue({ ...change, expected_revision })); },
     play(item) { const revision = this.snapshot.state.revision; return this.perform(() => PlayPlaybackQueue(item.id, revision)); },
     next() { const state = { ...this.snapshot.state }; return this.perform(() => NextPlaybackQueue(state.active_token, state.revision)); },
-    stop() { const token = this.snapshot.state.active_token; return this.perform(() => StopPlaybackQueue(token)); },
+    stop() { const token = this.cleanupPending ? this.cleanupToken : this.snapshot.state.active_token; return this.perform(() => StopPlaybackQueue(token)); },
     control() { const state = { ...this.snapshot.state }; return this.perform(() => ControlPlaybackQueue(state.active_token, state.status === 'paused' ? 'resume' : 'pause')); },
     async configure(player, autoplay) {
       const revision = this.snapshot.state.revision;

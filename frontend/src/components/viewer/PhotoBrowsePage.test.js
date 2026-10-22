@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({
   GetImageDetail: vi.fn(),
   GetWallpaperPreflight: vi.fn(),
+  ListImageAnniversaries: vi.fn(),
   ListImageFolderGroups: vi.fn(),
   ListImageTimelineBuckets: vi.fn(),
   ListPeople: vi.fn(),
@@ -780,4 +781,19 @@ describe('PhotoBrowsePage 别处改了图片后原地刷新', () => {
     expect(wrapper.vm.list.items).toHaveLength(0);
     expect(wrapper.get('[data-test="photo-browse-no-results"]').exists()).toBe(true);
   });
+});
+
+
+it('anniversary mode exposes only supported filters and hides the old count', async () => {
+  api.ListImageAnniversaries.mockResolvedValue({ items: [], total: 0 });
+  const wrapper = await mountPage();
+  await wrapper.findAll('button').find(button => button.text() === '那年今天').trigger('click');
+  await flushPromises();
+  expect(wrapper.find('[data-test="photo-browse-search"]').exists()).toBe(false);
+  expect(wrapper.find('[data-test="photo-browse-scope"]').exists()).toBe(false);
+  expect(wrapper.find('[data-test="photo-browse-folder-trigger"]').exists()).toBe(false);
+  expect(wrapper.find('[data-test="photo-browse-person-trigger"]').exists()).toBe(true);
+  expect(wrapper.text()).toContain('往年同月同日的照片 · 可按人物筛选');
+  await wrapper.setProps({ pageActive: false });
+  expect(wrapper.findComponent({ name: 'PhotoAnniversaries' }).props('pageActive')).toBe(false);
 });

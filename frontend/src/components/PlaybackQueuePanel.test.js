@@ -95,3 +95,18 @@ it('clicking an entry thumbnail or title opens its video detail and closes the l
   expect(wrapper.emitted('close')).toHaveLength(1);
   expect(api.PlayPlaybackQueue).not.toHaveBeenCalled();
 });
+it('keeps cleanup retry available and removes buffered playback after failed maintenance', async () => {
+  await panel();
+  const cleanupToken = 'abcdef0123456789abcdef0123456789';
+  api.GetPlaybackQueue.mockRejectedValueOnce(new Error(`queue_cleanup_pending:${cleanupToken}:专用队列播放器尚未清理，请重试停止`));
+  await wrapper.vm.load();
+  expect(wrapper.findComponent({ name: 'QueueInlinePlayer' }).exists()).toBe(false);
+  expect(wrapper.text()).not.toContain(cleanupToken);
+  expect(wrapper.get('[data-test="queue-cleanup-retry"]').attributes('disabled')).toBeUndefined();
+  api.StopPlaybackQueue.mockResolvedValue();
+  api.GetPlaybackQueue.mockResolvedValue(snapshot({ session: null, state: { revision: 2, player: 'inline', status: 'interrupted', active_token: '' } }));
+  await wrapper.get('[data-test="queue-cleanup-retry"]').trigger('click');
+  await flushPromises();
+  expect(api.StopPlaybackQueue).toHaveBeenCalledWith(cleanupToken);
+  expect(wrapper.find('[data-test="queue-cleanup-retry"]').exists()).toBe(false);
+});

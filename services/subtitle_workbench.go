@@ -123,6 +123,7 @@ type SubtitleConvertResult struct {
 }
 
 type SubtitleWorkbenchService struct {
+	extraction        subtitleExtractionState
 	subtitleService   *SubtitleService
 	replaceFile       func(string, string) error
 	translatorFactory func(SubtitleTranslationConfig) (SubtitleTranslator, error)
@@ -226,6 +227,10 @@ func (s *SubtitleWorkbenchService) Validate(entries []subtitleparser.EditorSegme
 }
 
 func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request SubtitleSaveRequest) (*SubtitleSaveResult, error) {
+	return s.saveDocument(context.Background(), video, request, nil)
+}
+
+func (s *SubtitleWorkbenchService) saveDocument(ctx context.Context, video models.Video, request SubtitleSaveRequest, validateSource func() error) (*SubtitleSaveResult, error) {
 	if request.VideoID == 0 || request.VideoID != video.ID {
 		return nil, errors.New("保存请求的视频与当前视频不一致")
 	}
@@ -246,7 +251,10 @@ func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request Subt
 	}
 
 	srtPath := subtitleparser.SRTPathForVideo(video.Path)
-	unlock := lockSubtitleFile(srtPath)
+	unlock, err := lockSubtitleFileContext(ctx, srtPath)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 
 	_, currentFingerprint, _, err := readSubtitleForEditing(srtPath)
@@ -261,7 +269,15 @@ func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request Subt
 		return rejectedSubtitleSave(SubtitleWorkbenchErrorConflict, "字幕在编辑器之外被修改，请重新加载后再保存"), nil
 	}
 
-	writeResult, err := s.writer().Replace(context.Background(), video.ID, srtPath, serialized)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if validateSource != nil {
+		if err := validateSource(); err != nil {
+			return nil, err
+		}
+	}
+	writeResult, err := s.writer().Replace(ctx, video.ID, srtPath, serialized)
 	if err != nil {
 		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, err.Error()), nil
 	}

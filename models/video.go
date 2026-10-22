@@ -142,6 +142,7 @@ type Tag struct {
 
 // Settings 应用设置
 type Settings struct {
+	DesktopPlayer string `json:"desktop_player"` // Empty/system keeps the system player; iina_controlled is explicit.
 	// Jellyfin 配置只由独立配置入口维护，不进入通用设置写回。
 	JellyfinEnabled       bool    `json:"jellyfin_enabled"`
 	JellyfinPort          int     `json:"jellyfin_port"`

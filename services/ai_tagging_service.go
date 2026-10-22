@@ -24,20 +24,23 @@ const aiTaggingWorkerInterval = 5 * time.Minute
 const aiTaggingSkipReasonManualRetry = "manual_retry"
 
 type AITaggingService struct {
-	reviewMu       sync.Mutex
-	reviewApproval *ReviewApprovalWorkflow
-	configProvider AITaggingConfigProvider
-	clientFactory  func(AITaggingConfig) AITaggingAIClient
-	extractor      *AITaggingExtractor
-	transcript     TemporaryTranscriptProvider
-	sameSource     AISameSourceProvider
-	now            func() time.Time
-	workerMu       sync.Mutex
-	workerRunMu    sync.Mutex
-	workerCancel   context.CancelFunc
-	workerWake     chan struct{}
-	registry       *BackgroundTaskRegistry
-	idleGate       *IdleGate
+	beforeFailureClaim func(*gorm.DB)
+	failureRecorder    taskFailureRecorder
+	reviewMu           sync.Mutex
+	reviewApproval     *ReviewApprovalWorkflow
+	configProvider     AITaggingConfigProvider
+	clientFactory      func(AITaggingConfig) AITaggingAIClient
+	extractor          *AITaggingExtractor
+	transcript         TemporaryTranscriptProvider
+	sameSource         AISameSourceProvider
+	now                func() time.Time
+	workerMu           sync.Mutex
+	workerLifecycle    sync.WaitGroup
+	workerRunMu        sync.Mutex
+	workerCancel       context.CancelFunc
+	workerWake         chan struct{}
+	registry           *BackgroundTaskRegistry
+	idleGate           *IdleGate
 	// gatedMu 保护 gatedActive / gatedCancel：worker 循环里"过门等待中的自动轮次"。
 	gatedMu     sync.Mutex
 	gatedActive bool
@@ -96,10 +99,12 @@ func (s *AITaggingService) Start(ctx context.Context) {
 	if err := s.recoverInterruptedRuns(); err != nil {
 		log.Printf("[AITagging] recover interrupted runs failed err=%v", err)
 	}
+	s.failureRecorder.begin()
 	workerCtx, cancel := context.WithCancel(ctx)
 	s.workerCancel = cancel
 	s.workerWake = make(chan struct{}, 1)
-	go s.workerLoop(workerCtx, s.workerWake)
+	s.workerLifecycle.Add(1)
+	go func() { defer s.workerLifecycle.Done(); s.workerLoop(workerCtx, s.workerWake) }()
 }
 
 func (s *AITaggingService) Stop() {
@@ -119,6 +124,7 @@ func (s *AITaggingService) StopAndWait() {
 		return
 	}
 	s.Stop()
+	s.workerLifecycle.Wait()
 	s.workerRunMu.Lock()
 	s.workerRunMu.Unlock()
 }
@@ -142,6 +148,7 @@ func (s *AITaggingService) Trigger() bool {
 }
 
 func (s *AITaggingService) workerLoop(ctx context.Context, wake <-chan struct{}) {
+	defer func() { s.workerRunMu.Lock(); defer s.workerRunMu.Unlock(); s.failureRecorder.finish(true) }()
 	s.runWorkerOnceGated(ctx)
 	ticker := time.NewTicker(aiTaggingWorkerInterval)
 	defer ticker.Stop()
@@ -270,6 +277,30 @@ func (s *AITaggingService) ProcessVideo(ctx context.Context, videoID uint) error
 }
 
 func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video models.Video, config AITaggingConfig) (returnErr error) {
+	sourceVersion := "unavailable"
+	if fp, err := mediaProbeStat(video.Path); err == nil {
+		sourceVersion = videoSourceVersion(video.ID, fp.size, fp.modTimeNS)
+	}
+	var retryState models.AITaggingState
+	if err := database.DB.WithContext(ctx).Where("video_id = ?", video.ID).First(&retryState).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if retryState.Status == models.AITaggingStateStatusPending && retryState.FailureRetrySourceVersion != "" && retryState.FailureRetrySourceVersion != sourceVersion {
+		s.failureRecorder.notice("AI 重试已跳过源文件发生变化的视频，请重新分析")
+		return database.DB.WithContext(ctx).Model(&models.AITaggingState{}).Where("id = ? AND status = ? AND updated_at = ? AND failure_retry_source_version = ?", retryState.ID, retryState.Status, retryState.UpdatedAt, retryState.FailureRetrySourceVersion).Updates(map[string]any{"status": models.AITaggingStateStatusSkipped, "skip_reason": "source_changed", "last_error": "源文件已变化，已跳过重试，请重新分析", "failure_retry_source_version": ""}).Error
+	}
+	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
+		var state models.AITaggingState
+		if err := database.DB.Where("video_id = ?", video.ID).First(&state).Error; err == nil && state.Status == models.AITaggingStateStatusFailed {
+			s.failureRecorder.record(video.ID, sourceVersion, "analysis_failed", state.LastError)
+		} else if returnErr != nil {
+			s.failureRecorder.record(video.ID, sourceVersion, "processing_failed", returnErr.Error())
+		}
+	}()
+
 	log.Printf("[AITagging] start video_id=%d tags=%d config={model:%q images_per_request:%d subtitle_char_limit:%d}",
 		video.ID,
 		len(video.Tags),
@@ -365,7 +396,7 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		if explicit {
 			requeueReason = aiTaggingSkipReasonManualRetry
 		}
-		return s.requeueVideo(video.ID, requeueReason)
+		return s.requeueVideoWithSource(video.ID, requeueReason, retryState.FailureRetrySourceVersion)
 	}
 	log.Printf("[AITagging] analyze succeeded video_id=%d suggestions=%d", video.ID, len(suggestions))
 	runID := run.ID
@@ -506,17 +537,18 @@ func (s *AITaggingService) setProcessing(videoID uint, fingerprint string) error
 			return err
 		}
 		return tx.Model(&state).Updates(map[string]interface{}{
-			"status":               models.AITaggingStateStatusProcessing,
-			"skip_reason":          "",
-			"evidence_fingerprint": fingerprint,
-			"attempt_count":        state.AttemptCount + 1,
-			"last_error":           "",
-			"last_processed_at":    &now,
+			"failure_retry_source_version": "",
+			"status":                       models.AITaggingStateStatusProcessing,
+			"skip_reason":                  "",
+			"evidence_fingerprint":         fingerprint,
+			"attempt_count":                state.AttemptCount + 1,
+			"last_error":                   "",
+			"last_processed_at":            &now,
 		}).Error
 	})
 }
 
-func (s *AITaggingService) markState(videoID uint, status, skipReason, fingerprint, lastError string) error {
+func (s *AITaggingService) markState(videoID uint, status, skipReason, fingerprint, lastError string) (returnErr error) {
 	now := s.now()
 	updates := map[string]interface{}{
 		"status":            status,
@@ -858,6 +890,9 @@ func (s *AITaggingService) RetryVideo(videoID uint) error {
 
 // requeueVideo 作废待审候选并把状态置回 pending。skipReason 为空是自动重排。
 func (s *AITaggingService) requeueVideo(videoID uint, skipReason string) error {
+	return s.requeueVideoWithSource(videoID, skipReason, "")
+}
+func (s *AITaggingService) requeueVideoWithSource(videoID uint, skipReason, sourceVersion string) error {
 	return database.Transaction(func(tx *gorm.DB) error {
 		if err := activeVideoExistsInTx(tx, videoID); err != nil {
 			return err
@@ -870,17 +905,18 @@ func (s *AITaggingService) requeueVideo(videoID uint, skipReason string) error {
 		var state models.AITaggingState
 		err := tx.Where("video_id = ?", videoID).First(&state).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			state = models.AITaggingState{VideoID: videoID, Status: models.AITaggingStateStatusPending, SkipReason: skipReason}
+			state = models.AITaggingState{VideoID: videoID, Status: models.AITaggingStateStatusPending, SkipReason: skipReason, FailureRetrySourceVersion: sourceVersion}
 			return tx.Create(&state).Error
 		}
 		if err != nil {
 			return err
 		}
 		return tx.Model(&state).Updates(map[string]interface{}{
-			"status":               models.AITaggingStateStatusPending,
-			"skip_reason":          skipReason,
-			"evidence_fingerprint": "",
-			"last_error":           "",
+			"failure_retry_source_version": sourceVersion,
+			"status":                       models.AITaggingStateStatusPending,
+			"skip_reason":                  skipReason,
+			"evidence_fingerprint":         "",
+			"last_error":                   "",
 		}).Error
 	})
 }

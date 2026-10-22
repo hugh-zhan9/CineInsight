@@ -141,7 +141,7 @@ describe('任务中心快照展示（APP-03）', () => {
       const wrapper = mountDrawer();
       await flushPromises();
       expect(wrapper.get('[data-test="task-item-failures-technical"] summary').text())
-        .toBe('失败明细 50 条（共 143 条失败，只保留了前 50 条明细）');
+        .toBe('失败明细 50 条（共 143 条失败，摘要显示前 50 条，请展开完整失败记录）');
       expect(wrapper.get('[data-test="task-item-failures-backup"] summary').text()).toBe('失败明细 1 条');
       expect(wrapper.find('[data-test="task-item-failure-link-backup"]').exists()).toBe(false);
 

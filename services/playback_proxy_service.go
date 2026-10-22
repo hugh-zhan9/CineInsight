@@ -19,14 +19,15 @@ import (
 
 // 代理任务的逐项结果码（D-006）。created 是唯一的成功值。
 const (
-	PlaybackProxyCodeCreated       = "created"
-	PlaybackProxyCodeAlreadyExists = "already_exists"
-	PlaybackProxyCodeInProgress    = "in_progress"
-	PlaybackProxyCodeSourceChanged = "source_changed"
-	PlaybackProxyCodeEncodeFailed  = "encode_failed"
-	PlaybackProxyCodeDiskFull      = "disk_full"
-	PlaybackProxyCodeFileMissing   = "file_missing"
-	PlaybackProxyCodeProbeFailed   = "probe_failed"
+	PlaybackProxyCodeRetrySourceChanged = "retry_source_changed"
+	PlaybackProxyCodeCreated            = "created"
+	PlaybackProxyCodeAlreadyExists      = "already_exists"
+	PlaybackProxyCodeInProgress         = "in_progress"
+	PlaybackProxyCodeSourceChanged      = "source_changed"
+	PlaybackProxyCodeEncodeFailed       = "encode_failed"
+	PlaybackProxyCodeDiskFull           = "disk_full"
+	PlaybackProxyCodeFileMissing        = "file_missing"
+	PlaybackProxyCodeProbeFailed        = "probe_failed"
 	// PlaybackProxyCodeCancelled 是被取消的项。取消的项也要有逐项结果，
 	// 否则 Processed 永远追不上 Total，界面上看着像"卡在半路"。
 	PlaybackProxyCodeCancelled = "cancelled"
@@ -92,8 +93,10 @@ type PlaybackProxyStatus struct {
 //
 // 代理是派生缓存：不入 videos 表、不写用户媒体目录、淘汰只删自己的文件。
 type PlaybackProxyService struct {
-	dataDir string
-	probe   *MediaProbeService
+	failureRecorder    taskFailureRecorder
+	failureRetryLeases map[uint]taskFailureLease
+	dataDir            string
+	probe              *MediaProbeService
 
 	// runFFmpeg / probeDuration 可注入：测试用 stub 断言参数数组与落位。
 	runFFmpeg     func(ctx context.Context, args []string) (string, error)
@@ -316,6 +319,9 @@ func (s *PlaybackProxyService) enqueue(parent context.Context, videoIDs []uint) 
 // enqueueItems 是所有入口的入队。autoOwner 非空表示预览自动代理（EnqueueAuto，只带一个视频），
 // 空表示手动、批量或扫描后自动（它们从不被预览取消）。
 func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []uint, autoOwner string) (PlaybackProxyStatus, error) {
+	return s.enqueueItemsGuarded(parent, videoIDs, autoOwner, nil)
+}
+func (s *PlaybackProxyService) enqueueItemsGuarded(parent context.Context, videoIDs []uint, autoOwner string, guard func() error) (PlaybackProxyStatus, error) {
 	if s == nil {
 		return PlaybackProxyStatus{}, errors.New("播放代理服务未初始化")
 	}
@@ -328,6 +334,13 @@ func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []u
 		status := s.snapshotLocked()
 		s.mu.Unlock()
 		return status, ErrPlaybackProxyStopping
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			status := s.snapshotLocked()
+			s.mu.Unlock()
+			return status, err
+		}
 	}
 	if s.inFlight == nil {
 		s.inFlight = make(map[uint]struct{})
@@ -371,6 +384,7 @@ func (s *PlaybackProxyService) enqueueItems(parent context.Context, videoIDs []u
 	startWorker := !s.status.Running
 	now := s.now()
 	if startWorker {
+		s.failureRecorder.begin()
 		s.status = PlaybackProxyStatus{
 			Running:   true,
 			StartedAt: &now,
@@ -537,6 +551,8 @@ func (s *PlaybackProxyService) finish(cancelled bool) bool {
 		s.mu.Unlock()
 		return false
 	}
+	s.releaseFailureClaimsLocked()
+	s.failureRecorder.finish(cancelled)
 	s.status.Running = false
 	s.status.Cancelled = cancelled
 	s.status.Completed = !cancelled
@@ -582,7 +598,17 @@ func (s *PlaybackProxyService) setCurrentName(name string) {
 }
 
 func (s *PlaybackProxyService) recordResult(result PlaybackProxyItemResult) {
+	switch result.Code {
+	case PlaybackProxyCodeCreated, PlaybackProxyCodeAlreadyExists, PlaybackProxyCodeInProgress, PlaybackProxyCodeCancelled, PlaybackProxyCodeRetrySourceChanged:
+	default:
+		s.failureRecorder.record(result.VideoID, "", result.Code, result.Message)
+	}
+
 	s.mu.Lock()
+	if lease, ok := s.failureRetryLeases[result.VideoID]; ok {
+		releaseTaskFailureClaims(TaskFailureProxy, lease.ClaimID, []taskFailureFrozen{lease.Item})
+		delete(s.failureRetryLeases, result.VideoID)
+	}
 	delete(s.inFlight, result.VideoID)
 	// 自动项有了结果就不再可被预览取消；处理中被取消、期间又有人要它的，在这里重排。
 	requeue := s.settleAutoLocked(result)
@@ -604,7 +630,7 @@ func (s *PlaybackProxyService) appendResultLocked(result PlaybackProxyItemResult
 	switch result.Code {
 	case PlaybackProxyCodeCreated:
 		s.status.Succeeded++
-	case PlaybackProxyCodeAlreadyExists, PlaybackProxyCodeInProgress, PlaybackProxyCodeCancelled:
+	case PlaybackProxyCodeAlreadyExists, PlaybackProxyCodeInProgress, PlaybackProxyCodeCancelled, PlaybackProxyCodeRetrySourceChanged:
 		// 取消不是失败：用户自己按的。
 		s.status.Skipped++
 	default:
@@ -653,6 +679,14 @@ func (s *PlaybackProxyService) processOne(ctx context.Context, videoID uint) {
 		return
 	}
 	before := playbackProxyFingerprintOf(info)
+	s.mu.Lock()
+	lease, hasLease := s.failureRetryLeases[videoID]
+	s.mu.Unlock()
+	if hasLease && videoSourceVersion(videoID, before.size, before.modTimeNS) != lease.Item.Item.SourceVersion {
+		s.failureRecorder.notice("播放代理重试已跳过源文件发生变化的视频，请重新分析")
+		s.recordResult(PlaybackProxyItemResult{VideoID: videoID, Name: video.Name, Code: PlaybackProxyCodeRetrySourceChanged, Message: "源文件已变化，已跳过重试，请重新分析"})
+		return
+	}
 
 	if existing := s.resolveValidProxy(videoID, before, false); existing != nil {
 		s.recordResult(PlaybackProxyItemResult{
@@ -673,7 +707,19 @@ func (s *PlaybackProxyService) processOne(ctx context.Context, videoID uint) {
 			s.failItem(video, before, "", PlaybackProxyCodeProbeFailed, "技术信息探测服务未初始化")
 			return
 		}
-		if err := s.probe.Refresh(ctx, videoID); err != nil {
+		var probeErr error
+		if hasLease {
+			probeErr = s.probe.RefreshForSource(ctx, videoID, lease.Item.Item.SourceVersion)
+		} else {
+			probeErr = s.probe.Refresh(ctx, videoID)
+		}
+		if err := probeErr; err != nil {
+			if hasLease && errors.Is(err, ErrMediaProbeSourceChanged) {
+				s.failureRecorder.notice("播放代理重试已跳过源文件发生变化的视频，请重新分析")
+				s.recordResult(PlaybackProxyItemResult{VideoID: videoID, Name: video.Name, Code: PlaybackProxyCodeRetrySourceChanged, Message: "源文件已变化，已跳过重试，请重新分析"})
+				return
+			}
+
 			if ctx.Err() != nil {
 				s.recordCancelled(videoID, video.Name)
 				return

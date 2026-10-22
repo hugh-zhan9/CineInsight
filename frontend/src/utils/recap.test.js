@@ -4,6 +4,8 @@ import {
   requestKey, shiftCursor, videoArtwork, yearCalendarWeeks
 } from './recap.js';
 
+import { sourceLabel } from './recap.js';
+
 describe('recap utils', () => {
   it('shifts months across year boundaries and years by one', () => {
     expect(shiftCursor('month', { year: 2026, month: 1 }, -1)).toEqual({ year: 2025, month: 12 });
@@ -64,3 +66,5 @@ describe('videoArtwork', () => {
     expect(videoArtwork(7, 'banner')).toBe('');
   });
 });
+
+it('labels precise IINA viewing distinctly', () => { expect(sourceLabel('video', 'desktop_controlled_view')).toBe('IINA 精确同步观看'); });

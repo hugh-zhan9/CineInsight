@@ -42,7 +42,7 @@ type ViewingDiaryEntry struct {
 	DateBasis         string         `gorm:"size:24;not null;default:''" json:"date_basis"`
 	UTCOffsetSeconds  *int           `json:"utc_offset_seconds"`
 	Origin            string         `gorm:"size:16;not null;default:manual" json:"origin"`
-	Source            string         `gorm:"size:16;not null;default:''" json:"source"`
+	Source            string         `gorm:"size:32;not null;default:''" json:"source"`
 	SourcePlayEventID *uint          `gorm:"uniqueIndex:idx_diary_play_event" json:"-"`
 	SourceSessionKey  *string        `gorm:"size:64;uniqueIndex:idx_diary_view_session" json:"-"`
 	Rating            *float64       `gorm:"type:numeric(3,1)" json:"rating"`

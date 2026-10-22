@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 	"video-master/database"
@@ -184,4 +185,24 @@ func (m *queueMediaLease) reader(ctx context.Context) (*io.SectionReader, string
 		return nil, "", time.Time{}, err
 	}
 	return io.NewSectionReader(file, 0, m.delivery.Size()), m.mime, m.delivery.ModTime(), nil
+}
+
+func validateQueueIINASource(ctx context.Context, m *queueMediaLease) error {
+	return database.WithOperationContext(ctx, func(db *gorm.DB) error {
+		var video models.Video
+		if err := db.Select("id", "path", "is_stale").First(&video, m.video.ID).Error; err != nil {
+			return err
+		}
+		if video.IsStale || filepath.Clean(video.Path) != filepath.Clean(m.video.Path) {
+			return ErrQueueSourceChanged
+		}
+		info, err := os.Stat(video.Path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || !m.source.matches(playbackProxyFingerprintOf(info)) {
+			return ErrQueueSourceChanged
+		}
+		return ctx.Err()
+	})
 }

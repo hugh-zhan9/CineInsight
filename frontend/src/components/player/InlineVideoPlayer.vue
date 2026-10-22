@@ -67,6 +67,7 @@
         >
           <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
         </video>
+        <PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" />
         <button type="button" class="btn btn--secondary inline-player__fullscreen" data-test="inline-player-fullscreen" :aria-pressed="isFullscreen" @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏' }}</button>
         <p v-if="fullscreenError" class="inline-player__fullscreen-error" role="alert">{{ fullscreenError }}</p>
         <div
@@ -129,6 +130,7 @@
 </template>
 
 <script>
+import PlaybackSubtitleControls from './PlaybackSubtitleControls.vue';
 import { markRaw } from 'vue';
 import { CancelPreviewProxy, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus, GetPreviewSession, RecordViewEvent, RequestPreviewProxy } from '../../../wailsjs/go/main/App';
 import { detailPlaybackOrigin, detailPlaybackStartMs, formatDuration } from '../../utils/mediaDetails.js';
@@ -141,6 +143,7 @@ import { claimActivePlayer, releaseActivePlayer } from '../../utils/activePlayer
 
 export default {
   name: 'InlineVideoPlayer',
+  components: { PlaybackSubtitleControls },
   props: {
     videoId: { type: Number, required: true },
     // 不传（undefined）表示由组件自己取会话；传 null 表示宿主还在取。

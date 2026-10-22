@@ -78,6 +78,7 @@ type InlineQueueEvent struct {
 }
 
 type playbackQueueRun struct {
+	cleanupPending                                                  bool
 	controlSequence                                                 uint64
 	token                                                           string
 	entryID                                                         uint
@@ -113,6 +114,7 @@ type PlaybackQueueService struct {
 	now           func() time.Time
 	closeOnce     sync.Once
 	closeErr      error
+	closeComplete bool
 }
 
 func NewPlaybackQueueService(video *VideoService, player queueControlledPlayer, emit func(uint64)) *PlaybackQueueService {
@@ -196,10 +198,30 @@ func (s *PlaybackQueueService) Play(ctx context.Context, entryID uint, revision 
 	return s.command(ctx, func(ctx context.Context) error { return s.playLocked(ctx, entryID, revision) })
 }
 func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, revision uint64) error {
+	if s.run != nil && s.run.cleanupPending {
+		return errors.New("专用队列播放器尚未清理，请先重试停止队列")
+	}
 	if entryID == 0 {
 		return ErrQueueInvalid
 	}
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
+	previousToken := ""
+	if s.run != nil {
+		previousToken = s.run.token
+	}
+	if err := claimControlledQueue(token); err != nil {
+		return err
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			controlledOwnership.Lock()
+			if controlledOwnership.queue == token {
+				controlledOwnership.queue = previousToken
+			}
+			controlledOwnership.Unlock()
+		}
+	}()
 	var state models.PlaybackQueueState
 	var entry models.PlaybackQueueEntry
 	err := database.TransactionWithContext(ctx, func(db *gorm.DB) error {
@@ -229,6 +251,7 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 		return err
 	}
 	s.stopRuntimeLocked(true)
+	previousToken = ""
 	s.warning = ""
 	prepCtx, prepDone, err := s.admission.begin(context.Background())
 	if err != nil {
@@ -237,6 +260,7 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 	prepCtx, cancel := context.WithTimeout(prepCtx, 30*time.Second)
 	r := &playbackQueueRun{token: token, entryID: entryID, player: state.Player, cancel: cancel, prepared: make(chan struct{}), cycle: 1}
 	s.run = r
+	reserved = false
 	s.terminalToken = ""
 	s.stoppedToken = ""
 	s.changed()
@@ -247,7 +271,7 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 		var attempt *PlaybackAttemptResult
 		var prepareErr error
 		if r.player == "system" {
-			attempt, prepareErr = s.video.PlayVideoContext(prepCtx, entry.VideoID)
+			attempt, prepareErr = s.video.PlayVideoContext(context.WithValue(prepCtx, controlledDispatchBypassKey{}, true), entry.VideoID)
 		} else {
 			lease, prepareErr = s.video.prepareQueueMedia(prepCtx, entry.VideoID, r.player == "inline")
 			if prepareErr == nil && r.player == "iina" {
@@ -269,6 +293,9 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 				}
 				s.warning = attempt.StatsWarning
 				return s.statusLocked(ctx, "dispatched", false)
+			}
+			if err := validateQueueIINASource(ctx, lease); err != nil {
+				return s.failLocked(ctx, "queue_source_changed", "原片已改变，请重新播放")
 			}
 			r.lease = lease
 			r.position = lease.start
@@ -329,7 +356,11 @@ func (s *PlaybackQueueService) failLocked(ctx context.Context, code, message str
 	if r.player == "iina" && s.player != nil {
 		if err := s.player.Close(); err != nil {
 			s.warning = "播放器关闭失败：" + queueSafeError(err)
+			r.cleanupPending = true
 		}
+	}
+	if !r.cleanupPending {
+		releaseControlledQueue(r.token)
 	}
 	state, err := readQueueState(ctx)
 	if err != nil {
@@ -395,7 +426,9 @@ func (s *PlaybackQueueService) Stop(ctx context.Context, token string) error {
 		}
 		s.stoppedToken = token
 		s.terminalToken = token
-		s.stopRuntimeLocked(false)
+		if err := s.stopRuntimeLocked(false); err != nil {
+			return err
+		}
 		s.changed()
 		state, err := readQueueState(ctx)
 		if err == nil {
@@ -412,11 +445,10 @@ func (s *PlaybackQueueService) Stop(ctx context.Context, token string) error {
 	})
 }
 
-func (s *PlaybackQueueService) stopRuntimeLocked(reusePlayer bool) {
+func (s *PlaybackQueueService) stopRuntimeLocked(reusePlayer bool) error {
 	r := s.run
-	s.run = nil
 	if r == nil {
-		return
+		return nil
 	}
 	r.cancel()
 	if r.lease != nil {
@@ -440,6 +472,11 @@ func (s *PlaybackQueueService) stopRuntimeLocked(reusePlayer bool) {
 			}
 			if err := s.player.Close(); err != nil {
 				s.warning = "播放器关闭失败：" + queueSafeError(err)
+				r.failed = true
+				r.cleanupPending = true
+				stateErr := s.statusLocked(ctx, "failed", true)
+				s.changed()
+				return errors.Join(err, stateErr)
 			}
 		}
 	}
@@ -448,6 +485,9 @@ func (s *PlaybackQueueService) stopRuntimeLocked(reusePlayer bool) {
 			s.warning = "最后观看进度未保存：" + queueSafeError(err)
 		}
 	}
+	s.run = nil
+	releaseControlledQueue(r.token)
+	return nil
 }
 func (s *PlaybackQueueService) Edit(ctx context.Context, in QueueEdit) error {
 	return s.command(ctx, func(ctx context.Context) error {
@@ -460,7 +500,9 @@ func (s *PlaybackQueueService) Edit(ctx context.Context, in QueueEdit) error {
 		if stop && s.run != nil {
 			s.stoppedToken = s.run.token
 			s.terminalToken = s.run.token
-			s.stopRuntimeLocked(false)
+			if err := s.stopRuntimeLocked(false); err != nil {
+				return err
+			}
 		}
 		_, err = applyPreparedQueueEdit(ctx, plan)
 		if err != nil && stop {
@@ -498,29 +540,34 @@ func (s *PlaybackQueueService) Control(ctx context.Context, token, action string
 	})
 }
 func (s *PlaybackQueueService) Close() error {
-	s.closeOnce.Do(func() {
-		wait, _ := s.admission.quiesce()
-		wait()
-		s.commands.Lock()
-		defer s.commands.Unlock()
-		s.stopRuntimeLocked(false)
-		ctx, cancel := playbackFactContext(context.Background())
-		defer cancel()
-		state, err := readQueueState(ctx)
-		if err == nil && state.ActiveToken != "" {
-			err = transitionQueue(ctx, state.Revision, map[string]any{"active_token": "", "status": "interrupted"})
-		}
-		if s.player != nil {
-			err = errors.Join(err, s.player.Close())
-		}
+	s.closeOnce.Do(func() { wait, _ := s.admission.quiesce(); wait() })
+	s.commands.Lock()
+	defer s.commands.Unlock()
+	if s.closeComplete {
+		return nil
+	}
+	idlePlayer := s.run == nil || s.run.player != "iina"
+	err := s.stopRuntimeLocked(false)
+	if err == nil && idlePlayer && s.player != nil {
+		err = s.player.Close()
+	}
+	if err != nil {
 		s.closeErr = err
 		s.changed()
-	})
-	return s.closeErr
+		return err
+	}
+	ctx, cancel := playbackFactContext(context.Background())
+	defer cancel()
+	state, err := readQueueState(ctx)
+	if err == nil && state.ActiveToken != "" {
+		err = transitionQueue(ctx, state.Revision, map[string]any{"active_token": "", "status": "interrupted"})
+	}
+	s.closeErr = err
+	s.closeComplete = err == nil
+	s.changed()
+	return err
 }
 
-// The HTTP route is token-only; callers never supply a file path. The second
-// admission check rejects a Stop/Next that occurred during metadata validation.
 func (s *PlaybackQueueService) Media(ctx context.Context, token string) (*io.SectionReader, string, time.Time, error) {
 	ctx, done, err := s.admission.begin(ctx)
 	if err != nil {

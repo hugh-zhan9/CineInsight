@@ -376,6 +376,38 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class TaskFailureRuns {
+	    runs: models.TaskFailureRun[];
+	    warning: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureRuns(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runs = this.convertValues(source["runs"], models.TaskFailureRun);
+	        this.warning = source["warning"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	
 	
@@ -754,6 +786,32 @@ export namespace models {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
+	export class RecommendationFeedback {
+	    id: number;
+	    target_kind: string;
+	    target_id: number;
+	    effect: string;
+	    expires_at?: string;
+	    revision: number;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecommendationFeedback(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.target_kind = source["target_kind"];
+	        this.target_id = source["target_id"];
+	        this.effect = source["effect"];
+	        this.expires_at = source["expires_at"];
+	        this.revision = source["revision"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class SavedLibraryView {
 	    id: number;
 	    name: string;
@@ -819,6 +877,7 @@ export namespace models {
 	    }
 	}
 	export class Settings {
+	    desktop_player: string;
 	    jellyfin_enabled: boolean;
 	    jellyfin_port: number;
 	    jellyfin_username: string;
@@ -895,6 +954,7 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.desktop_player = source["desktop_player"];
 	        this.jellyfin_enabled = source["jellyfin_enabled"];
 	        this.jellyfin_port = source["jellyfin_port"];
 	        this.jellyfin_username = source["jellyfin_username"];
@@ -967,6 +1027,58 @@ export namespace models {
 	    }
 	}
 	
+	export class TaskFailureItem {
+	    id: number;
+	    run_id: number;
+	    media_kind: string;
+	    media_id: number;
+	    attempt_key: string;
+	    source_version: string;
+	    state_version: string;
+	    error_code: string;
+	    error_summary: string;
+	    failed_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.run_id = source["run_id"];
+	        this.media_kind = source["media_kind"];
+	        this.media_id = source["media_id"];
+	        this.attempt_key = source["attempt_key"];
+	        this.source_version = source["source_version"];
+	        this.state_version = source["state_version"];
+	        this.error_code = source["error_code"];
+	        this.error_summary = source["error_summary"];
+	        this.failed_at = source["failed_at"];
+	    }
+	}
+	export class TaskFailureRun {
+	    id: number;
+	    task_key: string;
+	    started_at: string;
+	    finished_at?: string;
+	    state: string;
+	    records_complete: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.task_key = source["task_key"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	        this.state = source["state"];
+	        this.records_complete = source["records_complete"];
+	    }
+	}
 	export class Video {
 	    deleted_by: string;
 	    id: number;
@@ -3423,6 +3535,154 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class CollectionEpisodeEdit {
+	    video_id: number;
+	    season?: number;
+	    episode?: number;
+	    excluded: boolean;
+	    expected_revision: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionEpisodeEdit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.season = source["season"];
+	        this.episode = source["episode"];
+	        this.excluded = source["excluded"];
+	        this.expected_revision = source["expected_revision"];
+	    }
+	}
+	export class CollectionEpisodeMember {
+	    video_id: number;
+	    name: string;
+	    season?: number;
+	    episode?: number;
+	    excluded: boolean;
+	    revision: number;
+	    offline: boolean;
+	    issue: string;
+	    version_group_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionEpisodeMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.name = source["name"];
+	        this.season = source["season"];
+	        this.episode = source["episode"];
+	        this.excluded = source["excluded"];
+	        this.revision = source["revision"];
+	        this.offline = source["offline"];
+	        this.issue = source["issue"];
+	        this.version_group_id = source["version_group_id"];
+	    }
+	}
+	export class EpisodeMissingRange {
+	    start: number;
+	    end: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EpisodeMissingRange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start = source["start"];
+	        this.end = source["end"];
+	    }
+	}
+	export class CollectionSeasonReport {
+	    season: number;
+	    recognized: number;
+	    playable: number;
+	    offline: number;
+	    duplicate_episodes: number;
+	    expected_count?: number;
+	    revision: number;
+	    missing_ranges: EpisodeMissingRange[];
+	    range_conflicts: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionSeasonReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.season = source["season"];
+	        this.recognized = source["recognized"];
+	        this.playable = source["playable"];
+	        this.offline = source["offline"];
+	        this.duplicate_episodes = source["duplicate_episodes"];
+	        this.expected_count = source["expected_count"];
+	        this.revision = source["revision"];
+	        this.missing_ranges = this.convertValues(source["missing_ranges"], EpisodeMissingRange);
+	        this.range_conflicts = source["range_conflicts"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CollectionEpisodeReport {
+	    seasons: CollectionSeasonReport[];
+	    members: CollectionEpisodeMember[];
+	    total: number;
+	    uncertain: number;
+	    next_cursor: number;
+	    mixed_series: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectionEpisodeReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.seasons = this.convertValues(source["seasons"], CollectionSeasonReport);
+	        this.members = this.convertValues(source["members"], CollectionEpisodeMember);
+	        this.total = source["total"];
+	        this.uncertain = source["uncertain"];
+	        this.next_cursor = source["next_cursor"];
+	        this.mixed_series = source["mixed_series"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class CollectionProgressWork {
 	    work_index: number;
@@ -3572,6 +3832,7 @@ export namespace services {
 	    }
 	}
 	
+	
 	export class CollectionSuggestionMemberView {
 	    video_id: number;
 	    name: string;
@@ -3683,6 +3944,22 @@ export namespace services {
 		}
 	}
 	
+	export class ControlledPlaybackState {
+	    status: string;
+	    video_id: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ControlledPlaybackState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.video_id = source["video_id"];
+	        this.message = source["message"];
+	    }
+	}
 	export class DataHealthGroup {
 	    key: string;
 	    label: string;
@@ -5414,6 +5691,7 @@ export namespace services {
 	        this.free_bytes = source["free_bytes"];
 	    }
 	}
+	
 	export class ExternalSubtitleDetails {
 	    path: string;
 	    language: string;
@@ -5431,6 +5709,60 @@ export namespace services {
 	        this.segment_count = source["segment_count"];
 	        this.last_segment_index = source["last_segment_index"];
 	    }
+	}
+	export class ExtractableSubtitleTrack {
+	    index: number;
+	    language: string;
+	    title: string;
+	    codec: string;
+	    supported: boolean;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExtractableSubtitleTrack(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.language = source["language"];
+	        this.title = source["title"];
+	        this.codec = source["codec"];
+	        this.supported = source["supported"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class ExtractableSubtitleTracks {
+	    source_version: string;
+	    tracks: ExtractableSubtitleTrack[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ExtractableSubtitleTracks(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source_version = source["source_version"];
+	        this.tracks = this.convertValues(source["tracks"], ExtractableSubtitleTrack);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class FaceAnalysisFailure {
 	    media_kind: string;
@@ -6330,6 +6662,92 @@ export namespace services {
 	        this.pending = source["pending"];
 	        this.pending_images = source["pending_images"];
 	    }
+	}
+	export class ImageAnniversaryCursor {
+	    signature: string;
+	    taken_at: string;
+	    id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAnniversaryCursor(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.signature = source["signature"];
+	        this.taken_at = source["taken_at"];
+	        this.id = source["id"];
+	    }
+	}
+	export class ImageAnniversaryPage {
+	    items: models.Image[];
+	    total: number;
+	    next_cursor?: ImageAnniversaryCursor;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAnniversaryPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], models.Image);
+	        this.total = source["total"];
+	        this.next_cursor = this.convertValues(source["next_cursor"], ImageAnniversaryCursor);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageAnniversaryRequest {
+	    date: string;
+	    person_ids: number[];
+	    cursor?: ImageAnniversaryCursor;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAnniversaryRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.person_ids = source["person_ids"];
+	        this.cursor = this.convertValues(source["cursor"], ImageAnniversaryCursor);
+	        this.limit = source["limit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ImageCleanupCoverage {
 	    perceptual_hash: CleanupCoverageCount;
@@ -10229,6 +10647,89 @@ export namespace services {
 	    }
 	}
 	
+	export class PlaybackSubtitleCue {
+	    start_ms: number;
+	    end_ms: number;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PlaybackSubtitleCue(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.text = source["text"];
+	    }
+	}
+	export class SubtitleFingerprint {
+	    size: number;
+	    mod_time_ns: number;
+	    sha256: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleFingerprint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.size = source["size"];
+	        this.mod_time_ns = source["mod_time_ns"];
+	        this.sha256 = source["sha256"];
+	    }
+	}
+	export class PlaybackSubtitle {
+	    status: string;
+	    subtitle_fingerprint: SubtitleFingerprint;
+	    cues: PlaybackSubtitleCue[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PlaybackSubtitle(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.subtitle_fingerprint = this.convertValues(source["subtitle_fingerprint"], SubtitleFingerprint);
+	        this.cues = this.convertValues(source["cues"], PlaybackSubtitleCue);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class PlaybackSubtitleRequest {
+	    video_id: number;
+	    source_version: string;
+	    queue_token?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PlaybackSubtitleRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.queue_token = source["queue_token"];
+	    }
+	}
 	export class PreviewExternalAction {
 	    action_id: string;
 	    button_label: string;
@@ -11511,6 +12012,50 @@ export namespace services {
 	
 	
 	
+	export class RecommendationFeedbackItem {
+	    id: number;
+	    target_kind: string;
+	    target_id: number;
+	    effect: string;
+	    expires_at?: string;
+	    revision: number;
+	    label: string;
+	    active: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecommendationFeedbackItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.target_kind = source["target_kind"];
+	        this.target_id = source["target_id"];
+	        this.effect = source["effect"];
+	        this.expires_at = source["expires_at"];
+	        this.revision = source["revision"];
+	        this.label = source["label"];
+	        this.active = source["active"];
+	    }
+	}
+	export class RecommendationFeedbackRequest {
+	    target_kind: string;
+	    target_id: number;
+	    id: number;
+	    expected_revision: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecommendationFeedbackRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target_kind = source["target_kind"];
+	        this.target_id = source["target_id"];
+	        this.id = source["id"];
+	        this.expected_revision = source["expected_revision"];
+	    }
+	}
 	export class RelaunchResult {
 	    relaunched: boolean;
 	    message: string;
@@ -12733,22 +13278,6 @@ export namespace services {
 	        this.size = source["size"];
 	    }
 	}
-	export class SubtitleFingerprint {
-	    size: number;
-	    mod_time_ns: number;
-	    sha256: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new SubtitleFingerprint(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.size = source["size"];
-	        this.mod_time_ns = source["mod_time_ns"];
-	        this.sha256 = source["sha256"];
-	    }
-	}
 	export class SubtitleConvertResult {
 	    encoding: string;
 	    backup_id?: string;
@@ -12888,6 +13417,102 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class SubtitleExtractConfirm {
+	    token: string;
+	    video_id: number;
+	    source_version: string;
+	    track_index: number;
+	    target_fingerprint: SubtitleFingerprint;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleExtractConfirm(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.track_index = source["track_index"];
+	        this.target_fingerprint = this.convertValues(source["target_fingerprint"], SubtitleFingerprint);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SubtitleExtractPreview {
+	    token: string;
+	    video_id: number;
+	    source_version: string;
+	    track_index: number;
+	    target_fingerprint: SubtitleFingerprint;
+	    entries: subtitleparser.EditorSegment[];
+	    expires_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleExtractPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.track_index = source["track_index"];
+	        this.target_fingerprint = this.convertValues(source["target_fingerprint"], SubtitleFingerprint);
+	        this.entries = this.convertValues(source["entries"], subtitleparser.EditorSegment);
+	        this.expires_at = source["expires_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SubtitleExtractRequest {
+	    video_id: number;
+	    source_version: string;
+	    track_index: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleExtractRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.track_index = source["track_index"];
+	    }
 	}
 	
 	export class SubtitleGenerateRequest {
@@ -13517,6 +14142,154 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class TaskFailureListRequest {
+	    task_key: string;
+	    run_id: number;
+	    cursor_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureListRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task_key = source["task_key"];
+	        this.run_id = source["run_id"];
+	        this.cursor_id = source["cursor_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class TaskFailurePage {
+	    items: models.TaskFailureItem[];
+	    total: number;
+	    next_cursor: number;
+	    records_complete: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailurePage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], models.TaskFailureItem);
+	        this.total = source["total"];
+	        this.next_cursor = source["next_cursor"];
+	        this.records_complete = source["records_complete"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TaskFailureRetryItemResult {
+	    item_id: number;
+	    media_id: number;
+	    status: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureRetryItemResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.item_id = source["item_id"];
+	        this.media_id = source["media_id"];
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class TaskFailureRetryPage {
+	    operation_id: string;
+	    state: string;
+	    total: number;
+	    accepted: number;
+	    skipped: number;
+	    failed: number;
+	    items: TaskFailureRetryItemResult[];
+	    next_offset: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureRetryPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation_id = source["operation_id"];
+	        this.state = source["state"];
+	        this.total = source["total"];
+	        this.accepted = source["accepted"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.items = this.convertValues(source["items"], TaskFailureRetryItemResult);
+	        this.next_offset = source["next_offset"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TaskFailureRetryPreview {
+	    token: string;
+	    eligible_count: number;
+	    skipped_count: number;
+	    expires_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureRetryPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.eligible_count = source["eligible_count"];
+	        this.skipped_count = source["skipped_count"];
+	        this.expires_at = source["expires_at"];
+	    }
+	}
+	export class TaskFailureRetryRequest {
+	    run_id: number;
+	    item_ids: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskFailureRetryRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.item_ids = source["item_ids"];
+	    }
 	}
 	
 	export class TechnicalBackfillFailure {

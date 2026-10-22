@@ -1,9 +1,11 @@
 <template>
   <section class="page-content photo-browse" data-test="photo-browse">
-    <PageHeader title="图片" :subtitle="countText">
+    <PageHeader title="图片" :subtitle="anniversaries ? '往年同月同日的照片 · 可按人物筛选' : countText">
       <template #below>
         <div class="photo-browse__toolbar" role="search">
+          <button type="button" class="btn btn--secondary" :aria-pressed="anniversaries" @click="anniversaries = !anniversaries">那年今天</button>
           <input
+            v-if="!anniversaries"
             v-model="keyword"
             type="search"
             class="search-input photo-browse__search"
@@ -14,6 +16,7 @@
             @keyup.enter="reloadNow"
           />
           <SegmentedControl
+            v-if="!anniversaries"
             label="范围"
             :options="scopeOptions"
             :model-value="favoriteOnly ? 'favorites' : ''"
@@ -30,6 +33,7 @@
             @click="toggleMenu('people', 'personTrigger')"
           >人物<AppBadge v-if="people.length" tone="accent" :count="people.length" /><AppIcon name="chevron-down" :size="16" /></button>
           <button
+            v-if="!anniversaries"
             ref="folderTrigger"
             type="button"
             :class="['btn', 'btn--secondary', { 'photo-browse__trigger--on': Boolean(folder) }]"
@@ -39,7 +43,7 @@
             @click="toggleMenu('folders', 'folderTrigger')"
           >文件夹<AppIcon name="chevron-down" :size="16" /></button>
         </div>
-        <div v-if="people.length || folder" class="photo-browse__chips" data-test="photo-browse-active-filters">
+        <div v-if="people.length || (!anniversaries && folder)" class="photo-browse__chips" data-test="photo-browse-active-filters">
           <FilterChip
             v-for="person in people"
             :key="`person-${person.id}`"
@@ -51,7 +55,7 @@
             @remove="removePerson(person.id)"
           />
           <FilterChip
-            v-if="folder"
+            v-if="folder && !anniversaries"
             :label="folder.name"
             :title="folder.directory"
             active
@@ -65,7 +69,8 @@
       </template>
     </PageHeader>
 
-    <section class="photo-browse__stream" :aria-busy="list.loading ? 'true' : 'false'" aria-label="照片流">
+    <PhotoAnniversaries v-if="anniversaries" :page-active="pageActive" :person-ids="people.map(person => person.id)" @navigate="$emit('navigate', $event)" @open-in-manage="$emit('open-in-manage', $event)" @open-person="$emit('open-person', $event)" />
+    <section v-show="!anniversaries" class="photo-browse__stream" :aria-busy="list.loading ? 'true' : 'false'" aria-label="照片流">
       <AppBanner v-if="list.error && !list.items.length" tone="danger" title="读取图片失败" :message="list.error" data-test="photo-browse-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="photo-browse-retry" @click="reloadNow">重试</button></template>
       </AppBanner>
@@ -225,6 +230,7 @@
 // 事件：navigate(key)、open-person({ id, name })、open-in-manage({ id, name })（「在图片管理中打开」）、image-changed(fields)（看图里存成功的收藏 / 评分）。
 import { ListImageFolderGroups, ListImageTimelineBuckets, ListPeople, SearchImagePage } from '../../../wailsjs/go/main/App';
 import PhotoLightbox from './PhotoLightbox.vue';
+import PhotoAnniversaries from './PhotoAnniversaries.vue';
 import AppBadge from '../ui/AppBadge.vue';
 import AppBanner from '../ui/AppBanner.vue';
 import AppIcon from '../ui/AppIcon.vue';
@@ -317,7 +323,7 @@ function errorText(err) {
 export default {
   name: 'PhotoBrowsePage',
   components: {
-    AppBadge, AppBanner, AppIcon, AppSpinner, BasePopover, EmptyState, FilterChip, PageHeader, PhotoLightbox, SegmentedControl, SkeletonBlock
+    AppBadge, AppBanner, AppIcon, AppSpinner, BasePopover, EmptyState, FilterChip, PageHeader, PhotoLightbox, PhotoAnniversaries, SegmentedControl, SkeletonBlock
   },
   props: {
     pageActive: { type: Boolean, default: true },
@@ -329,6 +335,7 @@ export default {
   data() {
     return {
       keyword: '',
+      anniversaries: false,
       favoriteOnly: false,
       people: [],
       folder: null,

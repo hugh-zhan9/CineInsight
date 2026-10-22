@@ -309,23 +309,37 @@ func bumpVersionGroupRevision(tx *gorm.DB, groupID uint, expected int64, now tim
 // cleanupVersionGroupsBeforeWrite 在独立事务里先清理不足两个成员的组并提交。写事务随后若因 CAS 冲突、
 // 成员冲突或校验失败回滚，这次清理不会跟着回滚——否则只剩一条成员行的组会一直留着、一直冲突。
 func cleanupVersionGroupsBeforeWrite(ctx context.Context) error {
-	return database.TransactionWithContext(ctx, cleanupUndersizedVersionGroups)
+	var changed bool
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
+		count, err := cleanupUndersizedVersionGroupsCount(tx)
+		changed = count > 0
+		return err
+	})
+	if err == nil && changed {
+		notifyLibraryMatchInputsChanged("version_group_cleanup")
+	}
+	return err
 }
 
 // cleanupUndersizedVersionGroups 删除成员行总数（含软删成员）不足 2 的组；任何版本组写操作都顺带执行。
 // 永久删除视频时成员行随外键级联消失，留下的单成员组就在下一次写操作里被清掉。
 func cleanupUndersizedVersionGroups(tx *gorm.DB) error {
+	_, err := cleanupUndersizedVersionGroupsCount(tx)
+	return err
+}
+func cleanupUndersizedVersionGroupsCount(tx *gorm.DB) (int64, error) {
 	kept := func() *gorm.DB {
 		return tx.Session(&gorm.Session{NewDB: true}).Model(&models.VideoVersionMember{}).
 			Select("group_id").Group("group_id").Having("COUNT(*) >= ?", versionGroupMinMembers)
 	}
 	if err := tx.Where("group_id NOT IN (?)", kept()).Delete(&models.VideoVersionMember{}).Error; err != nil {
-		return fmt.Errorf("清理不足两个成员的版本组失败: %w", err)
+		return 0, fmt.Errorf("清理不足两个成员的版本组失败: %w", err)
 	}
-	if err := tx.Where("id NOT IN (?)", kept()).Delete(&models.VideoVersionGroup{}).Error; err != nil {
-		return fmt.Errorf("清理不足两个成员的版本组失败: %w", err)
+	result := tx.Where("id NOT IN (?)", kept()).Delete(&models.VideoVersionGroup{})
+	if err := result.Error; err != nil {
+		return 0, fmt.Errorf("清理不足两个成员的版本组失败: %w", err)
 	}
-	return nil
+	return result.RowsAffected, nil
 }
 
 // requireActiveVideos 要求这些视频都存在且未软删除（GORM 的软删除条件自动生效）。
@@ -435,6 +449,7 @@ func (s *VersionGroupService) Create(ctx context.Context, videoIDs []uint, title
 	if err != nil {
 		return nil, mapVersionMemberRace(ctx, err, ids)
 	}
+	notifyLibraryMatchInputsChanged("version_group_created")
 	return detail, nil
 }
 
@@ -523,6 +538,7 @@ func (s *VersionGroupService) mutateVersionGroup(ctx context.Context, groupID ui
 	if err != nil {
 		return nil, err
 	}
+	notifyLibraryMatchInputsChanged("version_group_changed")
 	return detail, nil
 }
 

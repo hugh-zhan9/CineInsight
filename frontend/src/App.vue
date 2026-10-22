@@ -52,6 +52,7 @@
     </div>
 
     <WallpaperStatusBar v-if="appReady" />
+    <ControlledPlaybackStatus v-if="appReady" />
     <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue', missingMessage: '这部视频已不在片库中，可能已删除或不在扫描目录内。' })" />
 
     <div v-if="startupError" class="startup-error-view">
@@ -451,6 +452,7 @@ import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
 import VersionCompareDialog from './components/VersionCompareDialog.vue';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
+import ControlledPlaybackStatus from './components/ControlledPlaybackStatus.vue';
 import DialogShell from './components/ui/DialogShell.vue';
 import AppBadge from './components/ui/AppBadge.vue';
 import AppBanner from './components/ui/AppBanner.vue';
@@ -505,7 +507,7 @@ export default {
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
-    DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage,
+    DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
   data() {

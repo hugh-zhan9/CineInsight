@@ -23,9 +23,16 @@ func (a *App) startPlaybackQueue() error {
 	}
 	a.playbackQueueMu.RLock()
 	existing := a.playbackQueue
+	quiesced := a.playbackQueueQuiesced
 	a.playbackQueueMu.RUnlock()
 	if existing != nil {
+		if quiesced {
+			return errors.New("queue_cleanup_pending: 上次专用播放器尚未停止，请重试停止队列")
+		}
 		return nil
+	}
+	if a.playbackMaintenanceRelease != nil || a.playbackControlledRelease != nil {
+		return services.ErrPlaybackQuiesced
 	}
 	emit := a.playbackQueueEmit
 	var published atomic.Bool
@@ -58,7 +65,11 @@ func (a *App) queueService() (*services.PlaybackQueueService, error) {
 	}
 	a.playbackQueueMu.RLock()
 	queue := a.playbackQueue
+	quiesced, cleanupToken := a.playbackQueueQuiesced, a.playbackQueueCleanupToken
 	a.playbackQueueMu.RUnlock()
+	if queue != nil && quiesced {
+		return nil, fmt.Errorf("queue_cleanup_pending:%s:专用队列播放器尚未清理，请重试停止", cleanupToken)
+	}
 	if queue == nil {
 		return nil, errors.New("queue_unavailable: 待播队列尚未就绪或正在维护")
 	}
@@ -90,6 +101,29 @@ func (a *App) NextPlaybackQueue(token string, revision uint64) error {
 	return a.queueRPC(func(q *services.PlaybackQueueService) error { return q.Next(a.backgroundContext(), token, revision) })
 }
 func (a *App) StopPlaybackQueue(token string) error {
+	a.playbackLifecycleMu.Lock()
+	a.playbackQueueMu.RLock()
+	queue, pending, expected := a.playbackQueue, a.playbackQueueQuiesced, a.playbackQueueCleanupToken
+	a.playbackQueueMu.RUnlock()
+	if queue != nil && pending {
+		if token == "" || token != expected {
+			a.playbackLifecycleMu.Unlock()
+			return services.ErrQueueChanged
+		}
+		if err := a.closeQueue(queue); err != nil {
+			a.playbackLifecycleMu.Unlock()
+			return services.WithoutAbsolutePaths(err)
+		}
+		a.playbackQueueMu.Lock()
+		a.playbackQueue = nil
+		a.playbackQueueQuiesced = false
+		a.playbackQueueCleanupToken = ""
+		a.playbackQueueMu.Unlock()
+		a.playbackLifecycleMu.Unlock()
+		a.releasePlaybackMaintenance()
+		return a.startPlaybackQueue()
+	}
+	a.playbackLifecycleMu.Unlock()
 	return a.queueRPC(func(q *services.PlaybackQueueService) error { return q.Stop(a.backgroundContext(), token) })
 }
 func (a *App) ControlPlaybackQueue(token, action string) error {

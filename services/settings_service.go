@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"video-master/database"
@@ -44,6 +45,10 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		// 图片扩展名与视频扩展名同样原样存（空值由使用方回退默认清单）；续播口径存归一化后的生效值。
 		settings.ImageExtensions = input.ImageExtensions
 		settings.PlaybackResumeMode = normalizePlaybackResumeMode(input.PlaybackResumeMode)
+		if input.DesktopPlayer != "" && input.DesktopPlayer != "system" && input.DesktopPlayer != "iina_controlled" {
+			return fmt.Errorf("不支持的桌面播放器")
+		}
+		settings.DesktopPlayer = input.DesktopPlayer
 		settings.ScanExcludePaths = normalizeScanExcludePaths(input.ScanExcludePaths)
 		settings.ImageScanExcludePaths = normalizeScanExcludePaths(input.ImageScanExcludePaths)
 		settings.PlayWeight = input.PlayWeight

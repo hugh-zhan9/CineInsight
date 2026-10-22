@@ -40,7 +40,7 @@ func (s *VideoService) SuggestTonight(ctx context.Context, request RandomPlayReq
 			return err
 		}
 		for _, video := range videos {
-			result = append(result, TonightSuggestion{Video: video, Reasons: tonightReasons(video, pool.request)})
+			result = append(result, TonightSuggestion{Video: video, Reasons: tonightWorkReasons(video, pool)})
 		}
 		return nil
 	})
@@ -72,4 +72,19 @@ func tonightReasons(video models.Video, request RandomPlayRequest) []string {
 		reasons = append(reasons, fmt.Sprintf("播放过 %d 次", plays))
 	}
 	return reasons
+}
+
+// tonightWorkReasons distinguishes the selected file's metadata from work-level viewing history.
+func tonightWorkReasons(video models.Video, pool *randomCandidatePool) []string {
+	for _, row := range pool.rows {
+		if row.ID == video.ID {
+			video.IsWatched = row.workWatched
+			reasons := tonightReasons(video, pool.request)
+			if row.feedbackFactor == 0.5 {
+				reasons = append(reasons, "命中已选择的减少推荐标签，权重减半")
+			}
+			return reasons
+		}
+	}
+	return tonightReasons(video, pool.request)
 }

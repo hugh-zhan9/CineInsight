@@ -355,11 +355,29 @@ func (f mediaProbeFingerprint) matches(other mediaProbeFingerprint) bool {
 
 // Refresh probes one active video and atomically replaces its successful technical snapshot.
 func (s *MediaProbeService) Refresh(ctx context.Context, videoID uint) error {
+	return s.refreshForSource(ctx, videoID, "")
+}
+
+// RefreshForSource preserves an explicit retry grant across the per-video probe gate.
+func (s *MediaProbeService) RefreshForSource(ctx context.Context, videoID uint, expectedSourceVersion string) error {
+	if expectedSourceVersion == "" {
+		return errors.New("expected probe source is empty")
+	}
+	return s.refreshForSource(ctx, videoID, expectedSourceVersion)
+}
+
+func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, expectedSourceVersion string) error {
 	if ctx == nil {
 		return errors.New("media probe context is nil")
 	}
 	if s == nil || s.runner == nil {
 		return errors.New("media probe service is not initialized")
+	}
+	// A frozen retry cancelled before execution never owns a new failure fact.
+	if expectedSourceVersion != "" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	release, err := s.acquireVideo(ctx, videoID)
 	if err != nil {
@@ -370,6 +388,9 @@ func (s *MediaProbeService) Refresh(ctx context.Context, videoID uint) error {
 		// Preserve the existing cancelled-at-start attempt record. Its bounded
 		// cleanup context is for this known cancellation fact, never a probe retry.
 		if cancelled := ctx.Err(); cancelled != nil {
+			if expectedSourceVersion != "" {
+				return cancelled
+			}
 			finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			finalDB := db.WithContext(finalCtx)
@@ -382,17 +403,25 @@ func (s *MediaProbeService) Refresh(ctx context.Context, videoID uint) error {
 			}
 			return cancelled
 		}
-		return s.refreshFrom(ctx, db, videoID)
+		return s.refreshFrom(ctx, db, videoID, expectedSourceVersion)
 	})
 }
 
-func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoID uint) error {
+func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoID uint, expectedSourceVersion string) error {
+	if expectedSourceVersion != "" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	var video models.Video
 	if err := db.First(&video, videoID).Error; err != nil {
 		return fmt.Errorf("load video %d: %w", videoID, err)
 	}
 	attemptedAt := s.now()
 	before, err := mediaProbeStat(video.Path)
+	if expectedSourceVersion != "" && (err != nil || videoSourceVersion(video.ID, before.size, before.modTimeNS) != expectedSourceVersion) {
+		return ErrMediaProbeSourceChanged // no attempt or new-source failure state was written
+	}
 	if err != nil {
 		return s.recordFailureOrJoinFrom(db, video.ID, nil, attemptedAt, err)
 	}
@@ -455,7 +484,7 @@ func (s *MediaProbeService) persistSuccessFrom(db *gorm.DB, video models.Video, 
 		updates := []string{
 			"format_name", "format_long_name", "total_bit_rate",
 			"successful_source_size", "successful_source_mod_time_ns", "probed_at",
-			"last_attempt_source_size", "last_attempt_source_mod_time_ns", "last_attempt_at", "last_error", "updated_at",
+			"last_attempt_source_size", "last_attempt_source_mod_time_ns", "last_attempt_at", "last_error", "updated_at", "failure_retry_claim",
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "video_id"}},
@@ -530,7 +559,7 @@ func (s *MediaProbeService) recordFailureFrom(db *gorm.DB, videoID uint, fingerp
 		metadata.LastAttemptSourceModTimeNS = &fingerprint.modTimeNS
 	}
 	updates := []string{
-		"last_attempt_source_size", "last_attempt_source_mod_time_ns", "last_attempt_at", "last_error", "updated_at",
+		"last_attempt_source_size", "last_attempt_source_mod_time_ns", "last_attempt_at", "last_error", "updated_at", "failure_retry_claim",
 	}
 	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "video_id"}},

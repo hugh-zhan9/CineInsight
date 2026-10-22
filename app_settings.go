@@ -316,7 +316,9 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 // 连接；切换后端只读源库，连接保持打开供迁移器读取。失败后离开维护模式统一走
 // resumeAfterDatabaseRestoreFailure；切换成功后不离开（「待重启」终态）。
 func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
-	a.quiescePlaybackForMaintenance()
+	if err := a.quiescePlaybackForMaintenance(); err != nil {
+		return err
+	}
 	a.stopAIReviewApprovals()
 	if err := a.stopCleanupConsolidationAndWait(); err != nil {
 		return err
@@ -340,6 +342,9 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	}
 	if a.technicalBackfill != nil {
 		a.technicalBackfill.StopAndWait()
+	}
+	if a.playbackProxies != nil {
+		a.playbackProxies.StopAndWait()
 	}
 	if a.enhancement != nil {
 		a.enhancement.StopAndWait()
@@ -413,6 +418,17 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 func (a *App) resumeAfterDatabaseRestoreFailure() {
 	defer a.releasePlaybackMaintenance()
 	a.releaseDatabaseRestoreMode()
+	a.playbackLifecycleMu.Lock()
+	shuttingDown := a.playbackShuttingDown
+	a.playbackLifecycleMu.Unlock()
+	if shuttingDown {
+		return
+	}
+	a.stopFailureOwners()
+	if err := a.initializeFunctionalPolish(); err != nil {
+		log.Printf("失败诊断恢复未完成，批量重试暂不可用: %v", err)
+	}
+	a.releasePlaybackMaintenance()
 	a.resumeCleanupConsolidation()
 	if a.videoEdit != nil {
 		a.videoEdit.Resume()
@@ -427,7 +443,7 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	if a.ctx == nil {
 		return
 	}
-	a.aiTaggingService.Start(a.ctx)
+	a.startDiagnosticOwner(a.ctx)
 	a.resetSemanticIndexService()
 	a.resetImageSemanticIndexService()
 	a.resetImageAITaggingService()

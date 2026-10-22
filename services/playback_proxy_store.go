@@ -612,7 +612,7 @@ func upsertProxyRow(row models.VideoPlaybackProxy) error {
 		Columns: []clause.Column{{Name: "video_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"source_size", "source_mod_time_ns", "strategy", "status",
-			"output_size", "last_used_at", "last_error", "updated_at",
+			"output_size", "last_used_at", "last_error", "updated_at", "failure_retry_claim",
 		}),
 	}).Create(&row).Error
 }
