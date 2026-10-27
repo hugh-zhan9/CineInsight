@@ -112,21 +112,29 @@
         <BookmarkPanel :key="video.id" :video="video" :session="playerOpen ? session : null" :current-position="currentPositionSeconds" @open-bookmark="openBookmark" @open-video="openBookmarkVideo" />
       </section>
 
-      <section v-if="blockVisible(relatedBlock)" class="recap-section" data-test="detail-related">
-        <header class="recap-section__head"><h3><RecapIcon name="spark" /> 相关推荐</h3><small>同一批人物的其他作品</small></header>
-        <p v-if="relatedBlock.error" class="viewer-detail__error" role="alert" data-test="detail-related-error">{{ relatedBlock.error }}</p>
-        <p v-else-if="relatedBlock.loading && !relatedBlock.items.length" class="recap-muted">正在读取…</p>
-        <div v-if="relatedBlock.items.length" class="recap-strip">
-          <RecapMediaCard
-            v-for="item in relatedBlock.items"
-            :key="item.video.id"
-            class="recap-strip__item"
-            :id="Number(item.video.id)"
-            :title="videoTitle(item.video)"
-            :subtitle="item.reason"
-            data-test="detail-related-item"
-            @open="openVideo(item.video.id)"
-          />
+      <!-- 推荐（2026-10-27）：同目录、同标签由 GetVideoRecommendations 算，同人物沿用 GetPersonDetail 的
+           「同一批人物的其他作品」。三条按 同目录 → 同标签 → 同人物 排，后一条不再重复前一条已经给出的片。 -->
+      <section v-if="recommendationVisible" class="recap-section" data-test="detail-recommendations">
+        <header class="recap-section__head"><h3><RecapIcon name="spark" /> 推荐</h3><small>根据所在文件夹、标签与人物</small></header>
+        <p v-for="message in recommendationErrors" :key="message" class="viewer-detail__error" role="alert" data-test="detail-recommendations-error">{{ message }}</p>
+        <p v-if="recommendationLoading && !recommendationRails.length" class="recap-muted">正在读取…</p>
+        <div v-for="rail in recommendationRails" :key="rail.key" class="viewer-detail__rail" :data-test="`detail-recommend-${rail.key}`">
+          <header class="viewer-detail__rail-head">
+            <h4>{{ rail.title }}</h4>
+            <small>{{ rail.hint }}</small>
+          </header>
+          <div class="recap-strip">
+            <RecapMediaCard
+              v-for="item in rail.items"
+              :key="item.video.id"
+              class="recap-strip__item"
+              :id="Number(item.video.id)"
+              :title="videoTitle(item.video)"
+              :subtitle="item.reason"
+              data-test="detail-recommend-item"
+              @open="openVideo(item.video.id)"
+            />
+          </div>
         </div>
       </section>
       <!-- 不在任何版本组里的片没有这一节；读取中也不先占一个空节。 -->
@@ -188,14 +196,14 @@
 import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress, waitForVideoWatchProgress } from '../../utils/watchProgress.js';
 // 观看侧整页详情（D-UI-05、D-UI-06、D-UI-08；详细设计「整页详情」）。
 // 数据：GetVideoDetails 一次取齐（含 artwork.has_poster/has_fanart、人物、作品集、标签）；
-//   相关推荐 = 本片人物在抽屉人物详情里的作品（GetPersonDetail）；版本 = 片库页同一份 version_groups 汇总
-//   （SearchLibraryVideoPage 按本片路径精确筛选并打开合并版本）；作品集的下一部 = GetCollectionDetail 的成员顺序；
-//   书签沿用 BookmarkPanel。各块各自加载、各自失败，没有内容的块不显示。
+//   推荐 = 同目录 / 同标签（GetVideoRecommendations）与同人物（本片人物在抽屉人物详情里的作品，GetPersonDetail）；
+//   版本 = 片库页同一份 version_groups 汇总（SearchLibraryVideoPage 按本片路径精确筛选并打开合并版本）；
+//   作品集的下一部 = GetCollectionDetail 的成员顺序；书签沿用 BookmarkPanel。各块各自加载、各自失败，没有内容的块不显示。
 // 内嵌播放：InlineVideoPlayer 受控模式（会话归本页，BookmarkPanel 记位置也要它）；带 startAtMs 进来时自动在应用内起播。
-// 返回、相关推荐、标签、人物与作品集都只发事件，页面切换与返回栈归 App（D-UI-07、D-UI-10）。
+// 返回、推荐、标签、人物与作品集都只发事件，页面切换与返回栈归 App（D-UI-07、D-UI-10）。
 import {
-  GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetSubtitleSegments, GetVideoDetails, PreviewExternally,
-  SearchLibraryVideoPage, SetVideoFavorite, SetVideoWatched, UpdateVideoRating, } from '../../../wailsjs/go/main/App';
+  GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetSubtitleSegments, GetVideoDetails, GetVideoRecommendations,
+  PreviewExternally, SearchLibraryVideoPage, SetVideoFavorite, SetVideoWatched, UpdateVideoRating, } from '../../../wailsjs/go/main/App';
 import BookmarkPanel from '../BookmarkPanel.vue';
 import QueueActionButton from '../QueueActionButton.vue';
 import QuoteCardDialog from '../QuoteCardDialog.vue';
@@ -218,7 +226,7 @@ import { versionMemberFacts, versionMemberTitle } from '../../utils/versionGroup
 import { resumePosition } from '../../utils/watchState.js';
 import {
   COLLECTION_DETAIL_LIMIT, RELATED_PEOPLE_LIMIT, RELATED_PER_PERSON, collectionProgress, detailBackdrop, detailFacts, detailTitle,
-  mergeRelatedVideos, playbackStaleChanges, ratingOf, stateChanges, viewingRecord
+  mergeRelatedVideos, playbackStaleChanges, ratingOf, sharedTagReason, stateChanges, viewingRecord
 } from './videoDetail.js';
 
 const STATE_TOGGLES = {
@@ -258,7 +266,9 @@ export default {
   data() {
     return {
       loading: false, error: '', details: null, posterFailed: false,
-      relatedBlock: emptyBlock(), versionBlock: { loading: false, error: '', group: null }, collectionStates: {},
+      // relatedBlock 是同人物那一条（沿用 GetPersonDetail）；recommendBlock 是同目录 / 同标签（GetVideoRecommendations）。
+      relatedBlock: emptyBlock(), recommendBlock: { loading: false, error: '', directory: [], tags: [] },
+      versionBlock: { loading: false, error: '', group: null }, collectionStates: {},
       // 内嵌播放：会话归本页（受控）；playerStart 在每次展开时定下来，播放中不再变。
       playerOpen: false, session: null, player: null,
       playerStart: { startTimeMs: null, resumePositionSeconds: 0 },
@@ -287,6 +297,27 @@ export default {
     rating() { return ratingOf(this.video); },
     people() { return this.details?.people || []; },
     record() { return viewingRecord(this.video); },
+    // 推荐区块：三条按 同目录 → 同标签 → 同人物 排，后面的条不再重复前面已经给出的片（后端已让同标签不重复同目录；
+    // 同人物这一条在读回后按这两条与本片版本组再筛一次）。
+    recommendationRails() {
+      const directory = (this.recommendBlock.directory || []).map(item => ({ video: item.video, reason: '' }));
+      const tags = (this.recommendBlock.tags || []).map(item => ({ video: item.video, reason: sharedTagReason(item.shared_tags) }));
+      const shown = new Set([Number(this.video?.id || 0)]);
+      for (const item of directory) shown.add(Number(item.video?.id || 0));
+      for (const item of tags) shown.add(Number(item.video?.id || 0));
+      for (const member of this.versionMembers) shown.add(Number(member.video_id || 0));
+      const people = (this.relatedBlock.items || []).filter(item => !shown.has(Number(item.video?.id || 0)));
+      return [
+        { key: 'directory', title: '同目录', hint: '这个文件夹里的其他片', items: directory },
+        { key: 'tags', title: '同标签', hint: '共享标签的片', items: tags },
+        { key: 'people', title: '同人物', hint: '同一批人物的其他作品', items: people }
+      ].filter(rail => rail.items.length);
+    },
+    recommendationErrors() { return [this.recommendBlock.error, this.relatedBlock.error].filter(Boolean); },
+    recommendationLoading() { return this.recommendBlock.loading || this.relatedBlock.loading; },
+    recommendationVisible() {
+      return Boolean(this.recommendationLoading || this.recommendationRails.length || this.recommendationErrors.length);
+    },
     collectionItems() {
       return (this.details?.collections || []).map(item => {
         const id = Number(item.collection?.id);
@@ -343,7 +374,6 @@ export default {
       return label ? `${label} · ${title}` : title;
     },
     initial(name) { return String(name || '?').trim().slice(0, 1) || '?'; },
-    blockVisible(block, items = block.items) { return Boolean(block.loading || block.error || items?.length); },
     isCurrentLoad(token) { return token === this._loadToken; },
     // 换一部片时回到顶部；来源页的滚动位置由 App 记、App 还原（D-UI-10）。滚动容器是顶栏下方唯一的 .main-view。
     scrollToTop() {
@@ -358,7 +388,8 @@ export default {
       this.closePlayer();
       Object.assign(this, {
         details: null, error: '', posterFailed: false, actionBusy: '', actionError: '', ratingSaving: false, quoteCard: null,
-        relatedBlock: emptyBlock(), versionBlock: { loading: false, error: '', group: null }, collectionStates: {}
+        relatedBlock: emptyBlock(), recommendBlock: { loading: false, error: '', directory: [], tags: [] },
+        versionBlock: { loading: false, error: '', group: null }, collectionStates: {}
       });
       if (!id) { this.loading = false; this.emitReady(token); return; }
       this.loading = true;
@@ -372,6 +403,7 @@ export default {
       if (!this.isCurrentLoad(token)) return;
       this.loading = false;
       this.details = details;
+      this.loadRecommendations(details, token);
       this.loadRelated(details, token);
       this.loadVersions(details, token);
       this.loadCollections(details, token);
@@ -389,6 +421,22 @@ export default {
         this.$emit('ready');
       });
     },
+    // 同目录 / 同标签（后端算好，两组的候选已排除本片与版本组成员）；同人物一条在 loadRelated 里取。
+    async loadRecommendations(details, token) {
+      const videoID = Number(details.video?.id || 0);
+      if (!videoID) return;
+      this.recommendBlock = { loading: true, error: '', directory: [], tags: [] };
+      try {
+        const result = await GetVideoRecommendations(videoID);
+        if (!this.isCurrentLoad(token)) return;
+        this.recommendBlock = {
+          loading: false, error: '',
+          directory: result?.directory || [], tags: result?.tags || []
+        };
+      } catch (err) {
+        if (this.isCurrentLoad(token)) this.recommendBlock = { loading: false, error: `读取推荐失败：${errorText(err)}`, directory: [], tags: [] };
+      }
+    },
     async loadRelated(details, token) {
       const people = (details.people || []).slice(0, RELATED_PEOPLE_LIMIT);
       if (!people.length) return;
@@ -400,7 +448,7 @@ export default {
       const failed = results.find(result => result.status === 'rejected');
       this.relatedBlock = {
         loading: false,
-        error: failed ? `读取相关推荐失败：${errorText(failed.reason)}` : '',
+        error: failed ? `读取同人物推荐失败：${errorText(failed.reason)}` : '',
         items: mergeRelatedVideos(groups, details.video.id)
       };
     },
@@ -706,6 +754,11 @@ export default {
 .viewer-detail__more { margin-top: 0; }
 .viewer-detail__description { max-width: 860px; margin: 0; color: var(--text-secondary); line-height: 1.75; white-space: pre-line; }
 .viewer-detail__rows { display: grid; gap: 10px; }
+/* 推荐区块里的一条（同目录 / 同标签 / 同人物）：小标题 + 横向卡片条，标题字号比区块标题小一级。 */
+.viewer-detail__rail { display: grid; gap: 8px; }
+.viewer-detail__rail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.viewer-detail__rail-head h4 { margin: 0; font-size: var(--fs-body); font-weight: var(--fw-bold); }
+.viewer-detail__rail-head small { color: var(--text-muted); font-size: var(--fs-caption); }
 .viewer-detail__row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; }
 .viewer-detail__row-copy { display: grid; flex: 1; gap: 4px; min-width: 0; }
 .viewer-detail__row-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

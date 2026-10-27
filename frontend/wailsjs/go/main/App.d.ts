@@ -472,6 +472,8 @@ export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 
 export function GetVideoEditStatus():Promise<services.VideoEditStatus>;
 
+export function GetVideoRecommendations(arg1:number):Promise<services.VideoRecommendations>;
+
 export function GetVideosByIDs(arg1:Array<number>):Promise<Array<models.Video>>;
 
 export function GetViewingYearReview(arg1:number):Promise<services.ViewingYearReview>;

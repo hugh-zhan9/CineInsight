@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RELATED_LIMIT, collectionProgress, detailBackdrop, detailFacts, detailTitle, mergeRelatedVideos, playbackStaleChanges, ratingOf, stateChanges,
-  viewingRecord
+  RELATED_LIMIT, collectionProgress, detailBackdrop, detailFacts, detailTitle, mergeRelatedVideos, playbackStaleChanges, ratingOf, sharedTagReason,
+  stateChanges, viewingRecord
 } from './videoDetail.js';
 
 const video = (id, extra = {}) => ({ id, name: `v${id}.mp4`, display_title: '', duration: 1000, ...extra });
@@ -66,6 +66,16 @@ describe('mergeRelatedVideos', () => {
     const many = Array.from({ length: RELATED_LIMIT + 5 }, (_, index) => video(index + 2));
     expect(mergeRelatedVideos([{ name: '甲', videos: many }], 1)).toHaveLength(RELATED_LIMIT);
     expect(mergeRelatedVideos([], 1)).toEqual([]);
+  });
+});
+
+describe('sharedTagReason', () => {
+  it('lists up to three shared tags and summarizes the rest', () => {
+    expect(sharedTagReason(['科幻'])).toBe('科幻');
+    expect(sharedTagReason(['科幻', '动作', '悬疑'])).toBe('科幻 · 动作 · 悬疑');
+    expect(sharedTagReason(['科幻', '动作', '悬疑', '剧情', '犯罪'])).toBe('科幻 · 动作 · 悬疑 等 5 个标签');
+    expect(sharedTagReason([])).toBe('');
+    expect(sharedTagReason(null)).toBe('');
   });
 });
 

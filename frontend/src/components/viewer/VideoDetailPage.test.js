@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   GetCollectionDetail: vi.fn(), GetPersonDetail: vi.fn(), GetPreviewSession: vi.fn(), GetSubtitleSegments: vi.fn(),
-  GetVideoDetails: vi.fn(), PlayVideo: vi.fn(), PreviewExternally: vi.fn(), SearchLibraryVideoPage: vi.fn(),
+  GetVideoDetails: vi.fn(), GetVideoRecommendations: vi.fn(), PlayVideo: vi.fn(), PreviewExternally: vi.fn(), SearchLibraryVideoPage: vi.fn(),
   SetVideoFavorite: vi.fn(), SetVideoWatched: vi.fn(), UpdateVideoRating: vi.fn(), UpdateVideoWatchProgress: vi.fn(),
   // 子组件（书签、待播、真实播放器）用到的绑定。
   ListVideoBookmarks: vi.fn(), SaveVideoBookmark: vi.fn(), DeleteVideoBookmark: vi.fn(), ResolveVideoBookmark: vi.fn(),
@@ -58,6 +58,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   closeVersionCompare();
   api.GetVideoDetails.mockImplementation(async id => detailsFor(id));
+  api.GetVideoRecommendations.mockResolvedValue({ directory: [], tags: [] });
   api.GetPersonDetail.mockResolvedValue({ videos: [baseVideo(5), baseVideo(7), baseVideo(8)] });
   api.SearchLibraryVideoPage.mockImplementation(async () => ({ videos: [baseVideo(5)], version_groups: { 5: versionGroup(5) } }));
   api.GetCollectionDetail.mockResolvedValue({ videos: [{ position: 1, video: baseVideo(5) }, { position: 2, video: baseVideo(12) }, { position: 3, video: baseVideo(13) }] });
@@ -86,6 +87,7 @@ describe('VideoDetailPage data', () => {
     expect(api.GetVideoDetails).toHaveBeenCalledWith(5);
     expect(api.GetPersonDetail).toHaveBeenCalledWith(31, 0, 12);
     expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith({ filter: { path_prefix: '/lib/v5.mp4', collapse_versions: true }, limit: 1 });
+    expect(api.GetVideoRecommendations).toHaveBeenCalledWith(5);
     expect(api.GetCollectionDetail).toHaveBeenCalledWith(41);
     expect(api.ListVideoBookmarks).toHaveBeenCalledWith(expect.objectContaining({ video_id: 5 }));
     expect(api.GetPreviewSession).not.toHaveBeenCalled();
@@ -99,10 +101,10 @@ describe('VideoDetailPage data', () => {
     expect(wrapper.get('[data-test="detail-tag-3"]').text()).toBe('科幻');
     expect(wrapper.get('[data-test="detail-description"]').text()).toContain('一段简介');
     expect(wrapper.get('[data-test="detail-person-31"]').text()).toContain('甲');
-    expect(wrapper.findAll('[data-test="detail-related-item"]').map(item => item.text())).toEqual([
+    expect(wrapper.get('[data-test="detail-recommend-people"]').findAll('[data-test="detail-recommend-item"]').map(item => item.text())).toEqual([
       expect.stringContaining('影片7'), expect.stringContaining('影片8')
     ]);
-    expect(wrapper.get('[data-test="detail-related"]').text()).toContain('同为 甲 的作品');
+    expect(wrapper.get('[data-test="detail-recommendations"]').text()).toContain('同为 甲 的作品');
     expect(wrapper.get('[data-test="detail-version-5"]').text()).toContain('当前');
     expect(wrapper.get('[data-test="detail-version-5"]').text()).toContain('4K · 影片5');
     expect(wrapper.find('[data-test="detail-version-compare-6"]').exists()).toBe(true);
@@ -110,6 +112,27 @@ describe('VideoDetailPage data', () => {
     expect(wrapper.get('[data-test="detail-collection-next-41"]').text()).toContain('影片12');
     expect(wrapper.get('[data-test="detail-history-plays"]').text()).toContain('2次');
     expect(wrapper.get('[data-test="detail-history-last-played"]').text()).toContain('2026年10月1日');
+  });
+
+  it('推荐：同目录、同标签在前，同人物只补没出现过的片（含本片的其他版本）', async () => {
+    api.GetVideoRecommendations.mockResolvedValue({
+      directory: [{ video: baseVideo(7), shared_tags: [] }],
+      tags: [{ video: baseVideo(9), shared_tags: ['科幻', '剧情'] }]
+    });
+    // 6 是本片的另一个版本（versionGroup(5)），7 已经出现在同目录里。
+    api.GetPersonDetail.mockResolvedValue({ videos: [baseVideo(5), baseVideo(6), baseVideo(7), baseVideo(8)] });
+    const wrapper = await mountPage();
+    const rails = wrapper.findAll('[data-test="detail-recommend-directory"], [data-test="detail-recommend-tags"], [data-test="detail-recommend-people"]');
+    expect(rails.map(rail => rail.attributes('data-test'))).toEqual([
+      'detail-recommend-directory', 'detail-recommend-tags', 'detail-recommend-people'
+    ]);
+    const items = key => wrapper.get(`[data-test="detail-recommend-${key}"]`).findAll('[data-test="detail-recommend-item"]');
+    expect(items('directory').map(item => item.text())).toEqual([expect.stringContaining('影片7')]);
+    expect(items('tags').map(item => item.text())).toEqual([expect.stringContaining('影片9')]);
+    expect(items('people').map(item => item.text())).toEqual([expect.stringContaining('影片8')]);
+    expect(wrapper.get('[data-test="detail-recommend-tags"]').text()).toContain('科幻 · 剧情');
+    await items('directory')[0].trigger('click');
+    expect(wrapper.emitted('open-video')).toEqual([[7]]);
   });
 
   it('shows a loading state while the details are pending', async () => {
@@ -136,10 +159,12 @@ describe('VideoDetailPage data', () => {
 
   it('fails each secondary block on its own', async () => {
     api.GetPersonDetail.mockRejectedValue('人物读取失败');
+    api.GetVideoRecommendations.mockRejectedValue('推荐读取失败');
     api.SearchLibraryVideoPage.mockRejectedValue('版本读取失败');
     api.GetCollectionDetail.mockRejectedValue('作品集读取失败');
     const wrapper = await mountPage();
-    expect(wrapper.get('[data-test="detail-related-error"]').text()).toBe('读取相关推荐失败：人物读取失败');
+    expect(wrapper.findAll('[data-test="detail-recommendations-error"]').map(item => item.text()))
+      .toEqual(['读取推荐失败：推荐读取失败', '读取同人物推荐失败：人物读取失败']);
     expect(wrapper.get('[data-test="detail-versions-error"]').text()).toBe('读取版本失败：版本读取失败');
     expect(wrapper.get('[data-test="detail-collection-41"]').text()).toContain('读取作品集失败：作品集读取失败');
     expect(wrapper.get('[data-test="detail-title"]').text()).toBe('影片5');
@@ -153,7 +178,7 @@ describe('VideoDetailPage data', () => {
     }));
     api.SearchLibraryVideoPage.mockResolvedValue({ videos: [baseVideo(5)], version_groups: {} });
     const wrapper = await mountPage();
-    for (const name of ['description', 'people', 'related', 'versions', 'collections', 'history', 'original-title']) {
+    for (const name of ['description', 'people', 'recommendations', 'versions', 'collections', 'history', 'original-title']) {
       expect(wrapper.find(`[data-test="detail-${name}"]`).exists(), name).toBe(false);
     }
     expect(api.GetPersonDetail).not.toHaveBeenCalled();
@@ -469,7 +494,7 @@ describe('VideoDetailPage navigation', () => {
   it('emits open-tag, open-video and open-entity for tags, related items, next items, people and collections', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-test="detail-tag-3"]').trigger('click');
-    await wrapper.findAll('[data-test="detail-related-item"]')[1].trigger('click');
+    await wrapper.get('[data-test="detail-recommend-people"]').findAll('[data-test="detail-recommend-item"]')[1].trigger('click');
     await wrapper.get('[data-test="detail-collection-next-41"]').trigger('click');
     await wrapper.get('[data-test="detail-person-31"]').trigger('click');
     await wrapper.get('[data-test="detail-collection-open-41"]').trigger('click');

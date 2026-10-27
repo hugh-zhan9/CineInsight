@@ -14817,6 +14817,70 @@ export namespace services {
 	        this.running_items = source["running_items"];
 	    }
 	}
+	export class VideoRecommendationItem {
+	    video: models.Video;
+	    shared_tags: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoRecommendationItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.shared_tags = source["shared_tags"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VideoRecommendations {
+	    directory: VideoRecommendationItem[];
+	    tags: VideoRecommendationItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoRecommendations(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = this.convertValues(source["directory"], VideoRecommendationItem);
+	        this.tags = this.convertValues(source["tags"], VideoRecommendationItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class VideoSameSourceReviewItem {
 	    id: number;
 	    video_a_id: number;

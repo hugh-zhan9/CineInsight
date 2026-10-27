@@ -13,6 +13,11 @@ func (a *App) GetVideoDetails(videoID uint) (*services.VideoDetails, error) {
 	return a.videoDetailService.GetVideoDetails(videoID)
 }
 
+// GetVideoRecommendations 返回整页详情「推荐」里同目录与同标签两组；同人物一条仍由 GetPersonDetail 取。
+func (a *App) GetVideoRecommendations(videoID uint) (*services.VideoRecommendations, error) {
+	return a.videoService.GetVideoRecommendations(videoID)
+}
+
 func (a *App) UpdateVideoDetails(input services.VideoDetailsUpdate) (*services.VideoDetails, error) {
 	return a.videoDetailService.UpdateVideoDetails(input)
 }

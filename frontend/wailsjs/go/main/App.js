@@ -934,6 +934,10 @@ export function GetVideoEditStatus() {
   return window['go']['main']['App']['GetVideoEditStatus']();
 }
 
+export function GetVideoRecommendations(arg1) {
+  return window['go']['main']['App']['GetVideoRecommendations'](arg1);
+}
+
 export function GetVideosByIDs(arg1) {
   return window['go']['main']['App']['GetVideosByIDs'](arg1);
 }

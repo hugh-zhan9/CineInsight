@@ -63,6 +63,14 @@ export function collectionProgress(detail, videoID) {
   };
 }
 
+// 同标签推荐卡片的理由：最多列 3 个共享标签，更多时写「等 N 个标签」，别把副标题撑成一大段。
+export function sharedTagReason(names) {
+  const list = (names || []).map(name => String(name || '').trim()).filter(Boolean);
+  if (!list.length) return '';
+  const shown = list.slice(0, 3).join(' · ');
+  return list.length > 3 ? `${shown} 等 ${list.length} 个标签` : shown;
+}
+
 // 相关推荐：按人物顺序合并各自的作品，去掉本片与重复的，理由记第一个带出它的人物。
 export function mergeRelatedVideos(groups, currentID, limit = RELATED_LIMIT) {
   const seen = new Set([Number(currentID)]);
