@@ -58,9 +58,8 @@ func errorCode(_ error: Error) -> String {
 
 @MainActor
 struct TranslationPreparation: View {
-    let source: Locale.Language
-    let target: Locale.Language
-    @State var configuration: TranslationSession.Configuration?
+    // One fixed language pair per helper invocation; no mutable SwiftUI state is needed.
+    let configuration: TranslationSession.Configuration
     var body: some View {
         VStack(spacing:16) {
             Text("准备系统翻译语言").font(.title2)
@@ -68,7 +67,6 @@ struct TranslationPreparation: View {
             ProgressView()
             Button("取消") { emit(Response(error:"cancelled")); exit(0) }
         }.padding(28).frame(width:420,height:180)
-        .task { configuration=TranslationSession.Configuration(source:source,target:target) }
         .translationTask(configuration) { session in
             do { try await session.prepareTranslation(); emit(Response(supported:true)) }
             catch { emit(Response(error:errorCode(error))) }
@@ -84,7 +82,7 @@ func prepareTranslation(_ request: Request) throws {
     app.setActivationPolicy(.regular)
     let window=NSWindow(contentRect:NSRect(x:0,y:0,width:476,height:236),styleMask:[.titled],backing:.buffered,defer:false)
     window.title="析微影策 · 系统语言资源"
-    window.contentView=NSHostingView(rootView:TranslationPreparation(source:Locale.Language(identifier:source),target:Locale.Language(identifier:target)))
+    window.contentView=NSHostingView(rootView:TranslationPreparation(configuration:TranslationSession.Configuration(source:Locale.Language(identifier:source),target:Locale.Language(identifier:target))))
     window.center(); window.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps:true)
     app.run()
 }

@@ -49,6 +49,12 @@ assert request(operation='translate', source='en', target='zh', texts=[])['trans
 assert request(operation='not-a-command')['error'] == 'apple_invalid_request'
 print('translation batch, empty batch and invalid request passed')
 
+# The successful translation above proves this pair is installed, so preparation must complete
+# without downloading assets. This also exercises the visible SwiftUI view's initial session.
+assert request(operation='prepare_translation', source='en', target='zh').get('supported')
+assert request(operation='prepare_translation', source='auto', target='zh')['error'] == 'apple_source_language_required'
+print('translation preparation and missing source validation passed')
+
 # The macOS 15 paths forced on a newer Mac. Speech there needs an interactive permission grant, so only
 # status and the hidden-window translation session are smoke-tested.
 legacy = dict(os.environ, CINEINSIGHT_APPLE_AI_LEGACY='1')
