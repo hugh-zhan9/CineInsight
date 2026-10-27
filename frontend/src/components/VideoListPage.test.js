@@ -1133,6 +1133,34 @@ describe('命令面板接线', () => {
     wrapper.unmount();
   });
 
+  it('整页详情「片库管理」：清掉其余条件，按传进来的文件名重搜（搜索模式回到文件）', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
+    const wrapper = await mountPage();
+    wrapper.vm.searchMode = 'subtitle';
+    wrapper.vm.smartView = 'favorites';
+    wrapper.vm.selectedTags = [1, 2];
+    wrapper.vm.minRating = '7';
+    wrapper.vm.missingFilter = 'poster';
+    api.SearchLibraryVideoPage.mockClear();
+
+    await wrapper.vm.applyVideoKeywordCommand('  v5.mp4  ');
+    await flushPromises();
+
+    expect(wrapper.vm.searchMode).toBe('file');
+    expect(wrapper.vm.searchKeyword).toBe('v5.mp4');
+    expect(wrapper.vm.selectedTags).toEqual([]);
+    expect(wrapper.vm.smartView).toBe('');
+    expect(wrapper.vm.missingFilter).toBe('');
+    const filter = api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter;
+    expect(filter.keyword).toBe('v5.mp4');
+    expect(filter.search_mode).toBe('file');
+    expect(filter.tag_ids).toEqual([]);
+    expect(filter.min_rating).toBeNull();
+    expect(wrapper.vm.applyVideoKeywordCommand('   ')).toBe(false);
+
+    wrapper.unmount();
+  });
+
   it('命令面板应用保存视图会套用该视图的全部条件', async () => {
     api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
     const wrapper = await mountPage();

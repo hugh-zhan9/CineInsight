@@ -2116,6 +2116,17 @@ export default {
       this.selectedTags = [id];
       return this.handleSearch(true, true);
     },
+    // 整页详情「片库管理」按钮（2026-10-27）：清掉其余条件，按传进来的名字把这一部搜出来（整页详情传的是文件名；
+    // 后端文件搜索同时匹配标题、原始标题、文件名与路径）。搜索模式回到文件——字幕 / 语义模式下这个名字搜不到它。空名字不动，免得把整库当结果。
+    applyVideoKeywordCommand(keyword) {
+      const value = String(keyword || '').trim();
+      if (!value) return false;
+      this.leaveSavedView();
+      this.resetConditionsForCommand();
+      this.searchMode = 'file';
+      this.searchKeyword = value;
+      return this.handleSearch(true, true);
+    },
     // 完整度页签的「去处理」（D-MC-03）：清掉其余条件，只按「缺少这一项」列出，条数与完整度页同口径。
     applyMissingFilter(field) {
       const value = String(field || '');

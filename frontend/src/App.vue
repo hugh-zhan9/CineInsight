@@ -151,6 +151,7 @@
         @open-video="openVideoByID($event, { from: 'video-detail' })"
         @navigate="navigateTo"
         @edit-in-manage="editVideoInManage"
+        @manage-in-library="openVideoInManageList"
         @open-tag="openLibraryTag"
         @open-entity="openRecapEntity"
         @find-similar="openSimilarScenes"
@@ -1241,6 +1242,18 @@ export default {
     // 整页详情「编辑资料」：切到片库管理，在抽屉里打开这部片（详细设计「整页详情」）。
     editVideoInManage(videoID) {
       return this.openVideoByID(videoID, { from: 'library-manage' });
+    },
+    // 整页详情「片库管理」按钮（2026-10-27 用户要求）：切到片库管理列表，并把这部片的文件名交给片库页当搜索条件，
+    // 停在列表上——行内「+ 标签」与行菜单里的删除不用再自己搜一遍。与「编辑资料」不同，这里不打开抽屉。
+    openVideoInManageList({ id, keyword } = {}) {
+      const videoID = Number(id);
+      if (!videoID) return false;
+      const value = String(keyword || '').trim();
+      return whenNavigated(this.navigateTo('library-manage'), async () => {
+        await this.$nextTick();
+        if (!value) return true;
+        return this.$refs.videoListPage?.applyVideoKeywordCommand(value) ?? false;
+      });
     },
     // 首页「本月常看的人物」：沿用命令面板打开实体的入口。payload 为 { id, name }。
     openPerson(person) {

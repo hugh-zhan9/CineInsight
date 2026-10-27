@@ -315,6 +315,12 @@ describe('VideoDetailPage actions', () => {
     expect(wrapper.emitted('back')).toHaveLength(1);
   });
 
+  it('「片库管理」把文件名交给宿主当搜索条件', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="detail-manage"]').trigger('click');
+    expect(wrapper.emitted('manage-in-library')).toEqual([[{ id: 5, keyword: 'v5.mp4' }]]);
+  });
+
   it('compares the selected version against this one', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-test="detail-version-compare-6"]').trigger('click');

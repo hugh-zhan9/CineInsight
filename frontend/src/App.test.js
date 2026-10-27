@@ -1875,6 +1875,21 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
     expect(wrapper.vm.detailReturnStack).toEqual([]);
   });
 
+  it('整页详情「片库管理」：切到片库管理并按带过去的文件名搜索，不打开抽屉', async () => {
+    const { wrapper, openPreview } = await onPage('home');
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    const apply = vi.fn().mockResolvedValue(true);
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.applyVideoKeywordCommand = apply;
+
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('manage-in-library', { id: 7, keyword: ' v7.mp4 ' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(apply).toHaveBeenCalledWith('v7.mp4');
+    expect(openPreview).not.toHaveBeenCalled();
+    expect(wrapper.vm.detailReturnStack).toEqual([]);
+  });
+
   it('整页详情的标签、人物/作品集与「找相似画面」接到既有入口', async () => {
     const { wrapper } = await onPage('home');
     wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);

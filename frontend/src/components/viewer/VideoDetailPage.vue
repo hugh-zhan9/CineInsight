@@ -84,6 +84,9 @@
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-find-similar" @click="findSimilarScenes">找相似画面</button>
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-edit" @click="$emit('edit-in-manage', Number(video.id))">编辑资料</button>
+              <!-- 快速进管理（2026-10-27 用户要求）：切到片库管理，并把这部片的文件名带过去当搜索条件，
+                   停在列表上——加标签（行内「+ 标签」）与删除（行菜单）不用再自己搜一遍。 -->
+              <button type="button" class="btn btn--secondary btn--sm" data-test="detail-manage" title="切到片库管理，按这部片的文件名搜索；加标签、删除都在列表行上" @click="openInManageList">片库管理</button>
             </div>
             <p v-if="actionError" class="viewer-detail__error" role="alert" data-test="detail-action-error">{{ actionError }}</p>
           </HeroHeader>
@@ -245,12 +248,13 @@ export default {
   },
   // back：返回来源页；open-video(id)：相关推荐、下一部、其他版本，宿主压栈后换成那一部；
   // navigate(pageKey)：去别的页面；edit-in-manage(id)：去片库管理并在抽屉里打开这部片；
+  // manage-in-library({ id, keyword })：去片库管理，并按 keyword（这部片的文件名）把它搜出来，停在列表上；
   // open-tag(tagId)：去视频页按这个标签筛选；open-entity({ type: person|collection, id, name })：去人物 / 作品集页
   // （与回顾页同一载荷）；find-similar({ videoID, atMS, title })：去场景检索找相似画面（与抽屉的 find-similar-scenes 同一载荷）；
   // ready：每次挂载只发一次——主详情读到并渲染之后（读取失败、没有视频 ID 也发），宿主据此还原滚动等；
   // video-state-changed({ id, changes })：收藏、已看、评分、进度保存成功，或「播放」失败并标了失效之后，
   // changes 是变了的字段（videoDetail.js 的 STATE_CHANGE_FIELDS / playbackStaleChanges），宿主拿去更新片库行。
-  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
+  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'manage-in-library', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
   data() {
     return {
       loading: false, error: '', details: null, posterFailed: false,
@@ -266,6 +270,9 @@ export default {
   computed: {
     video() { return this.details?.video || null; },
     title() { return detailTitle(this.details); },
+    // 「片库管理」带过去的搜索条件：文件名（`videos.name`，唯一）。用显示标题会在「合并版本」下命中同组的
+    // 另一版（组代表取顺序最靠前的匹配成员），而加标签 / 删除是按行上那一部算的；没名字时退回本页片名。
+    manageKeyword() { return String(this.video?.name || this.details?.effective_title || '').trim(); },
     originalTitle() {
       const original = String(this.video?.original_title || '').trim();
       return original && original !== this.title ? original : '';
@@ -642,6 +649,12 @@ export default {
     openVideo(id) {
       const videoID = Number(id || 0);
       if (videoID && videoID !== Number(this.video?.id)) this.$emit('open-video', videoID);
+    },
+    // 「片库管理」：把这部片的文件名交给宿主，由它切页并让片库页按这个名字搜出来（见 App.openVideoInManageList）。
+    openInManageList() {
+      const videoID = Number(this.video?.id || 0);
+      if (!videoID) return;
+      this.$emit('manage-in-library', { id: videoID, keyword: this.manageKeyword });
     },
     openEntity(type, id, name) {
       if (Number(id)) this.$emit('open-entity', { type, id: Number(id), name: name || '' });
