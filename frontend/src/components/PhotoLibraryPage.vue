@@ -3,6 +3,7 @@
     <!-- 本页只属于管理侧「图片管理」（观看侧「图片」是照片流 PhotoBrowsePage，D-P2-08）。 -->
     <PageHeader class="photo-library__header" title="图片管理" subtitle="独立扫描入库的本地图片库，可筛选、查看与管理。" />
 
+    <div v-if="focusedImage" class="photo-library__focus" data-test="photo-library-focus"><span :title="focusedImage.path">当前图片 · {{ focusedImage.name }}</span><button type="button" class="btn btn--ghost btn--sm" data-test="photo-library-exit-focus" @click="exitImageFocus">退出定位</button></div>
     <section class="photo-toolbar glass-surface">
       <div class="photo-toolbar__controls">
         <!-- 搜索模式与展示模式（D-UD-06 SegmentedControl），每个选项带 photo-mode-* / photo-display-* 钩子。
@@ -910,6 +911,7 @@ export default {
       failedFolderCovers: {},
       scanning: false,
       failedThumbs: {},
+      focusedImage: null,
       filters: {
         keyword: '',
         tagIDs: [],
@@ -1220,6 +1222,7 @@ export default {
       this.scheduleViewRecord(id);
     },
     'filters.keyword'() {
+      if (this.focusedImage && this.filters.keyword !== this.focusedImage.name) this.focusedImage = null;
       clearTimeout(this._keywordTimer);
       this._keywordTimer = setTimeout(() => this.reload(), 300);
     },
@@ -1621,6 +1624,7 @@ export default {
       }
     },
     setSearchMode(mode) {
+      this.focusedImage = null;
       if (mode === this.searchMode) return;
       if (mode === 'semantic' && !this.semanticAvailable) return;
       this.searchMode = mode;
@@ -1634,6 +1638,7 @@ export default {
     setDisplayMode(mode) {
       if (!PHOTO_DISPLAY_MODES.includes(mode)) return;
       if (mode === 'folders' && this.searchMode === 'semantic') return;
+      if (mode === 'folders' && this.focusedImage) { this.focusedImage = null; this.filters.keyword = ''; }
       if (mode === this.displayMode && !this.activeFolder) return;
       // 图片流与缩略图墙是同一份结果的两种格子：不重新查询、不回顶，只换几何，视口顶部那张照片留在原处。
       if (mode !== 'folders' && this.displayMode !== 'folders') {
@@ -1665,7 +1670,8 @@ export default {
     buildFilter(directory = this.activeFolder?.directory || '') {
       const parseRating = value => (value === '' || value == null ? null : Number(value));
       return {
-        keyword: this.filters.keyword.trim(),
+        keyword: this.focusedImage ? '' : this.filters.keyword.trim(),
+        ...(this.focusedImage ? { image_id: this.focusedImage.id } : {}),
         directory,
         tag_ids: [...this.filters.tagIDs],
         person_ids: [...this.filters.personIDs],
@@ -2205,16 +2211,14 @@ export default {
       this.ratingDraft = image.personal_rating == null ? '' : image.personal_rating;
       this.loadViewerDetail(image.id);
     },
-    // 从别的页面（观看侧照片流的「在图片管理中打开」）跳来定位一张图：已在当前结果里就直接打开查看器；否则回到照片流、
-    // 清掉其余筛选、按文件名搜这一张，载入后打开。找不到（已删除、被隐藏）返回 false 并提示。
+    // 从别的页面（观看侧照片流的「在图片管理中打开」）定位图片：统一回到照片流，
+    // 清掉其余筛选、按 ID 唯一定位，载入后打开。找不到（已删除、被隐藏）返回 false 并提示。
+    exitImageFocus() { this.focusedImage = null; return this.reload(); },
     async locateImage(target) {
       const id = Number(target?.id || 0);
-      if (!id) return false;
-      const loaded = this.images.findIndex(item => Number(item.id) === id);
-      if (loaded >= 0 && !this.folderModeRoot) {
-        this.openViewer(loaded);
-        return true;
-      }
+      if (!Number.isSafeInteger(id) || id <= 0) return false;
+      const token = this._locateToken = (this._locateToken || 0) + 1;
+      this.focusedImage = { id, name: String(target.name || ''), path: String(target.path || '') };
       this.searchMode = 'name';
       // 缩略图墙本身就是图片流，留在原布局；只有文件夹视图要切回来。
       if (this.displayMode === 'folders') {
@@ -2226,8 +2230,10 @@ export default {
         minRating: '', maxRating: '', takenAfter: '', takenBefore: '', aiTagState: '', missing: '' };
       // 条件侦听器会各自排一次重载（关键词那条带 300ms 防抖）：等它们排上后撤掉防抖，再以一次新查询为准。
       await this.$nextTick();
+      if (token !== this._locateToken || Number(this.focusedImage?.id) !== id) return false;
       clearTimeout(this._keywordTimer);
       await this.reload();
+      if (token !== this._locateToken || Number(this.focusedImage?.id) !== id) return false;
       const found = this.images.findIndex(item => Number(item.id) === id);
       if (found < 0) {
         notify('这张图片已不在图片库中，可能已删除或被隐藏。');
@@ -2238,6 +2244,7 @@ export default {
     },
     // 完整度页签的「去处理」（D-MC-03）：回到照片流、清掉其余筛选，只按「缺少这一项」列出。
     async applyMissingFilter(field) {
+      this.focusedImage = null;
       const value = String(field || '');
       if (!IMAGE_MISSING_OPTIONS.some(option => option.value === value)) return false;
       this.searchMode = 'name';
@@ -2885,4 +2892,9 @@ export default {
   .photo-viewer__nav--next { right: 14px; }
   .photo-viewer__sidebar { max-height: 42vh; }
 }
+</style>
+
+<style scoped>
+.photo-library__focus { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: var(--fs-secondary); }
+.photo-library__focus span { min-width: 0; overflow-wrap: anywhere; }
 </style>

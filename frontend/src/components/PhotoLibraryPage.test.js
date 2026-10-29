@@ -1937,9 +1937,10 @@ describe('PhotoLibraryPage view recording (D-RECAP-SOURCES)', () => {
 });
 
 describe('PhotoLibraryPage locateImage (回顾页跳转)', () => {
-  it('opens a loaded image directly, otherwise searches it by name in the stream and opens it', async () => {
+  it('locates both loaded and unloaded images by ID and opens the viewer', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
     const wrapper = await mountPage();
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(2)]));
     expect(await wrapper.vm.locateImage({ id: 2, name: 'photo-2.jpg' })).toBe(true);
     expect(wrapper.get('.photo-viewer__sidebar h3').text()).toBe('photo-2.jpg');
     wrapper.vm.closeViewer();
@@ -1949,7 +1950,7 @@ describe('PhotoLibraryPage locateImage (回顾页跳转)', () => {
     api.SearchImagePage.mockResolvedValue(makePage([makeImage(7)]));
     expect(await wrapper.vm.locateImage({ id: 7, name: 'photo-7.jpg' })).toBe(true);
     const lastFilter = api.SearchImagePage.mock.calls.at(-1)[0].filter;
-    expect(lastFilter).toMatchObject({ keyword: 'photo-7.jpg', favorite_only: false, tag_ids: [], person_ids: [] });
+    expect(lastFilter).toMatchObject({ image_id: 7, keyword: '', favorite_only: false, tag_ids: [], person_ids: [] });
     expect(wrapper.get('.photo-viewer__sidebar h3').text()).toBe('photo-7.jpg');
     api.SearchImagePage.mockResolvedValue(makePage([]));
     expect(await wrapper.vm.locateImage({ id: 9, name: 'gone.jpg' })).toBe(false);
@@ -2254,4 +2255,60 @@ describe('PhotoLibraryPage 统一设计（D-UD-06 / D-UD-08 / D-UD-13 / D-UD-14�
     expect(wrapper.find('[data-test="photo-batch-delete"]').exists()).toBe(false);
     wrapper.unmount();
   });
+});
+
+it('image management uses ID for an unloaded same-name target and exposes exit', async () => {
+  api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1, { name: 'same.jpg' })]));
+  const wrapper = await mountPage();
+  api.SearchImagePage.mockResolvedValue(makePage([makeImage(99, { name: 'same.jpg' })]));
+  expect(await wrapper.vm.locateImage({ id: 99, name: 'same.jpg' })).toBe(true);
+  expect(api.SearchImagePage.mock.calls.at(-1)[0].filter).toMatchObject({ image_id: 99, keyword: '' });
+  expect(wrapper.vm.viewerImage.id).toBe(99);
+  wrapper.vm.setDisplayMode('wall');
+  expect(wrapper.vm.buildFilter().image_id).toBe(99);
+  wrapper.vm.closeViewer();
+  await wrapper.get('[data-test="photo-library-exit-focus"]').trigger('click');
+  expect(wrapper.vm.buildFilter()).not.toHaveProperty('image_id');
+  wrapper.unmount();
+});
+
+it('a late image locate cannot replace a newer same-name target', async () => {
+  const wrapper = await mountPage();
+  let finishOld;
+  api.SearchImagePage.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; })).mockResolvedValue(makePage([makeImage(99, { name: 'same.jpg' })]));
+  const old = wrapper.vm.locateImage({ id: 98, name: 'same.jpg' });
+  await flushPromises();
+  const fresh = wrapper.vm.locateImage({ id: 99, name: 'same.jpg' });
+  await fresh;
+  finishOld(makePage([makeImage(98, { name: 'same.jpg' })]));
+  expect(await old).toBe(false);
+  expect(wrapper.vm.viewerImage.id).toBe(99);
+  wrapper.unmount();
+});
+
+it('an unloaded target superseded before reload never clears a newer loaded target', async () => {
+  api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(2)]));
+  const wrapper = await mountPage();
+  api.SearchImagePage.mockClear();
+  api.SearchImagePage.mockResolvedValue(makePage([makeImage(2)]));
+  const old = wrapper.vm.locateImage({ id: 99, name: 'photo-99.jpg' });
+  const fresh = wrapper.vm.locateImage({ id: 2, name: 'photo-2.jpg' });
+  expect(await old).toBe(false);
+  expect(await fresh).toBe(true);
+  expect(wrapper.vm.viewerImage.id).toBe(2);
+  expect(api.SearchImagePage.mock.calls.every(([request]) => request.filter.image_id === 2)).toBe(true);
+  wrapper.unmount();
+});
+
+it('entering folder management exits a single-image focus so folder counts and actions use their normal scope', async () => {
+  const wrapper = await mountPage();
+  api.SearchImagePage.mockResolvedValue(makePage([makeImage(99, { name: 'same.jpg' })]));
+  expect(await wrapper.vm.locateImage({ id: 99, name: 'same.jpg' })).toBe(true);
+  api.ListImageFolderGroups.mockClear();
+  wrapper.vm.setDisplayMode('folders'); await flushPromises();
+  expect(wrapper.vm.focusedImage).toBeNull();
+  expect(wrapper.vm.buildFilter()).not.toHaveProperty('image_id');
+  expect(wrapper.vm.filters.keyword).toBe('');
+  expect(api.ListImageFolderGroups.mock.calls.at(-1)[0]).toMatchObject({ keyword: '' });
+  wrapper.unmount();
 });

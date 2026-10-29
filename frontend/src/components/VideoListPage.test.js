@@ -2449,3 +2449,41 @@ it('刷新原片的迟到会话不能覆盖已经打开的另一个视频', asyn
   finish({ video_id: 1, source_version: 'old' }); await old;
   expect(wrapper.vm.previewSession.video_id).toBe(2); wrapper.unmount();
 });
+
+it('exact file focus uses its ID, never broadens to names or version groups, and can be cleared', async () => {
+  const wrapper = await mountPage();
+  api.SearchLibraryVideoPage.mockClear();
+  await wrapper.vm.applyVideoTargetCommand({ id: 5, keyword: 'same.mp4', path: '/one/same.mp4' });
+  await flushPromises();
+  expect(api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter).toMatchObject({ video_id: 5, keyword: '', collapse_versions: false });
+  expect(wrapper.get('[data-test="library-focused-video"]').text()).toContain('same.mp4');
+  expect(wrapper.vm.openSaveViewDialog()).toBe(false);
+  await wrapper.get('[data-test="library-exit-focus"]').trigger('click'); await flushPromises();
+  expect(wrapper.vm.currentLibraryFilter()).not.toHaveProperty('video_id');
+  expect(wrapper.vm.currentLibraryFilter().keyword).toBe('same.mp4');
+  await wrapper.vm.applyVideoTargetCommand({ id: 6, keyword: 'same.mp4' });
+  wrapper.vm.searchKeyword = 'different'; await wrapper.vm.$nextTick();
+  expect(wrapper.vm.focusedVideo).toBeNull();
+  expect(wrapper.vm.applyVideoTargetCommand({ id: 0 })).toBe(false);
+  wrapper.unmount();
+});
+
+it('switching same-name focused IDs invalidates prior query and selection', async () => {
+  const wrapper = await mountPage();
+  const row = id => ({ id, name: 'same.mp4', path: `/dir${id}/same.mp4`, tags: [] });
+  api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [row(5)], next_cursor: null });
+  await wrapper.vm.applyVideoTargetCommand({ id: 5, keyword: 'same.mp4' }); await flushPromises();
+  const oldKey = wrapper.vm.virtualListQueryKey;
+  wrapper.vm.selectedVideoIds = [5];
+  let finishOld;
+  api.SearchLibraryVideoPage.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; })).mockResolvedValue({ videos: [row(7)], next_cursor: null });
+  const oldRequest = wrapper.vm.applyVideoTargetCommand({ id: 6, keyword: 'same.mp4' });
+  await flushPromises();
+  const freshRequest = wrapper.vm.applyVideoTargetCommand({ id: 7, keyword: 'same.mp4' });
+  expect(wrapper.vm.virtualListQueryKey).not.toBe(oldKey);
+  finishOld({ videos: [row(6)], next_cursor: null });
+  await Promise.all([oldRequest, freshRequest]); await flushPromises();
+  expect(wrapper.vm.videos.map(video => video.id)).toEqual([7]);
+  expect(wrapper.vm.selectedVideoIds).not.toContain(5);
+  wrapper.unmount();
+});

@@ -7342,6 +7342,7 @@ export namespace services {
 		}
 	}
 	export class ImageFilter {
+	    image_id?: number;
 	    keyword: string;
 	    directory: string;
 	    tag_ids: number[];
@@ -7363,6 +7364,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
 	        this.keyword = source["keyword"];
 	        this.directory = source["directory"];
 	        this.tag_ids = source["tag_ids"];
@@ -8089,6 +8091,7 @@ export namespace services {
 	    }
 	}
 	export class LibraryFilter {
+	    video_id?: number;
 	    search_mode: string;
 	    keyword: string;
 	    path_prefix: string;
@@ -8112,6 +8115,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
 	        this.path_prefix = source["path_prefix"];
@@ -11836,6 +11840,7 @@ export namespace services {
 		}
 	}
 	export class RecapListRequest {
+	    date?: string;
 	    period: string;
 	    year: number;
 	    month: number;
@@ -11849,6 +11854,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
 	        this.period = source["period"];
 	        this.year = source["year"];
 	        this.month = source["month"];
@@ -12397,6 +12403,7 @@ export namespace services {
 	
 	export class SavedLibraryViewInput {
 	    name: string;
+	    video_id?: number;
 	    search_mode: string;
 	    keyword: string;
 	    path_prefix: string;
@@ -12421,6 +12428,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
+	        this.video_id = source["video_id"];
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
 	        this.path_prefix = source["path_prefix"];

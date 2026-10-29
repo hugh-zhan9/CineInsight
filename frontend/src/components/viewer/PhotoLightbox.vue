@@ -90,6 +90,7 @@
           <section class="photo-lightbox__block">
             <WallpaperButton kind="image" :media-id="Number(image.id)" />
             <button type="button" class="btn btn--secondary btn--sm photo-lightbox__manage" data-test="photo-lightbox-open-manage" @click="$emit('open-in-manage', image)">在图片管理中打开</button>
+            <button type="button" class="btn btn--danger btn--sm" data-test="photo-lightbox-delete" @click="$emit('delete-image', image)">从图片库移除…</button>
           </section>
         </aside>
       </div>
@@ -99,7 +100,7 @@
 
 <script>
 // 观看侧的全屏看图（D-P2-08，详细设计 §3.11）：照片流点一张进来。只看、收藏、评分、设为壁纸，
-// 没有删除、打标签、AI、批量、目录操作；要整理这一张就「在图片管理中打开」。
+// 可从图片库移除；其余整理操作在「图片管理」中进行。
 // - 骨架是 DialogShell（size=full），在 BaseModal 的打开栈里：Esc 只关最上面一层，叠在上面的确认框先收到 Esc；
 //   ← → 与 F（收藏）也只在本层是最上面一层、焦点不在输入框里时才接。
 // - 列表与当前是哪一张归宿主（PhotoBrowsePage）：本组件只发 prev / next（到已加载末尾时由宿主续载再前进）、
@@ -171,7 +172,7 @@ export default {
     loadingNext: { type: Boolean, default: false },
     nextError: { type: String, default: '' }
   },
-  emits: ['close', 'prev', 'next', 'patch', 'changed', 'open-person', 'open-in-manage'],
+  emits: ['delete-image', 'close', 'prev', 'next', 'patch', 'changed', 'open-person', 'open-in-manage'],
   data() {
     return {
       imageFailed: false,

@@ -2,23 +2,33 @@
   <div :class="['recap-calendar', `recap-calendar--${mode}`]" data-test="recap-calendar">
     <template v-if="mode === 'month'">
       <span v-for="label in weekdays" :key="label" class="recap-calendar__weekday">{{ label }}</span>
-      <span
+      <button
+        type="button"
+        class="btn-plain"
         v-for="cell in monthCells"
         :key="cell.key"
         :class="['recap-calendar__cell', cell.blank ? 'is-blank' : `level-${level(cell)}`, { 'is-future': isFuture(cell) }]"
         :title="cell.blank ? '' : tooltip(cell)"
+        :aria-label="cell.blank ? undefined : `${tooltip(cell)}，查看当天记录`"
+        :disabled="cell.blank || isFuture(cell)"
+        @click="$emit('select-day', cell)"
       >
         <template v-if="!cell.blank">{{ Number(cell.date.slice(8)) }}</template>
-      </span>
+      </button>
     </template>
     <div v-else class="recap-calendar__weeks">
       <div v-for="(week, index) in yearWeeks" :key="index" class="recap-calendar__week">
-        <span
+        <button
+          type="button"
+          class="btn-plain"
           v-for="cell in week"
           :key="cell.key"
           :class="['recap-calendar__dot', cell.blank ? 'is-blank' : `level-${level(cell)}`, { 'is-future': isFuture(cell) }]"
           :title="cell.blank ? '' : tooltip(cell)"
-        ></span>
+        :aria-label="cell.blank ? undefined : `${tooltip(cell)}，查看当天记录`"
+        :disabled="cell.blank || isFuture(cell)"
+        @click="$emit('select-day', cell)"
+        ></button>
       </div>
     </div>
   </div>
@@ -31,6 +41,7 @@ import { formatDateLabel, heatLevel, monthCalendarCells, yearCalendarWeeks } fro
 
 export default {
   name: 'RecapCalendar',
+  emits: ['select-day'],
   props: {
     days: { type: Array, default: () => [] },
     mode: { type: String, default: 'month' },
@@ -73,5 +84,8 @@ export default {
 .level-2 { background: color-mix(in srgb, var(--accent-color) 50%, var(--panel-bg)); }
 .level-3 { background: color-mix(in srgb, var(--accent-color) 78%, var(--panel-bg)); }
 .level-4 { background: var(--accent-color); }
+.recap-calendar button { padding: 0; }
+.recap-calendar button:not(:disabled) { cursor: pointer; }
+.recap-calendar button:not(:disabled):hover { outline: 2px solid var(--accent-color); outline-offset: 1px; }
 .is-future { opacity: 0.35; }
 </style>

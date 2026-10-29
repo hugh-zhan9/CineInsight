@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -1020,5 +1021,39 @@ func TestGetLibraryCountsSkipsStaleAndExcludedImages(t *testing.T) {
 	}
 	if counts.ImageCount != 1 {
 		t.Fatalf("顶栏图片数应只算可见的 1 张，实际 %d", counts.ImageCount)
+	}
+}
+
+func TestLibraryExactVideoFocusIsUniqueAndCannotWidenSavedViews(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	a, b := seedVersionVideo(t, "same-one", nil), seedVersionVideo(t, "same-two", nil)
+	if _, err := NewVersionGroupService().Create(context.Background(), versionIDs(a, b), ""); err != nil {
+		t.Fatal(err)
+	}
+	// Both records have the same filename, but distinct paths and IDs.
+	for _, v := range []models.Video{a, b} {
+		if err := UpdateVideoTitleFields(database.DB.Model(&models.Video{}).Where("id = ?", v.ID), v.ID, map[string]interface{}{"name": "same.mp4"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter := LibraryFilter{VideoID: b.ID, CollapseVersions: true}
+	page := mustLibraryPage(t, filter)
+	if len(page.Videos) != 1 || page.Videos[0].ID != b.ID || len(page.VersionGroups) != 0 || mustLibraryCount(t, filter) != 1 {
+		t.Fatalf("exact secondary version: %+v", page)
+	}
+	if _, err := buildSavedLibraryView("不能扩大", filter); err == nil {
+		t.Fatal("temporary focus must not silently become an unrestricted saved view")
+	}
+	if got := mustLibraryCount(t, LibraryFilter{VideoID: 999999}); got != 0 {
+		t.Fatalf("missing ID must be empty: %d", got)
+	}
+	if got := mustLibraryCount(t, LibraryFilter{Keyword: "same.mp4"}); got != 2 {
+		t.Fatalf("legacy name search: %d", got)
+	}
+	if err := database.DB.Model(&b).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLibraryCount(t, filter); got != 0 {
+		t.Fatalf("focus cannot bypass visibility: %d", got)
 	}
 }

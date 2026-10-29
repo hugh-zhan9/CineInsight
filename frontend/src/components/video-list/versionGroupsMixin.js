@@ -28,7 +28,7 @@ export const versionGroupsMixin = {
     // 只有走 SearchLibraryVideoPage 的列表才聚合；语义搜索（含相似视频）是文件级入口。三期（D-P3-03）片库管理拿掉了
     // 最近播放、继续观看与随机批次，它们原先也是文件级入口。
     versionCollapseActive() {
-      return Boolean(this.collapseVersions) && this.searchMode !== 'semantic';
+      return !this.focusedVideo && Boolean(this.collapseVersions) && this.searchMode !== 'semantic';
     },
     libraryPageFilter() {
       return { ...this.currentLibraryFilter(), collapse_versions: this.versionCollapseActive() };

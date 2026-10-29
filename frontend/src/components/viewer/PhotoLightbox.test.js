@@ -102,12 +102,14 @@ describe('PhotoLightbox 看图', () => {
     expect(wrapper.emitted('open-person')).toEqual([[{ id: 6, name: '乙' }]]);
     await wrapper.get('[data-test="photo-lightbox-open-manage"]').trigger('click');
     expect(wrapper.emitted('open-in-manage')[0][0]).toMatchObject({ id: 1, name: 'p1.jpg' });
+    await wrapper.get('[data-test="photo-lightbox-delete"]').trigger('click');
+    expect(wrapper.emitted('delete-image')[0][0].id).toBe(1);
   });
 
-  it('没有删除、打标签、AI、批量、目录操作，也没有可输入的编辑框', async () => {
+  it('提供移除入口，其余整理操作留在图片管理', async () => {
     const wrapper = await mountLightbox();
     const text = wrapper.text();
-    for (const word of ['删除', '废纸篓', '从图片库移除', '标签', 'AI', '批量', '在访达中显示', '重新分析', '解除']) {
+    for (const word of ['删除', '废纸篓', '标签', 'AI', '批量', '在访达中显示', '重新分析', '解除']) {
       expect(text, word).not.toContain(word);
     }
     expect(wrapper.findAll('input, textarea, select')).toHaveLength(0);

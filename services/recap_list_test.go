@@ -334,3 +334,71 @@ func TestRecapListRejectsBadRequestsAndPagesPastTheEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestRecapListCalendarDayFiltersBeforePaging(t *testing.T) {
+	f := newRecapFixture(t)
+	v, image := f.video("日历视频.mp4"), f.image("日历图片.jpg")
+	for _, at := range []time.Time{recapAt(2026, time.October, 7, 23, 59), recapAt(2026, time.October, 8, 0, 0), recapAt(2026, time.October, 8, 23, 59), recapAt(2026, time.October, 9, 0, 0)} {
+		f.play(v.ID, at, models.PlayEventSourceDesktopPlay)
+	}
+	f.view(image.ID, recapAt(2026, time.October, 8, 12, 0), models.ImageViewSourceDesktopViewer)
+	now := recapAt(2026, time.November, 1, 12, 0)
+	request := RecapListRequest{Period: RecapPeriodMonth, Year: 2026, Month: 10, Date: "2026-10-08", Kind: RecapListFeed, Limit: 2}
+	first := f.list(now, request)
+	if first.Total != 3 || !first.HasMore || len(first.Feed) != 2 || first.Feed[0].At.Hour() != 23 || first.Feed[1].Kind != RecapActivityImage {
+		t.Fatalf("day first page: %+v", first)
+	}
+	request.Offset = 2
+	last := f.list(now, request)
+	if last.HasMore || len(last.Feed) != 1 || last.Feed[0].At.Hour() != 0 {
+		t.Fatalf("day last page: %+v", last)
+	}
+	request.Date, request.Offset = "2026-10-10", 0
+	empty := f.list(now, request)
+	if empty.Total != 0 || empty.HasMore || len(empty.Feed) != 0 {
+		t.Fatalf("empty day: %+v", empty)
+	}
+	request.Date = ""
+	all := f.list(now, request)
+	if all.Total != 5 {
+		t.Fatalf("legacy monthly request: %+v", all)
+	}
+}
+
+func TestRecapListCalendarDateValidationAndDST(t *testing.T) {
+	f := newRecapFixture(t)
+	now := recapAt(2026, time.October, 15, 12, 0)
+	svc := &RecapService{now: func() time.Time { return now }, loc: recapTestZone}
+	for _, request := range []RecapListRequest{
+		{Period: RecapPeriodMonth, Year: 2026, Month: 10, Kind: RecapListFeed, Date: "2026-10-32"},
+		{Period: RecapPeriodMonth, Year: 2026, Month: 10, Kind: RecapListFeed, Date: "2026-9-30"},
+		{Period: RecapPeriodMonth, Year: 2026, Month: 10, Kind: RecapListFeed, Date: "2026-09-30"},
+		{Period: RecapPeriodMonth, Year: 2026, Month: 10, Kind: RecapListFeed, Date: "2026-10-16"},
+		{Period: RecapPeriodYear, Year: 2026, Kind: RecapListVideos, Date: "2026-10-08"},
+	} {
+		if _, err := svc.ListRecapItems(context.Background(), request); !errors.Is(err, ErrRecapListDateInvalid) {
+			t.Fatalf("%+v: %v", request, err)
+		}
+	}
+	v := f.video("DST.mp4")
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, date := range []string{"2026-03-08", "2026-11-01"} {
+		start, err := time.ParseInLocation("2006-01-02", date, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		end := start.AddDate(0, 0, 1)
+		f.play(v.ID, start.Add(-time.Second), models.PlayEventSourceDesktopPlay)
+		f.play(v.ID, start, models.PlayEventSourceDesktopPlay)
+		f.play(v.ID, end.Add(-time.Second), models.PlayEventSourceDesktopPlay)
+		f.play(v.ID, end, models.PlayEventSourceDesktopPlay)
+		service := &RecapService{now: func() time.Time { return end.Add(time.Hour) }, loc: loc}
+		page, err := service.ListRecapItems(context.Background(), RecapListRequest{Period: RecapPeriodYear, Year: 2026, Kind: RecapListFeed, Date: date})
+		if err != nil || page.Total != 2 {
+			t.Fatalf("DST day %s: %+v / %v", date, page, err)
+		}
+	}
+}

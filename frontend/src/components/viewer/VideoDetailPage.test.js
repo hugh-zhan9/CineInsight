@@ -343,7 +343,7 @@ describe('VideoDetailPage actions', () => {
   it('「片库管理」把文件名交给宿主当搜索条件', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-test="detail-manage"]').trigger('click');
-    expect(wrapper.emitted('manage-in-library')).toEqual([[{ id: 5, keyword: 'v5.mp4' }]]);
+    expect(wrapper.emitted('manage-in-library')).toEqual([[{ id: 5, keyword: 'v5.mp4', path: '/lib/v5.mp4' }]]);
   });
 
   it('compares the selected version against this one', async () => {
@@ -768,4 +768,27 @@ it('关闭详情后立刻重新进入同一视频，等待旧实例最后一笔�
   finish(baseVideo(5, { watch_position_seconds: 42 }));
   await flushPromises();
   expect(player(fresh).props('resumePositionSeconds')).toBe(42);
+});
+
+it('detail tag success updates chips, host state and recommendations; delete targets this file only', async () => {
+  const wrapper = await mountPage();
+  const picker = wrapper.findComponent({ name: 'DetailTagPicker' });
+  picker.vm.$emit('added', { videoId: 5, tag: { id: 77, name: '新标签' } });
+  await flushPromises();
+  expect(wrapper.get('[data-test="detail-tag-77"]').text()).toBe('新标签');
+  expect(wrapper.emitted('video-state-changed').at(-1)[0]).toMatchObject({ id: 5, changes: { tags: expect.arrayContaining([{ id: 77, name: '新标签' }]) } });
+  expect(api.GetVideoRecommendations).toHaveBeenCalledTimes(2);
+  await wrapper.get('[data-test="detail-delete"]').trigger('click');
+  expect(wrapper.emitted('delete-video')[0][0].id).toBe(5);
+});
+
+for (const rejectOld of [false, true]) it(`old recommendation ${rejectOld ? 'failure' : 'success'} from before tag addition cannot overwrite the newer recommendations`, async () => {
+  let finishOld;
+  api.GetVideoRecommendations.mockReturnValueOnce(new Promise((resolve, reject) => { finishOld = rejectOld ? reject : resolve; })).mockResolvedValueOnce({ directory: [], tags: [{ video: baseVideo(8), shared_tags: ['新标签'] }] });
+  const wrapper = await mountPage();
+  wrapper.findComponent({ name: 'DetailTagPicker' }).vm.$emit('added', { videoId: 5, tag: { id: 77, name: '新标签' } });
+  await flushPromises();
+  finishOld(rejectOld ? new Error('旧请求失败') : { directory: [{ video: baseVideo(9) }], tags: [] }); await flushPromises();
+  expect(wrapper.get('[data-test="detail-recommend-tags"]').text()).toContain('影片8');
+  expect(wrapper.find('[data-test="detail-recommend-directory"]').exists()).toBe(false);
 });

@@ -101,9 +101,8 @@
         <template v-for="row in renderedRows" :key="row.key">
           <h2 v-if="row.isHeader" class="photo-browse__month" :style="rowStyle(row)" data-test="photo-browse-month">{{ monthLabel(row) }}</h2>
           <div v-else class="photo-browse__row" :style="rowStyle(row)">
+            <div v-for="(image, offset) in rowImages(row)" :key="image.id" class="photo-browse__tile-wrap">
             <button
-              v-for="(image, offset) in rowImages(row)"
-              :key="image.id"
               type="button"
               class="btn-plain photo-browse__tile"
               :title="image.name"
@@ -115,6 +114,8 @@
               <span v-else class="photo-browse__tile-fallback"><AppIcon name="image" :size="24" /><small>{{ formatBadge(image) }}</small></span>
               <span v-if="image.is_favorite" class="photo-browse__favorite-mark" aria-hidden="true" data-test="photo-browse-favorite-mark"><AppIcon name="star" :size="16" /></span>
             </button>
+              <button type="button" class="btn btn--danger btn--sm photo-browse__delete" :aria-label="`从图片库移除 ${image.name}`" data-test="photo-browse-delete" @click.stop="$emit('delete-image', image)"><AppIcon name="trash" /></button>
+            </div>
           </div>
         </template>
         <div v-if="windowState.bottomSpacer > 0" :style="{ height: `${windowState.bottomSpacer}px` }" aria-hidden="true"></div>
@@ -211,6 +212,7 @@
       @changed="$emit('image-changed', $event)"
       @open-person="openPersonFromLightbox"
       @open-in-manage="openInManage"
+      @delete-image="$emit('delete-image', $event)"
     />
   </section>
 </template>
@@ -222,7 +224,7 @@
 // - 筛选只有四样：文件名关键字、全部 / 收藏、人物（ListPeople，与图片管理的人物筛选同一个搜索）、文件夹（ListImageFolderGroups）。
 // - 网格按行窗口化（utils/photoGrid.js：按月切行、算窗口、列宽变化时把视口顶部那张放回原处），滚动宿主是共用的 .main-view；
 //   接近底部自动取下一批。切走再回来放回滚动位置。
-// - 点一张进全屏看图（PhotoLightbox）；没有删除、打标签、AI、批量、目录操作。
+// - 点一张进全屏看图（PhotoLightbox）；网格和大图可移除图片，复杂整理仍在图片管理。
 // - navigationRequest：App 的 navigateTo('photos', { personId, personName? }) 带来的一次新浏览——筛选回到默认、只按这个人，回到顶部。
 // - locateImage(image)：回顾、人物 / 作品集页点图片进来，打开那一张（找不到就清空筛选按文件名找，仍找不到提示已不在图片库中）。
 // - imagesVersion：别处（图片管理、清理中心、数据维护…）改了图片时 App 递增；本页下次显示时按同一条件原地重取，滚动位置不动。
@@ -331,7 +333,7 @@ export default {
     navigationRequest: { type: Object, default: null },
     imagesVersion: { type: Number, default: 0 }
   },
-  emits: ['navigate', 'open-person', 'open-in-manage', 'image-changed'],
+  emits: ['delete-image', 'navigate', 'open-person', 'open-in-manage', 'image-changed'],
   data() {
     return {
       keyword: '',
@@ -742,6 +744,16 @@ export default {
       if (index < this.list.items.length - 1) this.lightboxIndex = index + 1;
     },
     // 看图改了这一张（收藏、评分、详情、查看次数）：就地并进列表。
+    removeDeletedImage(id) {
+      if (Number(this.lightboxImage?.id) === Number(id)) this.lightboxIndex = -1;
+      else if (this.lightboxIndex >= 0) {
+        const currentID = this.lightboxImage?.id;
+        this.list.items = this.list.items.filter(image => Number(image.id) !== Number(id));
+        this.lightboxIndex = this.list.items.findIndex(image => image.id === currentID);
+        return;
+      }
+      this.list.items = this.list.items.filter(image => Number(image.id) !== Number(id));
+    },
     patchImage(fields) {
       const id = Number(fields?.id || 0);
       const index = this.list.items.findIndex(image => Number(image.id) === id);
@@ -754,7 +766,7 @@ export default {
     },
     openInManage(image) {
       this.lightboxIndex = -1;
-      this.$emit('open-in-manage', { id: Number(image?.id), name: image?.name || '' });
+      this.$emit('open-in-manage', { id: Number(image?.id), name: image?.name || '', path: image?.path || '' });
     },
     revealItem(index) {
       const owner = this.scrollOwnerEl;
@@ -1016,4 +1028,11 @@ export default {
   .photo-browse__tile img { transition: none; }
   .photo-browse__tile:hover img { transform: none; }
 }
+</style>
+
+<style scoped>
+.photo-browse__tile-wrap { position: relative; min-width: 0; }
+.photo-browse__delete { position: absolute; right: var(--space-2); bottom: var(--space-2); opacity: 0; }
+.photo-browse__tile-wrap:hover .photo-browse__delete, .photo-browse__tile-wrap:focus-within .photo-browse__delete { opacity: 1; }
+@media (hover: none) { .photo-browse__delete { opacity: 1; } }
 </style>

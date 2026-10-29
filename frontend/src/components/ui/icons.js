@@ -4,6 +4,7 @@
 // 加图标：只往这里加一条，名字用 kebab-case；不要在页面里再写 path 数组或字符图标（× ▾ ★ ⚠）。
 export const ICON_PATHS = Object.freeze({
   // 界面通用
+  plus: ['M12 5v14', 'M5 12h14'],
   close: ['M6 6l12 12', 'M18 6L6 18'],
   'chevron-down': ['M6 9l6 6 6-6'],
   'chevron-up': ['M6 15l6-6 6 6'],

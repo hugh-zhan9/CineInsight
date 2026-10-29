@@ -51,6 +51,7 @@
       <div v-if="libraryCountsText" class="header-counts">{{ libraryCountsText }}</div>
     </div>
 
+    <PersonMediaDeleteDialog v-if="viewerDeleteTarget" :target="viewerDeleteTarget" @close="viewerDeleteTarget = null" @deleted="viewerMediaDeleted" @restored="viewerMediaRestored" />
     <WallpaperStatusBar v-if="appReady" />
     <ControlledPlaybackStatus v-if="appReady" />
     <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue', missingMessage: '这部视频已不在片库中，可能已删除或不在扫描目录内。' })" />
@@ -146,6 +147,8 @@
         :bookmark="detailRoute.bookmark"
         @ready="handleDetailReady"
         @video-state-changed="handleDetailVideoStateChange"
+        @reload-tags="loadTags"
+        @delete-video="viewerDeleteTarget = { kind: 'video', media: $event }"
         @playback-started="$refs.homePage?.replacePlayedTonight($event)"
         @back="goBackFromDetail"
         @open-video="openVideoByID($event, { from: 'video-detail' })"
@@ -346,6 +349,7 @@
 	    @navigate="navigateTo"
 	    @open-person="openPerson"
 	    @open-in-manage="openImageInManage"
+        @delete-image="viewerDeleteTarget = { kind: 'image', media: $event }"
 	    @image-changed="handleViewerImageChanged"
 	  />
 	  <!-- 图片管理：首次进入才挂载，之后只隐藏不卸载，切走再切回不会丢已加载的图片和滚动位置。只在「图片管理」上显示。 -->
@@ -442,6 +446,7 @@ import HomePage from './components/viewer/HomePage.vue';
 import VideoBrowsePage from './components/viewer/VideoBrowsePage.vue';
 import PhotoBrowsePage from './components/viewer/PhotoBrowsePage.vue';
 import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
+import PersonMediaDeleteDialog from './components/PersonMediaDeleteDialog.vue';
 import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
 import PendingWorkPage from './components/manage/PendingWorkPage.vue';
@@ -509,7 +514,7 @@ export default {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
-    HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, ManageHomePage, EntityBrowsePage, CleanupCenterPage
+    HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, PersonMediaDeleteDialog, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
   data() {
     return {
@@ -536,6 +541,7 @@ export default {
       // 整页详情的返回栈（D-UI-10）：[{ page, params, scrollTop }]，规则见 utils/viewerNavigation.js。
       detailReturnStack: [],
       viewerReturn: null,
+      viewerDeleteTarget: null,
       // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
       versionCompare: versionCompareState,
       // 图片管理首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"；观看侧照片流同理（D-P2-08）。
@@ -1249,6 +1255,30 @@ export default {
     },
     // 整页详情里收藏、标记已看、评分、播放进度或失效标记变了（{ id, changes }）：交给常挂载的片库页与海报墙，
     // 「片库管理」里那一行、「视频」上那张卡不用重载就跟上（M-5）。
+    viewerMediaDeleted(target) {
+      if (target.kind === 'image') {
+        this.$refs.photoBrowsePage?.removeDeletedImage(target.media.id);
+        return this.handleCleanupImagesChanged();
+      }
+      return this.detailVideoDeleted(target);
+    },
+    viewerMediaRestored(payload) {
+      if (payload.kind === 'image') return this.handleCleanupImagesChanged();
+      return this.detailVideoRestored(payload);
+    },
+    async detailVideoDeleted({ media }) {
+      const id = Number(media.id);
+      this.$refs.videoBrowsePage?.reloadNow?.();
+      if (this.currentPage === VIDEO_DETAIL_PAGE && Number(this.detailRoute.videoId) === id) await this.goBackFromDetail();
+      this.$refs.homePage?.refresh();
+      await this.handleVideosChangedElsewhere({ removedIDs: [id] });
+    },
+    async detailVideoRestored({ ids = [] } = {}) {
+      this.$refs.homePage?.refresh();
+      this.$refs.videoBrowsePage?.reloadNow?.();
+      await this.handleVideosChangedElsewhere();
+      this.handleLibraryTrashRestored({ videoIDs: ids });
+    },
     handleDetailVideoStateChange(payload) {
       this.$refs.videoBrowsePage?.applyExternalVideoStateChange(payload);
       return this.$refs.videoListPage?.applyExternalVideoStateChange(payload);
@@ -1257,16 +1287,14 @@ export default {
     editVideoInManage(videoID) {
       return this.openVideoByID(videoID, { from: 'library-manage' });
     },
-    // 整页详情「片库管理」按钮（2026-10-27 用户要求）：切到片库管理列表，并把这部片的文件名交给片库页当搜索条件，
-    // 停在列表上——行内「+ 标签」与行菜单里的删除不用再自己搜一遍。与「编辑资料」不同，这里不打开抽屉。
-    openVideoInManageList({ id, keyword } = {}) {
+    // 详情「片库管理」按视频 ID 唯一定位；文件名用于显示、路径用于提示，不打开抽屉。
+    openVideoInManageList({ id, keyword, path } = {}) {
       const videoID = Number(id);
       if (!videoID) return false;
       const value = String(keyword || '').trim();
       return whenNavigated(this.navigateTo('library-manage'), async () => {
         await this.$nextTick();
-        if (!value) return true;
-        return this.$refs.videoListPage?.applyVideoKeywordCommand(value) ?? false;
+        return this.$refs.videoListPage?.applyVideoTargetCommand({ id: videoID, keyword: value, path: String(path || '') }) ?? false;
       });
     },
     // 首页「本月常看的人物」：沿用命令面板打开实体的入口。payload 为 { id, name }。

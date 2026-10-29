@@ -381,3 +381,17 @@ describe('RecapPage live refresh', () => {
     expect(wrapper.find('[data-test="recap-list-dialog"]').exists()).toBe(false);
   });
 });
+
+it('calendar day opens a dated feed and picking a video keeps the usual navigation', async () => {
+  api.GetRecap.mockResolvedValue(recap());
+  api.ListRecapItems.mockResolvedValue({ total: 1, has_more: false, feed: [{ kind: 'video', id: 2, title: '当天影片', available: true, source: 'desktop_play', at: '2026-10-02T21:00:00+08:00' }] });
+  const wrapper = await mountPage();
+  const calendar = wrapper.findComponent({ name: 'RecapCalendar' });
+  calendar.vm.$emit('select-day', { date: '2026-10-02', plays: 2, views: 1 });
+  await flushPromises();
+  expect(api.ListRecapItems).toHaveBeenCalledWith(expect.objectContaining({ date: '2026-10-02', kind: 'feed' }));
+  expect(wrapper.text()).toContain('2026-10-02 的观看记录');
+  await wrapper.get('[data-test="recap-feed-video"]').trigger('click');
+  expect(wrapper.emitted('open-video-id')).toEqual([[2]]);
+  expect(wrapper.findComponent({ name: 'RecapListDialog' }).exists()).toBe(false);
+});

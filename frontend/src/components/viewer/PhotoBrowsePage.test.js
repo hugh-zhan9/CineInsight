@@ -551,7 +551,7 @@ describe('PhotoBrowsePage 看图', () => {
     await wrapper.findAll('[data-test="photo-browse-tile"]')[2].trigger('click');
     await flushPromises();
     await wrapper.get('[data-test="photo-lightbox-open-manage"]').trigger('click');
-    expect(wrapper.emitted('open-in-manage')).toEqual([[{ id: 3, name: 'IMG_0003.jpg' }]]);
+    expect(wrapper.emitted('open-in-manage')).toEqual([[{ id: 3, name: 'IMG_0003.jpg', path: '' }]]);
     expect(wrapper.findComponent(PhotoLightbox).exists()).toBe(false);
   });
 
@@ -796,4 +796,17 @@ it('anniversary mode exposes only supported filters and hides the old count', as
   expect(wrapper.text()).toContain('往年同月同日的照片 · 可按人物筛选');
   await wrapper.setProps({ pageActive: false });
   expect(wrapper.findComponent({ name: 'PhotoAnniversaries' }).props('pageActive')).toBe(false);
+});
+
+it('grid deletion targets the clicked image and removing another item preserves the open picture', async () => {
+  const wrapper = await mountPage();
+  await wrapper.findAll('[data-test="photo-browse-delete"]')[0].trigger('click');
+  expect(wrapper.emitted('delete-image')[0][0].id).toBe(1);
+  wrapper.vm.openLightbox(1); await flushPromises();
+  const current = wrapper.vm.lightboxImage.id;
+  wrapper.vm.removeDeletedImage(1); await flushPromises();
+  expect(wrapper.vm.lightboxImage.id).toBe(current);
+  wrapper.vm.removeDeletedImage(current); await flushPromises();
+  expect(wrapper.findComponent(PhotoLightbox).exists()).toBe(false);
+  wrapper.unmount();
 });

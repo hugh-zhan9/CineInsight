@@ -1137,7 +1137,7 @@ export default {
 .video-browse__section-head small { color: var(--text-muted); font-size: var(--fs-caption); }
 .video-browse__section-action { margin-left: auto; align-self: center; }
 /* 条带里的卡与海报墙的卡一样大，不压过下面的主体。 */
-.video-browse__progress-strip { grid-auto-columns: minmax(140px, 156px); }
+.video-browse__progress-strip { --rail-card-width: 140px; }
 /* 窗口化的墙：上下占位随滚动、翻页改高，浏览器自带的滚动锚定会跟着去改 scrollTop——锚到墙下面的「正在加载更多」时
    每追加一批就把视口推回底部、哨兵一直可见、一路翻完整个库；也会与本页按卡放回打架。整面墙（含哨兵）都不参与锚定
    （同 VirtualVideoList 的 overflow-anchor: none）。 */

@@ -997,3 +997,29 @@ func TestImageTimelineBucketsApplyFiltersAndValidate(t *testing.T) {
 		t.Fatal("非 0.5 步进评分筛选应被拒绝")
 	}
 }
+
+func TestImageFilterExactIDDoesNotMatchSameNames(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	first := mustCreateTestImage(t, "same.jpg", 100)
+	second := mustCreateTestImage(t, "same-other.jpg", 101)
+	if err := database.DB.Model(&second).Update("name", "same.jpg").Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewImageLibraryService()
+	page, err := service.SearchImagePage(ImagePageRequest{Filter: ImageFilter{ImageID: second.ID}, Limit: 1})
+	if err != nil || len(page.Images) != 1 || page.Images[0].ID != second.ID || page.NextCursor != nil {
+		t.Fatalf("exact: %+v / %v", page, err)
+	}
+	if got := searchImageIDs(t, ImageFilter{Keyword: "same.jpg"}); len(got) != 2 {
+		t.Fatalf("legacy names: %v", got)
+	}
+	if got := searchImageIDs(t, ImageFilter{ImageID: first.ID + second.ID + 100}); len(got) != 0 {
+		t.Fatalf("missing ID: %v", got)
+	}
+	if err := database.DB.Model(&second).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := searchImageIDs(t, ImageFilter{ImageID: second.ID}); len(got) != 0 {
+		t.Fatalf("visibility: %v", got)
+	}
+}

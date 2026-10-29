@@ -238,7 +238,7 @@
           <div class="recap-habits">
             <div class="recap-panel recap-habits__clock"><RecapClock :hours="result.habits.hours" :peak-hour="result.habits.peak_hour" /></div>
             <div class="recap-panel recap-habits__calendar">
-              <RecapCalendar :days="result.habits.days" :mode="result.period === 'year' ? 'year' : 'month'" :today="todayISO" />
+              <RecapCalendar :days="result.habits.days" :mode="result.period === 'year' ? 'year' : 'month'" :today="todayISO" @select-day="openDay" />
               <p class="recap-muted">活跃 {{ result.overview.active_days }} 天 · 最长连续 {{ result.overview.longest_streak }} 天</p>
             </div>
             <div class="recap-facts" data-test="recap-habit-facts">
@@ -325,7 +325,7 @@
     </template>
 
     <!-- 「查看全部」：页面上的数字比展示出来的多时，按同口径分页列出全部（取当前显示的这一期）。 -->
-    <RecapListDialog v-if="listKind && result" :kind="listKind" :request="listRequest" :total="listCounts[listKind].total" :now="nowTick" @close="listKind = ''" @pick="pickFromList" />
+    <RecapListDialog v-if="listKind && result" :kind="listKind" :request="listRequest" :total="listDate ? listDayTotal : listCounts[listKind].total" :now="nowTick" @close="listKind = ''" @pick="pickFromList" />
   </main>
 </template>
 
@@ -380,7 +380,7 @@ export default {
       // 新鲜度当前选中的一类（new / rewatched / favorites / diary），换期次时保留。
       freshKey: 'new',
       // 「查看全部」对话框正在列的那一类（RECAP_LIST_KINDS 的键），空串表示没打开。
-      listKind: ''
+      listKind: '', listDate: '', listDayTotal: 0
     };
   },
   computed: {
@@ -531,7 +531,7 @@ export default {
       };
     },
     listRequest() {
-      return { period: this.result?.period, year: this.result?.year, month: this.result?.month };
+      return { period: this.result?.period, year: this.result?.year, month: this.result?.month, ...(this.listDate ? { date: this.listDate } : {}) };
     },
     // 空期（EmptyState）：说明回顾统计什么，再按情况给一句下一步——还没结束就等等，上一期有记录就翻过去。
     emptyHasPrevious() {
@@ -658,7 +658,14 @@ export default {
     listAllText(kind, noun = '') {
       return `查看全部 ${this.listCounts[kind]?.total || 0} ${RECAP_LIST_KINDS[kind].unit}${noun}`;
     },
+    openDay(day) {
+      if (!day?.date || day.blank || day.date > this.todayISO) return;
+      this.listDate = day.date;
+      this.listDayTotal = Number(day.plays || 0) + Number(day.views || 0);
+      this.listKind = 'feed';
+    },
     openList(kind) {
+      this.listDate = '';
       this.listKind = kind;
     },
     // 对话框里点了一项：先关掉对话框，再按页面原来的方式打开（视频进详情、图片开查看器、标签回片库……）。

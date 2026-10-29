@@ -68,6 +68,7 @@ const recentlyAddedWindow = 30 * 24 * time.Hour
 
 // LibraryFilter 描述主片库和随机播放共享的筛选边界。
 type LibraryFilter struct {
+	VideoID    uint   `json:"video_id,omitempty"`
 	SearchMode string `json:"search_mode"`
 	Keyword    string `json:"keyword"`
 	PathPrefix string `json:"path_prefix"`
@@ -204,6 +205,9 @@ var validStaleReasons = map[string]struct{}{
 }
 
 func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
+	if filter.VideoID != 0 {
+		filter.CollapseVersions = false
+	}
 	filter.SearchMode = strings.TrimSpace(filter.SearchMode)
 	if filter.SearchMode == "" {
 		filter.SearchMode = LibrarySearchModeFile
@@ -373,6 +377,9 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 		return nil, err
 	}
 	filter = normalized
+	if filter.VideoID != 0 {
+		query = query.Where("videos.id = ?", filter.VideoID)
+	}
 
 	// 失效视图跳过根裁剪（黑名单仍排除）：根被移除后落到范围外的记录正是要在这里找回。
 	query, err = applyScanScope(query, filter.SmartView != LibraryViewStale)
@@ -843,6 +850,9 @@ func savedViewNameConflict(err error) bool {
 
 // buildSavedLibraryView 校验名称并把筛选条件规范化成保存视图行（新建与更新共用）。
 func buildSavedLibraryView(name string, input LibraryFilter) (models.SavedLibraryView, error) {
+	if input.VideoID != 0 {
+		return models.SavedLibraryView{}, fmt.Errorf("精确定位不能保存为视图，请先退出定位")
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return models.SavedLibraryView{}, fmt.Errorf("视图名称不能为空")

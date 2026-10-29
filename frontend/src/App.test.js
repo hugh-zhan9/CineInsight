@@ -1880,12 +1880,12 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
     wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);
     await flushPromises();
     const apply = vi.fn().mockResolvedValue(true);
-    wrapper.findComponent({ name: 'VideoListPage' }).vm.applyVideoKeywordCommand = apply;
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.applyVideoTargetCommand = apply;
 
     wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('manage-in-library', { id: 7, keyword: ' v7.mp4 ' });
     await flushPromises();
     expect(wrapper.vm.currentPage).toBe('library-manage');
-    expect(apply).toHaveBeenCalledWith('v7.mp4');
+    expect(apply).toHaveBeenCalledWith({ id: 7, keyword: 'v7.mp4', path: '' });
     expect(openPreview).not.toHaveBeenCalled();
     expect(wrapper.vm.detailReturnStack).toEqual([]);
   });
@@ -2264,6 +2264,32 @@ describe('整页详情的返回栈（D-UI-10）', () => {
     expect(wrapper.vm.$refs.mainView.scrollTop).toBe(340);
     await wrapper.vm.goBackFromDetail();
     expect(wrapper.vm.detailRoute.videoId).toBe(1);
+  });
+
+  it('detail deletion stays in confirmation until success, then returns and keeps undo mounted', async () => {
+    const wrapper = await viewerApp();
+    const home = wrapper.findComponent({ name: 'HomePage' });
+    home.vm.refresh = vi.fn();
+    const reload = vi.fn().mockResolvedValue();
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.handleVideosChangedElsewhere = reload;
+    home.vm.$emit('open-video', 1);
+    await flushPromises();
+    detail(wrapper).vm.$emit('delete-video', { id: 1, name: 'file.mp4' });
+    await flushPromises();
+    const dialog = wrapper.findComponent({ name: 'PersonMediaDeleteDialog' });
+    expect(dialog.props('target')).toEqual({ kind: 'video', media: { id: 1, name: 'file.mp4' } });
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    dialog.vm.$emit('close'); await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    detail(wrapper).vm.$emit('delete-video', { id: 1, name: 'file.mp4' }); await flushPromises();
+    wrapper.findComponent({ name: 'PersonMediaDeleteDialog' }).vm.$emit('deleted', { kind: 'video', media: { id: 1 } });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(reload).toHaveBeenCalledWith([1]);
+    expect(wrapper.findComponent({ name: 'PersonMediaDeleteDialog' }).exists()).toBe(true);
+    wrapper.findComponent({ name: 'PersonMediaDeleteDialog' }).vm.$emit('restored', { kind: 'video', ids: [1] });
+    await flushPromises();
+    expect(reload).toHaveBeenLastCalledWith([]);
   });
 
   it('栈最多 20 层，超出丢最早的', async () => {
@@ -3126,4 +3152,33 @@ it('从其他入口打开详情会清除旧的今晚来源标记', async () => {
   expect(clear).not.toHaveBeenCalled();
   wrapper.vm.openVideo({ id: 7 }, { from: 'videos' });
   expect(clear).toHaveBeenCalledTimes(1);
+});
+
+for (const deletedID of [7, 8]) it(`detail deletion of version ${deletedID} reloads the grouped browse wall`, async () => {
+  const wrapper = await mountApp();
+  await wrapper.vm.navigateTo('videos'); await flushPromises();
+  const reload = vi.fn();
+  wrapper.findComponent({ name: 'VideoBrowsePage' }).vm.reloadNow = reload;
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.handleVideosChangedElsewhere = vi.fn().mockResolvedValue();
+  wrapper.findComponent({ name: 'HomePage' }).vm.refresh = vi.fn();
+  await wrapper.vm.detailVideoDeleted({ media: { id: deletedID } });
+  expect(reload).toHaveBeenCalledOnce();
+});
+
+it('photo deletion uses image kind, preserves confirmation and routes refresh and undo only to pictures', async () => {
+  const wrapper = await mountApp();
+  await wrapper.vm.navigateTo('photos'); await flushPromises();
+  const browse = wrapper.findComponent({ name: 'PhotoBrowsePage' });
+  browse.vm.removeDeletedImage = vi.fn();
+  const refresh = vi.fn().mockResolvedValue();
+  wrapper.vm.handleCleanupImagesChanged = refresh;
+  browse.vm.$emit('delete-image', { id: 91, name: 'same.jpg' }); await flushPromises();
+  const dialog = wrapper.findComponent({ name: 'PersonMediaDeleteDialog' });
+  expect(dialog.props('target')).toEqual({ kind: 'image', media: { id: 91, name: 'same.jpg' } });
+  expect(wrapper.vm.currentPage).toBe('photos');
+  dialog.vm.$emit('deleted', dialog.props('target')); await flushPromises();
+  expect(browse.vm.removeDeletedImage).toHaveBeenCalledWith(91);
+  expect(refresh).toHaveBeenCalledOnce();
+  dialog.vm.$emit('restored', { kind: 'image', ids: [91] }); await flushPromises();
+  expect(refresh).toHaveBeenCalledTimes(2);
 });

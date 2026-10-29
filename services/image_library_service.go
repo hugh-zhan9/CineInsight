@@ -37,6 +37,7 @@ func NewImageLibraryService() *ImageLibraryService {
 // ImageFilter 描述照片页的筛选边界。TakenAfter/TakenBefore 是 EXIF 拍摄时间的闭区间，
 // 只命中有 taken_at 的图片。
 type ImageFilter struct {
+	ImageID   uint   `json:"image_id,omitempty"`
 	Keyword   string `json:"keyword"`
 	Directory string `json:"directory"`
 	TagIDs    []uint `json:"tag_ids"`
@@ -217,6 +218,9 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 // 时间线分组都经由这里取活跃集，改口径只改 applyImageVisibility 一处。
 func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 	query = applyImageVisibility(query, database.DB)
+	if filter.ImageID != 0 {
+		query = query.Where("images.id = ?", filter.ImageID)
+	}
 	if filter.Keyword != "" {
 		pattern := "%" + strings.ToLower(escapeSQLLike(filter.Keyword)) + "%"
 		query = query.Where("LOWER(images.name) LIKE ? ESCAPE '\\'", pattern)

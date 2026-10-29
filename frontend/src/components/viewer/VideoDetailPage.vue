@@ -1,6 +1,6 @@
 <template>
   <section class="page-content viewer-detail" data-test="viewer-detail">
-    <!-- 观看侧整页详情（D-UI-05，详细设计「整页详情」）：只读展示 + 常用动作；改资料去管理侧的抽屉。
+    <!-- 观看侧整页详情（D-UI-05，详细设计「整页详情」）：详情展示与常用动作；复杂资料编辑在管理侧抽屉。
          注释放在根元素里面：放在外面开发模式会变成多根片段，宿主的 v-show 与 $el 都会失效。 -->
     <nav class="viewer-detail__nav">
       <button type="button" class="btn btn--secondary btn--sm" data-test="detail-back" @click="$emit('back')"><AppIcon name="chevron-left" /> 返回</button>
@@ -58,7 +58,7 @@
             <p v-if="facts.length" class="recap-hero__meta viewer-detail__facts">
               <span v-for="fact in facts" :key="fact.key" :data-test="`detail-fact-${fact.key}`">{{ fact.text }}</span>
             </p>
-            <div v-if="tags.length" class="viewer-detail__tags">
+            <div class="viewer-detail__tags">
               <TagPill
                 v-for="tag in tags"
                 :key="tag.id"
@@ -70,6 +70,7 @@
                 :data-test="`detail-tag-${tag.id}`"
                 @click="$emit('open-tag', Number(tag.id))"
               />
+              <DetailTagPicker :video-id="Number(video.id)" :tags="tags" @added="tagAdded" @created="$emit('reload-tags')" />
             </div>
             <!-- 动作：播放与抽屉「播放」同一调用（PlayVideo，记一次正式播放）；收藏、已看、评分点了即存。 -->
             <div class="recap-hero__actions" data-test="detail-actions">
@@ -84,9 +85,9 @@
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-find-similar" @click="findSimilarScenes">找相似画面</button>
               <button type="button" class="btn btn--secondary btn--sm" data-test="detail-edit" @click="$emit('edit-in-manage', Number(video.id))">编辑资料</button>
-              <!-- 快速进管理（2026-10-27 用户要求）：切到片库管理，并把这部片的文件名带过去当搜索条件，
-                   停在列表上——加标签（行内「+ 标签」）与删除（行菜单）不用再自己搜一遍。 -->
-              <button type="button" class="btn btn--secondary btn--sm" data-test="detail-manage" title="切到片库管理，按这部片的文件名搜索；加标签、删除都在列表行上" @click="openInManageList">片库管理</button>
+              <button type="button" class="btn btn--danger btn--sm" data-test="detail-delete" :disabled="!!actionBusy" @click="requestDelete">从片库移除…</button>
+              <!-- 管理入口定位当前文件，避免同名结果；详情也可直接添加标签与移除视频。 -->
+              <button type="button" class="btn btn--secondary btn--sm" data-test="detail-manage" title="在片库管理中定位当前视频" @click="openInManageList">片库管理</button>
             </div>
             <p v-if="actionError" class="viewer-detail__error" role="alert" data-test="detail-action-error">{{ actionError }}</p>
           </HeroHeader>
@@ -194,6 +195,7 @@
 
 <script>
 import MediaRail from '../ui/MediaRail.vue';
+import DetailTagPicker from './DetailTagPicker.vue';
 import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress, waitForVideoWatchProgress } from '../../utils/watchProgress.js';
 // 观看侧整页详情（D-UI-05、D-UI-06、D-UI-08；详细设计「整页详情」）。
 // 数据：GetVideoDetails 一次取齐（含 artwork.has_poster/has_fanart、人物、作品集、标签）；
@@ -243,7 +245,7 @@ function errorText(err) {
 
 export default {
   name: 'VideoDetailPage',
-  components: { MediaRail,
+  components: { DetailTagPicker, MediaRail,
     AppBanner, AppIcon, BookmarkPanel, HeroHeader, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon,
     RecapMediaCard, StatTile, TagPill
   },
@@ -257,13 +259,13 @@ export default {
   },
   // back：返回来源页；open-video(id)：相关推荐、下一部、其他版本，宿主压栈后换成那一部；
   // navigate(pageKey)：去别的页面；edit-in-manage(id)：去片库管理并在抽屉里打开这部片；
-  // manage-in-library({ id, keyword })：去片库管理，并按 keyword（这部片的文件名）把它搜出来，停在列表上；
+  // manage-in-library({ id, keyword, path })：去片库管理，按 ID 定位当前文件；名称与路径只用于显示；
   // open-tag(tagId)：去视频页按这个标签筛选；open-entity({ type: person|collection, id, name })：去人物 / 作品集页
   // （与回顾页同一载荷）；find-similar({ videoID, atMS, title })：去场景检索找相似画面（与抽屉的 find-similar-scenes 同一载荷）；
   // ready：每次挂载只发一次——主详情读到并渲染之后（读取失败、没有视频 ID 也发），宿主据此还原滚动等；
   // video-state-changed({ id, changes })：收藏、已看、评分、进度保存成功，或「播放」失败并标了失效之后，
   // changes 是变了的字段（videoDetail.js 的 STATE_CHANGE_FIELDS / playbackStaleChanges），宿主拿去更新片库行。
-  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'manage-in-library', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
+  emits: ['delete-video', 'reload-tags', 'back', 'open-video', 'navigate', 'edit-in-manage', 'manage-in-library', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
   data() {
     return {
       loading: false, error: '', details: null, posterFailed: false,
@@ -426,16 +428,17 @@ export default {
     async loadRecommendations(details, token) {
       const videoID = Number(details.video?.id || 0);
       if (!videoID) return;
+      const sequence = this._recommendSeq = (this._recommendSeq || 0) + 1;
       this.recommendBlock = { loading: true, error: '', directory: [], tags: [] };
       try {
         const result = await GetVideoRecommendations(videoID);
-        if (!this.isCurrentLoad(token)) return;
+        if (!this.isCurrentLoad(token) || sequence !== this._recommendSeq) return;
         this.recommendBlock = {
           loading: false, error: '',
           directory: result?.directory || [], tags: result?.tags || []
         };
       } catch (err) {
-        if (this.isCurrentLoad(token)) this.recommendBlock = { loading: false, error: `读取推荐失败：${errorText(err)}`, directory: [], tags: [] };
+        if (this.isCurrentLoad(token) && sequence === this._recommendSeq) this.recommendBlock = { loading: false, error: `读取推荐失败：${errorText(err)}`, directory: [], tags: [] };
       }
     },
     async loadRelated(details, token) {
@@ -608,6 +611,18 @@ export default {
       if (!Array.isArray(updated.tags)) video.tags = this.details.video.tags;
       this.details = { ...this.details, video };
     },
+    tagAdded({ videoId, tag }) {
+      if (Number(this.video?.id) === Number(videoId) && !this.tags.some(item => Number(item.id) === Number(tag.id))) {
+        this.mergeVideo(videoId, { tags: [...this.tags, tag] });
+        this.emitStateChange(videoId, { tags: this.tags });
+        this.loadRecommendations(this.details, this._loadToken);
+      }
+      this.$emit('reload-tags');
+    },
+    requestDelete() {
+      this.player?.pauseAndReportProgress();
+      this.$emit('delete-video', { ...this.video });
+    },
     // ===== 动作 =====
     // 播放走正式播放（PlayVideo），与抽屉动作条「播放」同一调用；失败原因就地显示（后端文案不含路径）。
     async playExternally() {
@@ -703,7 +718,7 @@ export default {
     openInManageList() {
       const videoID = Number(this.video?.id || 0);
       if (!videoID) return;
-      this.$emit('manage-in-library', { id: videoID, keyword: this.manageKeyword });
+      this.$emit('manage-in-library', { id: videoID, keyword: this.manageKeyword, path: this.video.path || '' });
     },
     openEntity(type, id, name) {
       if (Number(id)) this.$emit('open-entity', { type, id: Number(id), name: name || '' });

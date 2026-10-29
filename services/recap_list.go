@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"video-master/database"
 
 	"gorm.io/gorm"
@@ -35,6 +36,7 @@ var (
 	ErrRecapListKindInvalid = errors.New("recap_list_kind_invalid")
 	// ErrRecapListOffsetInvalid 是负的 offset。
 	ErrRecapListOffsetInvalid = errors.New("recap_list_offset_invalid")
+	ErrRecapListDateInvalid   = errors.New("recap_list_date_invalid")
 )
 
 var recapListKinds = map[string]bool{RecapListNew: true, RecapListRewatched: true, RecapListFavorites: true, RecapListDiary: true,
@@ -42,6 +44,7 @@ var recapListKinds = map[string]bool{RecapListNew: true, RecapListRewatched: tru
 
 // RecapListRequest：Period / Year / Month 与 RecapRequest 同义；Limit 不传（≤0）取 60，最多 200。
 type RecapListRequest struct {
+	Date   string `json:"date,omitempty"`
 	Period string `json:"period"`
 	Year   int    `json:"year"`
 	Month  int    `json:"month"`
@@ -93,6 +96,14 @@ func (s *RecapService) ListRecapItems(ctx context.Context, req RecapListRequest)
 	w, err := resolveRecapWindow(RecapRequest{Period: req.Period, Year: req.Year, Month: req.Month}, now, loc)
 	if err != nil {
 		return nil, err
+	}
+	if req.Date != "" {
+		day, parseErr := time.ParseInLocation("2006-01-02", req.Date, loc)
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+		if parseErr != nil || day.Format("2006-01-02") != req.Date || kind != RecapListFeed || day.Before(w.start) || !day.Before(w.end) || day.After(today) {
+			return nil, fmt.Errorf("%w: %q", ErrRecapListDateInvalid, req.Date)
+		}
+		w.start, w.end = day, day.AddDate(0, 0, 1)
 	}
 	page := newRecapListPage(kind, req.Offset)
 	err = database.WithOperationContext(ctx, func(db *gorm.DB) error {

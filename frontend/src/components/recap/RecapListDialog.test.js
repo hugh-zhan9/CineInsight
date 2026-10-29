@@ -135,3 +135,19 @@ describe('RecapListDialog', () => {
     expect(wrapper.get('[data-test="recap-list-empty"]').text()).toBe('这一期没有可列出的人物排行。');
   });
 });
+
+it('loads a selected day, renders exact times, switches days and ignores stale responses', async () => {
+  const stale = deferred();
+  api.ListRecapItems.mockReturnValueOnce(stale.promise).mockResolvedValueOnce(page('feed', { total: 0, feed: [] }));
+  const wrapper = mountDialog({ kind: 'feed', request: { ...month, date: '2026-10-08' }, total: 2 });
+  await flushPromises();
+  expect(api.ListRecapItems).toHaveBeenCalledWith({ ...month, date: '2026-10-08', kind: 'feed', offset: 0, limit: RECAP_LIST_PAGE });
+  expect(wrapper.text()).toContain('2026-10-08 的观看记录');
+  await wrapper.setProps({ request: { ...month, date: '2026-10-09' } });
+  await flushPromises();
+  expect(wrapper.text()).toContain('这一天没有观看记录');
+  stale.resolve(page('feed', { total: 1, feed: [{ kind: 'video', id: 1, title: '旧日期视频', available: true, at: '2026-10-08T12:00:00+08:00' }] }));
+  await flushPromises();
+  expect(wrapper.text()).not.toContain('旧日期视频');
+  expect(wrapper.text()).toContain('2026-10-09 的观看记录（0 条）');
+});

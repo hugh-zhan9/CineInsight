@@ -15,7 +15,7 @@
           <strong>{{ item.title || '已删除的项' }}</strong>
           <small>{{ item.available ? '' : '已不在库中 · ' }}{{ item.kind === 'image' ? '看图' : '播放' }} · {{ sourceLabel(item.kind, item.source) }}</small>
         </span>
-        <time class="recap-feed__time" :datetime="item.at" :title="formatClock(item.at)">{{ relativeTime(item.at, now) }}</time>
+        <time class="recap-feed__time" :datetime="item.at" :title="formatClock(item.at)">{{ absoluteTime ? formatClock(item.at) : relativeTime(item.at, now) }}</time>
       </button>
     </li>
   </TransitionGroup>
@@ -29,6 +29,7 @@ import { formatClock, imageThumbnail, relativeTime, sourceLabel, videoThumbnail 
 export default {
   name: 'RecapLiveFeed',
   props: {
+    absoluteTime: { type: Boolean, default: false },
     items: { type: Array, default: () => [] },
     now: { type: Number, default: () => Date.now() }
   },

@@ -4,7 +4,7 @@
       <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="recap-list-retry" @click="retry">重试</button></template>
     </AppBanner>
     <p v-if="loading && !rows.length" class="recap-muted recap-list__status" data-test="recap-list-loading"><AppSpinner :size="16" /> 正在读取…</p>
-    <p v-else-if="loaded && !rows.length && !error" class="recap-muted" data-test="recap-list-empty">这一期没有可列出的{{ meta.title }}。</p>
+    <p v-else-if="loaded && !rows.length && !error" class="recap-muted" data-test="recap-list-empty">{{ request.date ? '这一天没有观看记录。' : `这一期没有可列出的${meta.title}。` }}</p>
 
     <div v-if="layout === 'media' && rows.length" class="recap-list__grid" data-test="recap-list-items">
       <RecapMediaCard
@@ -21,7 +21,7 @@
         @open="pick(row)"
       />
     </div>
-    <RecapLiveFeed v-else-if="layout === 'feed' && rows.length" :items="rows" :now="now" data-test="recap-list-items" @open="pick({ action: 'feed', payload: $event })" />
+    <RecapLiveFeed v-else-if="layout === 'feed' && rows.length" :items="rows" :now="now" :absolute-time="!!request.date" data-test="recap-list-items" @open="pick({ action: 'feed', payload: $event })" />
     <ol v-else-if="rows.length" class="recap-list__rows" data-test="recap-list-items">
       <li v-for="row in rows" :key="row.key">
         <button type="button" class="btn-plain recap-list__row" data-test="recap-list-item" @click="pick(row)">
@@ -128,13 +128,14 @@ export default {
     layout() { return this.meta.layout; },
     live() { return this.request.period === 'live'; },
     dialogTitle() {
+      if (this.request.date) return `${this.request.date} 的观看记录（${this.loadedTotal ?? this.total} 条）`;
       const title = this.kind === 'feed' && this.live ? '今日流水' : `${this.live ? '今天' : '本期'}${this.meta.title}`;
       return `${title}（${this.loadedTotal ?? this.total} ${this.meta.unit}）`;
     },
     rows() {
       return this.meta.ranked ? this.items.map((row, index) => ({ ...row, rank: index + 1 })) : this.items;
     },
-    listKey() { return [this.kind, this.request.period, this.request.year, this.request.month].join('|'); }
+    listKey() { return [this.kind, this.request.period, this.request.year, this.request.month, this.request.date].join('|'); }
   },
   watch: {
     listKey() {
@@ -156,12 +157,12 @@ export default {
     async load(append = false) {
       const generation = ++this.generation;
       const offset = append ? this.items.length : 0;
-      const { period, year, month } = this.request;
+      const { period, year, month, date } = this.request;
       this.loading = true;
       this.error = '';
       this.lastAppend = append;
       try {
-        const page = await ListRecapItems({ period, year, month, kind: this.kind, offset, limit: RECAP_LIST_PAGE });
+        const page = await ListRecapItems({ period, year, month, ...(date ? { date } : {}), kind: this.kind, offset, limit: RECAP_LIST_PAGE });
         if (generation !== this.generation) return;
         const rows = pageRows(this.kind, page || {});
         this.items = append ? [...this.items, ...rows] : rows;

@@ -68,6 +68,10 @@
       @manage-select="onManageSelect"
       @view-select="onViewSelect"
     />
+    <div v-if="focusedVideo" class="library-focus" data-test="library-focused-video">
+      <span :title="focusedVideo.path">当前视频 · {{ focusedVideo.keyword || focusedVideo.path }}</span>
+      <button type="button" class="btn btn--ghost btn--sm" data-test="library-exit-focus" @click="exitVideoFocus">退出定位</button>
+    </div>
     <MetadataBatchEditDialog
       v-if="metadataBatchEdit"
       kind="video"
@@ -638,6 +642,7 @@ export default {
       viewMode: readLibraryLayout().layout,
       rowDensity: window.localStorage?.getItem('cineinsight-library-density') === 'comfortable' ? 'comfortable' : 'compact',
       searchKeyword: '',
+      focusedVideo: null,
       searchMode: 'file',
       semanticSimilarVideoID: 0,
       semanticCoverage: null,
@@ -841,6 +846,8 @@ export default {
     }
   },
   watch: {
+    searchKeyword(value) { if (this.focusedVideo && value !== this.focusedVideo.keyword) this.focusedVideo = null; },
+    searchMode(value) { if (value !== 'file') this.focusedVideo = null; },
     pageActive(active) {
       if (active) this.showRemovedLayoutNotice();
     },
@@ -1054,6 +1061,7 @@ export default {
         mode: this.searchMode,
         keyword: this.currentQueryKeyword(),
         similarVideoID: this.semanticSimilarVideoID,
+        focusedVideoID: this.focusedVideo?.id || 0,
         smartView: this.smartView,
         missing: this.missingFilter,
         staleReason: this.staleReasonFilter,
@@ -1609,6 +1617,7 @@ export default {
       this.handleSearch(true);
     },
     clearAllConditions() {
+      this.focusedVideo = null;
       this.smartView = '';
       this.missingFilter = '';
       this.staleReasonFilter = '';
@@ -1798,11 +1807,11 @@ export default {
       return estimateVideoRowHeight(video, widthBucket, subtitleMode, density) + versions;
     },
     hasStructuredFilters() {
-      return !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
+      return !!this.focusedVideo || !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
     },
     // 当前有没有会让结果变少的条件：决定空列表显示「筛选没命中」还是「目录里没有视频」。
     hasActiveConditions() {
-      return !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
+      return !!this.focusedVideo || !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
         this.selectedTags.length > 0 || this.selectedPeople.length > 0 ||
         this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '';
     },
@@ -1814,7 +1823,8 @@ export default {
       const semantic = this.searchMode === 'semantic';
       return {
         search_mode: semantic ? 'file' : this.searchMode,
-        keyword: semantic ? '' : this.currentQueryKeyword(),
+        keyword: this.focusedVideo || semantic ? '' : this.currentQueryKeyword(),
+        ...(this.focusedVideo ? { video_id: this.focusedVideo.id } : {}),
         smart_view: this.smartView,
         missing: this.missingFilter,
         tag_ids: [...this.selectedTags],
@@ -2103,6 +2113,7 @@ export default {
     // 不另建一套加载逻辑。片库管理没有的视图（观看向的，D-P3-03）按「全部视频」处理——App 已经把它们指到观看侧，
     // 这里只是兜住。
     applySmartViewCommand(value) {
+      this.focusedVideo = null;
       this.smartView = LIBRARY_MANAGE_SMART_VIEWS.includes(value || '') ? (value || '') : '';
       return this.handleSearch(true);
     },
@@ -2121,6 +2132,17 @@ export default {
     },
     // 整页详情「片库管理」按钮（2026-10-27）：清掉其余条件，按传进来的名字把这一部搜出来（整页详情传的是文件名；
     // 后端文件搜索同时匹配标题、原始标题、文件名与路径）。搜索模式回到文件——字幕 / 语义模式下这个名字搜不到它。空名字不动，免得把整库当结果。
+    applyVideoTargetCommand({ id, keyword = '', path = '' } = {}) {
+      const videoID = Number(id);
+      if (!Number.isSafeInteger(videoID) || videoID <= 0) return false;
+      this.leaveSavedView();
+      this.resetConditionsForCommand();
+      this.searchMode = 'file';
+      this.searchKeyword = String(keyword).trim();
+      this.focusedVideo = { id: videoID, keyword: this.searchKeyword, path: String(path) };
+      return this.handleSearch(true, true);
+    },
+    exitVideoFocus() { this.focusedVideo = null; return this.handleSearch(true, true); },
     applyVideoKeywordCommand(keyword) {
       const value = String(keyword || '').trim();
       if (!value) return false;
@@ -2142,6 +2164,7 @@ export default {
     },
     // 跳转类命令（按标签、按缺失项）先清掉其余条件。
     resetConditionsForCommand() {
+      this.focusedVideo = null;
       this.smartView = '';
       this.missingFilter = '';
       this.staleReasonFilter = '';
@@ -2155,6 +2178,7 @@ export default {
     },
     // mode：create 另存为新视图；update 用当前条件覆盖；rename 只改名（D-PC35、LIB-15）。
     openSaveViewDialog(mode = 'create') {
+      if (this.focusedVideo) { notifyError('请先退出当前视频定位，再保存视图'); return false; }
       this.$refs.saveViewDialog?.open(mode);
     },
     // 保存成功后刷新视图列表并选中新视图，这两步仍归片库页。更新当前条件后，条件与视图重新一致，
@@ -2196,6 +2220,7 @@ export default {
       const viewRemoved = !LIBRARY_MANAGE_SMART_VIEWS.includes(storedView);
       const storedSort = view.sort_mode || 'balanced';
       const sortRemoved = !LIBRARY_SORT_MODES.includes(storedSort);
+      this.focusedVideo = null;
       this.searchMode = view.search_mode || 'file';
       this.searchKeyword = view.keyword || '';
       this.smartView = viewRemoved ? '' : storedView;
@@ -3013,3 +3038,8 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.library-focus { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-secondary); font-size: var(--fs-secondary); }
+.library-focus span { min-width: 0; overflow-wrap: anywhere; }
+</style>
