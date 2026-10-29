@@ -128,10 +128,10 @@
       <AppBanner v-if="progressBlock.error" tone="danger" title="读取「追到哪了」失败" :message="progressBlock.error" data-test="browse-progress-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="browse-progress-retry" @click="loadProgress">重试</button></template>
       </AppBanner>
-      <div v-else-if="progressSkeleton" class="recap-strip video-browse__progress-strip" aria-busy="true" data-test="browse-progress-loading">
+      <MediaRail v-else-if="progressSkeleton" class="recap-strip video-browse__progress-strip" aria-busy="true" data-test="browse-progress-loading">
         <SkeletonBlock v-for="n in 5" :key="n" shape="poster" :lines="2" />
-      </div>
-      <div v-if="progressCards.length" class="recap-strip video-browse__progress-strip">
+      </MediaRail>
+      <MediaRail v-if="progressCards.length" class="recap-strip video-browse__progress-strip">
         <RecapMediaCard
           v-for="card in progressCards"
           :key="card.key"
@@ -145,7 +145,7 @@
           data-test="browse-progress-item"
           @open="openVideoID(card.videoID)"
         />
-      </div>
+      </MediaRail>
     </section>
 
     <section ref="wall" class="video-browse__wall" :aria-busy="list.loading ? 'true' : 'false'" aria-label="视频海报墙">
@@ -300,6 +300,7 @@
 </template>
 
 <script>
+import MediaRail from '../ui/MediaRail.vue';
 import { playVideoAfterProgress as PlayVideo } from '../../utils/watchProgress.js';
 // 视频海报墙（UI 二期 D-P2-01，详细设计 §3.1）：观看侧的「视频」页，只做浏览。
 // - 筛选状态归本页（不与片库管理共享）：片名搜索（file 模式）、观看状态（对应智能视图）、标签、人物、排序；
@@ -450,7 +451,7 @@ function emptyList() {
 
 export default {
   name: 'VideoBrowsePage',
-  components: {
+  components: { MediaRail,
     AppBadge, AppBanner, AppIcon, AppSpinner, BaseMenu, BasePopover, EmptyState, FilterChip, PageHeader, RandomPickBanner,
     RecapMediaCard, SegmentedControl, SkeletonBlock, TonightPickerDialog, ViewAllDialog
   },

@@ -175,8 +175,25 @@ func TestVideoDetailsLoadsRelationshipCountsWithoutPerEntityQueries(t *testing.T
 	if err != nil {
 		t.Fatalf("批量读取详情关系失败: %v", err)
 	}
-	if len(detail.People) != 12 || len(detail.Collections) != 12 || queryCount > 10 {
-		t.Fatalf("详情关系计数不应按实体增加查询: people=%d collections=%d queries=%d", len(detail.People), len(detail.Collections), queryCount)
+	if len(detail.People) != 12 || len(detail.Collections) != 12 {
+		t.Fatalf("relationship rows missing: %+v", detail)
+	}
+	manyQueries := queryCount
+	// Compare twelve entities with one. Artwork uses fixed batch queries, so
+	// increasing the number of relationships must not add per-entity reads.
+	if err := database.DB.Where("video_id = ? AND person_id <> ?", video.ID, detail.People[0].Person.ID).Delete(&models.VideoPerson{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Where("video_id = ? AND collection_id <> ?", video.ID, detail.Collections[0].Collection.ID).Delete(&models.CollectionVideo{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	queryCount = 0
+	single, err := svc.GetVideoDetails(video.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(single.People) != 1 || len(single.Collections) != 1 || manyQueries > queryCount+1 {
+		t.Fatalf("relationship reads must stay bounded: twelve=%d one=%d", manyQueries, queryCount)
 	}
 }
 

@@ -47,12 +47,13 @@
   <div class="inline-player surface-cinema">
     <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
     <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
-      <div ref="playerShell" class="preview-drawer__player-shell">
+      <div ref="playerShell" class="preview-drawer__player-shell" tabindex="0" @keydown.capture="handlePlaybackKey">
         <video
           ref="videoElement"
           :key="previewMediaGeneration"
           class="preview-drawer__video"
           controls
+          controlslist="nofullscreen"
           playsinline
           preload="metadata"
           :muted="true"
@@ -130,6 +131,7 @@
 </template>
 
 <script>
+import { handlePlaybackKey } from '../../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './PlaybackSubtitleControls.vue';
 import { markRaw } from 'vue';
 import { CancelPreviewProxy, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus, GetPreviewSession, RecordViewEvent, RequestPreviewProxy } from '../../../wailsjs/go/main/App';
@@ -297,6 +299,7 @@ export default {
   },
   methods: {
     formatDuration,
+    handlePlaybackKey(event) { handlePlaybackKey(event, this.$refs.videoElement); },
     ownsFullscreen() {
       const element = document.fullscreenElement || document.webkitFullscreenElement;
       return !!element && element === this.$refs.playerShell;
@@ -329,7 +332,7 @@ export default {
       this.leaveFullscreen();
     },
     // ===== 宿主可调 =====
-    play() { return this.$refs.videoElement?.play(); },
+    play() { this.$refs.playerShell?.focus({ preventScroll: true }); return this.$refs.videoElement?.play(); },
     pause() { this.$refs.videoElement?.pause(); },
     // 切走之前同步发出最后位置；随后到达的原生 pause / 卸载事件不再重复写旧位置。
     pauseAndReportProgress() {
@@ -688,8 +691,8 @@ export default {
 .preview-drawer__player-shell:fullscreen { width: 100%; height: 100%; aspect-ratio: auto; }
 .preview-drawer__player-shell:-webkit-full-screen { width: 100%; height: 100%; aspect-ratio: auto; }
 .preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
-.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text-primary) 28%, transparent); cursor: default; }
-.preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; background: color-mix(in srgb, var(--text-primary) 58%, transparent); content: ''; }
+.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: var(--radius-pill); background: transparent; cursor: default; }
+.preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; content: none; }
 .preview-drawer__seek-preview { position: absolute; bottom: 18px; width: 160px; transform: translateX(-50%); display: grid; gap: var(--space-1); justify-items: center; pointer-events: none; }
 /* 悬停预览浮在画面上：描边与时间角标用画面角标的那一对颜色（两主题同值），投影取浮层投影。 */
 .preview-drawer__seek-image { position: relative; width: 160px; height: 90px; overflow: hidden; border: 2px solid var(--media-badge-fg); border-radius: var(--radius-sm); background: var(--player-bg); box-shadow: var(--shadow-popover); }
@@ -699,4 +702,5 @@ export default {
 .preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: var(--radius-lg); padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: var(--space-3); color: var(--text-secondary); }
 .detail-action-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .preview-drawer__proxy-progress { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); }
+.preview-drawer__video::-webkit-media-controls-fullscreen-button { display: none; }
 </style>

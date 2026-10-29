@@ -218,7 +218,7 @@
             <button type="button" class="btn btn--primary" @click="savePerson">保存姓名</button>
             <button type="button" class="btn btn--secondary" @click="replacePersonAvatar" :disabled="avatarSaving">从文件选择头像</button>
             <button type="button" class="btn btn--secondary" :disabled="avatarSaving" @click="avatarPickerOpen = true; avatarError = ''">从图片库选择头像</button>
-            <button v-if="personDetail.person.avatar_url" type="button" class="btn btn--secondary" @click="removePersonAvatar" :disabled="avatarSaving">移除头像</button>
+            <button v-if="personDetail.person.avatar_url?.startsWith('/preview/person-avatar/')" type="button" class="btn btn--secondary" @click="removePersonAvatar" :disabled="avatarSaving">移除头像</button>
           </div>
         </section>
         <p v-if="avatarError" role="alert" class="detail-error-text">{{ avatarError }}</p>
@@ -315,7 +315,7 @@
           <div class="detail-action-row">
             <button type="button" class="btn btn--primary" @click="saveCollection">保存</button>
             <button type="button" class="btn btn--secondary" @click="replaceCollectionCover">更换封面</button>
-            <button v-if="collectionDetail.collection.cover_url" type="button" class="btn btn--secondary" @click="removeCollectionCover">移除封面</button>
+            <button v-if="collectionDetail.collection.cover_url?.startsWith('/preview/collection-cover/')" type="button" class="btn btn--secondary" @click="removeCollectionCover">移除封面</button>
             <button type="button" class="btn btn--danger" data-test="drawer-collection-delete" @click="deleteCollection">删除作品集</button>
           </div>
         </section>

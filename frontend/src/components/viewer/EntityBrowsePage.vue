@@ -183,9 +183,9 @@
           <AppBanner v-if="images.error" tone="danger" :title="images.error" data-test="entity-person-images-error">
             <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="entity-person-images-retry" @click="loadImages(entityToken, { reset: !images.items.length })">重试</button></template>
           </AppBanner>
-          <div v-if="images.loading && !images.items.length" class="recap-strip recap-strip--images" aria-busy="true" data-test="entity-person-images-loading">
+          <MediaRail v-if="images.loading && !images.items.length" class="recap-strip recap-strip--images" aria-busy="true" data-test="entity-person-images-loading">
             <SkeletonBlock v-for="n in 6" :key="n" shape="thumb" />
-          </div>
+          </MediaRail>
           <EmptyState
             v-else-if="images.loaded && !images.error && !images.items.length"
             icon="images"
@@ -196,7 +196,7 @@
             <!-- 观看侧照片流的看图不能改人物（D-P2-08），标人物要去图片管理。 -->
             <template #actions><button type="button" class="btn btn--secondary" data-test="entity-person-images-go-photos" @click="$emit('navigate', 'photos-manage')">去图片管理</button></template>
           </EmptyState>
-          <div v-if="images.items.length" class="recap-strip recap-strip--images">
+          <MediaRail v-if="images.items.length" class="recap-strip recap-strip--images">
             <RecapMediaCard
               v-for="image in images.items"
               :key="image.id"
@@ -217,7 +217,7 @@
               data-test="entity-person-images-more"
               @click="loadImages(entityToken, { reset: false })"
             >{{ images.loading ? '正在加载…' : '更多图片' }}</button>
-          </div>
+          </MediaRail>
         </section>
       </template>
 
@@ -306,6 +306,7 @@
 </template>
 
 <script>
+import MediaRail from '../ui/MediaRail.vue';
 import {
   GetCollectionDetail, GetPersonDetail, GetPersonImages, ListCollectionProgress, ListCollections, ListPeople, ListPeopleByCount,
   SearchLibraryVideoPage
@@ -456,7 +457,7 @@ export function nextWorkKey(rows, progress) {
 
 export default {
   name: 'EntityBrowsePage',
-  components: {
+  components: { MediaRail,
     AppBadge, AppBanner, AppIcon, EmptyState, HeroHeader, PageHeader, ProgressBar, QueueActionButton, RecapBackdrop, RecapMediaCard,
     SegmentedControl, SkeletonBlock
   },

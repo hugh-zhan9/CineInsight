@@ -583,7 +583,9 @@ describe('HomePage view-all', () => {
     api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: many(HOME_CONTINUE_LIMIT + 1, id => video(id, { watch_position_seconds: 30 })) });
     api.SearchLibraryVideoPage.mockResolvedValue({ videos: many(HOME_RECENT_LIMIT + 1, id => video(100 + id)) });
     const wrapper = await mountPage();
-    expect(wrapper.findAll('[data-test="home-continue"] .recap-strip__item')).toHaveLength(HOME_CONTINUE_LIMIT);
+    expect(wrapper.findAll('[data-test="home-continue"] .recap-strip__item')).toHaveLength(6);
+    await wrapper.get('[data-test="home-continue"] [aria-label="下一组"]').trigger('click');
+    expect(wrapper.findAll('[data-test="home-continue"] .recap-strip__item')).toHaveLength(HOME_CONTINUE_LIMIT - 6);
     expect(wrapper.findAll('[data-test="home-recent-item"]')).toHaveLength(HOME_RECENT_LIMIT);
     await wrapper.get('[data-test="home-continue-all"]').trigger('click');
     await wrapper.get('[data-test="home-recent-all"]').trigger('click');

@@ -1,5 +1,7 @@
 package services
 
+import "video-master/models"
+
 // listPage 按种类填一页，返回这一页的条数。标签 / 人物 / 作品集、新收藏、日记直接在数据库里分页；
 // 其余几类与 GetRecap 一样把时间窗内的事件读进 tally，再按页面同一个顺序切出这一页、只水合这一页。
 func (b *recapBuilder) listPage(page *RecapListPage, offset, limit int) (int, error) {
@@ -55,6 +57,13 @@ func (b *recapBuilder) listVideos(page *RecapListPage, offset, limit int) (int, 
 		if page.Kind == RecapListRewatched {
 			items = recapMostRecent(rewatched, len(rewatched))
 		}
+	}
+	if page.Kind == RecapListNew {
+		available, err := recapAvailableIDs(b.db, &models.Video{}, recapItemIDs(items))
+		if err != nil {
+			return 0, err
+		}
+		items = recapOnlyAvailable(items, available)
 	}
 	page.Total = int64(len(items))
 	from, to := recapPageBounds(len(items), offset, limit)

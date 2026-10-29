@@ -144,7 +144,7 @@ func (s *PersonService) ListPeople(keyword, cursorName string, cursorID uint, li
 		item.CursorName = row.CursorName
 		items = append(items, item)
 	}
-	return items, nil
+	return items, fillPersonArtwork(items)
 }
 
 // ListPeopleByCount 是观看侧头像墙「按出现次数」的排序（UI 二期 D-P2-06）：按 active_video_count（可见视频数，
@@ -192,7 +192,7 @@ func (s *PersonService) ListPeopleByCount(keyword string, cursorCount int, curso
 		item.CursorName = row.CursorName
 		items = append(items, item)
 	}
-	return items, nil
+	return items, fillPersonArtwork(items)
 }
 
 // 人物名下的视频与图片（计数和列表）与片库、图片库默认视图同一口径：扫描根与黑名单之内、
@@ -223,7 +223,9 @@ func (s *PersonService) personListItem(person models.Person) (PersonListItem, er
 	if err != nil {
 		return PersonListItem{}, fmt.Errorf("count active person images: %w", err)
 	}
-	return personListItemWithCount(person, activeVideoCount, activeImageCount), nil
+	items := []PersonListItem{personListItemWithCount(person, activeVideoCount, activeImageCount)}
+	err = fillPersonArtwork(items)
+	return items[0], err
 }
 
 func personListItemWithCount(person models.Person, activeVideoCount, activeImageCount int64) PersonListItem {
@@ -1165,4 +1167,34 @@ func (s *PersonService) ResolvePersonAvatar(personID uint) (ManagedImageAsset, e
 		return ManagedImageAsset{}, os.ErrNotExist
 	}
 	return s.images.Resolve(person.AvatarPath)
+}
+
+// Automatic artwork is a projection of visible linked images; manual artwork always wins.
+func fillPersonArtwork(items []PersonListItem) error {
+	ids := make([]uint, 0, len(items))
+	for _, item := range items {
+		if item.AvatarURL == "" {
+			ids = append(ids, item.Person.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var rows []struct {
+		PersonID uint
+		ImageID  uint
+	}
+	if err := visiblePersonImages().Select("image_people.person_id, MIN(images.id) AS image_id").Where("image_people.person_id IN ?", ids).Group("image_people.person_id").Scan(&rows).Error; err != nil {
+		return err
+	}
+	urls := make(map[uint]string, len(rows))
+	for _, row := range rows {
+		urls[row.PersonID] = fmt.Sprintf("/preview/image-thumbnail/%d", row.ImageID)
+	}
+	for i := range items {
+		if items[i].AvatarURL == "" {
+			items[i].AvatarURL = urls[items[i].Person.ID]
+		}
+	}
+	return nil
 }

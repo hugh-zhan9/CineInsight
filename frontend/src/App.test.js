@@ -2245,6 +2245,27 @@ describe('整页详情的返回栈（D-UI-10）', () => {
     expect(wrapper.vm.currentPage).toBe('scenes');
   });
 
+  it('返回观看 restores the source detail, scroll and its back stack after management navigation', async () => {
+    const wrapper = await viewerApp();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    detail(wrapper).vm.$emit('open-video', 2);
+    await flushPromises();
+    wrapper.vm.$refs.mainView.scrollTop = 340;
+    await enterManage(wrapper);
+    await wrapper.get('[data-test="nav-library-manage"]').trigger('click');
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(wrapper.vm.detailRoute.videoId).toBe(2);
+    expect(wrapper.vm.detailReturnStack).toHaveLength(2);
+    detail(wrapper).vm.$emit('ready');
+    await flushPromises();
+    expect(wrapper.vm.$refs.mainView.scrollTop).toBe(340);
+    await wrapper.vm.goBackFromDetail();
+    expect(wrapper.vm.detailRoute.videoId).toBe(1);
+  });
+
   it('栈最多 20 层，超出丢最早的', async () => {
     const wrapper = await viewerApp();
     wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);

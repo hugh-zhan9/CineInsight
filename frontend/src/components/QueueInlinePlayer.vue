@@ -1,5 +1,5 @@
 <template>
-  <div class="queue-inline-player">
+  <div class="queue-inline-player" tabindex="0" @keydown.capture="handlePlaybackKey">
     <video ref="video" :src="identity.locator" controls playsinline preload="metadata" data-test="queue-inline-video"
       @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @timeupdate="progress" @ended="ended" @error="failed" />
@@ -8,6 +8,7 @@
   </div>
 </template>
 <script>
+import { handlePlaybackKey } from '../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './player/PlaybackSubtitleControls.vue';
 import { GetPlaybackQueue, ReportInlineQueuePlayback } from '../../wailsjs/go/main/App';
 import { claimActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
@@ -38,6 +39,7 @@ export default {
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   },
   methods: {
+    handlePlaybackKey(event) { handlePlaybackKey(event, this.$refs.video); },
     report(kind) {
       const video = this.$refs.video;
       if (this.retired || this.desynced || !video) return;

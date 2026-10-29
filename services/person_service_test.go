@@ -724,3 +724,44 @@ func TestPersonCountsAndListsSkipStaleAndExcludedMedia(t *testing.T) {
 		t.Fatalf("失效清除后图片应回来: %v %#v", err, detail)
 	}
 }
+
+func TestPersonAutomaticArtworkUsesVisibleLinkedImagesAndPreservesManual(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewPersonService(t.TempDir())
+	person, err := svc.CreatePerson("自动头像", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := mustCreateTestImage(t, "avatar-auto-first.jpg", 100)
+	second := mustCreateTestImage(t, "avatar-auto-second.jpg", 101)
+	if err := svc.AddPersonImages(person.ID, []uint{first.ID, second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(want string) {
+		t.Helper()
+		items, err := svc.ListPeople("", "", 0, 20)
+		if err != nil || len(items) != 1 || items[0].AvatarURL != want {
+			t.Fatalf("artwork: %+v / %v; want %s", items, err, want)
+		}
+		detail, err := svc.GetPersonDetail(person.ID, 0, 1)
+		if err != nil || detail.Person.AvatarURL != want {
+			t.Fatalf("detail artwork: %+v / %v", detail, err)
+		}
+	}
+	check(fmt.Sprintf("/preview/image-thumbnail/%d", first.ID))
+	if err := database.DB.Model(&first).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	check(fmt.Sprintf("/preview/image-thumbnail/%d", second.ID))
+	if err := database.DB.Model(person).Update("avatar_path", "manual.png").Error; err != nil {
+		t.Fatal(err)
+	}
+	check(fmt.Sprintf("/preview/person-avatar/%d", person.ID))
+	if err := database.DB.Model(person).Update("avatar_path", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Delete(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	check("")
+}

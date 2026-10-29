@@ -136,7 +136,7 @@
 
         <section v-if="result.favorite && result.favorite.related.length" v-reveal class="recap-section">
           <header class="recap-section__head"><h3><RecapIcon name="arrow" /> 相关视频还有</h3><small>与《{{ result.favorite.video.title }}》共享标签、人物或作品集，本期还没看过</small></header>
-          <div class="recap-strip" data-test="recap-related">
+          <MediaRail class="recap-strip" data-test="recap-related">
             <RecapMediaCard
               v-for="item in result.favorite.related"
               :key="item.video.id"
@@ -146,7 +146,7 @@
               :subtitle="relatedSubtitle(item)"
               @open="openVideo(item.video)"
             />
-          </div>
+          </MediaRail>
         </section>
 
         <!-- 期内看过的视频都已不在库中时排行为空，但计数还在：区块照样出，写一句说明并留「查看全部」。 -->
@@ -227,9 +227,9 @@
           </div>
           <template v-if="result.favorite_image && result.favorite_image.related.length">
             <header class="recap-section__head recap-section__head--sub"><h3>相似的图片还有</h3><small>与「{{ result.favorite_image.image.name }}」共享标签或人物，本期还没看过</small></header>
-            <div class="recap-strip recap-strip--images">
+            <MediaRail class="recap-strip recap-strip--images">
               <RecapMediaCard v-for="item in result.favorite_image.related" :key="item.image.id" class="recap-strip__item" kind="image" :id="item.image.id" :title="item.image.name" :subtitle="`共享 ${item.shared} 项`" @open="openImage(item.image)" />
-            </div>
+            </MediaRail>
           </template>
         </section>
 
@@ -273,7 +273,7 @@
               <span v-if="option.note">{{ option.note }}</span>
             </button>
           </div>
-          <div v-if="freshSamples.length" class="recap-strip recap-strip--compact recap-fresh__strip" data-test="recap-fresh-samples">
+          <MediaRail v-if="freshSamples.length" class="recap-strip recap-strip--compact recap-fresh__strip" data-test="recap-fresh-samples">
             <RecapMediaCard
               v-for="item in freshSamples"
               :key="item.key"
@@ -286,7 +286,7 @@
               :available="item.available"
               @open="item.open()"
             />
-          </div>
+          </MediaRail>
           <p v-else class="recap-muted" data-test="recap-fresh-empty">{{ freshEmptyText }}</p>
           <p v-if="canListAll(freshKey)" class="recap-fresh__more"><button type="button" class="btn btn--secondary btn--sm" :data-test="`recap-all-${freshKey}`" @click="openList(freshKey)">{{ listAllText(freshKey) }}</button></p>
         </section>
@@ -330,6 +330,7 @@
 </template>
 
 <script>
+import MediaRail from './ui/MediaRail.vue';
 // 观看回顾页（D-RECAP-UI）：实时 / 月度 / 年度三个分段，月度与年度可前后翻期。数据全部来自 GetRecap
 // 的只读事实；请求带代次，晚到的旧响应直接丢弃。实时分段在页面可见时随 recap-activity 刷新，另每 60 秒兜底。
 import { GetRecap } from '../../wailsjs/go/main/App';
@@ -366,7 +367,7 @@ export const RECAP_ACTIVITY_DEBOUNCE_MS = 600;
 export default {
   name: 'RecapPage',
   mixins: [runtimeEventsMixin],
-  components: {
+  components: { MediaRail,
     AppBanner, AppIcon, EmptyState, HeroHeader, PageHeader, RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon,
     RecapListDialog, RecapLiveFeed, RecapMediaCard, RecapMonthStrip, SegmentedControl, SkeletonBlock, StatTile, TagPill
   },

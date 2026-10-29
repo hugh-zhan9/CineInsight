@@ -202,7 +202,7 @@ func seedRecapListMonth(f *recapFixture) {
 }
 
 // 每一类：total 等于页面上的数字（且比页面上展示的多）；完整列表里能打开的前 N 个正好是页面上的样本 / 排行
-// （同一个顺序）；不在库中的项留在列表里、标 available=false；按 4 条一页翻到底不重不漏。
+// （同一个顺序）；新发现只列在库项，其余种类保留 unavailable；按 4 条一页翻到底不重不漏。
 func TestRecapListTotalsMatchPageCountsAndIncludeUnavailable(t *testing.T) {
 	f := newRecapFixture(t)
 	seedRecapListMonth(f)
@@ -237,7 +237,7 @@ func TestRecapListTotalsMatchPageCountsAndIncludeUnavailable(t *testing.T) {
 		shown       []string
 		unavailable int
 	}{
-		{RecapListNew, fresh.NewVideos, 6, recapVideoKeys(fresh.NewSamples), 2},
+		{RecapListNew, 4, 4, recapVideoKeys(fresh.NewSamples), 0},
 		{RecapListRewatched, fresh.RewatchedVideos, 8, recapVideoKeys(fresh.RewatchedSamples), 0},
 		{RecapListVideos, result.Overview.Videos, 15, keys.top, 2},
 		{RecapListImages, result.Overview.Images, 15, keys.images, 2},
@@ -248,8 +248,8 @@ func TestRecapListTotalsMatchPageCountsAndIncludeUnavailable(t *testing.T) {
 		{RecapListCollections, result.TopCollectionsTotal, 6, keys.collections, 0},
 	}
 	for _, c := range cases {
-		if c.total != c.want || c.total <= int64(len(c.shown)) {
-			t.Fatalf("%s: 页面上的数字应为 %d 且多于展示的 %d 个，实际 %d", c.kind, c.want, len(c.shown), c.total)
+		if c.total != c.want || c.total < int64(len(c.shown)) {
+			t.Fatalf("%s: 列表数字应为 %d 且不少于展示的 %d 个，实际 %d", c.kind, c.want, len(c.shown), c.total)
 		}
 		total, entries := f.listAll(now, RecapListRequest{Period: RecapPeriodMonth, Year: 2026, Month: 10, Kind: c.kind}, 4)
 		if total != c.total {

@@ -839,19 +839,9 @@ input:checked + .slider::before {
   border-radius: var(--radius-lg);
   background: var(--panel-bg);
 }
-.recap-strip {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(220px, 260px);
-  gap: 14px;
-  overflow-x: auto;
-  padding: 2px 2px 10px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-}
-.recap-strip--compact { grid-auto-columns: minmax(180px, 200px); }
-.recap-strip--images { grid-auto-columns: minmax(160px, 180px); }
-.recap-strip__item { scroll-snap-align: start; }
+.recap-strip { --rail-card-width: 220px; }
+.recap-strip--compact { --rail-card-width: 180px; }
+.recap-strip--images { --rail-card-width: 160px; }
 .recap-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 12px; }
 .recap-person { display: grid; justify-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--text-primary); cursor: pointer; }
 .recap-person__avatar {

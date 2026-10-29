@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,4 +226,37 @@ func TestCollectionValidatesEditableFields(t *testing.T) {
 	if _, err := svc.CreateCollection("Valid", strings.Repeat("述", 4001)); err == nil {
 		t.Fatal("超长作品集简介应拒绝")
 	}
+}
+
+func TestCollectionAutomaticArtworkPrefersPosterAndPreservesManual(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewCollectionService(t.TempDir())
+	collection, err := svc.CreateCollection("自动封面", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := createProbeTestVideo(t), createProbeTestVideo(t)
+	if err := svc.AddCollectionVideos(collection.ID, []uint{first.ID, second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(want string) {
+		t.Helper()
+		items, err := svc.ListCollections("", "", 0, 20)
+		if err != nil || len(items) != 1 || items[0].CoverURL != want {
+			t.Fatalf("artwork: %+v / %v; want %s", items, err, want)
+		}
+	}
+	check(fmt.Sprintf("/preview/video-artwork/%d?kind=poster", first.ID))
+	if err := database.DB.Model(&second).Update("poster_path", "poster.jpg").Error; err != nil {
+		t.Fatal(err)
+	}
+	check(fmt.Sprintf("/preview/video-artwork/%d?kind=poster", second.ID))
+	if err := database.DB.Model(&second).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	check(fmt.Sprintf("/preview/video-artwork/%d?kind=poster", first.ID))
+	if err := database.DB.Model(collection).Update("cover_path", "manual.png").Error; err != nil {
+		t.Fatal(err)
+	}
+	check(fmt.Sprintf("/preview/collection-cover/%d", collection.ID))
 }

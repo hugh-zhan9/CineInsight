@@ -746,3 +746,13 @@ it('已经开始播放后拖回片头，关闭仍保存零秒断点', async () =
   wrapper.vm.pauseAndReportProgress();
   expect(progress).toHaveBeenCalledWith(expect.objectContaining({ positionSeconds: 0, origin: 'resume' }));
 });
+
+it('keyboard controls reach the video from the player shell', async () => {
+  const wrapper = await mountPlayer();
+  const state = fakePlayer(wrapper.get('video').element, { duration: 100 });
+  await wrapper.get('.preview-drawer__player-shell').trigger('keydown', { key: 'ArrowRight' });
+  expect(state.currentTime).toBe(5);
+  await wrapper.get('video').trigger('keydown', { key: ' ' });
+  expect(wrapper.get('video').element.play).toHaveBeenCalledOnce();
+  expect(wrapper.get('video').attributes('controlslist')).toBe('nofullscreen');
+});

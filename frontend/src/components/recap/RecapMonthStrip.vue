@@ -1,6 +1,6 @@
 <template>
   <div class="recap-film" data-test="recap-month-strip">
-    <div class="recap-film__track">
+    <MediaRail class="recap-film__track">
       <button
         v-for="item in months"
         :key="item.month"
@@ -19,16 +19,18 @@
           <small v-if="item.best">{{ item.best.count }} 次</small>
         </span>
       </button>
-    </div>
+    </MediaRail>
   </div>
 </template>
 
 <script>
+import MediaRail from '../ui/MediaRail.vue';
 // 年度「每月之最」胶片条：12 格，每格是当月播放最多的那部（与本期最爱同一排序口径）。没有播放的月份留空格。
 import { videoThumbnail } from '../../utils/recap.js';
 
 export default {
   name: 'RecapMonthStrip',
+  components: { MediaRail },
   props: { months: { type: Array, default: () => [] } },
   emits: ['open'],
   data: () => ({ failed: {} }),
@@ -40,7 +42,7 @@ export default {
 
 <style scoped>
 .recap-film {
-  overflow-x: auto;
+  min-width: 0;
   padding: 16px 14px;
   border-radius: var(--radius-lg);
   background:
@@ -48,7 +50,7 @@ export default {
     radial-gradient(circle, var(--bg-color) 3px, transparent 3.5px) 0 calc(100% - 5px) / 18px 14px repeat-x,
     var(--player-bg);
 }
-.recap-film__track { display: grid; grid-template-columns: repeat(12, minmax(100px, 1fr)); gap: 10px; }
+.recap-film__track { --rail-card-width: 100px; }
 .recap-film__frame {
   display: grid;
   gap: 6px;

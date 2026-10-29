@@ -132,7 +132,7 @@ func (s *CollectionService) ListCollections(keyword, cursorName string, cursorID
 	for _, collection := range collections {
 		items = append(items, collectionListItemWithCount(collection, counts[collection.ID]))
 	}
-	return items, nil
+	return items, fillCollectionArtwork(items)
 }
 
 func (s *CollectionService) collectionListItem(collection models.MediaCollection) (CollectionListItem, error) {
@@ -144,7 +144,9 @@ func (s *CollectionService) collectionListItem(collection models.MediaCollection
 	if err != nil {
 		return CollectionListItem{}, fmt.Errorf("count collection videos: %w", err)
 	}
-	return collectionListItemWithCount(collection, count), nil
+	items := []CollectionListItem{collectionListItemWithCount(collection, count)}
+	err = fillCollectionArtwork(items)
+	return items[0], err
 }
 
 func collectionListItemWithCount(collection models.MediaCollection, count int64) CollectionListItem {
@@ -491,4 +493,42 @@ func (s *CollectionService) orderedActiveVideosFrom(db *gorm.DB, collectionID, s
 		videos = videos[1:]
 	}
 	return videos, nil
+}
+
+// Prefer a member poster, then the first visible member thumbnail. No managed image is overwritten.
+func fillCollectionArtwork(items []CollectionListItem) error {
+	ids := make([]uint, 0, len(items))
+	for _, item := range items {
+		if item.CoverURL == "" {
+			ids = append(ids, item.Collection.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	query, err := visibleVideoQuery(database.DB.Model(&models.Video{}).Joins("JOIN collection_videos ON collection_videos.video_id = videos.id"))
+	if err != nil {
+		return err
+	}
+	var rows []struct {
+		CollectionID uint
+		VideoID      uint
+	}
+	ranked := query.Select("collection_videos.collection_id, videos.id AS video_id, ROW_NUMBER() OVER (PARTITION BY collection_videos.collection_id ORDER BY CASE WHEN videos.poster_path <> '' THEN 0 ELSE 1 END, collection_videos.position ASC, videos.id ASC) AS artwork_rank").
+		Where("collection_videos.collection_id IN ?", ids)
+	if err := database.DB.Table("(?) AS artwork", ranked).Select("collection_id, video_id").Where("artwork_rank = 1").Scan(&rows).Error; err != nil {
+		return err
+	}
+	urls := make(map[uint]string, len(ids))
+	for _, row := range rows {
+		if urls[row.CollectionID] == "" {
+			urls[row.CollectionID] = fmt.Sprintf("/preview/video-artwork/%d?kind=poster", row.VideoID)
+		}
+	}
+	for i := range items {
+		if items[i].CoverURL == "" {
+			items[i].CoverURL = urls[items[i].Collection.ID]
+		}
+	}
+	return nil
 }

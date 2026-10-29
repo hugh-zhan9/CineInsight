@@ -13,7 +13,7 @@
       <!-- 启动失败时没有可去的页面（片库、各页都不挂载），只留标题，不给一排点了没反应的导航。 -->
       <nav v-if="appReady" class="header-nav" aria-label="页面导航" :data-test="`nav-area-${area}`">
         <template v-if="area === 'manage'">
-          <button type="button" class="btn btn--ghost nav-btn" data-test="nav-back-to-viewer" @click="navigateTo('home')">返回观看</button>
+          <button type="button" class="btn btn--ghost nav-btn" data-test="nav-back-to-viewer" @click="returnToViewer">返回观看</button>
           <span class="header-nav__divider" aria-hidden="true"></span>
         </template>
         <template v-for="(group, index) in visibleNavGroups" :key="group.key">
@@ -535,6 +535,7 @@ export default {
       detailRoute: { videoId: 0, startAtMs: null, bookmark: null, token: 0 },
       // 整页详情的返回栈（D-UI-10）：[{ page, params, scrollTop }]，规则见 utils/viewerNavigation.js。
       detailReturnStack: [],
+      viewerReturn: null,
       // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
       versionCompare: versionCompareState,
       // 图片管理首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"；观看侧照片流同理（D-P2-08）。
@@ -909,6 +910,9 @@ export default {
     },
     // 真正切页的唯一出口：顺带作废还在取视频的「打开一部片」（M-1），用户已经去了别处，取回来也不再把人拽回去。
     commitPage(page, params = null) {
+      if (this.area === 'viewer' && pageArea(page) === 'manage') {
+        this.viewerReturn = { page: this.currentPage, params: this.currentPageParams(), scrollTop: this.$refs.mainView?.scrollTop || 0, stack: [...this.detailReturnStack] };
+      }
       this.supersedeVideoOpen();
       // 上一页还没放回去的滚动位置不能落到新页面上。
       this._cancelScrollRestore?.();
@@ -916,6 +920,16 @@ export default {
       this._pendingDetailScrollTop = null;
       this.applyPageParams(page, params);
       this.currentPage = page;
+    },
+    async returnToViewer() {
+      const entry = this.viewerReturn;
+      if (!entry) return this.navigateTo('home');
+      if (await this.navigateTo(entry.page, entry.params) === false) return false;
+      await this.$nextTick();
+      this.detailReturnStack = [...entry.stack];
+      if (entry.page === VIDEO_DETAIL_PAGE) return this.showVideoDetail(entry.params.videoId, { scrollTop: entry.scrollTop });
+      if (this.$refs.mainView) this._cancelScrollRestore = restoreScrollWhenReachable(this.$refs.mainView, entry.scrollTop);
+      return true;
     },
     // 页面参数落到页面状态上：
     // - 「视频」的 { keyword } / { watch } / { tagId }：经 pageRequests 交给海报墙，每次换 token，页面据此套用一次；

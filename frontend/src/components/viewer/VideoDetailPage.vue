@@ -123,7 +123,7 @@
             <h4>{{ rail.title }}</h4>
             <small>{{ rail.hint }}</small>
           </header>
-          <div class="recap-strip">
+          <MediaRail class="recap-strip">
             <RecapMediaCard
               v-for="item in rail.items"
               :key="item.video.id"
@@ -134,7 +134,7 @@
               data-test="detail-recommend-item"
               @open="openVideo(item.video.id)"
             />
-          </div>
+          </MediaRail>
         </div>
       </section>
       <!-- 不在任何版本组里的片没有这一节；读取中也不先占一个空节。 -->
@@ -193,6 +193,7 @@
 </template>
 
 <script>
+import MediaRail from '../ui/MediaRail.vue';
 import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress, waitForVideoWatchProgress } from '../../utils/watchProgress.js';
 // 观看侧整页详情（D-UI-05、D-UI-06、D-UI-08；详细设计「整页详情」）。
 // 数据：GetVideoDetails 一次取齐（含 artwork.has_poster/has_fanart、人物、作品集、标签）；
@@ -242,7 +243,7 @@ function errorText(err) {
 
 export default {
   name: 'VideoDetailPage',
-  components: {
+  components: { MediaRail,
     AppBanner, AppIcon, BookmarkPanel, HeroHeader, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon,
     RecapMediaCard, StatTile, TagPill
   },

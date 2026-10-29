@@ -592,7 +592,7 @@ func imagePeopleListItems(imageID uint) ([]PersonListItem, error) {
 	for _, person := range people {
 		items = append(items, personListItemWithCount(person, videoCounts[person.ID], imageCounts[person.ID]))
 	}
-	return items, nil
+	return items, fillPersonArtwork(items)
 }
 
 // SetImageLiked 更新照片点赞状态（D-PC40），与 SetImageFavorite 同构。

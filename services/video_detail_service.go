@@ -129,6 +129,13 @@ func (s *VideoDetailService) GetVideoDetails(videoID uint) (*VideoDetails, error
 		detail.Collections = append(detail.Collections, collectionListItemWithCount(collection, collectionCounts[collection.ID]))
 	}
 
+	if err := fillPersonArtwork(detail.People); err != nil {
+		return nil, err
+	}
+	if err := fillCollectionArtwork(detail.Collections); err != nil {
+		return nil, err
+	}
+
 	var metadata models.VideoTechnicalMetadata
 	if err := database.DB.First(&metadata, "video_id = ?", videoID).Error; err == nil {
 		detail.TechnicalMetadata = &metadata

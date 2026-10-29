@@ -1175,7 +1175,9 @@ describe('VideoBrowsePage 追到哪了 view-all', () => {
   it('has no 查看全部 when the strip fits', async () => {
     api.ListCollectionProgress.mockResolvedValue(many(12));
     const wrapper = await mountPage();
-    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(12);
+    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(6);
+    await wrapper.get('.video-browse__progress-strip [aria-label="下一组"]').trigger('click');
+    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(6);
     expect(wrapper.find('[data-test="browse-progress-all"]').exists()).toBe(false);
   });
 
@@ -1185,7 +1187,9 @@ describe('VideoBrowsePage 追到哪了 view-all', () => {
       .mockResolvedValueOnce({ items: many(50), total: 60, has_more: true })
       .mockResolvedValueOnce({ items: many(10, 51), total: 60, has_more: false });
     const wrapper = await mountPage();
-    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(12);
+    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(6);
+    await wrapper.get('.video-browse__progress-strip [aria-label="下一组"]').trigger('click');
+    expect(wrapper.findAll('[data-test="browse-progress-item"]')).toHaveLength(6);
     await wrapper.get('[data-test="browse-progress-all"]').trigger('click');
     await flushPromises();
     expect(api.ListCollectionProgressPage).toHaveBeenCalledWith({ collection_ids: [], continue_only: true, offset: 0, limit: 50 });

@@ -34,7 +34,7 @@
       <div v-else-if="skeletonVisible(continueBlock)" class="viewer-home__skeletons" aria-busy="true" data-test="home-continue-loading">
         <SkeletonBlock v-for="n in 4" :key="n" shape="card" :lines="2" />
       </div>
-      <div v-if="continueBlock.items.length" class="recap-strip">
+      <MediaRail v-if="continueBlock.items.length" class="recap-strip">
         <RecapMediaCard
           v-for="video in continueBlock.items"
           :key="video.id"
@@ -44,7 +44,7 @@
           :subtitle="progressText(video)"
           @open="openVideo(video)"
         />
-      </div>
+      </MediaRail>
     </section>
 
     <!-- 追到哪了（D-P2-02、D-P2-07）：作品集看到第几部，卡片与「视频」页同一套（collectionProgressCard），点开进下一部的整页详情。 -->
@@ -198,6 +198,7 @@
 </template>
 
 <script>
+import MediaRail from '../ui/MediaRail.vue';
 // 观看首页（D-UI-04，详细设计「观看首页」）：一期只用现有接口——
 //   继续观看 ListContinueWatchingWithFilter({}, '', 0, 10)；今晚看什么 SuggestTonightVideos(默认条件, 3)；
 //   最近添加 SearchLibraryVideoPage 的 recently_added 智能视图（14 部，海报走 /preview/video-artwork）；
@@ -286,7 +287,7 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
-  components: { AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
+  components: { MediaRail, AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、追到哪了、最近添加、想看已在库、本月回顾；期间可能看过片），
   // 取回之前保留现有内容。今晚看什么整批只在「换一批」时重抽，播放后单项补位；大图仅对应推荐被补位时更新。
   props: { pageActive: { type: Boolean, default: true } },
