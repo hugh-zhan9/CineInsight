@@ -192,3 +192,14 @@ func positiveOrDefault(value int, fallback int) int {
 	}
 	return fallback
 }
+
+// RememberDeleteFileChoice updates only the last confirmed deletion choice.
+func (s *SettingsService) RememberDeleteFileChoice(deleteOriginal bool) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		var settings models.Settings
+		if err := tx.Select("id").First(&settings).Error; err != nil {
+			return err
+		}
+		return tx.Model(&settings).Update("delete_original_file", deleteOriginal).Error
+	})
+}

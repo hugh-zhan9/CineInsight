@@ -6,31 +6,33 @@
     :title="actionLabel"
     size="sm"
     stop-modal-clicks
+    :busy="remembering"
     class="delete-confirm-modal"
     data-test="delete-confirm-dialog"
-    @close="$emit('close')"
+    @close="requestClose"
   >
     <p data-test="delete-confirm-message">{{ confirmMessage }}</p>
     <div class="form-group">
       <label>
-        <input type="checkbox" v-model="deleteFile" data-test="delete-file-choice" />
+        <input type="checkbox" v-model="deleteFile" :disabled="remembering" data-test="delete-file-choice" />
         同时把原文件移到废纸篓
       </label>
       <label v-if="settings.confirm_before_delete">
-        <input type="checkbox" v-model="dontAskAgain" />
+        <input type="checkbox" v-model="dontAskAgain" :disabled="remembering" />
         不再提示
       </label>
     </div>
     <p class="delete-hint" data-test="delete-consequence">{{ deleteFile ? trashHint : recordOnlyHint }}</p>
     <template #footer>
-      <button type="button" class="btn btn--secondary" data-test="delete-confirm-cancel" @click="$emit('close')">取消</button>
-      <button type="button" class="btn btn--danger" data-test="delete-confirm-ok" @click="handleConfirm">{{ actionLabel }}</button>
+      <button type="button" class="btn btn--secondary" :disabled="remembering" data-test="delete-confirm-cancel" @click="requestClose">取消</button>
+      <button type="button" class="btn btn--danger" :disabled="remembering" data-test="delete-confirm-ok" @click="handleConfirm">{{ actionLabel }}</button>
     </template>
   </DialogShell>
 </template>
 
 <script>
 import DialogShell from './ui/DialogShell.vue';
+import { rememberDeleteFileChoice } from '../utils/trashConfirm.js';
 import { formatBytes } from '../utils/mediaDetails.js';
 
 // 删除的两种后果（D-PC01 / D-PC03），视频与图片的确认框共用这两句。
@@ -43,6 +45,7 @@ export default {
   props: {
     visible: { type: Boolean, default: false },
     video: { type: Object, default: null },
+    videoIds: { type: Array, default: () => [] },
     videoCount: { type: Number, default: 0 },
     settings: { type: Object, required: true }
   },
@@ -50,12 +53,16 @@ export default {
   data() {
     return {
       deleteFile: false,
+      remembering: false,
+      confirmation: 0,
       dontAskAgain: false,
       trashHint: DELETE_TRASH_HINT,
       recordOnlyHint: DELETE_RECORD_ONLY_HINT
     };
   },
+  beforeUnmount() { this.confirmation++; },
   watch: {
+    confirmationTargetKey: { flush: 'sync', handler() { this.confirmation++; } },
     visible(val) {
       if (val) {
         this.deleteFile = this.settings.delete_original_file;
@@ -64,6 +71,7 @@ export default {
     }
   },
   computed: {
+    confirmationTargetKey() { return JSON.stringify([this.visible, this.video?.id || 0, this.videoCount, this.videoIds]); },
     actionLabel() {
       return this.deleteFile ? '移到废纸篓' : '从片库移除';
     },
@@ -81,12 +89,19 @@ export default {
     }
   },
   methods: {
-    handleConfirm() {
-      this.$emit('confirm-delete', {
+    requestClose() { if (!this.remembering) this.$emit('close'); },
+    async handleConfirm() {
+      if (this.remembering) return;
+      const request = ++this.confirmation;
+      const choice = {
+        videoIds: [...this.videoIds],
         video: this.video,
         deleteFile: this.deleteFile,
         dontAskAgain: this.dontAskAgain
-      });
+      };
+      this.remembering = true;
+      try { await rememberDeleteFileChoice(choice.deleteFile); if (request === this.confirmation && this.visible) this.$emit('confirm-delete', choice); }
+      finally { this.remembering = false; }
     }
   }
 };

@@ -18,7 +18,7 @@ const api = vi.hoisted(() => ({
   DeleteImagesWithResult: vi.fn(),
   DeleteVideosWithResult: vi.fn(),
   RestoreTrashBatch: vi.fn(),
-  GetSettings: vi.fn(),
+  GetSettings: vi.fn(), RememberDeleteFileChoice: vi.fn(),
   GetAllTags: vi.fn(),
   BatchAddTagToImages: vi.fn(),
   PlayVideo: vi.fn(),
@@ -100,12 +100,15 @@ describe('EntityLibraryPage', () => {
     expect(w.get('[data-test="person-image-delete-11"]').text()).toBe('从图片库移除…');
     await w.get('[data-test="person-image-delete-11"]').trigger('click');
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    await flushPromises();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));
     expect(api.DeleteImage).not.toHaveBeenCalled();
     expect(w.vm.entityImages).toHaveLength(0); expect(w.vm.selectedItem.active_image_count).toBe(0);
     await w.get('[data-test="person-video-delete-21"]').trigger('click');
+    await flushPromises();
     await w.get('[data-test="person-media-delete-file"]').setValue(true);
+    await flushPromises();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
     expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([21], true, expect.any(String));
     expect(api.DeleteVideo).not.toHaveBeenCalled();
@@ -655,6 +658,7 @@ describe('EntityLibraryPage 撤销删除后的刷新', () => {
     await flushPromises();
     expect(w.find('[data-test="person-media-delete-dialog"]').exists()).toBe(true);
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    await flushPromises();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click');
     await flushPromises();
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));

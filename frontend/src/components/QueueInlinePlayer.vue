@@ -1,22 +1,27 @@
 <template>
-  <div class="queue-inline-player" tabindex="0" @keydown.capture="handlePlaybackKey">
-    <video ref="video" :src="identity.locator" controls playsinline preload="metadata" data-test="queue-inline-video"
+  <dialog open ref="playerShell" class="queue-inline-player playback-shell surface-cinema" aria-label="队列播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
+    <div ref="playerSurface" class="playback-surface" tabindex="0">
+    <video ref="video" :src="identity.locator" playsinline preload="metadata" data-test="queue-inline-video"
       @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @timeupdate="progress" @ended="ended" @error="failed" />
     <PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :video-element="() => $refs.video" />
+    <PlaybackControls :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" />
+    </div>
     <p v-if="error" role="alert" data-test="queue-inline-error">{{ error }}</p>
-  </div>
+  </dialog>
 </template>
 <script>
+import { isWatchCompleted } from '../utils/watchState.js';
 import { handlePlaybackKey } from '../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './player/PlaybackSubtitleControls.vue';
+import PlaybackControls from './player/PlaybackControls.vue';
 import { GetPlaybackQueue, ReportInlineQueuePlayback } from '../../wailsjs/go/main/App';
 import { claimActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
 const DESYNC_MESSAGE = '播放状态与待播队列不同步，已暂停。请停止队列后重新播放此项。';
 const STALE_MESSAGE = '播放器已重新载入，已暂停。请在队列中重新播放此项。';
 export default {
   name: 'QueueInlinePlayer',
-  components: { PlaybackSubtitleControls },
+  components: { PlaybackControls, PlaybackSubtitleControls },
   props: { session: { type: Object, required: true } },
   emits: ['error'],
   data() {
@@ -86,7 +91,8 @@ export default {
     loaded() {
       if (this.initialized) return;
       const video = this.$refs.video;
-      const start = Number(this.identity.start_seconds || 0);
+      const requested = Number(this.identity.start_seconds || 0);
+      const start = isWatchCompleted(requested, video.duration) ? 0 : requested;
       video.currentTime = Number.isFinite(video.duration) ? Math.min(start, Math.max(0, video.duration - 0.01)) : start;
       this.initialized = true; this.report('loaded');
       if (!this.session.desired_paused) this.play();
@@ -110,7 +116,10 @@ export default {
 };
 </script>
 <style scoped>
-.queue-inline-player { background: var(--player-bg); border-radius: var(--radius); overflow: hidden; }
-.queue-inline-player video { display: block; width: 100%; height: min(34vh, 300px); object-fit: contain; }
+.queue-inline-player { width: 100%; background: var(--player-bg); border-radius: var(--radius); overflow: hidden; }
+.queue-inline-player .playback-surface { height: min(34vh, 300px); }
+.queue-inline-player:modal .playback-surface, .queue-inline-player .playback-surface:fullscreen { height: 100vh; }
+.queue-inline-player:modal { position: fixed; inset: 0; width: 100vw; height: 100vh; margin: 0; border-radius: 0; }
+.queue-inline-player video { display: block; width: 100%; height: calc(100% - var(--playback-controls-height, 70px)); object-fit: contain; }
 .queue-inline-player p { color: var(--media-badge-fg); padding: var(--space-2); margin: 0; }
 </style>

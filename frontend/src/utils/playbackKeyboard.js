@@ -1,6 +1,7 @@
 // Handle shortcuts in the focused player only; subtitle form controls keep their keys.
-export function handlePlaybackKey(event, video) {
-  if (!video || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.target?.closest?.('input, textarea, select, button, [contenteditable="true"]')) return;
+export function handlePlaybackKey(event, video, { acceptRange = false } = {}) {
+  const playerRange = acceptRange && event.target?.tagName === 'INPUT' && event.target.type === 'range';
+  if (!video || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || (!playerRange && event.target?.closest?.('input, textarea, select, button, [contenteditable="true"]'))) return;
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(event.key)) return;
   event.preventDefault();
   event.stopPropagation();

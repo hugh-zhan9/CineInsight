@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -615,6 +615,12 @@ describe('InlineVideoPlayer 第三轮评审：解码失败后的请求同样受�
 
 
 describe('InlineVideoPlayer 全屏', () => {
+  async function enterSystem(wrapper) {
+    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    await flushPromises();
+    await new DOMWrapper(document.body).get('[data-test="player-system-fullscreen"]').trigger('click');
+    await flushPromises();
+  }
   function installFullscreen() {
     let current = null;
     vi.spyOn(document, 'fullscreenElement', 'get').mockImplementation(() => current);
@@ -641,14 +647,14 @@ describe('InlineVideoPlayer 全屏', () => {
     const player = fakePlayer(video);
     player.currentTime = 42;
     const button = wrapper.get('[data-test="inline-player-fullscreen"]');
-    await button.trigger('click');
-    expect(request.mock.instances[0]).toBe(wrapper.get('.preview-drawer__player-shell').element);
+    await enterSystem(wrapper);
+    expect(request.mock.instances[0]).toBe(wrapper.get('.playback-surface').element);
     expect(button.text()).toBe('退出全屏');
     expect(button.attributes('aria-pressed')).toBe('true');
     await button.trigger('click');
     expect(exit).toHaveBeenCalledTimes(1);
     expect(button.text()).toBe('全屏');
-    await button.trigger('click');
+    await enterSystem(wrapper);
     await document.exitFullscreen();
     await flushPromises();
     expect(button.text()).toBe('全屏');
@@ -661,7 +667,7 @@ describe('InlineVideoPlayer 全屏', () => {
     const { request } = installFullscreen();
     request.mockRejectedValue(new Error('denied'));
     const wrapper = await mountPlayer();
-    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    await enterSystem(wrapper);
     await flushPromises();
     expect(wrapper.get('[role="alert"]').text()).toContain('无法切换全屏');
     expect(wrapper.get('[data-test="inline-player-fullscreen"]').text()).toBe('全屏');
@@ -670,7 +676,7 @@ describe('InlineVideoPlayer 全屏', () => {
   it('离开播放器时退出自己开启的全屏', async () => {
     const { exit } = installFullscreen();
     const wrapper = await mountPlayer();
-    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    await enterSystem(wrapper);
     wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1);
     expect(exit).toHaveBeenCalledTimes(1);
   });
@@ -678,7 +684,7 @@ describe('InlineVideoPlayer 全屏', () => {
   it('Esc 退出全屏且不让宿主抽屉收到同一次按键', async () => {
     const { exit } = installFullscreen();
     const wrapper = await mountPlayer();
-    await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
+    await enterSystem(wrapper);
     const hostKey = vi.fn();
     document.addEventListener('keydown', hostKey);
     try {
@@ -754,5 +760,19 @@ it('keyboard controls reach the video from the player shell', async () => {
   expect(state.currentTime).toBe(5);
   await wrapper.get('video').trigger('keydown', { key: ' ' });
   expect(wrapper.get('video').element.play).toHaveBeenCalledOnce();
-  expect(wrapper.get('video').attributes('controlslist')).toBe('nofullscreen');
+  expect(wrapper.get('video').element.controls).toBe(false);
+  expect(wrapper.findAll('[data-test="inline-player-fullscreen"]')).toHaveLength(1);
+});
+
+it('ordinary resume uses actual duration and restarts at zero for a tail or out-of-range bookmark', async () => {
+  for (const resume of [585, 900]) {
+    const wrapper = await mountPlayer({ resumePositionSeconds: resume, durationSeconds: 3600 });
+    const state = fakePlayer(wrapper.get('video').element, { duration: 600 });
+    await wrapper.get('video').trigger('loadedmetadata');
+    expect(state.currentTime).toBe(0);
+  }
+  const explicit = await mountPlayer({ startTimeMs: 585000, resumePositionSeconds: 900 });
+  const state = fakePlayer(explicit.get('video').element, { duration: 600 });
+  await explicit.get('video').trigger('loadedmetadata');
+  expect(state.currentTime).toBe(585);
 });

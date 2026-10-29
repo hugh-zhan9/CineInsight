@@ -706,6 +706,8 @@ export function RelaunchApp():Promise<services.RelaunchResult>;
 
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
+export function RememberDeleteFileChoice(arg1:boolean):Promise<void>;
+
 export function RemoveCollectionCover(arg1:number):Promise<void>;
 
 export function RemoveCollectionVideo(arg1:number,arg2:number):Promise<void>;

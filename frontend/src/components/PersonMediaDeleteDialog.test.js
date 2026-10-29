@@ -4,12 +4,13 @@ const api = vi.hoisted(() => ({
   DeleteVideo: vi.fn(), DeleteImage: vi.fn(),
   DeleteVideosWithResult: vi.fn(), DeleteImagesWithResult: vi.fn(),
   PermanentlyDeleteVideos: vi.fn(), PermanentlyDeleteImages: vi.fn(),
-  RestoreTrashBatch: vi.fn(), CancelBatchDelete: vi.fn(), GetSettings: vi.fn()
+  RestoreTrashBatch: vi.fn(), CancelBatchDelete: vi.fn(), GetSettings: vi.fn(), RememberDeleteFileChoice: vi.fn()
 }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), notify: vi.fn(), notifyError: vi.fn() }));
 vi.mock('./TrashCenterDialog.vue', async (importOriginal) => ({ ...(await importOriginal()), default: { name: 'TrashCenterDialog', template: '<div />' } }));
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
+import DialogShell from './ui/DialogShell.vue';
 import { clearToasts, feedbackState, notify, runToastAction } from '../utils/feedback.js';
 import * as recentOperations from '../utils/recentOperations.js';
 const target = { kind: 'image', personID: 7, media: { id: 11, name: 'photo.jpg', path: '/photos/photo.jpg', size: 1024 } };
@@ -62,7 +63,8 @@ describe('PersonMediaDeleteDialog', () => {
     // 撤销提示还在，组件保持挂载；确认框已收起，遮罩层不再挡住页面；页内不再出撤销条。
     expect(w.emitted('close')).toBeUndefined();
     expect(body().find('[data-test="person-media-delete-dialog"]').exists()).toBe(false);
-    expect(body().get('.person-media-delete-layer').classes()).toContain('person-media-delete-layer--notice');
+    expect(body().find('.person-media-delete-layer').exists()).toBe(false);
+    expect(body().find('.person-media-delete-notice').exists()).toBe(true);
     expect(body().find('[data-test="delete-undo-banner"]').exists()).toBe(false);
     expect(undoToast().message).toContain('已从图片库移除 1 张图片（文件保留）');
     // 同一条操作也记进任务中心「最近操作」（notifyUndoable）。
@@ -144,13 +146,13 @@ describe('PersonMediaDeleteDialog', () => {
   // I-2：人物页 / 抽屉里删媒体一律先确认，不看「删除前确认」开关（按钮容易被当成「从人物名下拿掉」）；
   // 框里「同时把原文件移到废纸篓」默认不勾（即使「删除原文件」开着）：触发按钮写的是「从片库移除… / 从图片库移除…」，
   // 框里默认要与它一致；移文件得用户自己勾上，按钮随之改成「移到废纸篓」。
-  it('「删除前确认」关掉时仍弹确认框；用户确认之前不调删除，移原文件默认不勾、勾上才移到废纸篓', async () => {
+  it('「删除前确认」关掉时仍弹确认框；用户确认之前不调删除，使用上次确认的废纸篓选项', async () => {
     api.GetSettings.mockResolvedValue({ confirm_before_delete: false, delete_original_file: true });
     api.DeleteImagesWithResult.mockResolvedValueOnce({ batch_id: 'b9', items: [{ id: 11, code: 'ok' }] });
     const w = await mountLive();
     expect(body().get('[data-test="person-media-delete-dialog"]').text()).toContain('photo.jpg');
-    expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(false);
-    expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('从图片库移除');
+    expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(true);
+    expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('移到废纸篓');
     await body().get('[data-test="person-media-delete-file"]').setValue(true);
     expect(body().get('[data-test="person-media-delete-confirm"]').text()).toBe('移到废纸篓');
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
@@ -228,4 +230,33 @@ describe('PersonMediaDeleteDialog', () => {
     expect(body().get('[data-test="person-media-delete-dialog"]').text()).toContain('b.jpg');
     w.unmount();
   });
+});
+
+it('remembers confirmed choices, re-reads on reopening, and never writes a cancelled choice', async () => {
+ let remembered=true;
+ api.GetSettings.mockImplementation(async()=>({delete_original_file:remembered}));
+ api.RememberDeleteFileChoice.mockImplementation(async value=>{remembered=value;});
+ api.DeleteImagesWithResult.mockResolvedValue(okResult([11]));
+ const w=await mountLive();
+ expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(true);
+ await body().get('[data-test="person-media-delete-file"]').setValue(false);
+ await body().get('[data-test="person-media-delete-confirm"]').trigger('click');await flushPromises();
+ expect(remembered).toBe(false);
+ await w.setProps({target:{...target,media:{...target.media,id:12}}});await flushPromises();
+ expect(body().get('[data-test="person-media-delete-file"]').element.checked).toBe(false);
+ await body().get('[data-test="person-media-delete-file"]').setValue(true);
+ pressEscape();await flushPromises();
+ expect(api.RememberDeleteFileChoice).toHaveBeenCalledTimes(1);expect(remembered).toBe(false);w.unmount();
+});
+it('a reused deletion host puts the next confirmation after a newly opened picture dialog', async () => {
+ api.DeleteImagesWithResult.mockResolvedValue(okResult([11]));
+ const w=await mountLive();
+ await body().get('[data-test="person-media-delete-confirm"]').trigger('click');await flushPromises();
+ const picture=mount(DialogShell,{attachTo:document.body,props:{title:'第二张图片'},slots:{default:'图片内容'}});
+ await w.setProps({target:{...target,media:{...target.media,id:12}}});await flushPromises();
+ const last=[...document.querySelectorAll('.modal-overlay')].at(-1);
+ expect(last.querySelector('[data-test="person-media-delete-dialog"]')).not.toBeNull();
+ pressEscape();await flushPromises();
+ expect(w.emitted('close')).toHaveLength(1);expect(picture.emitted('close')).toBeUndefined();
+ w.unmount();picture.unmount();
 });

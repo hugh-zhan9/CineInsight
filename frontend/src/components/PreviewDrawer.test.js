@@ -14,6 +14,7 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
+  GetSettings: vi.fn(), RememberDeleteFileChoice: vi.fn(),
   AddCollectionVideo: vi.fn(),
   AddCollectionVideos: vi.fn(),
   AddPersonVideo: vi.fn(),
@@ -149,11 +150,13 @@ describe('PreviewDrawer', () => {
     expect(w.get('[data-test="drawer-person-video-delete-1"]').text()).toBe('从片库移除…');
     expect(w.get('[data-test="drawer-person-image-delete-11"]').text()).toBe('从图片库移除…');
     await w.get('[data-test="drawer-person-video-delete-1"]').trigger('click');
+    await flushPromises();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
     expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([1], false, expect.any(String));
     expect(api.DeleteVideo).not.toHaveBeenCalled();
     expect(w.vm.personDetail.videos).toHaveLength(0); expect(w.vm.personDetail.person.active_video_count).toBe(0);
     await w.get('[data-test="drawer-person-image-delete-11"]').trigger('click');
+    await flushPromises();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));
     expect(api.DeleteImage).not.toHaveBeenCalled();

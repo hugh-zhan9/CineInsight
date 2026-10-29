@@ -731,3 +731,10 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - 同批图片操作（D-PHOTO-01）：图片网格及 PhotoLightbox 支持“从图片库移除…”，App 单媒体删除宿主改为 viewerDeleteTarget，按 kind 分流到现有图片/视频刷新及撤销，取消/失败保留大图。图片管理 locateImage 统一使用 ImageFilter 可选 image_id 精确查询，关闭旧筛选并打开目标查看器；定位代际拦截晚到请求。临时 focusedImage 有退出入口，改关键词/模式退出，ID与图片可见性叠加；不按名称候选或首屏判断目标是否存在。
 
 - 同批修正视频页“追到哪了”样式：MediaRail 宿主不再保留旧 grid-auto-columns，改传 --rail-card-width:140px；旧规则会把少量卡片挤到隐式窄列。实际 WebKit 已先复现 1100px 下海报被压成 28.5px，再验证修复后的空/单/少量/多组与窄窗口布局。
+
+### 2026-10-29 播放与删除体验补正
+- 用户反馈刚打开内嵌播放就片尾：普通续播现在按媒体实际duration复核现有片尾阈值，尾部/超时长断点从0起播，显式字幕/书签跳转仍保留原规则；队列同样复核，外部播放器不变。
+- 先前用controlslist/CSS隐藏原生全屏不能保证实际WebKit仅一个入口。详情/抽屉及队列改用PlaybackControls，video不启用原生controls；单一全屏入口提供应用内全屏（外壳HTML dialog.showModal）和系统全屏（内层surface Fullscreen API），保持同一video节点、source与位置，Esc只退出本层。控制条实测高度从视频画布扣除，避免遮挡track字幕；进度条获焦后仍复用方向键/空格规则。
+- 用户要求记住废纸篓选择，替代此前单媒体确认默认强制不勾。上次确认值写入既有delete_original_file；取消不写，读取每次重开刷新。RememberDeleteFileChoice专用方法只更新这一列，成功事件同步App现有设置快照，不用整份设置覆盖。偏好保存失败提示但按本次确认值执行删除。
+- 单媒体删除确认Teleport每次准备完成后新挂到body末尾，撤销宿主独立保留；避免复用旧容器导致新图片大图覆盖确认框。确认保存偏好期间锁表单/取消/Esc，外部目标变化使旧确认失效，事件与片库宿主冻结IDs和names。
+- 设计与接口见 docs/loopx/design/2026-10-29-player-delete-fixes/。

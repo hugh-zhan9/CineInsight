@@ -1,4 +1,5 @@
-import { GetSettings } from '../../wailsjs/go/main/App';
+import { notifyError } from './feedback.js';
+import { GetSettings, RememberDeleteFileChoice } from '../../wailsjs/go/main/App';
 
 // 移到废纸篓前要不要确认（统一设计第 0 步的集成裁决）：以设置里既有的「删除前确认」（confirm_before_delete，
 // 默认开）为准——开着就照旧先确认，关了就直接执行、由删除宿主给「撤销」。不可逆的永久删除不看这个设置，
@@ -20,4 +21,10 @@ export async function readDeletePreferences() {
   } catch {
     return { confirmFirst: true, deleteOriginal: false };
   }
+}
+
+// Preference persistence is secondary to the already-confirmed deletion.
+export async function rememberDeleteFileChoice(deleteOriginal) {
+ try { await RememberDeleteFileChoice(Boolean(deleteOriginal)); return true; }
+ catch (error) { notifyError(`未能记住本次删除选项：${error}`); return false; }
 }

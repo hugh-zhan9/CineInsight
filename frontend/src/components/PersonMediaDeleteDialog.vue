@@ -1,7 +1,7 @@
 <template>
-  <Teleport to="body">
-    <div :class="['person-media-delete-layer', { 'person-media-delete-layer--notice': stage !== 'confirm', 'person-media-delete-layer--pending': deleteOriginal === null }]">
-      <DialogShell v-if="stage === 'confirm'" :title="actionTitle" size="sm" :busy="busy" data-test="person-media-delete-dialog" @close="close">
+  <Teleport v-if="stage === 'confirm' && deleteOriginal !== null" :key="confirmCycle" to="body">
+    <div class="person-media-delete-layer">
+      <DialogShell :title="actionTitle" size="sm" :busy="busy" data-test="person-media-delete-dialog" @close="close">
         <p>{{ target.media.name }} · {{ formatBytes(target.media.size) }}</p>
         <p>移除后，该{{ kindLabel }}会从{{ libraryLabel }}及所有人物的活跃作品中移除。</p>
         <label class="person-media-delete-option"><input v-model="deleteFile" type="checkbox" :disabled="busy" data-test="person-media-delete-file" />同时把原文件移到废纸篓</label>
@@ -13,13 +13,15 @@
           <button type="button" class="btn btn--danger" :disabled="busy" data-test="person-media-delete-confirm" @click="confirm">{{ busy ? '处理中…' : actionLabel }}</button>
         </template>
       </DialogShell>
+    </div>
+  </Teleport>
+  <Teleport to="body">
       <!-- 删除宿主（D-PC02/04）：批量删除的进度、不支持废纸篓时二选一、从回收站恢复。视频与图片各一个、种类固定。
            删完的撤销走全局提示（notifyUndoable），不再用这里的页内撤销条。 -->
       <div class="person-media-delete-notice">
         <TrashUndoBanner ref="videoTrashUndo" kind="video" :after-restore="ids => afterRestore('video', ids)" />
         <TrashUndoBanner ref="imageTrashUndo" kind="image" :after-restore="ids => afterRestore('image', ids)" />
       </div>
-    </div>
   </Teleport>
 </template>
 <script>
@@ -28,7 +30,7 @@ import TrashUndoBanner, { ALREADY_RESTORED_MESSAGE, partialRestoreError, restore
 import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
 import { feedbackState, notify, notifyUndoable } from '../utils/feedback.js';
 import { formatBytes } from '../utils/mediaDetails.js';
-import { readDeletePreferences } from '../utils/trashConfirm.js';
+import { readDeletePreferences, rememberDeleteFileChoice } from '../utils/trashConfirm.js';
 
 // 人物页 / 抽屉里删一部视频或一张图片（宿主：EntityLibraryPage、PreviewDrawer）。
 // 一律先弹确认框（DialogShell），不看「删除前确认」开关（2026-10-13 破坏性流程复审 I-2，回到 master 的做法）：
@@ -54,7 +56,7 @@ export default {
     deleteFile: false, busy: false, error: '', trashHint: DELETE_TRASH_HINT, recordOnlyHint: DELETE_RECORD_ONLY_HINT,
     // confirm：确认框（设置读回来之前先挂着但不显示）；done：删完、等撤销提示收起。
     // deleteOriginal 是设置里的「删除原文件」，null 表示还没读回来。
-    stage: 'confirm', deleteOriginal: null, undoToastID: null, undoing: false
+    stage: 'confirm', confirmCycle: 0, deleteOriginal: null, undoToastID: null, undoing: false
   }),
   computed: {
     kindLabel() { return this.target.kind === 'video' ? '视频' : '图片'; },
@@ -74,28 +76,32 @@ export default {
   methods: {
     formatBytes,
     close() { if (!this.busy) this.$emit('close'); },
-    // 每次都停在确认框，等用户点确认（confirm）。「同时把原文件移到废纸篓」默认不勾：触发按钮写的是
-    // 「从片库移除… / 从图片库移除…」（只删记录，D-UD-08），框里默认要与它一致，移文件得用户自己勾。
+    // 每次重新建立确认层并读取上次确认的选项；取消不改记忆。
     async start() {
+      if (this.busy) return;
+      const request = this._confirmationRequest = (this._confirmationRequest || 0) + 1;
+      this.confirmCycle++; this.deleteOriginal = null;
       this.error = ''; this.undoToastID = null; this.stage = 'confirm';
-      if (this.deleteOriginal === null) await this.loadSettings();
-      if (this.disposed || this.busy) return;
-      this.deleteFile = false;
+      const choice = await this.loadSettings();
+      if (this.disposed || this.busy || request !== this._confirmationRequest) return;
+      this.deleteFile = choice; this.deleteOriginal = choice;
     },
     // 与洞察、下载页同一处读设置（utils/trashConfirm.js）；读不出来时按默认值：不删原文件。
     async loadSettings() {
       const { deleteOriginal } = await readDeletePreferences();
-      this.deleteOriginal = deleteOriginal;
+      return deleteOriginal;
     },
     async confirm() {
-      if (this.busy) return;
+      if (this.busy || this.deleteOriginal === null) return;
       const target = this.target;
       if (target.kind !== 'video' && target.kind !== 'image') { this.error = '删除失败：未知媒体类型'; return; }
       const id = Number(target.media.id);
       const banner = this.bannerFor(target.kind);
+      const deleteFile = this.deleteFile;
       this.busy = true; this.error = '';
       try {
-        const outcome = await banner.runDelete({ ids: [id], deleteFile: this.deleteFile, names: { [id]: target.media.name } });
+        await rememberDeleteFileChoice(deleteFile);
+        const outcome = await banner.runDelete({ ids: [id], deleteFile, names: { [id]: target.media.name } });
         const failure = outcome.failures.find(item => item.id === id);
         if (!outcome.removedIDs.includes(id)) {
           // 失败或在「不支持废纸篓」里选了暂不处理：记录原样保留，留在确认步骤可以重试。
@@ -158,13 +164,6 @@ export default {
 </script>
 <style scoped>
 .person-media-delete-layer { position: fixed; inset: 0; z-index: var(--z-modal); }
-/* 设置读回来之前确认框先挂着但不显示：「同时把原文件移到废纸篓」的默认勾选不会闪一下。 */
-.person-media-delete-layer--pending { visibility: hidden; }
-/* 确认框以外的阶段（等撤销提示收起）不挡住页面：只有删除进度与回收站可以点（不支持废纸篓时的二选一出现时
-   自己 teleport 到 body 末尾）。里面的容器不定位、不做 transform：否则里面的 fixed 弹窗会以它为参照，层级也会被它困住。
-   整层与对话框同在 --z-modal：本组件挂载时才 teleport 到 body 末尾，从原图（ImageSourceDialog，同样 teleport）
-   上打开时排在它后面，自然压在它上面（层级规则见 tokens.css「层级」）。 */
-.person-media-delete-layer--notice { pointer-events: none; }
 .person-media-delete-notice { pointer-events: auto; }
 .person-media-delete-option { display: flex; align-items: center; gap: 8px; }
 .person-media-delete-option input { width: auto; margin: 0; }

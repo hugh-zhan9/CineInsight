@@ -14,6 +14,7 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
+  'RememberDeleteFileChoice',
   'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs', 'CountLibraryVideos', 'GetSemanticIndexStatus',
   'SetVideoFavorite', 'SetVideoWatched', 'UpdateVideoWatchProgress', 'ListSavedLibraryViews', 'SaveLibraryView',
   'DeleteSavedLibraryView', 'RejectSameSourceRelation', 'OpenDirectory', 'DeleteVideo', 'BatchDeleteVideos', 'ListTrashEntries',
@@ -2486,4 +2487,11 @@ it('switching same-name focused IDs invalidates prior query and selection', asyn
   expect(wrapper.vm.videos.map(video => video.id)).toEqual([7]);
   expect(wrapper.vm.selectedVideoIds).not.toContain(5);
   wrapper.unmount();
+});
+
+it('executes the IDs frozen by the confirmation instead of reading a later delete dialog', async () => {
+ const w=await mountPage();const remove=vi.fn().mockResolvedValue();w.vm.deleteVideos=remove;
+ w.vm.deleteDialog={show:true,video:null,videoIds:[7,8],names:{}};
+ await w.vm.executeDelete({video:null,videoIds:[1,2],deleteFile:false,dontAskAgain:false});
+ expect(remove).toHaveBeenCalledWith([1,2],false,{});w.unmount();
 });

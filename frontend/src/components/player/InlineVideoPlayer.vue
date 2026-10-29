@@ -47,16 +47,16 @@
   <div class="inline-player surface-cinema">
     <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
     <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
-      <div ref="playerShell" class="preview-drawer__player-shell" tabindex="0" @keydown.capture="handlePlaybackKey">
+      <dialog open ref="playerShell" class="preview-drawer__player-shell playback-shell" aria-label="视频播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
+        <div ref="playerSurface" class="playback-surface" tabindex="0">
         <video
           ref="videoElement"
           :key="previewMediaGeneration"
           class="preview-drawer__video"
-          controls
-          controlslist="nofullscreen"
           playsinline
           preload="metadata"
           :muted="true"
+          @click="$refs.controls?.togglePlayback()"
           @loadedmetadata="handleLoadedMetadata"
           @play="handlePlay"
           @playing="handlePlaying"
@@ -69,14 +69,11 @@
           <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
         </video>
         <PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" />
-        <button type="button" class="btn btn--secondary inline-player__fullscreen" data-test="inline-player-fullscreen" :aria-pressed="isFullscreen" @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏' }}</button>
-        <p v-if="fullscreenError" class="inline-player__fullscreen-error" role="alert">{{ fullscreenError }}</p>
+        <PlaybackControls :key="`controls-${previewMediaGeneration}`" ref="controls" :video-element="() => $refs.videoElement" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" @seek-hover="handleSeekPointerMove" @seek-leave="seekPreview = null" />
         <div
           v-if="activeSeekSprite"
           class="preview-drawer__seek-track"
           aria-hidden="true"
-          @pointermove="handleSeekPointerMove"
-          @pointerleave="seekPreview = null"
         >
           <div
             v-if="seekPreview"
@@ -94,7 +91,8 @@
             <time>{{ formatDuration(seekPreview.seconds) }}</time>
           </div>
         </div>
-      </div>
+        </div>
+      </dialog>
     </template>
     <!-- 内嵌播放器报错（D-PC26、PLAY-05）：解码失败不再是一块黑屏，给出系统播放器与播放代理两条路。
          直放的源解码失败时还会自动排一项代理（2026-10-13），就绪后自动切回内嵌。
@@ -133,6 +131,7 @@
 <script>
 import { handlePlaybackKey } from '../../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './PlaybackSubtitleControls.vue';
+import PlaybackControls from './PlaybackControls.vue';
 import { markRaw } from 'vue';
 import { CancelPreviewProxy, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus, GetPreviewSession, RecordViewEvent, RequestPreviewProxy } from '../../../wailsjs/go/main/App';
 import { detailPlaybackOrigin, detailPlaybackStartMs, formatDuration } from '../../utils/mediaDetails.js';
@@ -145,7 +144,7 @@ import { claimActivePlayer, releaseActivePlayer } from '../../utils/activePlayer
 
 export default {
   name: 'InlineVideoPlayer',
-  components: { PlaybackSubtitleControls },
+  components: { PlaybackControls, PlaybackSubtitleControls },
   props: {
     videoId: { type: Number, required: true },
     // 不传（undefined）表示由组件自己取会话；传 null 表示宿主还在取。
@@ -160,7 +159,6 @@ export default {
   data() {
     return {
       ownSession: null,
-      isFullscreen: false, fullscreenError: '',
       previewMediaGeneration: 0,
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false, autoplayPending: false,
       // 本次观看会话（D-PC43）：整个对象换掉时可被宿主读到，里面的累计量高频变化，不做响应式。
@@ -277,9 +275,6 @@ export default {
     this._autoProxy = null;
   },
   mounted() {
-    document.addEventListener('fullscreenchange', this.syncFullscreen);
-    document.addEventListener('webkitfullscreenchange', this.syncFullscreen);
-    window.addEventListener('keydown', this.handleFullscreenKey, true);
     // 代理队列的排位与完成（D-PC26）：本项完成后自动重取预览会话。
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('playback-proxy-state', status => this.applyProxyStatus(status, { fromEvent: true }));
@@ -288,10 +283,6 @@ export default {
     this.resetForVideo();
   },
   beforeUnmount() {
-    this.leaveFullscreen();
-    document.removeEventListener('fullscreenchange', this.syncFullscreen);
-    document.removeEventListener('webkitfullscreenchange', this.syncFullscreen);
-    window.removeEventListener('keydown', this.handleFullscreenKey, true);
     this.clearSeekSpriteRetry(); this.emitWatchProgress(true, false); this.resetVideoElement();
     this.cancelAutoProxy();
     releaseActivePlayer(this._activeHandle);
@@ -300,37 +291,6 @@ export default {
   methods: {
     formatDuration,
     handlePlaybackKey(event) { handlePlaybackKey(event, this.$refs.videoElement); },
-    ownsFullscreen() {
-      const element = document.fullscreenElement || document.webkitFullscreenElement;
-      return !!element && element === this.$refs.playerShell;
-    },
-    syncFullscreen() { this.isFullscreen = this.ownsFullscreen(); },
-    async leaveFullscreen() {
-      if (!this.ownsFullscreen()) return;
-      try {
-        if (document.exitFullscreen) await document.exitFullscreen();
-        else await document.webkitExitFullscreen();
-      } catch {
-        this.fullscreenError = '无法退出全屏，请按 Esc 重试。';
-      }
-    },
-    async toggleFullscreen() {
-      this.fullscreenError = '';
-      if (this.ownsFullscreen()) return this.leaveFullscreen();
-      const shell = this.$refs.playerShell;
-      try {
-        if (shell.requestFullscreen) await shell.requestFullscreen();
-        else if (shell.webkitRequestFullscreen) await shell.webkitRequestFullscreen();
-        else this.fullscreenError = '当前环境不支持全屏播放。';
-      } catch {
-        this.fullscreenError = '无法切换全屏，请重试。';
-      }
-    },
-    handleFullscreenKey(event) {
-      if (event.key !== 'Escape' || !this.ownsFullscreen()) return;
-      event.preventDefault(); event.stopImmediatePropagation();
-      this.leaveFullscreen();
-    },
     // ===== 宿主可调 =====
     play() { this.$refs.playerShell?.focus({ preventScroll: true }); return this.$refs.videoElement?.play(); },
     pause() { this.$refs.videoElement?.pause(); },
@@ -525,6 +485,8 @@ export default {
       const startTimeMs = bookmark ? bookmark.startMS : detailPlaybackStartMs(this.playbackStartOptions());
       if (video.readyState < 1 || (startTimeMs === 0 && !bookmark)) return;
       let seekSeconds = startTimeMs / 1000;
+      const ordinaryResume = !bookmark && this.startTimeMs == null && Number(this.resumePositionSeconds) > 0;
+      if (ordinaryResume && isWatchCompleted(seekSeconds, video.duration)) seekSeconds = 0;
       if (Number.isFinite(video.duration) && video.duration > 0) seekSeconds = Math.min(seekSeconds, Math.max(video.duration - 0.001, 0));
       const seekKey = `${this.activeSession?.video_id || ''}:${seekSeconds}:${bookmark?.requestID || ''}`;
       if (seekKey === this.appliedSeekKey) return;
@@ -686,12 +648,11 @@ export default {
 <style scoped>
 /* 根是一层网格：放进固定最小高度的容器（抽屉的播放器区块）时，占位框与以前一样撑满整块。 */
 .inline-player { display: grid; background: var(--player-bg); }
-.inline-player__fullscreen { position: absolute; z-index: 3; top: var(--space-3); right: var(--space-3); }
-.inline-player__fullscreen-error { position: absolute; z-index: 3; top: var(--space-3); left: var(--space-3); margin: 0; padding: var(--space-2); color: var(--media-badge-fg); background: var(--media-badge-bg); }
-.preview-drawer__player-shell:fullscreen { width: 100%; height: 100%; aspect-ratio: auto; }
-.preview-drawer__player-shell:-webkit-full-screen { width: 100%; height: 100%; aspect-ratio: auto; }
-.preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
-.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: var(--radius-pill); background: transparent; cursor: default; }
+
+
+.preview-drawer__player-shell:modal { position: fixed; inset: 0; width: 100vw; height: 100vh; margin: 0; aspect-ratio: auto; }
+.preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: calc(100% - var(--playback-controls-height, 70px)); min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
+.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: var(--playback-controls-height, 70px); left: 12px; height: 12px; border-radius: var(--radius-pill); background: transparent; cursor: default; pointer-events: none; }
 .preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; content: none; }
 .preview-drawer__seek-preview { position: absolute; bottom: 18px; width: 160px; transform: translateX(-50%); display: grid; gap: var(--space-1); justify-items: center; pointer-events: none; }
 /* 悬停预览浮在画面上：描边与时间角标用画面角标的那一对颜色（两主题同值），投影取浮层投影。 */
@@ -702,5 +663,5 @@ export default {
 .preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: var(--radius-lg); padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: var(--space-3); color: var(--text-secondary); }
 .detail-action-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .preview-drawer__proxy-progress { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); }
-.preview-drawer__video::-webkit-media-controls-fullscreen-button { display: none; }
+
 </style>

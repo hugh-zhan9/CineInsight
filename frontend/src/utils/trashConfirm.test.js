@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ GetSettings: vi.fn() }));
+const api = vi.hoisted(() => ({ GetSettings: vi.fn(), RememberDeleteFileChoice: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 
-import { readDeletePreferences, shouldConfirmTrash } from './trashConfirm.js';
+import { readDeletePreferences, shouldConfirmTrash, rememberDeleteFileChoice } from './trashConfirm.js';
 
 beforeEach(() => vi.resetAllMocks());
 
@@ -32,4 +32,13 @@ describe('readDeletePreferences（删除前确认 + 删除原文件，一次读�
     expect(await readDeletePreferences()).toEqual({ confirmFirst: true, deleteOriginal: false });
     expect(api.GetSettings).toHaveBeenCalledTimes(3);
   });
+});
+
+it('remembers both choices using the dedicated single-field call and reports persistence failure', async () => {
+ api.RememberDeleteFileChoice.mockResolvedValueOnce();
+ expect(await rememberDeleteFileChoice(true)).toBe(true);
+ expect(api.RememberDeleteFileChoice).toHaveBeenLastCalledWith(true);
+ api.RememberDeleteFileChoice.mockRejectedValueOnce(new Error('write failed'));
+ expect(await rememberDeleteFileChoice(false)).toBe(false);
+ expect(api.RememberDeleteFileChoice).toHaveBeenLastCalledWith(false);
 });

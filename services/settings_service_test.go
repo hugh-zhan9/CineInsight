@@ -1,6 +1,7 @@
 package services
 
 import (
+	"reflect"
 	"testing"
 
 	"video-master/database"
@@ -134,5 +135,31 @@ func TestAPP08UpdateSettingsPersistsImageExtensionsAndPlaybackResumeMode(t *test
 	}
 	if saved.PlaybackResumeMode != PlaybackResumeModeResume {
 		t.Fatalf("非法续播口径应存成默认 resume，实际 %q", saved.PlaybackResumeMode)
+	}
+}
+
+func TestRememberDeleteFileChoicePreservesAllOtherSettings(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	service := &SettingsService{}
+	before, err := service.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, choice := range []bool{true, false, true} {
+		if err := service.RememberDeleteFileChoice(choice); err != nil {
+			t.Fatal(err)
+		}
+		after, err := (&SettingsService{}).GetSettings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.DeleteOriginalFile != choice {
+			t.Fatalf("choice not retained: %v", after.DeleteOriginalFile)
+		}
+		after.DeleteOriginalFile = before.DeleteOriginalFile
+		after.UpdatedAt = before.UpdatedAt
+		if !reflect.DeepEqual(after, before) {
+			t.Fatal("remembering a deletion choice changed unrelated settings")
+		}
 	}
 }

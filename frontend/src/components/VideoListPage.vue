@@ -429,6 +429,7 @@
     />
 
     <DeleteConfirmDialog
+      :video-ids="deleteDialog.videoIds"
       :visible="deleteDialog.show"
       :video="deleteDialog.video"
       :video-count="deleteDialog.videoIds.length"
@@ -2600,7 +2601,9 @@ export default {
         ? { show: true, video: list[0], videoIds: [], names }
         : { show: true, video: null, videoIds: list.map(video => video.id), names };
     },
-    async executeDelete({ video, deleteFile, dontAskAgain }) {
+    async executeDelete({ video, videoIds: frozenIDs, deleteFile, dontAskAgain }) {
+      const videoIds = [...(Array.isArray(frozenIDs) ? frozenIDs : this.deleteDialog.videoIds)];
+      const names = { ...(this.deleteDialog.names || {}) };
       if (dontAskAgain) {
         await UpdateSettings({
           ...this.settings,
@@ -2618,8 +2621,6 @@ export default {
         });
       }
       // 先关确认框再删：批量删除的进度与「取消」、磁盘不支持废纸篓时的选择框都在它下面。
-      const videoIds = [...this.deleteDialog.videoIds];
-      const names = this.deleteDialog.names || {};
       this.deleteDialog.show = false;
       if (videoIds.length > 0) {
         await this.deleteVideos(videoIds, deleteFile, names);

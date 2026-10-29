@@ -817,6 +817,7 @@ import WallpaperButton from './WallpaperButton.vue';
 import BaseMenu from './ui/BaseMenu.vue';
 import BasePopover from './ui/BasePopover.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
+import { rememberDeleteFileChoice } from '../utils/trashConfirm.js';
 import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
@@ -2155,13 +2156,14 @@ export default {
     async confirmBatchDelete() {
       if (!this.batchDeletePending || this.batchBusy) return;
       this.batchDeletePending = false;
-      await this.performBatchDelete(this.batchDeleteFileChoice);
+      await this.performBatchDelete(this.batchDeleteFileChoice, true);
     },
-    async performBatchDelete(deleteFile) {
+    async performBatchDelete(deleteFile, remember = false) {
       const ids = [...this.selectedImageIDs].map(Number);
       if (!ids.length || this.batchBusy) return;
       this.batchBusy = true;
       try {
+        if (remember) await rememberDeleteFileChoice(deleteFile);
         const before = new Map(this.images.map(image => [Number(image.id), image]));
         const banner = this.$refs.trashUndo;
         const outcome = await banner.runDelete({ ids, deleteFile, names: this.imageNames(ids) });
@@ -2637,7 +2639,9 @@ export default {
       if (!this.deleteTarget || this.deleting) return;
       this.deleting = true;
       try {
-        if (await this.performDelete(this.deleteTarget, this.deleteFileChoice)) this.deleteTarget = null;
+        const target = this.deleteTarget; const choice = this.deleteFileChoice;
+        await rememberDeleteFileChoice(choice);
+        if (await this.performDelete(target, choice) && this.deleteTarget === target) this.deleteTarget = null;
       } finally {
         this.deleting = false;
       }

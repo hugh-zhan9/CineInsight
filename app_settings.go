@@ -690,3 +690,13 @@ func (a *App) emitLibraryWatcherStatus() {
 		runtime.EventsEmit(a.ctx, "library-watcher-status", a.GetLibraryWatcherStatus())
 	}
 }
+
+func (a *App) RememberDeleteFileChoice(deleteOriginal bool) error {
+	if err := a.settingsService.RememberDeleteFileChoice(deleteOriginal); err != nil {
+		return err
+	}
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "delete-file-choice-changed", deleteOriginal)
+	}
+	return nil
+}

@@ -1,5 +1,9 @@
-import { flushPromises, mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const api = vi.hoisted(() => ({ RememberDeleteFileChoice: vi.fn() }));
+vi.mock('../../wailsjs/go/main/App', () => api);
+enableAutoUnmount(afterEach);
+beforeEach(() => api.RememberDeleteFileChoice.mockReset().mockResolvedValue());
 
 import DeleteConfirmDialog from './DeleteConfirmDialog.vue';
 
@@ -41,7 +45,7 @@ describe('DeleteConfirmDialog 删除后果说明', () => {
     expect(wrapper.get('[data-test="delete-consequence"]').text()).toContain('仅删除记录');
 
     await wrapper.get('[data-test="delete-confirm-ok"]').trigger('click');
-    expect(wrapper.emitted('confirm-delete')[0][0]).toEqual({ video: null, deleteFile: false, dontAskAgain: false });
+    expect(wrapper.emitted('confirm-delete')[0][0]).toEqual({ videoIds: [], video: null, deleteFile: false, dontAskAgain: false });
   });
 });
 
@@ -64,4 +68,21 @@ describe('DeleteConfirmDialog 三个删除词', () => {
     expect(wrapper.emitted('close')).toHaveLength(1);
     expect(wrapper.emitted('confirm-delete')).toBeUndefined();
   });
+});
+
+it('blocks cancel/Esc during preference persistence and invalidates an externally replaced batch', async () => {
+ let finish;
+ api.RememberDeleteFileChoice.mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+ const w=mount(DeleteConfirmDialog,{props:{visible:true,settings:{confirm_before_delete:true,delete_original_file:false},videoCount:2,videoIds:[1,2]}});
+ await w.get('[data-test="delete-confirm-ok"]').trigger('click');
+ expect(w.get('[data-test="delete-confirm-cancel"]').element.disabled).toBe(true);
+ expect(w.get('[data-test="delete-file-choice"]').element.disabled).toBe(true);
+ await w.get('[data-test="delete-confirm-cancel"]').trigger('click');
+ document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+ expect(w.emitted('close')).toBeUndefined();
+ await w.setProps({visible:false});await w.setProps({visible:true,videoIds:[7,8]});
+ finish();await flushPromises();
+ expect(w.emitted('confirm-delete')).toBeUndefined();
+ await w.get('[data-test="delete-confirm-ok"]').trigger('click');await flushPromises();
+ expect(w.emitted('confirm-delete')[0][0].videoIds).toEqual([7,8]);
 });

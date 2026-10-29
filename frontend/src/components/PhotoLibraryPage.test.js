@@ -14,7 +14,7 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'SearchImagePage', 'GetImageDetail', 'SetImageFavorite', 'SetImageRating',
+  'RememberDeleteFileChoice', 'SearchImagePage', 'GetImageDetail', 'SetImageFavorite', 'SetImageRating',
   'AddTagToImage', 'BatchAddTagToImages', 'RemoveTagFromImage', 'GetAllImageDirectories', 'SyncImageDirectories',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
   'GetImageSemanticIndexStatus', 'SearchImagesSemantic',

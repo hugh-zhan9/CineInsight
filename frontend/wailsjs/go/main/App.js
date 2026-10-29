@@ -1402,6 +1402,10 @@ export function RelocateVideo(arg1, arg2) {
   return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
 }
 
+export function RememberDeleteFileChoice(arg1) {
+  return window['go']['main']['App']['RememberDeleteFileChoice'](arg1);
+}
+
 export function RemoveCollectionCover(arg1) {
   return window['go']['main']['App']['RemoveCollectionCover'](arg1);
 }

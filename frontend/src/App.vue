@@ -655,6 +655,7 @@ export default {
     this._pendingWorkTimer = setInterval(() => this.refreshPendingWorkTotal(), PENDING_WORK_REFRESH_MS);
     // 扫描完成事件（D-PC09）：库里真的多了、少了或恢复了视频时，顶栏的库规模计数跟着刷新。
     // 列表本身的刷新归片库页。
+    this.registerRuntimeEvent('delete-file-choice-changed', value => { this.settings = { ...this.settings, delete_original_file: Boolean(value) }; });
     this.registerRuntimeEvent('library-scan-summary', event => this.handleLibraryScanSummary(event));
     // 迁移并切换在后台完成：用户可能已经离开设置页，遮罩由这里统一弹出（D-PC55）。
     this.registerRuntimeEvent('database-switch-state', status => {

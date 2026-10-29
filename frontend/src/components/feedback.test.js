@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import AppFeedback from './AppFeedback.vue';
 import DialogShell from './ui/DialogShell.vue';
@@ -204,14 +204,24 @@ describe('禁止再用 webview 里失效的原生弹框', () => {
 
 // 用了提示 API 却忘了 import：Vite 构建不报错，点下去才在运行期炸成一次
 // 静默的 unhandled rejection（按钮"点了没反应"）。静态钉住。
+function feedbackImportNames(source, file) {
+  const match = [...source.matchAll(/import \{([^}]*)\} from '([^']+)';/g)]
+    .find(item => resolve(dirname(file), item[2]) === join(SRC, 'utils/feedback.js'));
+  return new Set((match?.[1] || '').split(',').map(name => name.trim()).filter(Boolean));
+}
 describe('提示 API 必须显式导入', () => {
+  it('resolves local utility imports without accepting an unrelated feedback module', () => {
+    expect(feedbackImportNames("import { notifyError } from './feedback.js';", join(SRC, 'utils/example.js')).has('notifyError')).toBe(true);
+    expect(feedbackImportNames("import { notifyError } from '../utils/feedback.js';", join(SRC, 'components/example.vue')).has('notifyError')).toBe(true);
+    expect(feedbackImportNames("import { notifyError } from './feedback.js';", join(SRC, 'components/example.vue')).size).toBe(0);
+    expect(feedbackImportNames('', join(SRC, 'utils/example.js')).size).toBe(0);
+  });
   it('每个用到 notify/confirmAction 的文件都从 utils/feedback.js 导入了它们', () => {
     const missing = [];
     for (const file of listSourceFiles(SRC)) {
       if (file.endsWith('utils/feedback.js')) continue;
       const source = readFileSync(file, 'utf8');
-      const importLine = source.match(/import \{([^}]*)\} from '[^']*utils\/feedback\.js';/);
-      const imported = new Set((importLine?.[1] || '').split(',').map(name => name.trim()).filter(Boolean));
+      const imported = feedbackImportNames(source, file);
       for (const api of ['notify', 'notifyError', 'notifySuccess', 'notifyUndo', 'notifyUndoable', 'confirmAction']) {
         const used = new RegExp(`(?<![\\w.])${api}\\(`).test(source);
         if (used && !imported.has(api)) missing.push(`${relative(SRC, file)} 用了 ${api}() 但没导入`);

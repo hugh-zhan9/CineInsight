@@ -141,3 +141,11 @@ it('joins the single-active-player rule with the detail and drawer players', asy
   wrapper.unmount(); wrapper = null;
   expect(currentActivePlayer()).toBeNull();
 });
+
+it('restarts an invalid queue resume using actual media duration rather than clamping to the end', async () => {
+  wrapper=mount(Player,{props:{session:{...session(),start_seconds:42,duration:600,desired_paused:true}}});
+  const video=wrapper.get('video');Object.defineProperty(video.element,'duration',{configurable:true,value:3});
+  await video.trigger('loadedmetadata');await flushPromises();
+  expect(video.element.currentTime).toBe(0);
+  expect(events().find(event=>event.kind==='loaded')).toMatchObject({position:0,duration:3});
+});
