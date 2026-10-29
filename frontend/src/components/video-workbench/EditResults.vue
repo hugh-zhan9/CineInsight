@@ -78,7 +78,7 @@ export default {
       return this.outputIDs.join(',');
     },
     canLinkVersion() {
-      return this.project?.kind === 'trim_intro' || this.project?.kind === 'hd_replace';
+      return ['trim_intro', 'hd_replace', 'crop'].includes(this.project?.kind);
     }
   },
   watch: {

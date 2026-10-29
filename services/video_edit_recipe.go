@@ -59,6 +59,7 @@ const (
 // EditRecipe 是项目配方。kind 由项目决定，配方里只填对应的那一节。
 type EditRecipe struct {
 	V         int              `json:"v"`
+	Crop      *EditCropRecipe  `json:"crop,omitempty"`
 	Merge     *EditMergeRecipe `json:"merge,omitempty"`
 	TrimIntro *EditTrimRecipe  `json:"trim_intro,omitempty"`
 	HDReplace *EditHDRecipe    `json:"hd_replace,omitempty"`
@@ -183,6 +184,9 @@ func normalizeEditRecipe(recipe *EditRecipe) {
 	if recipe.Tracks.Subtitle == nil {
 		recipe.Tracks.Subtitle = []EditTrackChoice{}
 	}
+	if recipe.Crop != nil && recipe.Crop.Items == nil {
+		recipe.Crop.Items = []EditCropItem{}
+	}
 	if recipe.Merge != nil && recipe.Merge.Sources == nil {
 		recipe.Merge.Sources = []EditMergeSource{}
 	}
@@ -198,6 +202,11 @@ func normalizeEditRecipe(recipe *EditRecipe) {
 func defaultEditRecipe(kind string, videoIDs []uint) (EditRecipe, error) {
 	recipe := EditRecipe{V: videoEditRecipeVersion}
 	switch kind {
+	case models.VideoEditKindCrop:
+		recipe.Crop = &EditCropRecipe{}
+		for _, id := range videoIDs {
+			recipe.Crop.Items = append(recipe.Crop.Items, EditCropItem{VideoID: id})
+		}
 	case models.VideoEditKindMerge:
 		merge := &EditMergeRecipe{}
 		for _, id := range videoIDs {
@@ -228,7 +237,7 @@ func validateEditRecipeStructure(kind string, recipe EditRecipe) error {
 		return editError("recipe_invalid", "不支持的配方版本 %d", recipe.V)
 	}
 	sections := 0
-	for _, present := range []bool{recipe.Merge != nil, recipe.TrimIntro != nil, recipe.HDReplace != nil} {
+	for _, present := range []bool{recipe.Crop != nil, recipe.Merge != nil, recipe.TrimIntro != nil, recipe.HDReplace != nil} {
 		if present {
 			sections++
 		}
@@ -237,6 +246,10 @@ func validateEditRecipeStructure(kind string, recipe EditRecipe) error {
 		return editError("recipe_invalid", "配方必须且只能包含与项目类型对应的一节")
 	}
 	switch kind {
+	case models.VideoEditKindCrop:
+		if err := validateCropStructure(recipe.Crop); err != nil {
+			return err
+		}
 	case models.VideoEditKindMerge:
 		if err := validateMergeStructure(recipe.Merge); err != nil {
 			return err
@@ -387,6 +400,11 @@ func editRecipeVideoIDs(recipe EditRecipe) []uint {
 		if id != 0 && !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
+		}
+	}
+	if recipe.Crop != nil {
+		for _, item := range recipe.Crop.Items {
+			add(item.VideoID)
 		}
 	}
 	if recipe.Merge != nil {

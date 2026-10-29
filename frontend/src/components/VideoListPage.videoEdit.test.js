@@ -56,6 +56,25 @@ beforeEach(() => {
 });
 
 describe('视频工作台入口', () => {
+  it('单部行菜单及批量栏均能创建裁剪项目，批次不能超过200', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: rows[0], anchor: null, position: { x: 0, y: 0 } };
+    expect(wrapper.vm.rowMenuItems.map(item => item.id)).toContain('crop');
+    wrapper.vm.onRowMenuSelect({ id: 'crop' });
+    await flushPromises();
+    expect(api.CreateEditProject).toHaveBeenCalledWith({ kind: 'crop', title: '', video_ids: [1] });
+    await wrapper.setData({ selectedVideoIds: [7, 4] });
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-edit-crop');
+    await flushPromises();
+    expect(api.CreateEditProject).toHaveBeenLastCalledWith({ kind: 'crop', title: '', video_ids: [7, 4] });
+    api.CreateEditProject.mockClear();
+    await wrapper.setData({ selectedVideoIds: Array.from({ length: 201 }, (_, i) => i + 1) });
+    wrapper.findComponent({ name: 'BatchActionBar' }).vm.$emit('batch-edit-crop');
+    await flushPromises();
+    expect(api.CreateEditProject).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it('「合并为新视频」按选中顺序建合并项目，交给宿主打开并清掉选择', async () => {
     const wrapper = await mountPage();
     await wrapper.setData({ selectedVideoIds: [7, 1, 4] });

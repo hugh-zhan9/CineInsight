@@ -26,6 +26,7 @@
       <!-- 视频工作台（视频编辑合同「入口」）：按选中顺序合并为新视频（2 个以上）、批量去片头。 -->
       <button type="button" class="btn btn--secondary btn--sm" data-test="batch-edit-merge" :disabled="selectedCount < 2" @click="$emit('batch-edit-merge')">合并为新视频</button>
       <button type="button" class="btn btn--secondary btn--sm" data-test="batch-edit-trim" :disabled="selectedCount < 1" @click="$emit('batch-edit-trim')">批量去片头</button>
+      <button type="button" class="btn btn--secondary btn--sm" data-test="batch-edit-crop" :disabled="selectedCount < 1" @click="$emit('batch-edit-crop')">批量裁剪画面</button>
       <!-- 删除用三个词之一（D-UD-08）：按设置里的默认方式写「移到废纸篓」或「从片库移除」，要先确认时带「…」。 -->
       <button type="button" class="btn btn--danger btn--sm" data-test="batch-delete" @click="$emit('batch-delete')">{{ deleteLabel }}</button>
     </template>
@@ -66,7 +67,7 @@ export default {
     migrationRunning: { type: Boolean, default: false },
     deleteLabel: { type: String, default: '移到废纸篓' }
   },
-  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'select-all-matching', 'clear-selection']
+  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-edit-crop', 'batch-delete', 'select-all-matching', 'clear-selection']
 };
 </script>
 

@@ -4,6 +4,7 @@ import "time"
 
 // 视频工作台（视频编辑合同「状态模型」）的三种任务。
 const (
+	VideoEditKindCrop      = "crop"
 	VideoEditKindMerge     = "merge"
 	VideoEditKindTrimIntro = "trim_intro"
 	VideoEditKindHDReplace = "hd_replace"

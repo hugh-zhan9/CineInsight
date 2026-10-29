@@ -5,7 +5,7 @@ import { createRequestGeneration, sceneFrameURL } from './sceneSearch.js';
 
 export { createRequestGeneration };
 
-export const EDIT_KIND_LABELS = { merge: '顺序合并', trim_intro: '批量去片头', hd_replace: '高清替换' };
+export const EDIT_KIND_LABELS = { merge: '顺序合并', trim_intro: '批量去片头', hd_replace: '高清替换', crop: '画面裁剪' };
 
 export const EDIT_STATUS_LABELS = {
   draft: '草稿',
@@ -143,6 +143,7 @@ export function editRecipeVideoIDs(recipe) {
   };
   (recipe?.merge?.sources || []).forEach(source => add(source.video_id));
   (recipe?.trim_intro?.items || []).forEach(item => add(item.video_id));
+  (recipe?.crop?.items || []).forEach(item => add(item.video_id));
   if (recipe?.hd_replace) {
     add(recipe.hd_replace.long_video_id);
     add(recipe.hd_replace.hd_video_id);

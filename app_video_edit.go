@@ -48,7 +48,7 @@ func videoEditResult[T any](name string, value T, err error) (T, error) {
 	return value, nil
 }
 
-// CreateEditProject 新建编辑项目（kind=merge|trim_intro|hd_replace；hd_replace 的 video_ids 为 [长版, 高清版]）。
+// CreateEditProject 新建编辑项目（kind=merge|trim_intro|hd_replace|crop；hd_replace 的 video_ids 为 [长版, 高清版]）。
 func (a *App) CreateEditProject(request services.EditProjectCreateRequest) (*services.EditProjectView, error) {
 	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)
 	if err != nil {
@@ -114,7 +114,7 @@ func (a *App) UpdateEditRecipe(request services.EditRecipeUpdateRequest) (*servi
 	return videoEditResult("UpdateEditRecipe", view, err)
 }
 
-// AnalyzeEditProject 启动片头识别（trim_intro）或分段对齐（hd_replace），立即返回 analyzing 状态的项目。
+// AnalyzeEditProject 启动片头识别（trim_intro）、分段对齐（hd_replace）或黑边检测（crop），立即返回 analyzing 状态的项目。
 func (a *App) AnalyzeEditProject(request services.EditAnalyzeRequest) (*services.EditProjectView, error) {
 	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)
 	if err != nil {

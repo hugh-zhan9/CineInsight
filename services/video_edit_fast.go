@@ -35,6 +35,9 @@ func editStreamBySource(sources map[uint]*editSourceCtx, plan editPlan, source i
 // editFastReasons 列出该计划不能用快速模式的原因（空表示可以）。
 func editFastReasons(plan editPlan, sources map[uint]*editSourceCtx) []string {
 	reasons := []string{}
+	if plan.Video.Crop != nil {
+		reasons = append(reasons, "画面裁剪需要重新编码")
+	}
 	add := func(reason string) {
 		for _, existing := range reasons {
 			if existing == reason {

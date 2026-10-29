@@ -23,6 +23,7 @@ const editAnalysisStepMS = 250
 // EditAnalysisResult 是项目最近一轮分析的结果（存于 analysis_json）。
 type EditAnalysisResult struct {
 	Kind       string               `json:"kind"`
+	Crops      []EditCropResult     `json:"crops"`
 	Status     string               `json:"status"`
 	Error      string               `json:"error"`
 	WindowMS   int64                `json:"window_ms"`
@@ -109,6 +110,7 @@ func (s *VideoEditService) AnalyzeProject(ctx context.Context, request EditAnaly
 			return nil, editError("recipe_invalid", "片头分析窗口必须在 1–20 分钟之间")
 		}
 	case models.VideoEditKindHDReplace:
+	case models.VideoEditKindCrop:
 	default:
 		return nil, editError("analysis_not_applicable", "顺序合并不需要分析")
 	}
@@ -219,6 +221,8 @@ func (s *VideoEditService) runAnalysis(ctx context.Context, cancel context.Cance
 			switch project.Kind {
 			case models.VideoEditKindTrimIntro:
 				err = s.analyzeIntros(ctx, project.ID, &recipe, window, &result)
+			case models.VideoEditKindCrop:
+				err = s.analyzeCrops(ctx, project.ID, &recipe, &result)
 			case models.VideoEditKindHDReplace:
 				err = s.analyzeAlignment(ctx, project.ID, &recipe, &result)
 			}
@@ -228,6 +232,7 @@ func (s *VideoEditService) runAnalysis(ctx context.Context, cancel context.Cance
 	result.FinishedAt = &finished
 	writeRecipe := err == nil && ctx.Err() == nil
 	if !writeRecipe {
+		result.Crops = nil
 		result.Intros, result.Segments = []EditIntroResult{}, []EditAlignedSegment{}
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			result.Status, result.Error = "cancelled", ""

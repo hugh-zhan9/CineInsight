@@ -23,29 +23,31 @@ const videoEditProbeTimeout = 30 * time.Second
 
 // editStream 是预检读到的一条流。
 type editStream struct {
-	Index          int
-	Type           string
-	Codec          string
-	Profile        string
-	Width          int
-	Height         int
-	PixFmt         string
-	FrameRate      string
-	TimeBase       string
-	SampleRate     int
-	Channels       int
-	ChannelLayout  string
-	BitRate        int64
-	ColorPrimaries string
-	ColorTransfer  string
-	ColorSpace     string
-	ColorRange     string
-	Language       string
-	Title          string
-	Filename       string
-	MimeType       string
-	Default        bool
-	DolbyVision    bool
+	Index             int
+	Type              string
+	Codec             string
+	Profile           string
+	Width             int
+	Height            int
+	SampleAspectRatio string
+	Rotation          float64
+	PixFmt            string
+	FrameRate         string
+	TimeBase          string
+	SampleRate        int
+	Channels          int
+	ChannelLayout     string
+	BitRate           int64
+	ColorPrimaries    string
+	ColorTransfer     string
+	ColorSpace        string
+	ColorRange        string
+	Language          string
+	Title             string
+	Filename          string
+	MimeType          string
+	Default           bool
+	DolbyVision       bool
 }
 
 // editProbe 是一个来源的探测结果。
@@ -63,25 +65,26 @@ type editProbe struct {
 
 type editProbeJSON struct {
 	Streams []struct {
-		Index          int    `json:"index"`
-		CodecType      string `json:"codec_type"`
-		CodecName      string `json:"codec_name"`
-		Profile        string `json:"profile"`
-		Width          int    `json:"width"`
-		Height         int    `json:"height"`
-		PixFmt         string `json:"pix_fmt"`
-		RFrameRate     string `json:"r_frame_rate"`
-		AvgFrameRate   string `json:"avg_frame_rate"`
-		TimeBase       string `json:"time_base"`
-		SampleRate     string `json:"sample_rate"`
-		Channels       int    `json:"channels"`
-		ChannelLayout  string `json:"channel_layout"`
-		BitRate        string `json:"bit_rate"`
-		ColorPrimaries string `json:"color_primaries"`
-		ColorTransfer  string `json:"color_transfer"`
-		ColorSpace     string `json:"color_space"`
-		ColorRange     string `json:"color_range"`
-		Tags           struct {
+		Index             int    `json:"index"`
+		CodecType         string `json:"codec_type"`
+		CodecName         string `json:"codec_name"`
+		Profile           string `json:"profile"`
+		Width             int    `json:"width"`
+		Height            int    `json:"height"`
+		SampleAspectRatio string `json:"sample_aspect_ratio"`
+		PixFmt            string `json:"pix_fmt"`
+		RFrameRate        string `json:"r_frame_rate"`
+		AvgFrameRate      string `json:"avg_frame_rate"`
+		TimeBase          string `json:"time_base"`
+		SampleRate        string `json:"sample_rate"`
+		Channels          int    `json:"channels"`
+		ChannelLayout     string `json:"channel_layout"`
+		BitRate           string `json:"bit_rate"`
+		ColorPrimaries    string `json:"color_primaries"`
+		ColorTransfer     string `json:"color_transfer"`
+		ColorSpace        string `json:"color_space"`
+		ColorRange        string `json:"color_range"`
+		Tags              struct {
 			Language string `json:"language"`
 			Title    string `json:"title"`
 			Filename string `json:"filename"`
@@ -92,7 +95,8 @@ type editProbeJSON struct {
 			AttachedPic int `json:"attached_pic"`
 		} `json:"disposition"`
 		SideDataList []struct {
-			SideDataType string `json:"side_data_type"`
+			SideDataType string  `json:"side_data_type"`
+			Rotation     float64 `json:"rotation"`
 		} `json:"side_data_list"`
 	} `json:"streams"`
 	Format struct {
@@ -127,7 +131,7 @@ func parseEditProbe(raw []byte) (editProbe, error) {
 		stream := editStream{
 			Index: raw.Index, Type: raw.CodecType, Codec: raw.CodecName, Profile: raw.Profile,
 			Width: raw.Width, Height: raw.Height, PixFmt: raw.PixFmt, FrameRate: raw.RFrameRate, TimeBase: raw.TimeBase,
-			Channels: raw.Channels, ChannelLayout: raw.ChannelLayout,
+			Channels: raw.Channels, ChannelLayout: raw.ChannelLayout, SampleAspectRatio: raw.SampleAspectRatio,
 			ColorPrimaries: raw.ColorPrimaries, ColorTransfer: raw.ColorTransfer, ColorSpace: raw.ColorSpace, ColorRange: raw.ColorRange,
 			Language: raw.Tags.Language, Title: raw.Tags.Title, Filename: raw.Tags.Filename, MimeType: raw.Tags.MimeType,
 			Default: raw.Disposition.Default == 1,
@@ -138,6 +142,9 @@ func parseEditProbe(raw []byte) (editProbe, error) {
 		stream.SampleRate, _ = strconv.Atoi(raw.SampleRate)
 		stream.BitRate, _ = strconv.ParseInt(raw.BitRate, 10, 64)
 		for _, side := range raw.SideDataList {
+			if strings.Contains(strings.ToLower(side.SideDataType), "display matrix") {
+				stream.Rotation = side.Rotation
+			}
 			if strings.Contains(strings.ToLower(side.SideDataType), "dovi") || strings.Contains(strings.ToLower(side.SideDataType), "dolby vision") {
 				stream.DolbyVision = true
 			}
@@ -283,6 +290,9 @@ type EditStreamInfo struct {
 // EditPreflightSource 是一个来源的探测摘要。error 非空时其余字段可能为空。
 type EditPreflightSource struct {
 	VideoID         uint             `json:"video_id"`
+	DisplayWidth    int              `json:"display_width"`
+	DisplayHeight   int              `json:"display_height"`
+	SourceVersion   string           `json:"source_version"`
 	Name            string           `json:"name"`
 	DurationMS      int64            `json:"duration_ms"`
 	Container       string           `json:"container"`
@@ -486,6 +496,8 @@ func (s *VideoEditService) preflight(ctx context.Context, project models.VideoEd
 	}
 	var plans []editPlan
 	switch project.Kind {
+	case models.VideoEditKindCrop:
+		plans = s.buildCropPlans(pre, project.Mode, recipe, sources, completedSeqs)
 	case models.VideoEditKindMerge:
 		if plan, ok := s.buildMergePlan(pre, project.Mode, recipe, sources); ok {
 			plans = append(plans, plan)
@@ -506,6 +518,15 @@ func (s *VideoEditService) preflight(ctx context.Context, project models.VideoEd
 
 // editPreflightVideoIDs 列出本次要导出的项引用的视频（跳过已完成的去片头项）。
 func editPreflightVideoIDs(recipe EditRecipe, completedSeqs map[int]bool) []uint {
+	if recipe.Crop != nil {
+		ids := []uint{}
+		for index, item := range recipe.Crop.Items {
+			if !completedSeqs[index+1] {
+				ids = append(ids, item.VideoID)
+			}
+		}
+		return ids
+	}
 	if recipe.TrimIntro == nil {
 		return editRecipeVideoIDs(recipe)
 	}
@@ -544,6 +565,8 @@ func (s *VideoEditService) collectEditSources(ctx context.Context, pre *EditPref
 		}
 		if sc.ok {
 			probe := sc.probe
+			info.DisplayWidth, info.DisplayHeight = editDisplaySize(probe.Video)
+			info.SourceVersion = editCropSourceVersion(sc.size, sc.modTimeNS)
 			video := editStreamInfo(*probe.Video)
 			info.Video = &video
 			info.DurationMS, info.Container, info.Size = probe.DurationMS, probe.FormatName, sc.size

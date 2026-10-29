@@ -285,6 +285,7 @@
       @batch-delete="confirmBatchDelete"
       @batch-edit-merge="createEditProjectFromSelection('merge')"
       @batch-edit-trim="createEditProjectFromSelection('trim_intro')"
+      @batch-edit-crop="createEditProjectFromSelection('crop')"
       @select-all-matching="selectAllMatching"
       @clear-selection="clearSelection"
     />
@@ -958,6 +959,7 @@ export default {
         { heading: '增强' },
         { id: 'enhance', label: enhanceReady ? '视频超分…' : '视频超分（未就绪）' },
         { id: 'hd-replace', label: '高清替换…' },
+        { id: 'crop', label: '裁剪画面…' },
         // 只有预览自动代理在跑（auto_only）时不置灰：手动请求照常加入或接管（2026-10-13）。
         { id: 'playback-proxy', label: '生成播放代理', disabled: !!this.playbackProxy.running && !this.playbackProxy.auto_only },
         { divider: true },
@@ -1761,6 +1763,7 @@ export default {
           else this.openEnhanceDialog(video);
           break;
         case 'hd-replace': this.openHDReplacePicker(video); break;
+        case 'crop': this.createEditProject('crop', [video.id]); break;
         case 'playback-queue': this.addVideosToPlaybackQueue([video.id]); break;
         case 'playback-proxy': this.createProxyForVideo(video); break;
         case 'delete': this.confirmDelete(video); break;

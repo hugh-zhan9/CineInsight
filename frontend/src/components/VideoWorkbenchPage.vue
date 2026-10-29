@@ -1,6 +1,6 @@
 <template>
   <section class="page-content workbench-page" data-test="workbench-page">
-    <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头与高清替换。成品另存入库，原片保持不变；确认成品无误后才提供原片清理入口。" />
+    <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头、高清替换与画面裁剪。成品另存入库，原片保持不变；确认成品无误后才提供原片清理入口。" />
     <div class="workbench-layout">
       <EditProjectList
         :projects="projects"
@@ -17,7 +17,7 @@
         @delete="deleteProject"
       />
       <div class="workbench-main">
-        <EmptyState v-if="!selectedId" icon="videos" title="从左侧选择一个编辑项目" message="在片库里多选视频后点「合并为新视频」或「批量去片头」，或在行菜单选「高清替换…」，新项目会出现在左侧。" data-test="workbench-placeholder" />
+        <EmptyState v-if="!selectedId" icon="videos" title="从左侧选择一个编辑项目" message="在片库里多选视频后点「合并为新视频」或「批量去片头」，或在行菜单选「高清替换…」「裁剪画面…」，新项目会出现在左侧。" data-test="workbench-placeholder" />
         <div v-else-if="!project" class="workbench-loading" role="status" aria-label="正在读取项目"><SkeletonBlock :lines="4" /></div>
         <template v-else>
           <header class="workbench-project" data-test="workbench-project">
@@ -91,6 +91,7 @@ import EditProjectList from './video-workbench/EditProjectList.vue';
 import EditResults from './video-workbench/EditResults.vue';
 import HDReplaceEditor from './video-workbench/HDReplaceEditor.vue';
 import MergeEditor from './video-workbench/MergeEditor.vue';
+import CropEditor from './video-workbench/CropEditor.vue';
 import TrimIntroEditor from './video-workbench/TrimIntroEditor.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
@@ -103,7 +104,7 @@ import {
 } from '../utils/videoEdit.js';
 import './video-workbench/workbench.css';
 
-const EDITORS = { merge: 'MergeEditor', trim_intro: 'TrimIntroEditor', hd_replace: 'HDReplaceEditor' };
+const EDITORS = { crop: 'CropEditor', merge: 'MergeEditor', trim_intro: 'TrimIntroEditor', hd_replace: 'HDReplaceEditor' };
 const LIST_LIMIT = 50;
 
 function asList(value) {
@@ -117,7 +118,7 @@ const LIST_REFRESH_DELAY_MS = 800;
 // 进度与状态跟 video-edit-state 事件走：同状态的进度事件就地更新，状态变化时重读。
 export default {
   name: 'VideoWorkbenchPage',
-  components: { EditExportPanel, EditProjectList, EditResults, EmptyState, HDReplaceEditor, MergeEditor, PageHeader, SkeletonBlock, TrimIntroEditor },
+  components: { EditExportPanel, EditProjectList, EditResults, EmptyState, HDReplaceEditor, MergeEditor, CropEditor, PageHeader, SkeletonBlock, TrimIntroEditor },
   mixins: [runtimeEventsMixin],
   props: {
     pageActive: { type: Boolean, default: true },

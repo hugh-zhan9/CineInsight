@@ -275,6 +275,8 @@ func defaultEditTitle(kind string, videoIDs []uint, videos map[uint]models.Video
 		first = editVideoDisplayName(videos[videoIDs[0]])
 	}
 	switch kind {
+	case models.VideoEditKindCrop:
+		return fmt.Sprintf("裁剪：%s 等 %d 个", first, len(videoIDs))
 	case models.VideoEditKindMerge:
 		return fmt.Sprintf("合并：%s 等 %d 个", first, len(videoIDs))
 	case models.VideoEditKindTrimIntro:

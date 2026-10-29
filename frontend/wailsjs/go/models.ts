@@ -4529,8 +4529,63 @@ export namespace services {
 	        this.applied = source["applied"];
 	    }
 	}
+	export class EditCropRect {
+	    x: number;
+	    y: number;
+	    width: number;
+	    height: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditCropRect(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.x = source["x"];
+	        this.y = source["y"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	    }
+	}
+	export class EditCropResult {
+	    video_id: number;
+	    status: string;
+	    rect?: EditCropRect;
+	    applied: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditCropResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.status = source["status"];
+	        this.rect = this.convertValues(source["rect"], EditCropRect);
+	        this.applied = source["applied"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class EditAnalysisResult {
 	    kind: string;
+	    crops: EditCropResult[];
 	    status: string;
 	    error: string;
 	    window_ms: number;
@@ -4546,6 +4601,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
+	        this.crops = this.convertValues(source["crops"], EditCropResult);
 	        this.status = source["status"];
 	        this.error = source["error"];
 	        this.window_ms = source["window_ms"];
@@ -4589,6 +4645,74 @@ export namespace services {
 	        this.window_ms = source["window_ms"];
 	    }
 	}
+	export class EditCropItem {
+	    video_id: number;
+	    rect?: EditCropRect;
+	    source_version: string;
+	    confirmed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditCropItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.rect = this.convertValues(source["rect"], EditCropRect);
+	        this.source_version = source["source_version"];
+	        this.confirmed = source["confirmed"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditCropRecipe {
+	    items: EditCropItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditCropRecipe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], EditCropItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	export class EditCutPoint {
 	    seq: number;
 	    segment: number;
@@ -5084,6 +5208,9 @@ export namespace services {
 	}
 	export class EditPreflightSource {
 	    video_id: number;
+	    display_width: number;
+	    display_height: number;
+	    source_version: string;
 	    name: string;
 	    duration_ms: number;
 	    container: string;
@@ -5106,6 +5233,9 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.video_id = source["video_id"];
+	        this.display_width = source["display_width"];
+	        this.display_height = source["display_height"];
+	        this.source_version = source["source_version"];
 	        this.name = source["name"];
 	        this.duration_ms = source["duration_ms"];
 	        this.container = source["container"];
@@ -5356,6 +5486,7 @@ export namespace services {
 	}
 	export class EditRecipe {
 	    v: number;
+	    crop?: EditCropRecipe;
 	    merge?: EditMergeRecipe;
 	    trim_intro?: EditTrimRecipe;
 	    hd_replace?: EditHDRecipe;
@@ -5368,6 +5499,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.v = source["v"];
+	        this.crop = this.convertValues(source["crop"], EditCropRecipe);
 	        this.merge = this.convertValues(source["merge"], EditMergeRecipe);
 	        this.trim_intro = this.convertValues(source["trim_intro"], EditTrimRecipe);
 	        this.hd_replace = this.convertValues(source["hd_replace"], EditHDRecipe);

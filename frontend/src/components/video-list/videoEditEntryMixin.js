@@ -6,6 +6,7 @@ import { editErrorText } from '../../utils/videoEdit.js';
 // 行菜单「高清替换…」。建好项目后发 open-video-edit，由宿主切到工作台并选中它。
 // 依赖片库页的 selectedVideoIds。
 const SELECTION_LIMITS = {
+  crop: { min: 1, max: 200, text: '画面裁剪需要选择 1–200 个视频' },
   merge: { min: 2, max: 50, text: '合并为新视频需要选择 2–50 个视频' },
   trim_intro: { min: 1, max: 200, text: '批量去片头需要选择 1–200 个视频' }
 };

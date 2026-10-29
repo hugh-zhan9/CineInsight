@@ -79,6 +79,18 @@ function toastText() {
 }
 
 describe('视频工作台页（视频编辑合同「界面」）', () => {
+  it('裁剪项目读取来源并通过原有分析接口启动黑边检测', async () => {
+    const project = mergeProject({ kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21, rect: null, source_version: '', confirmed: false }] }, tracks: tracks() } });
+    const wrapper = await mountPage(project);
+    expect(api.GetVideosByIDs).toHaveBeenCalledWith([21]);
+    expect(wrapper.get('[data-test="crop-editor"]').exists()).toBe(true);
+    api.AnalyzeEditProject.mockResolvedValue({ ...project, status: 'analyzing' });
+    await wrapper.get('[data-test="crop-analyze"]').trigger('click');
+    await flushPromises();
+    expect(api.AnalyzeEditProject).toHaveBeenCalledWith({ project_id: 1, expected_revision: 3, window_ms: 0 });
+    expect(wrapper.get('[data-test="crop-cancel-analysis"]').exists()).toBe(true);
+  });
+
   it('打开请求选中项目、读取来源名并自动预检', async () => {
     const wrapper = await mountPage(mergeProject());
     expect(api.GetEditProject).toHaveBeenCalledWith(1);

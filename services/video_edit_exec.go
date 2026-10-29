@@ -351,6 +351,9 @@ func (s *VideoEditService) verifyEditOutput(ctx context.Context, plan editPlan, 
 	if probe.Video == nil {
 		return editError("verify_failed", "成品没有视频流")
 	}
+	if plan.Video.Crop != nil && (probe.Video.Width != plan.Video.Width || probe.Video.Height != plan.Video.Height) {
+		return editError("verify_failed", "成品裁剪尺寸与计划不一致")
+	}
 	tolerance := max(int64(500), plan.DurationMS/200)
 	if diff := probe.DurationMS - plan.DurationMS; diff > tolerance || diff < -tolerance {
 		return editError("verify_failed", "成品时长 %s 与计划 %s 相差过大", editClock(probe.DurationMS), editClock(plan.DurationMS))

@@ -47,18 +47,21 @@ type editPlanSource struct {
 
 // editPlanVideo：精确模式的统一视频规格；快速模式只用 Codec/尺寸做校验，不重编码。
 type editPlanVideo struct {
-	Encoder        string `json:"encoder"`
-	Codec          string `json:"codec"`
-	Width          int    `json:"width"`
-	Height         int    `json:"height"`
-	FrameRate      string `json:"frame_rate"`
-	PixFmt         string `json:"pix_fmt"`
-	Main10         bool   `json:"main10"`
-	BitRate        int64  `json:"bit_rate"`
-	ColorPrimaries string `json:"color_primaries"`
-	ColorTransfer  string `json:"color_transfer"`
-	ColorSpace     string `json:"color_space"`
-	ColorRange     string `json:"color_range"`
+	Crop           *EditCropRect `json:"crop,omitempty"`
+	CanvasWidth    int           `json:"canvas_width,omitempty"`
+	CanvasHeight   int           `json:"canvas_height,omitempty"`
+	Encoder        string        `json:"encoder"`
+	Codec          string        `json:"codec"`
+	Width          int           `json:"width"`
+	Height         int           `json:"height"`
+	FrameRate      string        `json:"frame_rate"`
+	PixFmt         string        `json:"pix_fmt"`
+	Main10         bool          `json:"main10"`
+	BitRate        int64         `json:"bit_rate"`
+	ColorPrimaries string        `json:"color_primaries"`
+	ColorTransfer  string        `json:"color_transfer"`
+	ColorSpace     string        `json:"color_space"`
+	ColorRange     string        `json:"color_range"`
 }
 
 type editPlanTrack struct {
@@ -213,6 +216,9 @@ func editSegmentArgs(plan editPlan, segment editPlanSegment, segmentPath, blankS
 
 // editVideoFilter：缩放加黑边、统一帧率与像素格式；tpad 用最后一帧补齐，配合 -frames:v 得到整帧数。
 func editVideoFilter(video editPlanVideo) string {
+	if r := video.Crop; r != nil {
+		return fmt.Sprintf("scale=%d:%d,setsar=1,crop=%d:%d:%d:%d,setsar=1,fps=%s,tpad=stop_mode=clone:stop=-1,format=%s", video.CanvasWidth, video.CanvasHeight, r.Width, r.Height, r.X, r.Y, video.FrameRate, video.PixFmt)
+	}
 	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%s,tpad=stop_mode=clone:stop=-1,format=%s",
 		video.Width, video.Height, video.Width, video.Height, video.FrameRate, video.PixFmt)
 }
