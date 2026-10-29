@@ -13,6 +13,17 @@ describe('playback keyboard', () => {
     press(' '); expect(video.play).toHaveBeenCalledOnce();
     video.paused = false; press(' '); expect(video.pause).toHaveBeenCalledOnce();
   });
+  it('leaves library button/volume keys alone and retains player shortcuts on the timeline', () => {
+    const video = { currentTime: 10, duration: 30 };
+    for (const [tag,key] of [['media-play-button', ' '], ['media-volume-range','ArrowRight']]) {
+      const event = { key, target: document.createElement(tag), preventDefault: vi.fn(), stopPropagation: vi.fn() };
+      handlePlaybackKey(event, video); expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    handlePlaybackKey({ key: 'ArrowRight', target: document.createElement('media-time-range'), preventDefault: vi.fn(), stopPropagation: vi.fn() }, video);
+    expect(video.currentTime).toBe(15);
+    handlePlaybackKey({key:'ArrowRight', target:document.createElement('media-play-button'), preventDefault:vi.fn(), stopPropagation:vi.fn()},video);
+    expect(video.currentTime).toBe(20);
+  });
   it('does not hijack input controls or modified keys', () => {
     const video = { currentTime: 10, duration: 20 };
     const input = document.createElement('input');

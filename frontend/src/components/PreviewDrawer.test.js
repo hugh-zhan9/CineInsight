@@ -272,7 +272,7 @@ describe('PreviewDrawer', () => {
     expect(wrapper.get('.detail-section--player').exists()).toBe(true);
     expect(wrapper.get('.preview-drawer__player-shell').exists()).toBe(true);
     expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/1');
-    expect(wrapper.find('.preview-drawer__seek-track').exists()).toBe(false);
+    expect(wrapper.find('.preview-drawer__seek-preview').exists()).toBe(false);
   });
 
 	it('emits the same review action for drawer keyboard shortcuts and ignores inputs', async () => {
@@ -327,7 +327,7 @@ describe('PreviewDrawer', () => {
     });
     await flushPromises();
 
-    const track = wrapper.get('.preview-drawer__seek-track');
+    const track = wrapper.get('[data-test="playback-seek"]');
     wrapper.vm.handleSeekPointerMove({
       clientX: 55,
       currentTarget: { getBoundingClientRect: () => ({ left: 5, width: 100 }) }
@@ -341,7 +341,7 @@ describe('PreviewDrawer', () => {
     expect(sprite.attributes('style')).toContain('left: -300%');
 
     await sprite.trigger('error');
-    expect(wrapper.find('.preview-drawer__seek-track').exists()).toBe(false);
+    expect(wrapper.find('.preview-drawer__seek-preview').exists()).toBe(false);
     expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/1');
   });
 

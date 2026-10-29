@@ -734,7 +734,12 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 
 ### 2026-10-29 播放与删除体验补正
 - 用户反馈刚打开内嵌播放就片尾：普通续播现在按媒体实际duration复核现有片尾阈值，尾部/超时长断点从0起播，显式字幕/书签跳转仍保留原规则；队列同样复核，外部播放器不变。
-- 先前用controlslist/CSS隐藏原生全屏不能保证实际WebKit仅一个入口。详情/抽屉及队列改用PlaybackControls，video不启用原生controls；单一全屏入口提供应用内全屏（外壳HTML dialog.showModal）和系统全屏（内层surface Fullscreen API），保持同一video节点、source与位置，Esc只退出本层。控制条实测高度从视频画布扣除，避免遮挡track字幕；进度条获焦后仍复用方向键/空格规则。
+- 先前用controlslist/CSS隐藏原生全屏不能保证实际WebKit仅一个入口。详情/抽屉及队列改用PlaybackControls，video不启用原生controls；单一全屏入口提供应用内全屏（外壳HTML dialog.showModal）和系统全屏（内层surface Fullscreen API），保持同一video节点、source与位置，Esc只退出本层。控制区与字幕布局已由下节2026-10-30修订，进度条获焦后仍复用方向键/空格规则。
 - 用户要求记住废纸篓选择，替代此前单媒体确认默认强制不勾。上次确认值写入既有delete_original_file；取消不写，读取每次重开刷新。RememberDeleteFileChoice专用方法只更新这一列，成功事件同步App现有设置快照，不用整份设置覆盖。偏好保存失败提示但按本次确认值执行删除。
 - 单媒体删除确认Teleport每次准备完成后新挂到body末尾，撤销宿主独立保留；避免复用旧容器导致新图片大图覆盖确认框。确认保存偏好期间锁表单/取消/Esc，外部目标变化使旧确认失效，事件与片库宿主冻结IDs和names。
 - 设计与接口见 docs/loopx/design/2026-10-29-player-delete-fixes/。
+
+### 2026-10-30 播放器控制层与样式
+- 用户要求参考优秀开源播放UI，修正两条常驻滑条与控制区脱离画面的观感。详情/抽屉与队列共用Media Chrome 4.19.4控件，继续使用同一个原生video及现有会话/续播/观看事实；关闭库的热键、手势与持久偏好，避免重复行为。
+- 播放时间线是唯一常驻滑条；音量与字幕设置收进按钮浮层，控制区为画面底部渐变叠层，空闲隐藏、暂停显示。视频恢复完整画布，track字幕按实际控制高度避让，控件隐藏时回到底部；sprite进入库的预览槽。唯一全屏入口继续提供应用内与系统全屏，设置弹层在两种模式下可用，Esc优先关设置。
+- 队列非模态dialog显式相对定位，遵守父容器宽度。原浏览器默认绝对定位会越过380px容器；真实WKWebView用可信鼠标点击验证时间线位置与全屏，专用runner及测试见scripts/test_playback_queue_webkit.sh。设计修订见docs/loopx/design/2026-10-29-player-delete-fixes/概要设计.md#D-PLAYER-UI-01。

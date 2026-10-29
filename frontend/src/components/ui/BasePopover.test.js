@@ -57,4 +57,16 @@ describe('BasePopover 与对话框', () => {
     expect(wrapper.vm.popover).toBe(true);
     expect([...document.body.querySelectorAll('.base-popover')].map(node => node.textContent)).toContain('对话框里的浮层');
   });
+  it('supports player menus above the anchor and keeps existing bottom placement as default', async () => {
+    const anchor = {getBoundingClientRect:()=>({left:50,right:150,top:300,bottom:336})};
+    const wrapper = mount(BasePopover, {attachTo:document.body,props:{anchor,placement:'top',teleport:false}}); wrappers.push(wrapper);
+    Object.defineProperty(wrapper.vm.$refs.panel,'offsetHeight',{configurable:true,value:100});
+    wrapper.vm.reposition();
+    expect(wrapper.vm.top).toBe(194);
+    await wrapper.setProps({placement:'bottom'}); wrapper.vm.reposition();
+    expect(wrapper.vm.top).toBe(342);
+    await wrapper.setProps({placement:'top',anchor:{getBoundingClientRect:()=>({left:50,right:150,top:20,bottom:56})}}); wrapper.vm.reposition();
+    expect(wrapper.vm.top).toBe(62);
+  });
+
 });

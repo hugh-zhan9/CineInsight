@@ -1,12 +1,13 @@
 <template>
   <dialog open ref="playerShell" class="queue-inline-player playback-shell surface-cinema" aria-label="队列播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
-    <div ref="playerSurface" class="playback-surface" tabindex="0">
-    <video ref="video" :src="identity.locator" playsinline preload="metadata" data-test="queue-inline-video"
+    <component :is="'media-controller'" ref="playerSurface" :id="`queue-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand">
+    <video slot="media" ref="video" :src="identity.locator" playsinline preload="metadata" @click="$refs.controls?.togglePlayback()" data-test="queue-inline-video"
       @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @timeupdate="progress" @ended="ended" @error="failed" />
-    <PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :video-element="() => $refs.video" />
-    <PlaybackControls :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" />
-    </div>
+    <PlaybackControls ref="controls" :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface">
+      <template #settings><PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :video-element="() => $refs.video" @menu-change="$refs.controls?.holdControls($event)" /></template>
+    </PlaybackControls>
+    </component>
     <p v-if="error" role="alert" data-test="queue-inline-error">{{ error }}</p>
   </dialog>
 </template>
@@ -116,10 +117,10 @@ export default {
 };
 </script>
 <style scoped>
-.queue-inline-player { width: 100%; background: var(--player-bg); border-radius: var(--radius); overflow: hidden; }
+.queue-inline-player { position: relative; width: 100%; background: var(--player-bg); border-radius: var(--radius); overflow: hidden; }
 .queue-inline-player .playback-surface { height: min(34vh, 300px); }
 .queue-inline-player:modal .playback-surface, .queue-inline-player .playback-surface:fullscreen { height: 100vh; }
 .queue-inline-player:modal { position: fixed; inset: 0; width: 100vw; height: 100vh; margin: 0; border-radius: 0; }
-.queue-inline-player video { display: block; width: 100%; height: calc(100% - var(--playback-controls-height, 70px)); object-fit: contain; }
+.queue-inline-player video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .queue-inline-player p { color: var(--media-badge-fg); padding: var(--space-2); margin: 0; }
 </style>

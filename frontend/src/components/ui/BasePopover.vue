@@ -37,6 +37,7 @@ export default {
     // 右键菜单这类没有触发元素的场景，直接给视口坐标。
     position: { type: Object, default: null },
     align: { type: String, default: 'start' },
+    placement: { type: String, default: 'bottom', validator: value => ['top', 'bottom'].includes(value) },
     minWidth: { type: Number, default: 0 },
     panelClass: { type: String, default: '' },
     teleport: { type: Boolean, default: true }
@@ -111,10 +112,13 @@ export default {
         left = this.position.x;
       } else if (this.anchor?.getBoundingClientRect) {
         const rect = this.anchor.getBoundingClientRect();
-        top = rect.bottom + ANCHOR_GAP;
+        top = this.placement === 'top' ? rect.top - ANCHOR_GAP - height : rect.bottom + ANCHOR_GAP;
         left = this.align === 'end' ? rect.right - width : rect.left;
         // 下方放不下就翻到上方，翻上去仍放不下时保留在下方由钳制兜底。
-        if (top + height > viewportHeight - VIEWPORT_MARGIN) {
+        if (this.placement === 'top' && top < VIEWPORT_MARGIN) {
+          const below = rect.bottom + ANCHOR_GAP;
+          if (below + height <= viewportHeight - VIEWPORT_MARGIN) top = below;
+        } else if (this.placement !== 'top' && top + height > viewportHeight - VIEWPORT_MARGIN) {
           const above = rect.top - ANCHOR_GAP - height;
           if (above >= VIEWPORT_MARGIN) top = above;
         }

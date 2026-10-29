@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "esbuild": "^0.28.1",
+    "media-chrome": "4.19.4",
     "vue": "^3.2.37"
   },
   "devDependencies": {

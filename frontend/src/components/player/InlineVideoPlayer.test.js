@@ -1,4 +1,4 @@
-import { DOMWrapper, flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -618,7 +618,7 @@ describe('InlineVideoPlayer 全屏', () => {
   async function enterSystem(wrapper) {
     await wrapper.get('[data-test="inline-player-fullscreen"]').trigger('click');
     await flushPromises();
-    await new DOMWrapper(document.body).get('[data-test="player-system-fullscreen"]').trigger('click');
+    await wrapper.get('[data-test="player-system-fullscreen"]').trigger('click');
     await flushPromises();
   }
   function installFullscreen() {
@@ -649,15 +649,15 @@ describe('InlineVideoPlayer 全屏', () => {
     const button = wrapper.get('[data-test="inline-player-fullscreen"]');
     await enterSystem(wrapper);
     expect(request.mock.instances[0]).toBe(wrapper.get('.playback-surface').element);
-    expect(button.text()).toBe('退出全屏');
+    expect(button.attributes('aria-label')).toBe('退出全屏');
     expect(button.attributes('aria-pressed')).toBe('true');
     await button.trigger('click');
     expect(exit).toHaveBeenCalledTimes(1);
-    expect(button.text()).toBe('全屏');
+    expect(button.attributes('aria-label')).toBe('全屏');
     await enterSystem(wrapper);
     await document.exitFullscreen();
     await flushPromises();
-    expect(button.text()).toBe('全屏');
+    expect(button.attributes('aria-label')).toBe('全屏');
     expect(wrapper.get('video').element).toBe(video);
     expect(player.currentTime).toBe(42);
     expect(video.pause).not.toHaveBeenCalled();
@@ -670,7 +670,7 @@ describe('InlineVideoPlayer 全屏', () => {
     await enterSystem(wrapper);
     await flushPromises();
     expect(wrapper.get('[role="alert"]').text()).toContain('无法切换全屏');
-    expect(wrapper.get('[data-test="inline-player-fullscreen"]').text()).toBe('全屏');
+    expect(wrapper.get('[data-test="inline-player-fullscreen"]').attributes('aria-label')).toBe('全屏');
   });
 
   it('离开播放器时退出自己开启的全屏', async () => {
@@ -694,7 +694,7 @@ describe('InlineVideoPlayer 全屏', () => {
       expect(exit).toHaveBeenCalledTimes(1);
       expect(event.defaultPrevented).toBe(true);
       expect(hostKey).not.toHaveBeenCalled();
-      expect(wrapper.get('[data-test="inline-player-fullscreen"]').text()).toBe('全屏');
+      expect(wrapper.get('[data-test="inline-player-fullscreen"]').attributes('aria-label')).toBe('全屏');
     } finally {
       document.removeEventListener('keydown', hostKey);
     }

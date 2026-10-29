@@ -48,9 +48,10 @@
     <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
     <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
       <dialog open ref="playerShell" class="preview-drawer__player-shell playback-shell" aria-label="视频播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
-        <div ref="playerSurface" class="playback-surface" tabindex="0">
+        <component :is="'media-controller'" ref="playerSurface" :id="`detail-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand">
         <video
           ref="videoElement"
+          slot="media"
           :key="previewMediaGeneration"
           class="preview-drawer__video"
           playsinline
@@ -68,17 +69,12 @@
         >
           <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
         </video>
-        <PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" />
-        <PlaybackControls :key="`controls-${previewMediaGeneration}`" ref="controls" :video-element="() => $refs.videoElement" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" @seek-hover="handleSeekPointerMove" @seek-leave="seekPreview = null" />
-        <div
-          v-if="activeSeekSprite"
-          class="preview-drawer__seek-track"
-          aria-hidden="true"
-        >
+        <PlaybackControls :key="`controls-${previewMediaGeneration}`" ref="controls" :video-element="() => $refs.videoElement" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" @seek-hover="handleSeekPointerMove" @seek-leave="seekPreview = null">
+          <template #settings><PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" @menu-change="$refs.controls?.holdControls($event)" /></template>
+          <template v-if="activeSeekSprite" #seek-preview>
           <div
             v-if="seekPreview"
             class="preview-drawer__seek-preview"
-            :style="{ left: `${seekPreview.clampedPercent}%` }"
           >
             <span class="preview-drawer__seek-image">
               <img
@@ -90,8 +86,9 @@
             </span>
             <time>{{ formatDuration(seekPreview.seconds) }}</time>
           </div>
-        </div>
-        </div>
+          </template>
+        </PlaybackControls>
+        </component>
       </dialog>
     </template>
     <!-- 内嵌播放器报错（D-PC26、PLAY-05）：解码失败不再是一块黑屏，给出系统播放器与播放代理两条路。
@@ -618,8 +615,7 @@ export default {
       const frameIndex = Math.min(Math.floor(seconds / interval), frameCount - 1);
       this.seekPreview = {
         frameIndex,
-        seconds,
-        clampedPercent: Math.min(Math.max(ratio * 100, 18), 82)
+        seconds
       };
     },
     handleSeekSpriteError() {
@@ -651,10 +647,8 @@ export default {
 
 
 .preview-drawer__player-shell:modal { position: fixed; inset: 0; width: 100vw; height: 100vh; margin: 0; aspect-ratio: auto; }
-.preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: calc(100% - var(--playback-controls-height, 70px)); min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
-.preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: var(--playback-controls-height, 70px); left: 12px; height: 12px; border-radius: var(--radius-pill); background: transparent; cursor: default; pointer-events: none; }
-.preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; content: none; }
-.preview-drawer__seek-preview { position: absolute; bottom: 18px; width: 160px; transform: translateX(-50%); display: grid; gap: var(--space-1); justify-items: center; pointer-events: none; }
+.preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
+.preview-drawer__seek-preview { width: 160px; display: grid; gap: var(--space-1); justify-items: center; pointer-events: none; }
 /* 悬停预览浮在画面上：描边与时间角标用画面角标的那一对颜色（两主题同值），投影取浮层投影。 */
 .preview-drawer__seek-image { position: relative; width: 160px; height: 90px; overflow: hidden; border: 2px solid var(--media-badge-fg); border-radius: var(--radius-sm); background: var(--player-bg); box-shadow: var(--shadow-popover); }
 .preview-drawer__seek-image img { position: absolute; max-width: none; object-fit: fill; }

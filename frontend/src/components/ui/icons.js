@@ -19,6 +19,7 @@ export const ICON_PATHS = Object.freeze({
   folder: ['M3.5 6.5a1 1 0 0 1 1-1h5l2 2.5h8a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z'],
   play: ['M7 4.5v15l12-7.5z'],
   pause: ['M8 5v14', 'M16 5v14'],
+  subtitles: ['M3 5h18v14H3z', 'M6 10h4', 'M14 10h4', 'M6 14h7', 'M16 14h2'],
   fullscreen: ['M9 4H4v5', 'M15 4h5v5', 'M4 15v5h5', 'M20 15v5h-5'],
   volume: ['M4 9v6h4l5 4V5L8 9z', 'M17 8a6 6 0 0 1 0 8'],
   'volume-off': ['M4 9v6h4l5 4V5L8 9z', 'M17 9l5 6', 'M22 9l-5 6'],
