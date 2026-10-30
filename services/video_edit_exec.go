@@ -372,9 +372,7 @@ func (s *VideoEditService) verifyEditOutput(ctx context.Context, plan editPlan, 
 // publish_target 与 staged_size 写入项行，再 rename，然后单事务建 videos 行、同步短视频标签并把项置
 // completed。事务失败把文件移回工作目录并报 publish_failed。发布一旦开始不再响应取消。
 func (s *VideoEditService) publishEditOutput(ctx context.Context, item models.VideoEditItem, plan editPlan, staging string) error {
-	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
-	if err := fsyncEnhancementFile(staging); err != nil {
+	if err := s.syncPublishFile(staging); err != nil {
 		return editError("publish_failed", "发布前同步成品失败")
 	}
 	info, err := os.Stat(staging)
@@ -393,6 +391,10 @@ func (s *VideoEditService) publishEditOutput(ctx context.Context, item models.Vi
 		}
 	}
 	defer releaseOnce()
+	// 刷盘和路径锁等待不受数据库 context 控制，不能提前耗尽入库预算。
+	// 在准备完成后开始计时；发布过程仍不响应用户取消。
+	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.publishTimeout)
+	defer cancel()
 	name, target, err := s.renameEditOutputExclusive(bg, item.ID, plan, staging, info.Size())
 	if err != nil {
 		return err

@@ -46,6 +46,9 @@ type VideoEditService struct {
 	afterClaimHook func()
 	// beforePublishRename 只在单测里设置：发布时选好文件名、写入 publish_target 之后、rename 之前调用。
 	beforePublishRename func(target string)
+	// 发布准备与入库预算的测试接缝；生产默认仍使用真实刷盘和两分钟预算。
+	syncPublishFile func(string) error
+	publishTimeout  time.Duration
 
 	// bootTime 是服务构造时间：启动对账只处理在它之前排队/开始分析的项目，不碰本次进程里新排的项。
 	bootTime time.Time
@@ -101,6 +104,8 @@ func NewVideoEditService(probe *MediaProbeService, slot *MediaWorkSlot, dataDir 
 		findFFprobe:     findFFProbeBinary,
 		listEncoders:    nil,
 		diskFree:        enhancementDiskFree,
+		syncPublishFile: fsyncEnhancementFile,
+		publishTimeout:  2 * time.Minute,
 		goos:            runtime.GOOS,
 		now:             time.Now,
 		detectIntros:    editalign.DetectIntros,
