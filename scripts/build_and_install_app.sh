@@ -236,6 +236,7 @@ main() {
 
   bundle_enhance_runtime
   bundle_apple_ai
+  python3 "${SCRIPT_DIR}/macos_signing.py" sign "${BUILD_APP_PATH}"
 
   if (( BUILD_ONLY == 1 )); then
     log "构建完成：${BUILD_APP_PATH}"

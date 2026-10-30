@@ -508,7 +508,7 @@
 
 <script>
 import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress } from '../utils/watchProgress.js';
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { GetSemanticIndexStatus, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -524,11 +524,13 @@ import AITagReviewDialog from './AITagReviewDialog.vue';
 import LocalMetadataDialog from './LocalMetadataDialog.vue';
 import LibraryToolbar from './video-list/LibraryToolbar.vue';
 import IncrementalScanBar from './video-list/IncrementalScanBar.vue';
+import { libraryQueryMixin } from './video-list/libraryQuery.js';
+import { librarySelectionMixin } from './video-list/librarySelection.js';
 import { libraryTaskStateMixin } from './video-list/libraryTasks.js';
 import RenameDialogs from './video-list/RenameDialogs.vue';
 import SemanticNoticeBar from './video-list/SemanticNoticeBar.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
-import BatchActionBar, { selectedSizeText } from './video-list/BatchActionBar.vue';
+import BatchActionBar from './video-list/BatchActionBar.vue';
 import { wheelForwardingMixin } from './video-list/wheelForwarding.js';
 import SaveViewDialog, { parseSavedViewIDs } from './video-list/SaveViewDialog.vue';
 import SubtitlePreviewModal from './video-list/SubtitlePreviewModal.vue';
@@ -568,13 +570,7 @@ import { LIBRARY_MANAGE_SMART_VIEWS } from '../utils/appCommands.js';
 const LOCAL_METADATA_UPDATED_VIEW = 'local_metadata_updated';
 // UpdateVideoWatchProgress 的起播来源（D-PC42）：从断点、从片头、从字幕命中或指定时间。
 const WATCH_PROGRESS_ORIGINS = ['resume', 'start', 'jump'];
-// 分页游标的全部字段及其初值：整表重载、原地刷新从头翻页时都清成这一份。
-const EMPTY_PAGING_CURSOR = Object.freeze({
-  cursorScore: 0,
-  cursorSize: 0,
-  cursorID: 0,
-  libraryCursor: null
-});
+
 // 片库管理的布局（D-P3-03）：列表与网格。缩略图墙拿掉了，本机记着它的打开时退回列表并提示一次（随即改写偏好）。
 const LIBRARY_LAYOUT_KEY = 'cineinsight-library-layout';
 const LIBRARY_LAYOUTS = ['list', 'grid'];
@@ -598,8 +594,7 @@ export function readLibraryLayout() {
   if (LIBRARY_LAYOUTS.includes(stored)) return { layout: stored, removed: false };
   return { layout: 'list', removed: stored === 'wall' };
 }
-// 原地刷新每次请求的条数上限：后端分页接口超过 200 会退回默认值，语义检索封顶 100。
-const IN_PLACE_REFRESH_PAGE_LIMIT = 100;
+
 
 // 界面上只显示目录名，不显示绝对路径（G-3）。
 function pathBaseName(path) {
@@ -624,7 +619,7 @@ export default {
   name: 'VideoListPage',
   // 三期（D-P3-03）本页只属于管理侧「片库管理」：随机播放与今晚看什么、缩略图墙、观看向的智能视图都在观看侧「视频」海报墙上。
   // 「管理」菜单发起的补全与 NFO 写出、它们的进度文案在 libraryTaskStateMixin（原 BackgroundTaskStatusBars，D-P3-05）。
-  mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin, libraryTaskStateMixin],
+  mixins: [libraryQueryMixin, librarySelectionMixin, wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin, libraryTaskStateMixin],
   components: { MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, IncrementalScanBar, LibraryToolbar, SemanticNoticeBar, TrashUndoBanner, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, AppBanner, AppIcon, AppSpinner, BatchActionBar, DialogShell, EmptyState, FilterChip, PageHeader, SkeletonBlock },
   props: {
     tags: { type: Array, default: () => [] },
@@ -638,7 +633,6 @@ export default {
   emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'search-scenes', 'find-similar-scenes', 'open-video-edit', 'open-cleanup', 'trash-restored', 'open-task-center'],
   data() {
     return {
-      videos: [],
       consolidationRefreshVersions: new Map(),
       viewMode: readLibraryLayout().layout,
       rowDensity: window.localStorage?.getItem('cineinsight-library-density') === 'comfortable' ? 'comfortable' : 'compact',
@@ -662,9 +656,6 @@ export default {
       lastAppliedSavedViewID: 0,
       // 应用保存视图时被剔除的条件数（D-PC35）：{ name, dropped }。
       savedViewNotice: null,
-      filteredCount: null,
-      libraryTotalCount: null,
-      countToken: 0,
       // 元数据批量编辑（D-MC-04）：打开时记下所选与当前筛选；null 表示没开。
       metadataBatchEdit: null,
       selectedTags: [],
@@ -692,35 +683,15 @@ export default {
         { label: '2k-4k', value: { min: 1440, max: 2159 } },
         { label: '4k以上', value: { min: 2160, max: 0 } }
       ],
-      cursorScore: 0,
-      cursorSize: 0,
-      cursorID: 0,
-      libraryCursor: null,
       // 行标签「手动」角标（D-PC36）：视频 ID（字符串）→ 被人工覆盖、结果为「加上」的自动标签种类。
       automaticOverrideKinds: {},
-      pageSize: 20,
-      loading: false,
-      hasMore: true,
-      // 列表当前装的是哪一组查询条件（virtualListQueryKey）。重载时条件没变就原地刷新、停在原位，
-      // 条件变了才清空回顶。
-      listQueryKey: '',
-      // 原地刷新期间列表照常显示，不出「加载中」；分页游标被刷新占用，触底加载要等它结束。
-      refreshingInPlace: false,
       rowMenu: { video: null, anchor: null, position: null },
       showScanDialog: false,
       // 增量扫描状态条自己持有真值；这里的镜像给「管理」菜单文案与 ⌘R 用。
       incrementalScan: { running: false, state: 'idle', message: '' },
       migrationRunning: false,
       showTagManagerDialog: false,
-      reloadRequested: false,
-      reloadPromise: null,
-      loadIdleResolvers: [],
       addTagDialog: { show: false, video: null, videoIds: [], mode: 'single' },
-      selectedVideoIds: [],
-      // 「全选当前结果」正在补取剩余的页（D-UD-10）。
-      selectingAllMatching: false,
-      // 用户自己改选择（勾选/取消、清空、键盘移动）时加一：补取途中改过，「全选当前结果」作废，不覆盖用户的改动。
-      selectionEditSeq: 0,
 	  keyboardFocusVideoID: 0,
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
@@ -767,12 +738,7 @@ export default {
       this._removedLayoutNoticePending = true;
       this.showRemovedLayoutNotice();
     }
-    this.listQueryKey = this.virtualListQueryKey;
-    this.loadVideos();
-    this.refreshLibraryCounts();
-    this.loadSemanticStatus();
-    this.loadSavedLibraryViews();
-    this.loadEnhancementCapability();
+    this.activateLibraryView();
     this.attachWheelFallback();
 	window.addEventListener('keydown', this.handleLibraryShortcut);
 	window.addEventListener('keydown', this.handleToolbarShortcut);
@@ -850,7 +816,10 @@ export default {
     searchKeyword(value) { if (this.focusedVideo && value !== this.focusedVideo.keyword) this.focusedVideo = null; },
     searchMode(value) { if (value !== 'file') this.focusedVideo = null; },
     pageActive(active) {
-      if (active) this.showRemovedLayoutNotice();
+      if (active) {
+        this.showRemovedLayoutNotice();
+        this.activateLibraryView();
+      }
     },
     subtitleIndexNoticeVisible: {
       immediate: true,
@@ -1027,30 +996,6 @@ export default {
       if (!this.hasMore) return this.videos.length;
       if (!this.listIsFilterResult) return null;
       return Number.isFinite(this.filteredCount) ? this.filteredCount : null;
-    },
-    // 「全选当前结果（N）」的范围（D-UD-10）：工具栏按钮与底部选择操作条共用这一份，N 与点了之后选中的条数一致。
-    //   筛选结果：整个筛选（N 是命中数，没加载的页先取回来，见 selectAllMatching）；
-    //   语义检索、相似视频与随机批次：只选已经加载、列出来的行（N 是已加载条数），不往后取——
-    //   后端没有距离阈值，往后取就是把整个已索引的片库都选上。
-    selectAllScope() {
-      const loadedOnly = !this.listIsFilterResult;
-      return { loadedOnly, total: loadedOnly ? this.videos.length : this.matchingTotal };
-    },
-    // 「全选当前结果」要选的每一条都已选中：工具栏的按钮据此换成「取消选择」。
-    selectAllScopeSelected() {
-      if (!this.selectAllScope.loadedOnly) return this.allMatchingSelected;
-      if (this.videos.length === 0) return false;
-      const selected = new Set(this.selectedVideoIds);
-      return this.videos.every(video => selected.has(video.id));
-    },
-    // 当前结果已全部选中：结果加载完了，且每一条都在选中里。
-    allMatchingSelected() {
-      if (this.hasMore || this.videos.length === 0) return false;
-      const selected = new Set(this.selectedVideoIds);
-      return this.videos.every(video => selected.has(video.id));
-    },
-    selectedTotalSizeText() {
-      return selectedSizeText(this.videos, this.selectedVideoIds);
     },
     // 删除用三个词之一（D-UD-08）：按设置里的默认方式写「移到废纸篓」或「从片库移除」；会先弹确认框时带「…」。
     deleteActionLabel() {
@@ -1651,35 +1596,6 @@ export default {
         max_rating: overrides.maxRating === '' ? null : Number(overrides.maxRating)
       };
     },
-    // 片库总数只在为空时才重新取（refreshLibraryCounts）；扫描与重新检查之后置空让它重取。
-    invalidateLibraryTotal() {
-      this.libraryTotalCount = null;
-    },
-    // 结果条的命中数：筛选变化后请求一次，翻页不再重复请求。
-    async refreshLibraryCounts() {
-      if (this.searchMode === 'semantic') {
-        this.filteredCount = null;
-        return;
-      }
-      const token = ++this.countToken;
-      // 合并版本时两个数都按卡片计；口径（按卡片 / 按文件）变了，总数要重取。
-      const collapse = this.versionCollapseActive();
-      const totalStale = this.libraryTotalCount === null || this.libraryTotalCollapse !== collapse;
-      try {
-        const [filtered, total] = await Promise.all([
-          CountLibraryVideos(this.libraryPageFilter()),
-          totalStale ? CountLibraryVideos(this.libraryTotalFilter()) : Promise.resolve(this.libraryTotalCount)
-        ]);
-        if (token !== this.countToken) return;
-        this.filteredCount = filtered;
-        this.libraryTotalCount = total;
-        this.libraryTotalCollapse = collapse;
-      } catch (err) {
-        if (token !== this.countToken) return;
-        this.filteredCount = null;
-        this.debugLog('refreshLibraryCounts failed', { err: String(err) }, true);
-      }
-    },
     emptyLibraryFilter() {
       return {
         search_mode: 'file',
@@ -1734,10 +1650,6 @@ export default {
         this.selectedSavedViewID = Number(item.id.slice(6));
         this.applySelectedSavedView();
       }
-    },
-    clearSelection() {
-      this.selectedVideoIds = [];
-      this.selectionEditSeq += 1;
     },
     openRowMenu(video, anchor) {
       this.rowMenu = { video, anchor, position: null };
@@ -1875,187 +1787,6 @@ export default {
           _subtitleMatchEndMs: segment.end_time_ms
         };
       });
-    },
-    // limit：一页取多少条，触底加载用 pageSize；「全选当前结果」补齐剩余结果时一次取得多一些（与原地刷新同一上限）。
-    async loadVideos(limit = this.pageSize) {
-      if (this.loading || this.refreshingInPlace || !this.hasMore) return;
-      this.loading = true;
-      try {
-        const keyword = this.currentQueryKeyword();
-        this.debugLog('loadVideos begin', {
-          keyword,
-          searchMode: this.searchMode,
-          hasStructuredFilters: this.hasStructuredFilters(),
-          cursorScore: this.cursorScore,
-          cursorSize: this.cursorSize,
-          cursorID: this.cursorID,
-          pageSize: this.pageSize,
-          existingVideos: this.videos.length
-        });
-
-        const page = await this.fetchNextVideoPage(limit, this.videos.length);
-        const newVideos = page.videos;
-
-        this.debugLog('loadVideos query resolved', {
-          count: newVideos.length,
-          sample: newVideos.slice(0, 3).map(video => ({ id: video.id, name: video.name, path: video.path })),
-          mode: this.smartView || keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
-        });
-
-        if (!page.hasMore) {
-          this.hasMore = false;
-        }
-        if (newVideos.length > 0) {
-          this.videos.push(...newVideos);
-        }
-        this.debugLog('loadVideos applied to state', {
-          totalVideos: this.videos.length,
-          hasMore: this.hasMore
-        });
-      } catch (err) {
-        this.reportVideoLoadFailure(err);
-      } finally {
-        this.loading = false;
-        const idleResolvers = this.loadIdleResolvers.splice(0);
-        idleResolvers.forEach(resolve => resolve());
-        this.debugLog('loadVideos finished', {
-          totalVideos: this.videos.length,
-          hasMore: this.hasMore,
-          loading: this.loading
-        });
-      }
-    },
-    // 从当前分页游标往后取一页并推进游标；取回的行要不要进列表、hasMore 怎么改由调用方决定。
-    // offset 只有语义检索用（按条数翻页），其余接口走键集游标。
-    async fetchNextVideoPage(limit, offset) {
-      const keyword = this.currentQueryKeyword();
-      let videos = [];
-      let semanticHasMore = null;
-
-      if (this.searchMode === 'semantic') {
-        if (!keyword && !this.semanticSimilarVideoID) {
-          return { videos, hasMore: false };
-        }
-        this.semanticSearchError = '';
-        const request = {
-          filter: this.currentLibraryFilter(),
-          offset,
-          limit
-        };
-        const page = this.semanticSimilarVideoID
-          ? await FindSimilarVideos({ ...request, video_id: this.semanticSimilarVideoID })
-          : await SearchSemanticVideos({ ...request, query: keyword });
-        this.semanticCoverage = page?.coverage || null;
-        semanticHasMore = !!page?.has_more;
-        videos = (page?.hits || []).map(hit => ({ ...hit.video, _semanticScore: hit.score }));
-        this.libraryCursor = null;
-        await this.fillAutomaticOverrideKinds(videos);
-      } else {
-        const request = { filter: this.libraryPageFilter(), limit };
-        if (this.libraryCursor) request.cursor = this.libraryCursor;
-        const page = await SearchLibraryVideoPage(request);
-        videos = page?.videos || [];
-        this.libraryCursor = page?.next_cursor || null;
-        this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
-        this.mergeVersionGroups(page?.version_groups, videos);
-      }
-
-      videos = await this.attachSubtitleHits(videos, keyword);
-
-      const hasMore = this.searchMode === 'semantic' ? semanticHasMore : !!this.libraryCursor;
-      return { videos, hasMore };
-    },
-    reportVideoLoadFailure(err) {
-      if (this.searchMode === 'semantic') this.semanticSearchError = String(err);
-      this.debugLog('loadVideos failed', { err: String(err) }, true);
-      console.error('加载视频失败:', err);
-      notifyError('加载视频失败: ' + err);
-    },
-    pagingCursor() {
-      return Object.fromEntries(Object.keys(EMPTY_PAGING_CURSOR).map(key => [key, this[key]]));
-    },
-    setPagingCursor(cursor) {
-      for (const key of Object.keys(EMPTY_PAGING_CURSOR)) this[key] = cursor[key];
-    },
-    // 同一组条件下的重载（后台对账、扫描汇总、行内操作之后）：列表不清空、不出「加载中」，
-    // 从头按当前已加载的条数重取一遍，取齐后整体替换，再把视口顶部那一行放回原位。
-    // 取的途中失败或条件变了，就留着旧列表、放回原游标，触底加载照旧往后翻。
-    async refreshVideosInPlace() {
-      const depth = this.videos.length;
-      const queryKey = this.virtualListQueryKey;
-      const previousCursor = this.pagingCursor();
-      const refreshed = [];
-      let hasMore = true;
-      this.refreshingInPlace = true;
-      this.setPagingCursor(EMPTY_PAGING_CURSOR);
-      try {
-        while (hasMore && refreshed.length < depth) {
-          const limit = Math.min(IN_PLACE_REFRESH_PAGE_LIMIT, depth - refreshed.length);
-          const page = await this.fetchNextVideoPage(limit, refreshed.length);
-          refreshed.push(...page.videos);
-          hasMore = page.hasMore;
-          if (page.videos.length === 0) break;
-        }
-      } catch (err) {
-        this.setPagingCursor(previousCursor);
-        this.reportVideoLoadFailure(err);
-        return;
-      } finally {
-        this.refreshingInPlace = false;
-      }
-      if (this.virtualListQueryKey !== queryKey) {
-        this.setPagingCursor(previousCursor);
-        return;
-      }
-      const anchor = this.$refs.virtualList?.captureScrollAnchor?.();
-      this.videos = refreshed;
-      this.hasMore = hasMore;
-      const keptIDs = new Set(refreshed.map(video => video.id));
-      this.selectedVideoIds = this.selectedVideoIds.filter(id => keptIDs.has(id));
-      this.debugLog('refreshVideosInPlace applied', { depth, totalVideos: refreshed.length, hasMore });
-      await this.$nextTick();
-      this.$refs.virtualList?.restoreScrollAnchor?.(anchor);
-    },
-    waitForLoadIdle() {
-      if (!this.loading) return Promise.resolve();
-      return new Promise(resolve => this.loadIdleResolvers.push(resolve));
-    },
-    async resetAndLoadVideos() {
-      this.reloadRequested = true;
-      if (this.reloadPromise) {
-        await this.reloadPromise;
-        if (this.reloadRequested) return this.resetAndLoadVideos();
-        return;
-      }
-      this.refreshLibraryCounts();
-      const activeReload = (async () => {
-        while (this.reloadRequested) {
-          this.reloadRequested = false;
-          await this.waitForLoadIdle();
-          const queryKey = this.virtualListQueryKey;
-          if (this.videos.length > 0 && queryKey === this.listQueryKey) {
-            await this.refreshVideosInPlace();
-            continue;
-          }
-          this.listQueryKey = queryKey;
-          this.videos = [];
-          this.selectedVideoIds = [];
-          this.setPagingCursor(EMPTY_PAGING_CURSOR);
-          this.automaticOverrideKinds = {};
-          if (this.searchMode !== 'semantic') {
-            this.semanticCoverage = null;
-            this.semanticSearchError = '';
-          }
-          this.hasMore = true;
-          await this.loadVideos();
-        }
-      })();
-      this.reloadPromise = activeReload;
-      await activeReload;
-      if (this.reloadPromise === activeReload) {
-        this.reloadPromise = null;
-      }
-      if (this.reloadRequested) return this.resetAndLoadVideos();
     },
     isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
       return this.searchMode === 'subtitle' && !!keyword;
@@ -2271,9 +2002,6 @@ export default {
       } catch (err) {
         notifyError('删除保存视图失败: ' + err);
       }
-    },
-    async reloadCurrentView() {
-      return this.resetAndLoadVideos();
     },
     applyClientFilters(videos) {
       return (videos || []).filter(video => {
@@ -2658,61 +2386,6 @@ export default {
     },
     showContextMenu(event, video) {
       this.rowMenu = { video, anchor: null, position: { x: event.clientX, y: event.clientY } };
-    },
-    isVideoSelected(videoID) {
-      return this.selectedVideoIds.includes(videoID);
-    },
-    toggleVideoSelection(video, selected) {
-      if (!video) return;
-      this.selectionEditSeq += 1;
-      if (selected) {
-        if (!this.selectedVideoIds.includes(video.id)) {
-          this.selectedVideoIds = [...this.selectedVideoIds, video.id];
-        }
-      } else {
-        this.selectedVideoIds = this.selectedVideoIds.filter(id => id !== video.id);
-      }
-    },
-    // 工具栏的「全选当前结果 / 取消选择」：已全选时清空，否则选中整个当前结果（与选择操作条同一个范围）。
-    toggleSelectAllMatching() {
-      if (this.selectAllScopeSelected) {
-        this.clearSelection();
-        return undefined;
-      }
-      return this.selectAllMatching();
-    },
-    // 「全选当前结果（N）」（D-UD-10），范围见 selectAllScope：
-    //   语义检索、相似视频与随机批次只选已加载的行，不往后取；
-    //   筛选结果作用于整个筛选，先把还没加载的页按当前条件取回来再全部选中（期间按钮写「正在选择…」）。
-    //   取的途中条件变了、某一页取失败（已提示）、或用户自己改了选择，就不选——不把一部分说成「全部」，
-    //   也不覆盖用户刚做的勾选。
-    async selectAllMatching() {
-      if (this.selectingAllMatching) return;
-      if (this.selectAllScope.loadedOnly) {
-        this.selectedVideoIds = this.videos.map(video => video.id);
-        return;
-      }
-      this.selectingAllMatching = true;
-      const queryKey = this.virtualListQueryKey;
-      const editSeq = this.selectionEditSeq;
-      // 勾选、取消选择与键盘移动会推 selectionEditSeq；批量动作做完直接清空选择的路径（导入本地资料、移动、
-      // 版本组、剪辑工程）不推，所以再比一次内容：选择变了就作废这次全选。
-      const startSelection = [...this.selectedVideoIds].sort((a, b) => a - b).join(',');
-      const sameSelection = () => [...this.selectedVideoIds].sort((a, b) => a - b).join(',') === startSelection;
-      const unchanged = () => this.virtualListQueryKey === queryKey && this.selectionEditSeq === editSeq && sameSelection();
-      try {
-        if (this.reloadPromise) await this.reloadPromise;
-        await this.waitForLoadIdle();
-        while (this.hasMore && unchanged()) {
-          const before = this.videos.length;
-          await this.loadVideos(IN_PLACE_REFRESH_PAGE_LIMIT);
-          if (this.videos.length === before) break;
-        }
-        if (this.hasMore || !unchanged()) return;
-        this.selectedVideoIds = this.videos.map(video => video.id);
-      } finally {
-        this.selectingAllMatching = false;
-      }
     },
     // 「批量编辑…」：所选条目，或当前筛选的全部结果。语义检索、随机批次与相似视频列出的不是筛选结果，
     // 这时只提供「所选」。折叠版本时筛选范围仍是全部版本，对话框据 collapsed 说明总数里含折叠的版本。

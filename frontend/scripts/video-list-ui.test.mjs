@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 
 const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
-const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
+const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/libraryQuery.js', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/librarySelection.js', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const videoRowSource = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const shortFeedCss = readFileSync(new URL('../src/short-feed/short-feed.css', import.meta.url), 'utf8');

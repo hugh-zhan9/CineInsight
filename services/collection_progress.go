@@ -271,8 +271,15 @@ func loadCollectionProgressRows(collectionIDs []uint) (map[uint][]collectionProg
 		return nil, fmt.Errorf("读取作品集成员失败: %w", err)
 	}
 	grouped := make(map[uint][]collectionProgressRow)
-	for _, row := range rows {
-		grouped[row.CollectionID] = append(grouped[row.CollectionID], row)
+	// SQL orders by collection ID. Keep bounded views into the result instead of
+	// repeatedly copying every row while growing one slice per collection.
+	for start := 0; start < len(rows); {
+		end := start + 1
+		for end < len(rows) && rows[end].CollectionID == rows[start].CollectionID {
+			end++
+		}
+		grouped[rows[start].CollectionID] = rows[start:end:end]
+		start = end
 	}
 	return grouped, nil
 }
@@ -282,27 +289,30 @@ func loadCollectionProgressRows(collectionIDs []uint) (map[uint][]collectionProg
 func collectionProgressWorks(rows []collectionProgressRow) []*collectionProgressWork {
 	works := make([]*collectionProgressWork, 0, len(rows))
 	byGroup := map[uint]*collectionProgressWork{}
-	for _, row := range rows {
+	for i, row := range rows {
 		if row.GroupID != nil {
 			if work, ok := byGroup[*row.GroupID]; ok {
 				work.members = append(work.members, row)
 				continue
 			}
 		}
-		work := &collectionProgressWork{index: len(works) + 1, members: []collectionProgressRow{row}}
+		work := &collectionProgressWork{index: len(works) + 1, members: rows[i : i+1 : i+1]}
 		works = append(works, work)
 		if row.GroupID != nil {
 			byGroup[*row.GroupID] = work
 		}
 	}
 	for _, work := range works {
-		sort.SliceStable(work.members, func(i, j int) bool {
-			a, b := work.members[i], work.members[j]
-			if groupPositionOf(a) != groupPositionOf(b) {
-				return groupPositionOf(a) < groupPositionOf(b)
-			}
-			return a.VideoID < b.VideoID
-		})
+		// Ungrouped works already have one member; only grouped members need sorting.
+		if len(work.members) > 1 {
+			sort.SliceStable(work.members, func(i, j int) bool {
+				a, b := work.members[i], work.members[j]
+				if groupPositionOf(a) != groupPositionOf(b) {
+					return groupPositionOf(a) < groupPositionOf(b)
+				}
+				return a.VideoID < b.VideoID
+			})
+		}
 		for _, member := range work.members {
 			if member.IsWatched {
 				work.watched = true

@@ -22,6 +22,14 @@ static id evaluate(WKWebView *view, NSString *js) {
 @implementation NativeClick
 -(void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message {
  NSDictionary *data=message.body; WKWebView *view=self.view;
+ // Native pointer input requires a key test window. App-dialog transitions or
+ // another foreground application can otherwise consume a click as activation.
+ if(!NSApp.active || !view.window.keyWindow) {
+  [view.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
+  NSDate *focusLimit=[NSDate dateWithTimeIntervalSinceNow:2];
+  while((!NSApp.active || !view.window.keyWindow) && focusLimit.timeIntervalSinceNow>0) pump(0.01);
+  if(!NSApp.active || !view.window.keyWindow) {fprintf(stderr,"native pointer requires the foreground test window\n");exit(1);}
+ }
  CGFloat x=[data[@"x"] doubleValue], y=[data[@"y"] doubleValue];
  NSPoint point=[view convertPoint:NSMakePoint(x,view.isFlipped?y:view.bounds.size.height-y) toView:nil];
  NSString *phase=data[@"phase"];

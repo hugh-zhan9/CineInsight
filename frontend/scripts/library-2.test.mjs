@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const page = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
+const page = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/libraryQuery.js', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/librarySelection.js', import.meta.url), 'utf8');
 const row = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const preview = readFileSync(new URL('../src/components/PreviewDrawer.vue', import.meta.url), 'utf8');
 // D-UI-11 把抽屉里的内嵌播放器抽成了 InlineVideoPlayer，起播与进度上报的断言跟着搬到新文件上。

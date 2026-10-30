@@ -27,7 +27,8 @@
     "test:visual-library": "node scripts/visual-library.test.mjs",
     "test:design-system": "node scripts/design-system.test.mjs",
     "test:library-2": "node scripts/library-2.test.mjs",
-    "test:bindings-usage": "node scripts/bindings-usage.test.mjs"
+    "test:bindings-usage": "node scripts/bindings-usage.test.mjs",
+    "test:macos": "bash ../scripts/test_macos_webkit.sh"
   },
   "dependencies": {
     "esbuild": "^0.28.1",

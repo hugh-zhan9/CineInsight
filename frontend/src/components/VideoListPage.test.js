@@ -2495,3 +2495,36 @@ it('executes the IDs frozen by the confirmation instead of reading a later delet
  await w.vm.executeDelete({video:null,videoIds:[1,2],deleteFile:false,dontAskAgain:false});
  expect(remove).toHaveBeenCalledWith([1,2],false,{});w.unmount();
 });
+
+
+describe('hidden library startup', () => {
+  it('registers commands without loading hidden view data; coalesces refreshes until first entry', async () => {
+    const w = await mountPage({ pageActive: false });
+    for (const name of ['SearchLibraryVideoPage', 'CountLibraryVideos', 'GetSemanticIndexStatus', 'ListSavedLibraryViews', 'GetEnhancementCapability']) expect(api[name]).not.toHaveBeenCalled();
+    expect(commandList().some(c => c.id === 'library.openAIReview')).toBe(true);
+    await w.vm.reloadCurrentView(); await w.vm.reloadCurrentView();
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
+    await w.setProps({ pageActive: true }); await flushPromises();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(1);
+    expect(api.GetSemanticIndexStatus).toHaveBeenCalledTimes(1);
+    await w.setProps({ pageActive: false });
+    await w.vm.reloadCurrentView(); await w.vm.reloadCurrentView();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(1);
+    await w.setProps({ pageActive: true }); await flushPromises();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(2);
+    expect(api.GetSemanticIndexStatus).toHaveBeenCalledTimes(1);
+    await w.setProps({ pageActive: false }); await w.setProps({ pageActive: true }); await flushPromises();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(2);
+    w.unmount();
+  });
+  it('allows retry after first-entry loading fails', async () => {
+    const w = await mountPage({ pageActive: false });
+    api.SearchLibraryVideoPage.mockRejectedValueOnce(new Error('offline'));
+    await w.setProps({ pageActive: true }); await flushPromises();
+    expect(feedback.notifyError).toHaveBeenCalled();
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [{ id: 456, name: 'retry.mp4', tags: [] }] });
+    await w.vm.reloadCurrentView(); await flushPromises();
+    expect(w.vm.videos.map(v => v.id)).toEqual([456]);
+    w.unmount();
+  });
+});

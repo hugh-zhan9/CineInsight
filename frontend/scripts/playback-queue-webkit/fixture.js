@@ -23,7 +23,8 @@ const root = createApp({ data: () => ({ mode: 'player', session: session(), open
 const assert = (value, message) => { if (!value) throw new Error(message); };
 const until = async (test, label) => { window.progress = label; const end = Date.now()+8000; while (!test() && Date.now()<end) { await new Promise(resolve => setTimeout(resolve, 20)); await nextTick(); } assert(test(), label); };
 const click = selector => { const element = document.querySelector(selector); assert(element, `Missing ${selector}`); element.click(); };
-const trustedClick = (element, ratio = .5) => { const rect = element.getBoundingClientRect(); window.webkit.messageHandlers.nativeClick.postMessage({ x: rect.left + rect.width * ratio, y: rect.top + rect.height / 2 }); };
+document.addEventListener('pointerdown', event => { window.lastPointer = { x:event.clientX, y:event.clientY, trusted:event.isTrusted, target:event.composedPath()[0]?.tagName }; }, true);
+const trustedClick = (element, ratio = .5) => { const rect = element.getBoundingClientRect(); window.lastClickRect = {x:rect.x,y:rect.y,width:rect.width,height:rect.height}; window.webkit.messageHandlers.nativeClick.postMessage({ x: rect.left + rect.width * ratio, y: rect.top + rect.height / 2 }); };
 async function verifyControls(video, label) {
   const surface = video.parentElement;
   const bar = document.querySelector('[data-test="playback-controls"]');
@@ -39,7 +40,11 @@ async function verifyControls(video, label) {
   assert(video.textTracks[0].cues[0].line < 90, 'caption avoids control overlay');
   for (const ratio of [.25, .65]) {
     trustedClick(seek.range, ratio);
-    await until(() => !video.seeking && Math.abs(video.currentTime - 3 * ratio) < .12, `${label} click timeline at ${ratio}`);
+    try {
+      await until(() => !video.seeking && Math.abs(video.currentTime - 3 * ratio) < .12, `${label} click timeline at ${ratio}`);
+    } catch (error) {
+      throw new Error(`${error.message}: ${JSON.stringify({time:video.currentTime,duration:video.duration,seeking:video.seeking,rect:window.lastClickRect,pointer:window.lastPointer})}`);
+    }
   }
   seek.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft', bubbles:true, cancelable:true}));
   await until(() => !video.seeking && video.currentTime < .05, 'timeline keyboard uses five-second step');
@@ -80,7 +85,8 @@ async function verifyControls(video, label) {
   click('[data-test="inline-player-fullscreen"]'); await nextTick();
   await new Promise(r => setTimeout(r, 60));
   trustedClick(document.querySelector('[data-test="player-system-fullscreen"]'));
-  await until(() => document.fullscreenElement === surface, 'system fullscreen ' + (document.querySelector('[role=alert]')?.textContent || ''));
+  try { await until(() => document.fullscreenElement === surface, `${label} system fullscreen`); }
+  catch(error) { throw new Error(`${error.message}: ${JSON.stringify({alert:document.querySelector('[role=alert]')?.textContent,rect:window.lastClickRect,pointer:window.lastPointer,fullscreen:document.fullscreenElement?.tagName,focus:document.hasFocus()})}`); }
   click('[data-test="playback-volume-toggle"]'); await nextTick(); await new Promise(r => setTimeout(r, 50));
   const vr = document.querySelector('[data-test="playback-volume-panel"]').getBoundingClientRect();
   assert(document.elementFromPoint(vr.left + 20, vr.top + 20)?.closest('[data-test="playback-volume-panel"]'), 'volume settings visible in system fullscreen');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
+const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/libraryQuery.js', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/librarySelection.js', import.meta.url), 'utf8');
 const settingsSource = readFileSync(new URL('../src/components/SettingsPage.vue', import.meta.url), 'utf8');
 const bindingsSource = readFileSync(new URL('../wailsjs/go/main/App.js', import.meta.url), 'utf8');
 // P-002 把字幕任务队列与生成弹窗抽成了独立组件，下面属于它的断言跟着搬。

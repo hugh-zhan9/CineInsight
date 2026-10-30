@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
+const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../src/components/video-list/libraryQuery.js', import.meta.url), 'utf8');
 const photoLibrarySource = readFileSync(new URL('../src/components/PhotoLibraryPage.vue', import.meta.url), 'utf8');
 // P-030 用 TrashCenterDialog 取代了 TrashRestoreDialog / PhotoTrashDialog 两个旧弹窗；
 // 撤销提示条（video-list/TrashUndoBanner.vue）改为按批次撤销，片库页与图片页共用。
