@@ -27,8 +27,8 @@ usage() {
   $(basename "$0") [--skip-build | --build-only] [wails build 参数...]
 
 说明:
-  1. 在项目根目录执行 wails build（默认使用 Go 1.24.9）
-  2. 产出 ${BUILD_APP_PATH} 并打包已构建的超分运行时
+  1. 自动初始化或复用本机签名配置，再执行 wails build（默认使用 Go 1.24.9）
+  2. 产出 ${BUILD_APP_PATH}、打包已构建的超分运行时并完成签名验证
   3. 默认关闭正在运行的 ${APP_NAME}，将新包替换到 ${INSTALL_APP_PATH}
   4. --build-only 在第 2 步结束，不替换已安装应用
 
@@ -230,6 +230,8 @@ main() {
   fi
 
   wails_bin="$(resolve_wails)"
+  log "准备本机签名配置（首次创建，后续复用）"
+  python3 "${SCRIPT_DIR}/macos_signing.py" setup
   build_app "${wails_bin}"
 
   [[ -d "${BUILD_APP_PATH}" ]] || fail "未找到构建产物: ${BUILD_APP_PATH}"

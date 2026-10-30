@@ -71,4 +71,4 @@
 
 - 片库管理保持常驻宿主与命令注册，首次显示才加载列表、计数、语义状态、保存视图及超分能力；隐藏期间列表刷新合并到再次显示。`libraryQuery.js` 管查询生命周期，`librarySelection.js` 管选择，页面仍拥有筛选与 UI 动作。
 - 作品集进度复用有序查询结果的切片，避免重复复制成员；单成员不排序，版本聚合口径不变。基线及命令见 [性能记录](docs/context/performance.md)。
-- 本机打包用固定钥匙串证书；首次 `python3 scripts/macos_signing.py setup`，后续打包完成资源装配后最终签名，失败阻止安装。不清除 TCC；详见 [本机签名](docs/context/local-signing.md)。
+- 本机打包用固定钥匙串证书；`build_and_install_app.sh` 在编译前自动执行 setup，首次创建、后续复用，无需额外手动指令。资源装配后最终签名，失败阻止安装；已有同名证书而配置丢失时拒绝重新生成身份。不清除 TCC；详见 [本机签名](docs/context/local-signing.md)。
