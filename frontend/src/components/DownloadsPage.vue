@@ -1,6 +1,6 @@
 <template>
   <section class="page-content downloads-page">
-    <PageHeader title="下载" subtitle="浏览器插件推过来的任务。进度由后端实时推送，不用手动刷新。">
+    <PageHeader title="下载" subtitle="从站点找资源，或接收浏览器视频下载。">
       <template #actions>
         <button
           type="button"
@@ -13,6 +13,8 @@
       </template>
     </PageHeader>
 
+    <BTDownloadsPanel :api="btAPI" :initial-query="initialQuery" :refresh-key="btRefresh" @settings="$emit('settings', 'bt')" @play="$emit('play', $event)" />
+    <h2>浏览器下载</h2>
     <AppBanner v-if="errorMessage" tone="danger" :title="errorMessage" data-test="downloads-error" />
     <!-- 查重提示里「把这次下载移到废纸篓」走片库同一个删除宿主：进度、磁盘不支持废纸篓时的二选一、整批撤销。
          删前确不确认看设置「删除前确认」（默认开）。 -->
@@ -91,6 +93,8 @@ import {
   AddDownloadDirectoryToScan, CancelBrowserDownloadTask, ClearDownloadDuplicate, CreateVersionGroup, DismissDownloadDuplicate, ListDownloadTasks,
   ReimportDownload, RetryDownload, RevealDownload
 } from '../../wailsjs/go/main/App';
+import BTDownloadsPanel from './bt/BTDownloadsPanel.vue';
+import { btAPI } from '../utils/btAPI.js';
 import DownloadRow from './downloads/DownloadRow.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import AppBanner from './ui/AppBanner.vue';
@@ -138,9 +142,11 @@ const ACTION_SUCCESS_TEXTS = {
 // 既看不到又要手动刷新。这里由后端推 browser-download-tasks 事件驱动，不轮询。
 export default {
   name: 'DownloadsPage',
-  components: { AppBanner, DownloadRow, EmptyState, PageHeader, TrashUndoBanner },
+  props: { initialQuery: { type: String, default: '' } },
+  emits: ['settings', 'play'],
+  components: { BTDownloadsPanel, AppBanner, DownloadRow, EmptyState, PageHeader, TrashUndoBanner },
   data() {
-    return { tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
+    return { btAPI, btRefresh: 0, btOff: null, tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
   },
   computed: {
     visibleTasks() {
@@ -176,6 +182,7 @@ export default {
     this.loadTasks();
     // 后端推送是唯一的刷新来源；这里不做轮询。
     if (window.runtime?.EventsOn) {
+      this.btOff = window.runtime.EventsOn('bt-task-changed', () => { this.btRefresh++; });
       this.unsubscribe = window.runtime.EventsOn('browser-download-tasks', (tasks) => {
         this.tasks = tasks || [];
       });
@@ -183,6 +190,7 @@ export default {
   },
   beforeUnmount() {
     if (typeof this.unsubscribe === 'function') this.unsubscribe();
+    if (typeof this.btOff === 'function') this.btOff();
   },
   methods: {
     async loadTasks() {

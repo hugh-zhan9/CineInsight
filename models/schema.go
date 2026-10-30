@@ -124,5 +124,8 @@ func AllModels() []interface{} {
 		&TaskFailureItem{},
 		&CollectionEpisodeAssignment{},
 		&CollectionSeasonExpectation{},
+		&BTConnection{},
+		&BTTask{},
+		&BTFile{},
 	}
 }

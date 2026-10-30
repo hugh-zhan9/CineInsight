@@ -72,6 +72,12 @@ func TestAPP01RestoreDatabaseBackupOnSQLiteRestoresAndQuitsInternally(t *testing
 		t.Fatal(err)
 	}
 	app := newMaintenanceTestApp(dataDir)
+	app.videoService = services.NewVideoService(nil)
+	app.wireBT(dataDir)
+	if err := app.initializeBTLocal(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.stopBT(context.Background()) })
 	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); releasePlaybackAfterShutdownTest(app) })
 
 	backup, err := app.CreateDatabaseBackup()
@@ -91,6 +97,10 @@ func TestAPP01RestoreDatabaseBackupOnSQLiteRestoresAndQuitsInternally(t *testing
 	}
 	if !app.restoreTerminal {
 		t.Fatal("恢复完成后应进入终态，拒绝再次恢复或切换")
+	}
+	markers, err := filepath.Glob(filepath.Join(dataDir, "bt-recovery", "*.json"))
+	if err != nil || len(markers) != 1 {
+		t.Fatal("successful SQLite swap lost durable BT recovery fence", markers, err)
 	}
 
 	restored, err := gorm.Open(sqlite.Open(database.SQLiteDSN(livePath)), &gorm.Config{})

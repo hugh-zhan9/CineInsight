@@ -1,3 +1,4 @@
+vi.mock('./btAPI.js', () => ({ btAPI: { GetBTConnection: async () => ({ enabled: false, credential_status: 'unconfigured' }), ListBTIndexers: async () => [], ListBTTasks: async () => ({ tasks: [], next_cursor: '' }) }, btConnectionError: () => '连接失败' }));
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -333,9 +334,9 @@ describe('应用级命令注册', () => {
     expect(openVideo).toHaveBeenCalledWith({ id: 5 }, { from: 'command-palette' });
   });
 
-  it('APP-14 「打开下载」只在开启浏览器插件桥接时注册', async () => {
+  it('BT 下载入口不依赖浏览器桥接开关', async () => {
     const wrapper = host();
-    expect(commandByID('nav:page:downloads')).toBeNull();
+    expect(commandByID('nav:page:downloads')).not.toBeNull();
 
     await wrapper.setProps({ settings: { browser_bridge_enabled: true } });
     wrapper.vm.registerAppCommands();

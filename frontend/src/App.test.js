@@ -1,3 +1,4 @@
+vi.mock('./utils/btAPI.js', () => ({ btAPI: { GetBTConnection: async () => ({ enabled: false, credential_status: 'unconfigured' }), ListBTIndexers: async () => [], ListBTTasks: async () => ({ tasks: [], next_cursor: '' }) }, btConnectionError: () => '连接失败' }));
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -663,7 +664,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(wrapper.find('[data-test="nav-area-viewer"]').exists()).toBe(true);
   });
 
-  it('APP-14 「下载」只在开启浏览器插件桥接时出现（管理区），关掉后随即隐藏', async () => {
+  it('BT 下载导航在关闭浏览器桥接后仍然可用', async () => {
     api.GetSettings.mockResolvedValue({ auto_scan_on_startup: false, theme: 'system', browser_bridge_enabled: true });
     const wrapper = await mountApp();
     await enterManage(wrapper);
@@ -674,7 +675,7 @@ describe('顶栏信息架构（APP-14）', () => {
 
     wrapper.vm.handleSettingsUpdate({ browser_bridge_enabled: false });
     await flushPromises();
-    expect(wrapper.find('[data-test="nav-downloads"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-downloads"]').exists()).toBe(true);
   });
 });
 
@@ -3181,4 +3182,10 @@ it('photo deletion uses image kind, preserves confirmation and routes refresh an
   expect(refresh).toHaveBeenCalledOnce();
   dialog.vm.$emit('restored', { kind: 'image', ids: [91] }); await flushPromises();
   expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+it('routes watchlist resource title to downloads without auto-search', async () => { const w = await mountApp(); await openListsTab(w, 'watchlist'); w.findComponent({ name: 'ListsPage' }).vm.$emit('find-resources', '沙丘'); await flushPromises(); expect(w.vm.currentPage).toBe('downloads'); expect(w.findComponent({ name: 'DownloadsPage' }).props('initialQuery')).toBe('沙丘'); });
+
+it('task center BT navigation opens downloads without a task control request', async () => {
+ const w = await mountApp(); w.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-bt-downloads'); await flushPromises(); expect(w.vm.currentPage).toBe('downloads');
 });

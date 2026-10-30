@@ -1,3 +1,4 @@
+vi.mock('../utils/btAPI.js', () => ({ btAPI: { GetBTConnection: async () => ({ enabled: false, credential_status: 'unconfigured' }), ListBTIndexers: async () => [], ListBTTasks: async () => ({ tasks: [], next_cursor: '' }) }, btConnectionError: () => '连接失败' }));
 import { flushPromises, mount } from '@vue/test-utils';
 
 // 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。

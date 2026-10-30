@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -116,10 +117,16 @@ const (
 //
 // 它不热换 database.DB（设计 D-007）。句柄被约二十个服务和多个后台 worker 持有，
 // 运行期替换没有安全的时机；切换以"写配置 + 要求重启"收尾。
+// DatabaseTargetPreparation protects external state before choosing an old DB.
+// finish(true) means publication failed and the durable config was verified
+// unchanged; false includes success or an unknown publication outcome.
+type DatabaseTargetPreparation func(context.Context, *gorm.DB) (finish func(bool) error, err error)
+
 type DatabaseSwitchService struct {
-	dataDir string
-	mu      sync.Mutex
-	running atomic.Bool
+	prepareConfigTarget DatabaseTargetPreparation
+	dataDir             string
+	mu                  sync.Mutex
+	running             atomic.Bool
 	// relaunchPending 在一次迁移并切换成功后置位，本进程内不再复位：之后到重启前的写入会落进
 	// 旧库、重启后在用户眼里消失，所以维护围栏一直保持，恢复、再次切换、只改配置、清空目标库
 	// 一律拒绝（relaunch_pending）。
@@ -515,8 +522,8 @@ func (s *DatabaseSwitchService) SwitchBackendConfigOnlyWithLifecycle(target stri
 		result.Message = "无法连接目标库: " + err.Error()
 		return result, nil
 	}
+	defer cleanup()
 	preflightErr := migrator.Preflight(db)
-	cleanup()
 	var notEmpty *migrator.ErrTargetNotEmpty
 	switch {
 	case errors.As(preflightErr, &notEmpty):
@@ -541,11 +548,32 @@ func (s *DatabaseSwitchService) SwitchBackendConfigOnlyWithLifecycle(target stri
 			return nil, fmt.Errorf("进入维护模式失败，配置未修改: %w", err)
 		}
 	}
+	before, readErr := os.ReadFile(filepath.Join(s.dataDir, ".env"))
+	var finish func(bool) error
+	if s.prepareConfigTarget != nil {
+		var prepareErr error
+		finish, prepareErr = s.prepareConfigTarget(context.Background(), db)
+		if prepareErr != nil {
+			if enterMaintenance != nil && leaveMaintenance != nil {
+				leaveMaintenance()
+			}
+			return nil, fmt.Errorf("准备目标数据库失败，配置未修改: %w", prepareErr)
+		}
+	}
 	if err := persistBackendChoiceFn(s.dataDir, backend, current); err != nil {
+		after, afterErr := os.ReadFile(filepath.Join(s.dataDir, ".env"))
+		unchanged := readErr == nil && afterErr == nil && bytes.Equal(before, after)
+		var finishErr error
+		if finish != nil {
+			finishErr = finish(unchanged)
+		}
 		if enterMaintenance != nil && leaveMaintenance != nil {
 			leaveMaintenance()
 		}
-		return nil, fmt.Errorf("写入后端配置失败: %w", err)
+		return nil, fmt.Errorf("写入后端配置失败: %w", errors.Join(err, finishErr))
+	}
+	if finish != nil {
+		_ = finish(false)
 	}
 	s.relaunchPending.Store(true)
 	result.Switched = true
@@ -855,4 +883,12 @@ func persistBackendChoice(dataDir string, backend, previous database.Backend) er
 		return err
 	}
 	return nil
+}
+
+// SetConfigTargetPreparation installs a read-only target preparation lifecycle.
+// Call during App construction, before any switch operation.
+func (s *DatabaseSwitchService) SetConfigTargetPreparation(prepare DatabaseTargetPreparation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prepareConfigTarget = prepare
 }

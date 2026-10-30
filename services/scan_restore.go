@@ -37,6 +37,16 @@ func scannerRowUnderTombstone(deletedBy string, found bool, entryState string) b
 // Caller holds the scan/path locks. Historical unknown and user deletions are
 // intentionally left alone: file presence does not establish deletion intent.
 func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error) {
+	return s.addScannedVideoWithBTGrant(path, nil)
+}
+func (s *VideoService) addScannedVideoWithBTGrant(path string, grant *btImportGrant) (*models.Video, bool, error) {
+	if grant == nil {
+		if err := s.checkBTPath(path); err != nil {
+			return nil, false, err
+		}
+	} else if err := grant.check(path); err != nil {
+		return nil, false, err
+	}
 	var video models.Video
 	err := withoutTrashTombstones(database.DB.Unscoped().Where("path = ?", path), videoTrashKind).
 		Order("deleted_at IS NULL DESC, id DESC").First(&video).Error
@@ -51,7 +61,7 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 			return nil, false, result.Error
 		}
 		if result.RowsAffected == 1 {
-			restored, err := s.restoreTrashEntry(&entry)
+			restored, err := s.restoreTrashEntryWithBTGrant(&entry, grant)
 			return restored, err == nil, err
 		}
 		// 记录上挂着「恢复后残留」的墓碑（或墓碑已被启动清理删掉、没有条目，修复 N I-1）：扫描器软删时建不进 missing 条目，
@@ -62,14 +72,14 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 			return nil, false, currentResult.Error
 		}
 		if scannerRowUnderTombstone(video.DeletedBy, currentResult.RowsAffected == 1, current.State) {
-			restored, err := s.restoreScannerDeletedVideoWithoutEntry(video)
+			restored, err := s.restoreScannerDeletedVideoWithoutEntryWithBTGrant(video, grant)
 			return restored, err == nil, err
 		}
 		// 没有 deleted 的 missing 条目（例如上次恢复中断、条目停在 restoring）：交给下面的同路径软删判定
 		// （softDeletedVideoPathSkip），restoring 由它跳过、交给启动对账，不报 add 错误（修复 L m2）。
 	}
 	// 访达「放回原处」由 addVideoOrRestorePutBack 统一处理（与手动添加同一条路，Minor 2）。
-	return s.addVideoOrRestorePutBack(path)
+	return s.addVideoWithBTGrant(path, grant)
 }
 
 // errScannerRestoreFileMismatch：原路径上的文件与扫描器软删的记录对不上（大小不同），不恢复。文案不含路径（G-3），
@@ -86,6 +96,16 @@ var errScannerRestoreFileMismatch = errors.New("原路径上的文件与缺失�
 // （deleted_at IS NOT NULL AND deleted_by='scanner'），原 ID、标签、人物保留，重建字幕索引；墓碑（若有）原样保留。
 // 调用方持有路径读锁（扫描）。
 func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video) (*models.Video, error) {
+	return s.restoreScannerDeletedVideoWithoutEntryWithBTGrant(video, nil)
+}
+func (s *VideoService) restoreScannerDeletedVideoWithoutEntryWithBTGrant(video models.Video, grant *btImportGrant) (*models.Video, error) {
+	if grant == nil {
+		if err := s.checkBTPath(video.Path); err != nil {
+			return nil, err
+		}
+	} else if err := grant.check(video.Path); err != nil {
+		return nil, err
+	}
 	info, err := os.Stat(video.Path)
 	if err != nil {
 		return nil, fmt.Errorf("原文件不可用，无法恢复记录: %w", pathlessError(err))
@@ -94,21 +114,32 @@ func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video
 		return nil, errScannerRestoreFileMismatch
 	}
 	var restored models.Video
+	staleReason := ""
+	if grant != nil {
+		staleReason = models.StaleReasonReadError
+	}
 	err = database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).Unscoped().
 			Where("id = ? AND deleted_at IS NOT NULL AND deleted_by = ?", video.ID, "scanner").
-			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false, "stale_reason": ""})
+			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": grant != nil, "stale_reason": staleReason})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("视频记录已不再处于可恢复状态: %d", video.ID)
 		}
+		if grant != nil {
+			if err := grant.recordProvisional(tx, video.ID, BTImportPublicationPendingRestore); err != nil {
+				return err
+			}
+		}
 		if err := tx.Preload("Tags").First(&restored, video.ID).Error; err != nil {
 			return err
 		}
-		if err := rebuildSubtitleIndexTx(tx, restored); err != nil {
-			return fmt.Errorf("重建字幕索引失败: %w", err)
+		if grant == nil {
+			if err := rebuildSubtitleIndexTx(tx, restored); err != nil {
+				return fmt.Errorf("重建字幕索引失败: %w", err)
+			}
 		}
 		return nil
 	})
@@ -116,7 +147,9 @@ func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video
 		return nil, err
 	}
 	log.Printf("扫描器软删的视频文件已回到原处，恢复原记录（无 missing 条目） video_id=%d", restored.ID)
-	notifyLibraryMatchInputsChanged("scanner-restore")
+	if grant == nil {
+		notifyLibraryMatchInputsChanged("scanner-restore")
+	}
 	return &restored, nil
 }
 
@@ -130,6 +163,9 @@ func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video
 // 是「无法判定」（修复 L m1）：没有别的行能认定放回时返回那个读取错误，调用方既不恢复也不新建（扫描计入读取错误）。
 // 调用方持有路径读锁（扫描或 AddVideo）。
 func (s *VideoService) restorePutBackVideo(path string) (*models.Video, bool, error) {
+	return s.restorePutBackVideoWithBTGrant(path, nil)
+}
+func (s *VideoService) restorePutBackVideoWithBTGrant(path string, grant *btImportGrant) (*models.Video, bool, error) {
 	info := originalRegularFile(path)
 	if info == nil {
 		return nil, false, nil
@@ -164,7 +200,7 @@ func (s *VideoService) restorePutBackVideo(path string) (*models.Video, bool, er
 			}
 			entry.State = trashStateDeleted
 		}
-		restored, err := s.restoreTrashEntry(&entry)
+		restored, err := s.restoreTrashEntryWithBTGrant(&entry, grant)
 		if err != nil {
 			return nil, false, err
 		}

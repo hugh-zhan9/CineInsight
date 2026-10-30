@@ -286,6 +286,10 @@ export function ClearVideoAutomaticTagOverride(arg1, arg2) {
   return window['go']['main']['App']['ClearVideoAutomaticTagOverride'](arg1, arg2);
 }
 
+export function ConfigureBTConnection(arg1) {
+  return window['go']['main']['App']['ConfigureBTConnection'](arg1);
+}
+
 export function ConfigureJellyfin(arg1) {
   return window['go']['main']['App']['ConfigureJellyfin'](arg1);
 }
@@ -316,6 +320,10 @@ export function ConfirmSubtitleExtraction(arg1) {
 
 export function ConfirmTaskFailureRetry(arg1) {
   return window['go']['main']['App']['ConfirmTaskFailureRetry'](arg1);
+}
+
+export function ControlBTTask(arg1) {
+  return window['go']['main']['App']['ControlBTTask'](arg1);
 }
 
 export function ControlPlaybackQueue(arg1, arg2) {
@@ -592,6 +600,14 @@ export function GetAutomaticOverrideKinds(arg1) {
 
 export function GetAutomationRuleRunStatus() {
   return window['go']['main']['App']['GetAutomationRuleRunStatus']();
+}
+
+export function GetBTConnection() {
+  return window['go']['main']['App']['GetBTConnection']();
+}
+
+export function GetBTTask(arg1) {
+  return window['go']['main']['App']['GetBTTask'](arg1);
 }
 
 export function GetBackgroundTasks() {
@@ -978,6 +994,14 @@ export function ListAutomationRules() {
   return window['go']['main']['App']['ListAutomationRules']();
 }
 
+export function ListBTIndexers() {
+  return window['go']['main']['App']['ListBTIndexers']();
+}
+
+export function ListBTTasks(arg1, arg2) {
+  return window['go']['main']['App']['ListBTTasks'](arg1, arg2);
+}
+
 export function ListCleanupDismissals(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListCleanupDismissals'](arg1, arg2, arg3);
 }
@@ -1280,6 +1304,10 @@ export function PreviewAIReviewApproval(arg1, arg2) {
 
 export function PreviewAutomationRule(arg1) {
   return window['go']['main']['App']['PreviewAutomationRule'](arg1);
+}
+
+export function PreviewBTResource(arg1) {
+  return window['go']['main']['App']['PreviewBTResource'](arg1);
 }
 
 export function PreviewCleanupConsolidation(arg1) {
@@ -1610,6 +1638,10 @@ export function SearchAITagCandidatePage(arg1) {
   return window['go']['main']['App']['SearchAITagCandidatePage'](arg1);
 }
 
+export function SearchBTResources(arg1, arg2) {
+  return window['go']['main']['App']['SearchBTResources'](arg1, arg2);
+}
+
 export function SearchImageAITagCandidatePage(arg1) {
   return window['go']['main']['App']['SearchImageAITagCandidatePage'](arg1);
 }
@@ -1818,6 +1850,10 @@ export function StopVideoWallpaper() {
   return window['go']['main']['App']['StopVideoWallpaper']();
 }
 
+export function SubmitBTDownload(arg1) {
+  return window['go']['main']['App']['SubmitBTDownload'](arg1);
+}
+
 export function SuggestLibraryMatchesBatch(arg1) {
   return window['go']['main']['App']['SuggestLibraryMatchesBatch'](arg1);
 }
@@ -1848,6 +1884,10 @@ export function SyncSubtitleIndexNow() {
 
 export function TestAITaggingConnection(arg1) {
   return window['go']['main']['App']['TestAITaggingConnection'](arg1);
+}
+
+export function TestBTConnection() {
+  return window['go']['main']['App']['TestBTConnection']();
 }
 
 export function TestWatchlistMetadataConnection(arg1) {

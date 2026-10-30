@@ -23,6 +23,7 @@ import (
 )
 
 type VideoService struct {
+	btPolicy                 atomic.Pointer[BTPathPolicy]
 	controlledMu             sync.Mutex
 	controlled               *controlledPlayback
 	scanSyncMu               sync.Mutex
@@ -357,8 +358,18 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 // 放回原处的那个已删除视频，这次恢复了原记录而没有新建（Minor 2：手动 AddVideo 与扫描同一判定）。
 // 调用方持有路径读锁。
 func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, bool, error) {
+	return s.addVideoWithBTGrant(path, nil)
+}
+func (s *VideoService) addVideoWithBTGrant(path string, grant *btImportGrant) (*models.Video, bool, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
 
+	if grant == nil {
+		if err := s.checkBTPath(path); err != nil {
+			return nil, false, err
+		}
+	} else if err := grant.check(path); err != nil {
+		return nil, false, err
+	}
 	// 检查文件是否存在
 	info, err := os.Stat(path)
 	if err != nil {
@@ -376,7 +387,7 @@ func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, boo
 		log.Printf("跳过已存在视频 path=%s", path)
 		return &existingVideo, false, ErrVideoExists
 	}
-	if restored, ok, err := s.restorePutBackVideo(path); err != nil {
+	if restored, ok, err := s.restorePutBackVideoWithBTGrant(path, grant); err != nil {
 		return nil, false, err
 	} else if ok {
 		log.Printf("文件已被放回原处，恢复原记录 video_id=%d", restored.ID)
@@ -396,9 +407,19 @@ func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, boo
 		Size:      info.Size(),
 	}
 
+	if grant != nil {
+		video.IsStale = true
+		video.StaleReason = models.StaleReasonReadError
+	}
+
 	err = database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(video).Error; err != nil {
 			return err
+		}
+		if grant != nil {
+			if err := grant.recordProvisional(tx, video.ID, BTImportPublicationPendingNew); err != nil {
+				return err
+			}
 		}
 		return syncShortVideoTagForVideo(tx, video.ID)
 	})
@@ -421,8 +442,10 @@ func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, boo
 			video = refreshed
 		}
 	}
-	s.observeLocalMetadata(video.ID, true)
-	s.notifyNewVideo(video.ID)
+	if grant == nil {
+		s.observeLocalMetadata(video.ID, true)
+		s.notifyNewVideo(video.ID)
+	}
 	if refreshed, refreshErr := s.GetVideo(video.ID); refreshErr == nil {
 		video = refreshed
 	}
@@ -480,10 +503,15 @@ func (s *VideoService) RestoreTrashEntry(entryID uint) (*models.Video, error) {
 	if entry.State == trashStateRemoved {
 		return nil, errTrashEntryNotFound(entry.ID)
 	}
+	authorization, err := s.authorizeBTRestore(entry.OriginalPath, entry.VideoID)
+	if err != nil {
+		return nil, err
+	}
+
 	if entry.State == trashStatePendingMove || entry.State == trashStateRollback {
 		return s.cancelInterruptedDeletion(&entry)
 	}
-	restored, err := s.restoreTrashEntry(&entry)
+	restored, err := s.restoreTrashEntryAuthorized(&entry, nil, authorization)
 	if err == nil {
 		// 视频回到片库：想看自动匹配可能多了一个命中（D-P2-03），防抖后重跑一轮。
 		notifyLibraryMatchInputsChanged("trash-restore")
@@ -492,6 +520,23 @@ func (s *VideoService) RestoreTrashEntry(entryID uint) (*models.Video, error) {
 }
 
 func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models.Video, error) {
+	return s.restoreTrashEntryWithBTGrant(entry, nil)
+}
+func (s *VideoService) restoreTrashEntryWithBTGrant(entry *models.VideoTrashEntry, grant *btImportGrant) (*models.Video, error) {
+	return s.restoreTrashEntryAuthorized(entry, grant, nil)
+}
+func (s *VideoService) restoreTrashEntryAuthorized(entry *models.VideoTrashEntry, grant *btImportGrant, authorization *btRestoreGrant) (*models.Video, error) {
+	if authorization != nil {
+		if err := authorization.identity.check(entry.OriginalPath); err != nil {
+			return nil, err
+		}
+	} else if grant == nil {
+		if err := s.checkBTPath(entry.OriginalPath); err != nil {
+			return nil, err
+		}
+	} else if err := grant.check(entry.OriginalPath); err != nil {
+		return nil, err
+	}
 	var video models.Video
 	if err := database.DB.Unscoped().First(&video, entry.VideoID).Error; err != nil {
 		return nil, fmt.Errorf("读取已删除视频失败: %w", err)
@@ -542,7 +587,17 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 	// 移回废纸篓作补偿；文件本来就在原路径（访达放回、上次中断已移回）时一律不动文件（I-1）。
 	movedFromTrash := false
 	trashService := NewTrashService()
-	if entry.Mode == models.TrashModeRecordOnly {
+	if grant != nil {
+		// Keep the original restore identity rules while forbidding payload moves.
+		info, err := os.Stat(entry.OriginalPath)
+		if err != nil {
+			return nil, err
+		}
+		if entry.Mode != models.TrashModeRecordOnly && !trashEntryFileMatches(entry.OriginalPath, info, *entry) && !(entry.DeletedBy == "scanner" && entry.FileIdentity == "" && entry.FileSHA256 == "" && info.Size() == video.Size) {
+			_ = markTrashEntryRecoverable(entry.ID, errScannerRestoreFileMismatch)
+			return nil, errScannerRestoreFileMismatch
+		}
+	} else if entry.Mode == models.TrashModeRecordOnly {
 		// 只删记录：文件一直在原地没动过，恢复只还原数据库（原 ID、标签、人物），不碰文件。
 	} else if entry.FileMoved {
 		var err error
@@ -575,22 +630,38 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 	// （修复 L m5）：清理失败（或进程在两者之间退出）时目录继续登记，残留名字不会被扫描当成新文件收录。
 	residue := legacyRestoreResidue(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	var restored models.Video
+	staleReason := ""
+	if grant != nil {
+		staleReason = models.StaleReasonReadError
+	}
 	err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).
 			Unscoped().
 			Where("id = ? AND deleted_at IS NOT NULL", video.ID).
-			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false, "stale_reason": ""})
+			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": grant != nil, "stale_reason": staleReason})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("视频记录已不再处于可恢复状态: %d", video.ID)
 		}
+		if authorization != nil {
+			if err := authorization.release(tx, video.ID); err != nil {
+				return err
+			}
+		}
+		if grant != nil {
+			if err := grant.recordProvisional(tx, video.ID, BTImportPublicationPendingRestore); err != nil {
+				return err
+			}
+		}
 		if err := tx.Preload("Tags").First(&restored, video.ID).Error; err != nil {
 			return err
 		}
-		if err := rebuildSubtitleIndexTx(tx, restored); err != nil {
-			return fmt.Errorf("重建字幕索引失败: %w", err)
+		if grant == nil {
+			if err := rebuildSubtitleIndexTx(tx, restored); err != nil {
+				return fmt.Errorf("重建字幕索引失败: %w", err)
+			}
 		}
 		if residue {
 			return retireRestoredEntryAsTombstoneTx(tx, videoTrashKind, entry.ID)
@@ -604,7 +675,9 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 			return nil, fmt.Errorf("恢复提交结果无法确认，已保留当前文件和恢复日志供启动对账: %w", err)
 		}
 		if committed {
-			finishRestoredLegacyResidue(videoTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+			if grant == nil {
+				finishRestoredLegacyResidue(videoTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+			}
 			if loadErr := database.DB.Preload("Tags").First(&restored, video.ID).Error; loadErr != nil {
 				return nil, fmt.Errorf("恢复已提交，但读取结果失败: %w", loadErr)
 			}
@@ -623,7 +696,9 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		_ = database.DB.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": err.Error()}).Error
 		return nil, fmt.Errorf("恢复数据库记录失败: %w", err)
 	}
-	finishRestoredLegacyResidue(videoTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+	if grant == nil {
+		finishRestoredLegacyResidue(videoTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+	}
 	log.Printf("视频恢复 video_id=%d original_deleted_by=%s", restored.ID, entry.DeletedBy)
 	return &restored, nil
 }
@@ -1732,6 +1807,10 @@ func setManualAutomaticVideoTag(videoID uint, tag models.Tag, present bool) erro
 func (s *VideoService) RefreshVideoMetadata(id uint) error {
 	var video models.Video
 	if err := database.DB.First(&video, id).Error; err != nil {
+		return err
+	}
+
+	if err := s.checkBTPath(video.Path); err != nil {
 		return err
 	}
 

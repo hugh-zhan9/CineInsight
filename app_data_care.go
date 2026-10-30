@@ -46,9 +46,7 @@ func (a *App) stopDataCare() {
 
 // resumeDataCare 在数据库恢复失败续跑时恢复常驻部分（例如新入库的规则队列）。
 func (a *App) resumeDataCare() {
-	if a.ctx == nil {
-		return
-	}
+	// Resume only opens the existing local rule queue; it needs no UI runtime.
 	a.resumeAutomationRules(a.ctx)
 }
 

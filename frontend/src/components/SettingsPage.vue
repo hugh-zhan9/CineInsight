@@ -47,6 +47,7 @@
 
     <JellyfinSection />
 
+    <BTConnectionSection @update:dirty="btDirty = $event" @scan-settings="scrollToSection('scan-dirs')" />
     <BrowserBridgeSection :form="settingsForm" @error="reportSettingsError" />
 
     <AITagSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
@@ -110,6 +111,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'scenes', label: '场景检索', saveMode: 'save' },
   { key: 'mobile', label: '手机端浏览', saveMode: 'mixed' },
   { key: 'jellyfin', label: 'Jellyfin 客户端连接', saveMode: 'instant' },
+  { key: 'bt', label: 'Prowlarr 与 qBittorrent', saveMode: 'instant' },
   { key: 'browser-bridge', label: '浏览器插件', saveMode: 'save' },
   { key: 'ai-tags', label: 'AI 标签', saveMode: 'save' },
   { key: 'online-sources', label: '在线资料源', saveMode: 'save' },
@@ -292,6 +294,7 @@ import FaceSection from './settings/FaceSection.vue';
 import SceneSection from './settings/SceneSection.vue';
 import IdleSchedulingSection from './settings/IdleSchedulingSection.vue';
 import IINASyncSection from './settings/IINASyncSection.vue';
+import BTConnectionSection from './settings/BTConnectionSection.vue';
 import BrowserBridgeSection from './settings/BrowserBridgeSection.vue';
 import JellyfinSection from './settings/JellyfinSection.vue';
 import MobileSection from './settings/MobileSection.vue';
@@ -303,7 +306,7 @@ import SubtitleSection from './settings/SubtitleSection.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { BTConnectionSection, PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -315,7 +318,7 @@ export default {
   data() {
     const form = normalizeSettingsForm(this.settings);
     return {
-      settingsForm: form,
+      settingsForm: form, btDirty: false,
       // 最近一次读回或保存成功时的表单快照：脏状态以它为基准。
       savedSnapshot: { ...form },
       navSections: SETTINGS_SECTIONS,
@@ -333,7 +336,7 @@ export default {
       return changedSettingsFields(this.settingsForm, this.savedSnapshot);
     },
     dirty() {
-      return this.dirtyFields.length > 0;
+      return this.dirtyFields.length > 0 || this.btDirty;
     }
   },
   watch: {

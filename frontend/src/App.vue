@@ -220,11 +220,12 @@
         @open-entity="openRecapEntity"
         @navigate="navigateTo"
       />
-      <DownloadsPage v-if="currentPage === 'downloads'" />
+      <DownloadsPage v-if="currentPage === 'downloads'" :initial-query="pageRequests.downloads?.query || ''" @settings="openSettingsSectionFromCommand($event)" @play="openVideoByID($event, { from: 'downloads' })" />
       <!-- 片单（D-P2-04）：想看 · 榜单 · 观影记录 · 观看笔记四个标签。首次进入才挂载，之后只隐藏（观看笔记的
            编辑与翻页状态要留着）；各标签何时挂载、何时卸载由 ListsPage 按原来四页的做法管。当前标签是页面参数
            listsTab，别名 key（watchlist 等）由 navigateTo 换成它。 -->
       <ListsPage
+        @find-resources="navigateTo('downloads', { query: $event })"
         v-if="listsMounted"
         v-show="currentPage === 'lists'"
         :page-active="currentPage === 'lists'"
@@ -377,6 +378,7 @@
 
     <!-- 任务中心常挂载（关着也在），顶栏任务指示才能跟着事件走。待处理角标由 App 自己定时读（refreshPendingWorkTotal）。 -->
     <TaskCenterDrawer
+      @open-bt-downloads="navigateTo('downloads')"
       v-if="appReady"
       :open="taskCenterOpen"
       @close="taskCenterOpen = false"
@@ -701,7 +703,7 @@ export default {
         document.body.classList.toggle('surface-cinema', on);
       }
     },
-    // 「下载」页只在开启浏览器插件桥接时出现在顶栏与命令面板（D-PC59）。
+    // 浏览器配置变化后刷新命令；BT 下载入口始终可见。
     'settings.browser_bridge_enabled'() {
       this.registerAppCommands();
     },
@@ -947,7 +949,7 @@ export default {
     // - 清理中心的 { tab }（认不出的忽略）与落在视频标签上的请求 { open | relationId | consolidationTaskID }；
     // - 人物与作品集的 { tab }（人物 · 作品集 · 人脸审阅，认不出的忽略）。
     applyPageParams(page, params) {
-      if (page === 'videos' || page === 'photos') this.setPageRequest(page, params);
+      if (page === 'videos' || page === 'photos' || page === 'downloads') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       if (page === CLEANUP_PAGE) this.applyCleanupParams(params);
       if (page === ENTITIES_MANAGE_PAGE && isEntitiesManageTab(params?.tab)) this.entitiesManageTab = params.tab;

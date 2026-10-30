@@ -279,8 +279,29 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	enterRestoreMode := func() error { return a.enterDatabaseRestoreMode(true) }
-	err := a.backupService.RestoreBackupWithLifecycle(ctx, request, enterRestoreMode, database.Init)
+	enterRestoreMode := func() error {
+		if err := a.quiesceBT(ctx); err != nil {
+			return err
+		}
+		ticket, err := a.prepareBTRestore(ctx)
+		if err != nil {
+			return err
+		}
+		if err = a.enterDatabaseRestoreMode(true); err != nil {
+			// The restore callback has not succeeded: destructive restore has not begun.
+			if a.bt != nil {
+				err = errors.Join(err, a.bt.fence.ClearOwned(ticket))
+			}
+			return err
+		}
+		// Any later restore error may follow a committed restore; keep the marker.
+		return nil
+	}
+	restore := a.restoreDatabaseBackup
+	if restore == nil {
+		restore = a.backupService.RestoreBackupWithLifecycle
+	}
+	err := restore(ctx, request, enterRestoreMode, database.Init)
 	if err == nil || services.DatabaseRestoreRequiresRestart(err) {
 		a.restoreTerminal = true
 		_ = database.Close()
@@ -316,6 +337,11 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 // 连接；切换后端只读源库，连接保持打开供迁移器读取。失败后离开维护模式统一走
 // resumeAfterDatabaseRestoreFailure；切换成功后不离开（「待重启」终态）。
 func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.quiesceBT(ctx); err != nil {
+		return err
+	}
 	if err := a.quiescePlaybackForMaintenance(); err != nil {
 		return err
 	}
@@ -434,6 +460,8 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 		a.videoEdit.Resume()
 	}
 	a.resumeDataCare()
+	// Rule and publication consumers must accept events before BT can import again.
+	a.resumeBTAfterMaintenance()
 	if a.aiTaggingService != nil {
 		a.aiTaggingService.ResetReviewApproval()
 	}

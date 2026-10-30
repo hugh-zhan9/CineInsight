@@ -29,7 +29,7 @@
 - 快捷键 **⌘K / Ctrl+K** 与 **⌘⇧P / Ctrl+Shift+P** 都打开命令面板（2026-10-13 统一设计 D-UD 起；此前 ⌘K 是清理中心）：面板开着时再按关闭；有模态对话框（`role="dialog"` 且未标 `aria-modal="false"`，或任何 `aria-modal="true"`）或确认框未答复时不响应；片库详情抽屉、浮层这类非模态面板标了 `aria-modal="false"`，不拦。Esc 只关最上面一层对话框（`BaseModal` 的打开栈）。2026-09-29/30 起（D-PC59，APP-11）「管理」菜单去掉了「清理审阅」与「AI 标签管理」；「打开清理中心」现为 **⌘⇧K / Ctrl+Shift+K**，任何页面都能按（`appCommands.js` 的全局处理器执行 `library.openCleanup`：不在片库页时先切过去；片库页自己的处理器先收到就由它处理；有弹窗开着时不响应）；⌘T 仍是片库页的 AI 标签审阅。顶栏无按钮；焦点在输入框内仍生效；`event.defaultPrevented` 时让位；面板关闭时不拦截任何既有键（J/K、空格、F、W、T、回车、⌘F、⇧⌘N、⌘R、⌘T）。
 - `frontend/src/utils/commandRegistry.js`：进程内注册表，`registerCommands(scopeKey, commands)` / `unregisterCommands(scopeKey)` / `commandList()` / `filterCommands(query)` / `isCommandEnabled(command)`；命令项 `{id, group ∈ navigate|action|task|video, label, keywords[], run(), enabled?()}`；分组顺序固定，同 scope 重复注册就地覆盖、同 id 只留先注册者；过滤权重 label 前缀 > label 包含 > keywords 包含，同权重按注册顺序；内部 `shallowRef` 版本计数器让 computed 跟随变化。
 - `frontend/src/utils/taskCommands.js`：任务组三态（运行中·取消 / 等待空闲·立即运行 / 启动），输入是 `GetBackgroundTasks`/`background-tasks` 与 `GetIdleSchedulerStatus`/`idle-scheduler-state`；只收零参 `Start*`/`Cancel*` 绑定，需要选参数的任务（字幕、超分、语义索引、清理分析）闲置时不列出；`idle_gate_task_not_waiting` 不算失败。
-- `frontend/src/utils/appCommands.js`：`appCommandsMixin` 被 `App.vue` 混入（App.vue 只留挂载点），负责全局快捷键、面板开关、导航组（全部页面：视频、人物、作品集、图片、想看、榜单、观影记录、洞察、设置，启用浏览器插件桥接时另有「下载」——与顶栏共用 `VIEWER_NAV_GROUPS` / `MANAGE_NAV_GROUPS`（2026-10-12 分区一期，见 2.37）；12 个智能视图；保存视图；作品集与人物各懒加载前 50 条）、应用级动作（2026-09-29/30 起新增全局的打开任务中心、打开待处理、打开清理中心、打开回收站、打开标签管理、扫描图片目录，D-PC60；另有立即备份、设置各分区锚点——直接读 `SettingsPage` 的命名导出 `SETTINGS_SECTIONS`）、任务组随事件重建；需要宿主页的命令按 `COMMAND_HOST_PAGES` 先切页再执行。智能视图清单是 `LibraryToolbar.vue` `smartViewOptions` 的副本，有防漂移断言。（旧写法「6 个页面、11 个智能视图」已过时，2026-09-30 按代码更正，APP-13。）命令执行成功后统一提示「已执行：<label>」（APP-12）。
+- `frontend/src/utils/appCommands.js`：`appCommandsMixin` 被 `App.vue` 混入（App.vue 只留挂载点），负责全局快捷键、面板开关、导航组（全部页面：视频、人物、作品集、图片、想看、榜单、观影记录、洞察、设置，始终提供「下载」（含 BT 资源与浏览器下载，不依赖桥接开关）——与顶栏共用 `VIEWER_NAV_GROUPS` / `MANAGE_NAV_GROUPS`（2026-10-12 分区一期，见 2.37）；12 个智能视图；保存视图；作品集与人物各懒加载前 50 条）、应用级动作（2026-09-29/30 起新增全局的打开任务中心、打开待处理、打开清理中心、打开回收站、打开标签管理、扫描图片目录，D-PC60；另有立即备份、设置各分区锚点——直接读 `SettingsPage` 的命名导出 `SETTINGS_SECTIONS`）、任务组随事件重建；需要宿主页的命令按 `COMMAND_HOST_PAGES` 先切页再执行。智能视图清单是 `LibraryToolbar.vue` `smartViewOptions` 的副本，有防漂移断言。（旧写法「6 个页面、11 个智能视图」已过时，2026-09-30 按代码更正，APP-13。）命令执行成功后统一提示「已执行：<label>」（APP-12）。
 - `frontend/src/components/CommandPalette.vue`：外壳 `DialogShell`，做命令过滤 + 统一搜索 + 执行；搜索结果不入注册表。2026-10-13 起视频组并入 ⌘K 统一搜索（每组 5 条、合并版本、防抖 250 ms，原 limit 8 / 180 ms），见 2.37.4。
 - 页面注册：`VideoListPage`（`video-list`，另提供 `applySmartViewCommand` / `applySavedViewCommand`）、`PhotoLibraryPage`（`photo-library`）、`EntityLibraryPage`（`entity-person` / `entity-collection`，新增可选 prop `focusEntity` 承接跨页落点）、`InsightsPage`（`insights-page`）、`SettingsPage`（`settings-page`）。已知限制：作品集/人物只取前 50 条，不随输入词二次查询。
 
@@ -142,3 +142,9 @@
 - 应用内详情和队列播放器在焦点位于播放器时支持左右 ±5 秒、上下 ±5% 音量、空格暂停/继续；表单控件保留自己的按键。详情播放器保留组件全屏按钮，隐藏原生重复入口；悬停 seek 预览不再画额外进度线。
 - 回顾「本期新发现」完整列表在分页前排除已删除/失效视频，列表总数为可显示数；历史回顾计数继续保留事件事实。
 - 用户明确选择优先使用库内素材：人物未设置手动头像时投影最早的可见关联图片；作品集未设置手动封面时优先取可见成员中按顺序的海报，否则用首个可见成员缩略图。只投影 URL，不覆盖托管图片；已有文件选择、图片库设头像与手动替换继续有效。
+
+### BT 下载界面与任务生命周期（2026-10-31）
+
+下载页的 `BTDownloadsPanel` 通过 Wails 适配器串起搜索、文件勾选/全选、明细、分页与控制；字节总计保持十进制字符串精度。列表、分页、详情和草稿读取共用一个请求链，事件突发最多补刷一次，离页/卸载作废旧响应。取消准备失败时明确保留任务，允许仅关闭窗口；重新读取前不提交旧清单。未入库文件没有播放入口，退休连接任务独立显示只读说明。
+
+任务中心的 `bt_download` 最近任务只有 `open_bt_downloads` 导航动作，不进入本地 kill/cancel 注册表，不把外部传输当作必须阻止退出的本地进程。退出说明明确 qBittorrent 的下载和做种继续。连接设置独立保存、测试和清除密钥，未保存修改参与既有离页确认；恢复尚未核实时提示稍后重试或重新打开应用，不误导用户重输凭据。详见[界面与恢复合同](../loopx/design/2026-10-30-prowlarr-download/需求设计文档.md#D-PT-08)。

@@ -29,7 +29,7 @@ import { recordBackgroundTasks } from './sessionChanges.js';
 // 顶栏只显示当前区域那一套，命令面板列出两边全部页面（APP-12、APP-14：两边读同一份清单，不会各自漏页）。
 // 「视频」是观看侧的海报墙（VideoBrowsePage，D-P2-01），「片库管理」是常挂载的片库页（VideoListPage），两页筛选各自独立；
 // 「图片」是观看侧的照片流（PhotoBrowsePage，D-P2-08），「图片管理」是图片库管理页（PhotoLibraryPage），两页筛选各自独立。
-// requiresBrowserBridge：只在设置里开启了浏览器插件桥接时显示（「下载」页）。
+// 下载页同时提供 BT 资源入口，不依赖浏览器插件桥接开关。
 // 「片单」是一个页面（D-P2-04，四个标签），不再是下拉；原来的四个页面 key 是它的别名，见下面的 LIST_TABS。
 export const VIEWER_NAV_GROUPS = [
   {
@@ -90,7 +90,7 @@ export const MANAGE_NAV_GROUPS = [
     key: 'manage-tools',
     label: '工具',
     pages: [
-      { key: 'downloads', label: '下载', keywords: ['download', 'xiazai', '插件', '浏览器'], requiresBrowserBridge: true },
+      { key: 'downloads', label: '下载', keywords: ['download', 'xiazai', '插件', '浏览器', 'Prowlarr', 'qBittorrent', '资源'] },
       { key: 'video-workbench', label: '视频工作台', keywords: ['workbench', 'edit', 'merge', 'trim', 'gongzuotai', '合并', '去片头', '高清替换', '剪辑'] },
       { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
       // 数据维护（D-DC-01）：失联 · 完整度 · 规则 · 体检。

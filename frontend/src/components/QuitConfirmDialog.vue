@@ -9,6 +9,7 @@
           <span v-if="task.names.length" class="quit-confirm__names">{{ namesText(task) }}</span>
         </li>
       </ul>
+      <p class="quit-confirm__hint" data-test="quit-bt-continues">由 qBittorrent 执行的下载和做种会继续，重新打开应用后会核对进度。</p>
       <p v-for="hint in hints" :key="hint" class="quit-confirm__hint">{{ hint }}</p>
       <template #footer>
         <button type="button" class="btn btn--secondary" :disabled="quitting" data-test="quit-cancel" @click="cancel">继续运行</button>

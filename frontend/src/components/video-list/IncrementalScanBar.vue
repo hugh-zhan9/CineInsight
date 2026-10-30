@@ -44,6 +44,7 @@ import TaskFailureList from './TaskFailureList.vue';
 // 跳过数的拆分（D-PC09、LIB-14）：后端 skip_breakdown 的七个键。手动目录扫描弹窗共用这份文案。
 export const SKIP_BREAKDOWN_LABELS = {
   existing: '已在库',
+  bt_pending: 'BT 文件尚未具备入库资格',
   blocked_user_delete: '删除过、不再收录',
   recently_modified: '刚修改（5 分钟内）暂缓',
   temp_file: '临时文件',

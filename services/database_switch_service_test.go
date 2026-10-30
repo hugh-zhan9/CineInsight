@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -943,5 +944,59 @@ func TestAPP02StatusReportsNextBackendForPendingRestartNotice(t *testing.T) {
 	status = service.Status()
 	if status.NextBackend != string(live) || status.PendingRestart {
 		t.Fatalf("环境变量锁定时下次启动仍用当前后端: %#v", status)
+	}
+}
+
+func TestBTConfigOnlyPreparesLiveTargetBeforePublishingAndPreservesUnknown(t *testing.T) {
+	for _, mutate := range []bool{false, true} {
+		t.Run(fmt.Sprint(mutate), func(t *testing.T) {
+			dataDir := useSQLiteAsSwitchTarget(t)
+			service := NewDatabaseSwitchService(dataDir)
+			service.backendFromProcessEnvOverride = func() bool { return false }
+			target, closeTarget := openSQLiteFile(t, database.SQLitePath(dataDir))
+			if err := target.AutoMigrate(models.AllModels()...); err != nil {
+				t.Fatal(err)
+			}
+			target.Create(&models.Video{Name: "old", Path: "/old", Directory: "/"})
+			closeTarget()
+			if err := persistBackendChoice(dataDir, database.BackendPostgres, database.BackendSQLite); err != nil {
+				t.Fatal(err)
+			}
+			prepared := false
+			finished := false
+			service.SetConfigTargetPreparation(func(ctx context.Context, db *gorm.DB) (func(bool) error, error) {
+				var count int64
+				if err := db.Model(&models.Video{}).Count(&count).Error; err != nil || count != 1 {
+					t.Fatal("target handle closed before preparation", err)
+				}
+				if readSwitchConfig(t, dataDir)["DB_BACKEND"] != "postgres" {
+					t.Fatal("prepared after config publication")
+				}
+				prepared = true
+				return func(unchanged bool) error {
+					finished = true
+					if unchanged == mutate {
+						t.Fatal("wrong unchanged certification", unchanged)
+					}
+					return nil
+				}, nil
+			})
+			persistBackendChoiceFn = func(dir string, b, prev database.Backend) error {
+				if !prepared {
+					t.Error("published before preparation")
+				}
+				if mutate {
+					if err := persistBackendChoice(dir, b, prev); err != nil {
+						return err
+					}
+				}
+				return errors.New("uncertain write")
+			}
+			t.Cleanup(func() { persistBackendChoiceFn = persistBackendChoice })
+			_, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", func() error { return nil }, func() {})
+			if err == nil || !finished {
+				t.Fatal("missing failure cleanup decision", err)
+			}
+		})
 	}
 }

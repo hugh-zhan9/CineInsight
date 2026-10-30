@@ -10,7 +10,7 @@
          榜单一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），不在这个标签上时不该有那个副作用；
          观影记录每次进来重读本地标记表，不用自己做失效。 -->
     <div v-if="pageActive && activeTab.key === 'watchlist'" id="lists-panel-watchlist" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-watchlist">
-      <WatchlistPage embedded @open-video-id="$emit('open-video-id', $event)" />
+      <WatchlistPage embedded @find-resources="$emit('find-resources', $event)" @open-video-id="$emit('open-video-id', $event)" />
     </div>
     <div v-if="pageActive && activeTab.key === 'movie-chart'" id="lists-panel-movie-chart" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-movie-chart">
       <MovieChartPage embedded />
@@ -59,7 +59,7 @@ export default {
     tab: { type: String, default: DEFAULT_LIST_TAB },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['update:tab', 'navigate', 'open-video', 'open-video-id', 'open-bookmark'],
+  emits: ['find-resources', 'update:tab', 'navigate', 'open-video', 'open-video-id', 'open-bookmark'],
   data() {
     return { notesMounted: false };
   },

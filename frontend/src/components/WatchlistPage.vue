@@ -112,6 +112,7 @@
           </div>
         </div>
         <div class="watchlist-actions">
+          <button class="btn btn--secondary btn--sm" type="button" :data-test="`watchlist-resources-${entry.id}`" @click="$emit('find-resources', entry.title)">找资源</button>
           <button v-if="entry.enrichment_status === 'failed'" class="btn btn--secondary btn--sm" type="button"
             :disabled="busy || loading" :data-test="`watchlist-retry-${entry.id}`" @click="retry(entry)">重试补全</button>
           <button class="btn btn--secondary btn--sm" type="button" :disabled="busy || loading"
@@ -254,7 +255,7 @@ export default {
     embedded: { type: Boolean, default: false }
   },
   // open-video-id(videoID)：「已在库 · 播放」，由宿主进这部片的整页详情。
-  emits: ['open-video-id'],
+  emits: ['open-video-id', 'find-resources'],
   data() {
     return {
       entries: [], nextID: 0, keyword: '', title: '', kind: DEFAULT_KIND, kindTouched: false,

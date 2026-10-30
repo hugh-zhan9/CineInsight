@@ -308,7 +308,7 @@ func TestMEDIA08EmbeddedSubtitleLiteralDefinedOnce(t *testing.T) {
 		}
 		if info.IsDir() {
 			switch info.Name() {
-			case "node_modules", ".git", ".loopx", ".claude", "frontend", "docs", "build":
+			case "node_modules", ".git", ".worktrees", ".loopx", ".claude", "frontend", "docs", "build":
 				return filepath.SkipDir
 			}
 			return nil

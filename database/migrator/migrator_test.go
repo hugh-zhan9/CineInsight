@@ -66,6 +66,7 @@ func seedSource(t *testing.T, db *gorm.DB) (videoIDs []uint, tagID uint) {
 	seedVideoEditRows(t, db, videoIDs)
 	seedRecapRows(t, db)
 	seedFunctionalPolishRows(t, db, videoIDs)
+	seedBTRows(t, db)
 	// 手写夹具覆盖不到的表由反射补一行：往返比对是逐表比行数，空表永远 0 == 0，
 	// 一张表整张被漏掉也照样"通过"（N-1 就是这样藏住的）。
 	seedEveryTable(t, db)

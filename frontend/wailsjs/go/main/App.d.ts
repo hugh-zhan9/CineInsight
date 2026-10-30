@@ -148,6 +148,8 @@ export function ClearStaleSceneIndex():Promise<services.SceneIndexCleanupResult>
 
 export function ClearVideoAutomaticTagOverride(arg1:number,arg2:string):Promise<void>;
 
+export function ConfigureBTConnection(arg1:services.BTConnectionRequest):Promise<services.BTConnectionView>;
+
 export function ConfigureJellyfin(arg1:services.JellyfinConfigInput):Promise<services.JellyfinStatus>;
 
 export function ConfirmCollectionSuggestion(arg1:number,arg2:string,arg3:Array<number>):Promise<services.CollectionDetail>;
@@ -163,6 +165,8 @@ export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
 export function ConfirmSubtitleExtraction(arg1:services.SubtitleExtractConfirm):Promise<services.SubtitleSaveResult>;
 
 export function ConfirmTaskFailureRetry(arg1:string):Promise<string>;
+
+export function ControlBTTask(arg1:services.BTControlRequest):Promise<services.BTTaskView>;
 
 export function ControlPlaybackQueue(arg1:string,arg2:string):Promise<void>;
 
@@ -301,6 +305,10 @@ export function GetAllTags():Promise<Array<models.Tag>>;
 export function GetAutomaticOverrideKinds(arg1:Array<number>):Promise<Record<number, Array<string>>>;
 
 export function GetAutomationRuleRunStatus():Promise<services.AutomationRuleRunStatus>;
+
+export function GetBTConnection():Promise<services.BTConnectionView>;
+
+export function GetBTTask(arg1:string):Promise<services.BTTaskView>;
 
 export function GetBackgroundTasks():Promise<Array<string>>;
 
@@ -494,6 +502,10 @@ export function ListAITagCandidatePage(arg1:number,arg2:string,arg3:string,arg4:
 
 export function ListAutomationRules():Promise<Array<services.AutomationRuleView>>;
 
+export function ListBTIndexers():Promise<Array<services.BTIndexerView>>;
+
+export function ListBTTasks(arg1:string,arg2:number):Promise<Array<services.BTTaskView>>;
+
 export function ListCleanupDismissals(arg1:string,arg2:number,arg3:number):Promise<services.CleanupDismissalPage>;
 
 export function ListCollectionProgress(arg1:services.CollectionProgressRequest):Promise<Array<services.CollectionProgress>>;
@@ -645,6 +657,8 @@ export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void
 export function PreviewAIReviewApproval(arg1:string,arg2:services.ReviewApprovalRequest):Promise<services.ReviewApprovalPreview>;
 
 export function PreviewAutomationRule(arg1:number):Promise<services.AutomationRulePreview>;
+
+export function PreviewBTResource(arg1:string):Promise<services.BTTaskView>;
 
 export function PreviewCleanupConsolidation(arg1:services.CleanupConsolidationRequest):Promise<services.CleanupConsolidationPreview>;
 
@@ -810,6 +824,8 @@ export function SaveViewingDiary(arg1:services.DiaryInput):Promise<services.Diar
 
 export function SearchAITagCandidatePage(arg1:services.ReviewSearchRequest):Promise<services.AITagCandidatePage>;
 
+export function SearchBTResources(arg1:string,arg2:Array<number>):Promise<services.BTSearchResult>;
+
 export function SearchImageAITagCandidatePage(arg1:services.ReviewSearchRequest):Promise<services.ImageAITagCandidatePage>;
 
 export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
@@ -914,6 +930,8 @@ export function StopPlaybackQueue(arg1:string):Promise<void>;
 
 export function StopVideoWallpaper():Promise<services.WallpaperStatus>;
 
+export function SubmitBTDownload(arg1:services.BTSubmitRequest):Promise<services.BTTaskView>;
+
 export function SuggestLibraryMatchesBatch(arg1:Array<services.LibraryMatchQuery>):Promise<Record<string, Array<services.LibraryMatchSuggestion>>>;
 
 export function SuggestTonightVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<Array<services.TonightSuggestion>>;
@@ -929,6 +947,8 @@ export function SyncScanDirectories(arg1:string):Promise<services.ScanSyncResult
 export function SyncSubtitleIndexNow():Promise<services.SubtitleIndexSyncStatus>;
 
 export function TestAITaggingConnection(arg1:services.AITaggingConnectionTestInput):Promise<services.AITaggingConnectionTestResult>;
+
+export function TestBTConnection():Promise<services.BTConnectionTestResult>;
 
 export function TestWatchlistMetadataConnection(arg1:services.WatchlistMetadataProbeInput):Promise<services.WatchlistMetadataProbeResult>;
 

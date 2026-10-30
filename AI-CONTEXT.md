@@ -40,7 +40,7 @@
 - `/database`: **持久化层**（数据库连接、迁移与初始化）。
 - `/frontend/src/components`: **UI 组件**（Vue 组件）。
   - `video-list/`：`VideoListPage.vue` 拆出的 15 个子组件（工具栏、批量操作栏、清理审阅面板、字幕生成/预览/翻译弹窗、超分弹窗、重命名与保存视图弹窗、后台任务状态条、任务失败明细、增量扫描条、语义提示条、随机批次条、删除撤销条）与 3 个共用模块（`runtimeEvents.js` 事件注册 mixin、`format.js`、`wheelForwarding.js`）。父子只经 props / emit / 父→直接子 `$refs`；需要保持 `await` 顺序的片库侧动作用函数 prop 回调。
-  - `settings/`：`SettingsPage.vue` 按分区拆出的 16 个子组件（`SETTINGS_SECTIONS` 共 20 个锚点，每项带 `saveMode`：即时生效 / 需保存 / 部分需保存，扫描目录排第 2 位，D-PC57 / D-PC58）；父组件只留锚点导航、`settingsForm`、`saveSettings` 与未保存状态（`dirty`，切页前由 `App.vue` 确认「放弃未保存的设置修改？」），分区通过 `form` prop 改字段。（旧写法「10 个 / 13 个」已过时，2026-09-30 按代码更正，APP-13。）
+  - `settings/`：`SettingsPage.vue` 按分区拆成子组件，分区与锚点以 `SETTINGS_SECTIONS` 为准（2026-10-31 为 23 项，每项带 `saveMode`，扫描目录排第 2 位）。通用设置通过 `form` 保存；BT 连接分区独立保存，密钥留在系统 Keychain，未保存修改仍参与 App 的离页确认。BT 下载导航不依赖浏览器桥接开关，详见[外部入口](docs/context/integrations.md)。
   - `frontend/src/utils/idleScheduling.js` 收口后台任务名与等待原因的中文口径，设置页与状态条共用。
   - `frontend/src/utils/{commandRegistry,taskCommands,appCommands}.js` 与 `frontend/src/components/CommandPalette.vue`：命令面板（见 2.21）。
   - `services/desktop_notify*.go`：桌面通知与 Dock 角标，`_darwin.go` 使用 cgo（见 2.20）；另一个 cgo 入口为 FSEvents 的 `library_watcher_backend_darwin.go`（见 2.14）。

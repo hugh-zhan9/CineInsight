@@ -31,6 +31,7 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
+	bt                             *appBTState
 	functionalTransitionMu         sync.Mutex
 	functionalMu                   sync.Mutex
 	functionalInitialized          bool
@@ -58,26 +59,28 @@ type App struct {
 	tagService                     *services.TagService
 	settingsService                *services.SettingsService
 	backupService                  *services.BackupService
-	databaseSwitchService          *services.DatabaseSwitchService
-	directoryService               *services.DirectoryService
-	subtitleService                *services.SubtitleService
-	subtitleWorkbench              *services.SubtitleWorkbenchService
-	cleanupService                 *services.CleanupService
-	subtitleSearchService          *services.SubtitleSearchService
-	aiTaggingService               *services.AITaggingService
-	aiQualityService               *services.AIQualityService
-	shortFeedService               *services.ShortFeedService
-	personService                  *services.PersonService
-	collectionService              *services.CollectionService
-	watchlistService               *services.WatchlistService
-	collectionSuggestions          *services.CollectionSuggestionService
-	videoDetailService             *services.VideoDetailService
-	libraryStatsService            *services.LibraryStatsService
-	storageReportService           *services.StorageReportService
-	localMetadata                  *services.LocalMetadataService
-	mediaProbeService              *services.MediaProbeService
-	technicalBackfill              *services.TechnicalBackfillService
-	perceptualHash                 *services.PerceptualHashService
+	// Test seam for outcomes after the real maintenance callback; production uses BackupService.
+	restoreDatabaseBackup func(context.Context, services.BackupRestoreRequest, func() error, func() error) error
+	databaseSwitchService *services.DatabaseSwitchService
+	directoryService      *services.DirectoryService
+	subtitleService       *services.SubtitleService
+	subtitleWorkbench     *services.SubtitleWorkbenchService
+	cleanupService        *services.CleanupService
+	subtitleSearchService *services.SubtitleSearchService
+	aiTaggingService      *services.AITaggingService
+	aiQualityService      *services.AIQualityService
+	shortFeedService      *services.ShortFeedService
+	personService         *services.PersonService
+	collectionService     *services.CollectionService
+	watchlistService      *services.WatchlistService
+	collectionSuggestions *services.CollectionSuggestionService
+	videoDetailService    *services.VideoDetailService
+	libraryStatsService   *services.LibraryStatsService
+	storageReportService  *services.StorageReportService
+	localMetadata         *services.LocalMetadataService
+	mediaProbeService     *services.MediaProbeService
+	technicalBackfill     *services.TechnicalBackfillService
+	perceptualHash        *services.PerceptualHashService
 	// mediaWorkSlot 是转封装、帧哈希回填、人脸抽帧共享的重媒体处理槽（D-007）：
 	// 容量 1，三条流水线在处理每一项之前各自取一次。新增重 ffmpeg 任务请复用它，
 	// 不要各建一个——各建一个等于没有限制。
@@ -155,6 +158,7 @@ func NewApp() *App {
 	dataDir, dataDirErr := appdata.Resolve()
 	mediaProbeService := services.NewMediaProbeService()
 	videoService := services.NewVideoService(mediaProbeService)
+	videoService.SetBTPathPolicy(services.NewBTPathPolicy(nil))
 	libraryWatcher := services.NewLibraryWatcherService(videoService)
 	subtitleService := services.NewSubtitleService(dataDir)
 	aiTaggingService := services.NewAITaggingService()
@@ -236,6 +240,7 @@ func NewApp() *App {
 		return data, err
 	})
 	app.wireBrowserBridge()
+	app.wireBT(dataDir)
 	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService, personService, collectionService)
 	app.wireBackgroundTaskRegistry()
 	app.configureCleanupConsolidation(dataDir)
@@ -419,6 +424,7 @@ func (a *App) startup(ctx context.Context) {
 	a.wireFunctionalPolish(emit)
 	a.wireStartupHooks(emit)
 	a.startDataCare(ctx, emit)
+	a.startBT(ctx, emit)
 	a.playbackQueueEmit = func(sequence uint64) { emit("playback-queue-state", sequence) }
 	services.SetRecapActivityListener(func(activity services.RecapActivity) { emit(recapActivityEvent, activity) })
 	if err := a.startPlaybackQueue(); err != nil {
@@ -656,6 +662,9 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if err := a.stopBT(context.Background()); err != nil {
+		log.Printf("下载管理本地任务退出未完成")
+	}
 	if a.subtitleService != nil {
 		a.subtitleService.StopApplePreparation()
 	}

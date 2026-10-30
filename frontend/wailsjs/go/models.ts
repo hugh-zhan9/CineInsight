@@ -1964,6 +1964,431 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class BTSecretChange {
+	    operation: string;
+	    value: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTSecretChange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation = source["operation"];
+	        this.value = source["value"];
+	    }
+	}
+	export class BTConnectionRequest {
+	    expected_revision: number;
+	    prowlarr_base: string;
+	    qb_base: string;
+	    qb_username: string;
+	    download_root: string;
+	    enabled: boolean;
+	    prowlarr_key: BTSecretChange;
+	    qb_password: BTSecretChange;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.expected_revision = source["expected_revision"];
+	        this.prowlarr_base = source["prowlarr_base"];
+	        this.qb_base = source["qb_base"];
+	        this.qb_username = source["qb_username"];
+	        this.download_root = source["download_root"];
+	        this.enabled = source["enabled"];
+	        this.prowlarr_key = this.convertValues(source["prowlarr_key"], BTSecretChange);
+	        this.qb_password = this.convertValues(source["qb_password"], BTSecretChange);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BTConnectionTestResult {
+	    prowlarr_status: string;
+	    qb_status: string;
+	    prowlarr_version: string;
+	    qb_version: string;
+	    qb_api_version: string;
+	    metadata_preview_status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTConnectionTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prowlarr_status = source["prowlarr_status"];
+	        this.qb_status = source["qb_status"];
+	        this.prowlarr_version = source["prowlarr_version"];
+	        this.qb_version = source["qb_version"];
+	        this.qb_api_version = source["qb_api_version"];
+	        this.metadata_preview_status = source["metadata_preview_status"];
+	    }
+	}
+	export class BTConnectionView {
+	    instance_id: string;
+	    revision: number;
+	    prowlarr_base: string;
+	    qb_base: string;
+	    qb_username: string;
+	    download_root: string;
+	    enabled: boolean;
+	    prowlarr_key_configured: boolean;
+	    qb_password_configured: boolean;
+	    credential_status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTConnectionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.instance_id = source["instance_id"];
+	        this.revision = source["revision"];
+	        this.prowlarr_base = source["prowlarr_base"];
+	        this.qb_base = source["qb_base"];
+	        this.qb_username = source["qb_username"];
+	        this.download_root = source["download_root"];
+	        this.enabled = source["enabled"];
+	        this.prowlarr_key_configured = source["prowlarr_key_configured"];
+	        this.qb_password_configured = source["qb_password_configured"];
+	        this.credential_status = source["credential_status"];
+	    }
+	}
+	export class BTControlRequest {
+	    task_id: string;
+	    expected_revision: number;
+	    action: string;
+	    confirmed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTControlRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task_id = source["task_id"];
+	        this.expected_revision = source["expected_revision"];
+	        this.action = source["action"];
+	        this.confirmed = source["confirmed"];
+	    }
+	}
+	export class BTDuplicateMatchView {
+	    video_id: number;
+	    title: string;
+	    kind: string;
+	    relation: string;
+	    width: number;
+	    height: number;
+	    size: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTDuplicateMatchView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.kind = source["kind"];
+	        this.relation = source["relation"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.size = source["size"];
+	    }
+	}
+	export class BTDuplicateView {
+	    status: string;
+	    matches: BTDuplicateMatchView[];
+	    unhashed_videos: number;
+	    error: string;
+	    version_error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTDuplicateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.matches = this.convertValues(source["matches"], BTDuplicateMatchView);
+	        this.unhashed_videos = source["unhashed_videos"];
+	        this.error = source["error"];
+	        this.version_error = source["version_error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BTFileView {
+	    duplicate?: BTDuplicateView;
+	    id: string;
+	    path: string;
+	    size: string;
+	    selected: boolean;
+	    selectable: boolean;
+	    padding: boolean;
+	    kind: string;
+	    progress: number;
+	    import_state: string;
+	    video_id?: number;
+	    error_code: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTFileView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.duplicate = this.convertValues(source["duplicate"], BTDuplicateView);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.size = source["size"];
+	        this.selected = source["selected"];
+	        this.selectable = source["selectable"];
+	        this.padding = source["padding"];
+	        this.kind = source["kind"];
+	        this.progress = source["progress"];
+	        this.import_state = source["import_state"];
+	        this.video_id = source["video_id"];
+	        this.error_code = source["error_code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BTIndexerSearchStatus {
+	    indexer_id: number;
+	    status: string;
+	    coverage: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTIndexerSearchStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.indexer_id = source["indexer_id"];
+	        this.status = source["status"];
+	        this.coverage = source["coverage"];
+	    }
+	}
+	export class BTIndexerView {
+	    id: number;
+	    name: string;
+	    protocol: string;
+	    enabled: boolean;
+	    health: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTIndexerView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.protocol = source["protocol"];
+	        this.enabled = source["enabled"];
+	        this.health = source["health"];
+	    }
+	}
+	export class BTResource {
+	    result_token: string;
+	    title: string;
+	    indexer_id: number;
+	    indexer: string;
+	    size: string;
+	    seeders?: number;
+	    publish_time?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTResource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.result_token = source["result_token"];
+	        this.title = source["title"];
+	        this.indexer_id = source["indexer_id"];
+	        this.indexer = source["indexer"];
+	        this.size = source["size"];
+	        this.seeders = source["seeders"];
+	        this.publish_time = source["publish_time"];
+	    }
+	}
+	export class BTSearchResult {
+	    resources: BTResource[];
+	    indexers: BTIndexerSearchStatus[];
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BTSearchResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.resources = this.convertValues(source["resources"], BTResource);
+	        this.indexers = this.convertValues(source["indexers"], BTIndexerSearchStatus);
+	        this.truncated = source["truncated"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class BTSubmitRequest {
+	    draft_id: string;
+	    expected_revision: number;
+	    selected_file_ids: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new BTSubmitRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.draft_id = source["draft_id"];
+	        this.expected_revision = source["expected_revision"];
+	        this.selected_file_ids = source["selected_file_ids"];
+	    }
+	}
+	export class BTTaskView {
+	    id: string;
+	    revision: number;
+	    title: string;
+	    indexer_id: number;
+	    indexer_name: string;
+	    stage: string;
+	    remote_state: string;
+	    save_path: string;
+	    error_code: string;
+	    pending_action: string;
+	    unresolved_write: boolean;
+	    read_only_reason?: string;
+	    files: BTFileView[];
+	    selected_bytes: string;
+	    total_bytes: string;
+	    progress: number;
+	    download_complete: boolean;
+	    selected_video_count: number;
+	    imported_count: number;
+	    failed_count: number;
+	    expires_at?: string;
+	    actions: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new BTTaskView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.revision = source["revision"];
+	        this.title = source["title"];
+	        this.indexer_id = source["indexer_id"];
+	        this.indexer_name = source["indexer_name"];
+	        this.stage = source["stage"];
+	        this.remote_state = source["remote_state"];
+	        this.save_path = source["save_path"];
+	        this.error_code = source["error_code"];
+	        this.pending_action = source["pending_action"];
+	        this.unresolved_write = source["unresolved_write"];
+	        this.read_only_reason = source["read_only_reason"];
+	        this.files = this.convertValues(source["files"], BTFileView);
+	        this.selected_bytes = source["selected_bytes"];
+	        this.total_bytes = source["total_bytes"];
+	        this.progress = source["progress"];
+	        this.download_complete = source["download_complete"];
+	        this.selected_video_count = source["selected_video_count"];
+	        this.imported_count = source["imported_count"];
+	        this.failed_count = source["failed_count"];
+	        this.expires_at = source["expires_at"];
+	        this.actions = source["actions"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class BackupVerification {
 	    name: string;
 	    level: string;
@@ -4656,11 +5081,11 @@ export namespace services {
 	export class EditCropRange {
 	    start_ms: number;
 	    end_ms: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EditCropRange(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.start_ms = source["start_ms"];
@@ -4705,7 +5130,7 @@ export namespace services {
 		    return a;
 		}
 	}
-
+	
 	export class EditCropRecipe {
 	    items: EditCropItem[];
 	
@@ -4794,11 +5219,11 @@ export namespace services {
 	}
 	export class EditFramePosition {
 	    at_ms: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EditFramePosition(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.at_ms = source["at_ms"];
@@ -4810,11 +5235,11 @@ export namespace services {
 	    source_version: string;
 	    at_ms: number;
 	    direction: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EditFrameRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.project_id = source["project_id"];
@@ -8206,6 +8631,7 @@ export namespace services {
 	    }
 	}
 	export class SkipBreakdown {
+	    bt_pending: number;
 	    existing: number;
 	    blocked_user_delete: number;
 	    recently_modified: number;
@@ -8220,6 +8646,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bt_pending = source["bt_pending"];
 	        this.existing = source["existing"];
 	        this.blocked_user_delete = source["blocked_user_delete"];
 	        this.recently_modified = source["recently_modified"];

@@ -370,10 +370,26 @@ func downloadDuplicateStillApplies(result DownloadDuplicateResult, task BrowserD
 // resolveDownloadDuplicateViews 把一批任务的查重结论换成界面用的视图：按 ID 一次查出对方视频，
 // 对方已删除或不在片库可见范围内的匹配丢掉；这次下载自己的记录或文件已经变了（结论作废）、
 // 或自己的片库记录已经不可见（移到废纸篓之后）的，整条提示不再显示。
+type downloadDuplicateSubject struct {
+	VideoID   uint
+	Path, Raw string
+}
+
 func resolveDownloadDuplicateViews(db *gorm.DB, tasks []BrowserDownloadTask) {
+	subjects := make([]downloadDuplicateSubject, len(tasks))
+	for i, task := range tasks {
+		subjects[i] = downloadDuplicateSubject{VideoID: task.VideoID, Path: task.OutputPath, Raw: task.duplicateResult}
+	}
+	views := resolveDuplicateSubjectViews(db, subjects)
+	for i := range tasks {
+		tasks[i].Duplicate = views[i]
+	}
+}
+func resolveDuplicateSubjectViews(db *gorm.DB, tasks []downloadDuplicateSubject) []*DownloadDuplicateView {
+	out := make([]*DownloadDuplicateView, len(tasks))
 	ids := []uint{}
 	for _, task := range tasks {
-		if result, ok := decodeDownloadDuplicateResult(task.duplicateResult); ok {
+		if result, ok := decodeDownloadDuplicateResult(task.Raw); ok {
 			for _, match := range result.Matches {
 				ids = append(ids, match.VideoID)
 			}
@@ -396,14 +412,14 @@ func resolveDownloadDuplicateViews(db *gorm.DB, tasks []BrowserDownloadTask) {
 		}
 	}
 	for index := range tasks {
-		result, ok := decodeDownloadDuplicateResult(tasks[index].duplicateResult)
-		if !ok || !downloadDuplicateStillApplies(result, tasks[index]) {
-			tasks[index].Duplicate = nil
+		result, ok := decodeDownloadDuplicateResult(tasks[index].Raw)
+		if !ok || !downloadDuplicateStillApplies(result, BrowserDownloadTask{VideoID: tasks[index].VideoID, OutputPath: tasks[index].Path}) {
+			out[index] = nil
 			continue
 		}
 		if self := tasks[index].VideoID; self != 0 {
 			if _, visible := videos[self]; !visible {
-				tasks[index].Duplicate = nil
+				out[index] = nil
 				continue
 			}
 		}
@@ -427,6 +443,7 @@ func resolveDownloadDuplicateViews(db *gorm.DB, tasks []BrowserDownloadTask) {
 		if view.Status == DownloadDuplicateFound && len(view.Matches) == 0 {
 			view.Status = DownloadDuplicateNone
 		}
-		tasks[index].Duplicate = view
+		out[index] = view
 	}
+	return out
 }

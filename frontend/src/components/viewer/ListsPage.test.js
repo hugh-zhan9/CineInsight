@@ -120,3 +120,5 @@ describe('片单（D-P2-04）', () => {
     expect(wrapper.emitted('open-bookmark')).toEqual([[resolution]]);
   });
 });
+
+it('transfers resource search title without changing the watchlist tab', () => { const w = mountLists(); child(w, 'WatchlistPage').vm.$emit('find-resources', '沙丘'); expect(w.emitted('find-resources')).toEqual([['沙丘']]); expect(w.emitted('update:tab')).toBeUndefined(); });

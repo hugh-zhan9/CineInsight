@@ -67,6 +67,7 @@ type ScanSyncResult struct {
 
 // SkipBreakdown 是扫描跳过原因的分项计数（D-PC09）。JSON 键固定，前端按键取值。
 type SkipBreakdown struct {
+	BTPending int `json:"bt_pending"`
 	// Existing：记录已存在（含扫得到但不属于本轮候选的在库文件）。
 	Existing int `json:"existing"`
 	// BlockedUserDelete：用户只删过记录、文件身份未变，扫描不重新收录。
@@ -85,10 +86,11 @@ type SkipBreakdown struct {
 
 // Total 返回各项之和。
 func (b SkipBreakdown) Total() int {
-	return b.Existing + b.BlockedUserDelete + b.RecentlyModified + b.TempFile + b.NotVideo + b.ReadError + b.LegacyTrash
+	return b.BTPending + b.Existing + b.BlockedUserDelete + b.RecentlyModified + b.TempFile + b.NotVideo + b.ReadError + b.LegacyTrash
 }
 
 func (b *SkipBreakdown) merge(other SkipBreakdown) {
+	b.BTPending += other.BTPending
 	b.Existing += other.Existing
 	b.BlockedUserDelete += other.BlockedUserDelete
 	b.RecentlyModified += other.RecentlyModified
@@ -100,6 +102,7 @@ func (b *SkipBreakdown) merge(other SkipBreakdown) {
 
 // 跳过原因，与 SkipBreakdown 的字段一一对应。
 const (
+	skipReasonBTPending         = "bt_pending"
 	skipReasonExisting          = "existing"
 	skipReasonBlockedUserDelete = "blocked_user_delete"
 	skipReasonRecentlyModified  = "recently_modified"
@@ -113,6 +116,8 @@ const (
 func (r *ScanSyncResult) recordSkip(reason string) {
 	r.Skipped++
 	switch reason {
+	case skipReasonBTPending:
+		r.SkipBreakdown.BTPending++
 	case skipReasonExisting:
 		r.SkipBreakdown.Existing++
 	case skipReasonBlockedUserDelete:
@@ -192,6 +197,11 @@ func (s *VideoService) scanDirectoryCollectContext(ctx context.Context, dir stri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	btSnapshot, btErr := s.btPathSnapshot(ctx)
+	if btErr != nil {
+		return nil, btErr
+	}
+
 	var videoFiles []ScannedFile
 	reporter := directoryScanReporter{callback: progress}
 	dir = filepath.Clean(strings.TrimSpace(dir))
@@ -288,6 +298,16 @@ func (s *VideoService) scanDirectoryCollectContext(ctx context.Context, dir stri
 		if !matched {
 			return nil
 		}
+		withheld, btErr := btSnapshot.Withheld(path)
+		if btErr != nil {
+			return btErr
+		}
+		if withheld {
+			if filtered != nil {
+				filtered.BTPending++
+			}
+			return nil
+		}
 		// 只有扩展名是视频的文件才谈得上「被跳过」；其他文件与扫描无关，不计数。
 		if hasTempVideoSuffix(path) {
 			if filtered != nil {
@@ -370,6 +390,12 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 		videoSyncAfterLock()
 	}
 
+	btSnapshot, btErr := s.btPathSnapshot(context.Background())
+	if btErr != nil {
+		result.recordError("bt_policy", "", "", btErr)
+		return result
+	}
+
 	scannedByPath := make(map[string]ScannedFile)
 	existingByPath := make(map[string]models.Video)
 	roots := make([]string, 0, len(dirs))
@@ -424,6 +450,15 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 		result.addSkipBreakdown(filtered)
 		result.Scanned += len(scannedFiles)
 		for _, file := range scannedFiles {
+			withheld, btErr := btSnapshot.Withheld(file.Path)
+			if btErr != nil {
+				result.recordError("bt_policy", "", "", btErr)
+				return result
+			}
+			if withheld {
+				result.recordSkip(skipReasonBTPending)
+				continue
+			}
 			scannedByPath[file.Path] = file
 		}
 	}
@@ -436,6 +471,14 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 		result.recordError("load_existing", "", "", err)
 	} else {
 		for _, video := range loadedExisting {
+			withheld, btErr := btSnapshot.Withheld(video.Path)
+			if btErr != nil {
+				result.recordError("bt_policy", "", "", btErr)
+				return result
+			}
+			if withheld {
+				continue
+			}
 			if isScanPathExcluded(video.Path, excludedPaths) {
 				continue
 			}
@@ -622,7 +665,22 @@ func (s *VideoService) markUnavailableScanRoot(root string, result *ScanSyncResu
 		result.recordError("load_offline", root, "", err)
 		return
 	}
+	btSnapshot, btErr := s.btPathSnapshot(context.Background())
+	if btErr != nil {
+		result.recordError("bt_policy", "", "", btErr)
+		return
+	}
+
 	for _, video := range videos {
+		withheld, btErr := btSnapshot.Withheld(video.Path)
+		if btErr != nil {
+			result.recordError("bt_policy", "", "", btErr)
+			return
+		}
+		if withheld {
+			continue
+		}
+
 		update := markVideoStale(video.ID, models.StaleReasonOfflineRoot)
 		if update.Error != nil {
 			result.recordError("mark_stale", root, video.Path, update.Error)
@@ -655,6 +713,12 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 	}
 	result.Directories = len(targets)
 
+	btSnapshot, btErr := s.btPathSnapshot(context.Background())
+	if btErr != nil {
+		result.recordError("bt_policy", "", "", btErr)
+		return result
+	}
+
 	scannedByPath := make(map[string]ScannedFile)
 	successfulTargets := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -668,6 +732,15 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		result.addSkipBreakdown(filtered)
 		result.Scanned += len(files)
 		for _, file := range files {
+			withheld, btErr := btSnapshot.Withheld(file.Path)
+			if btErr != nil {
+				result.recordError("bt_policy", "", "", btErr)
+				return result
+			}
+			if withheld {
+				result.recordSkip(skipReasonBTPending)
+				continue
+			}
 			file.Path = filepath.Clean(file.Path)
 			scannedByPath[file.Path] = file
 		}
@@ -678,6 +751,18 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		result.recordError("load_existing", "", "", loadErr)
 		return result
 	}
+	eligibleExisting := allExisting[:0]
+	for _, video := range allExisting {
+		withheld, btErr := btSnapshot.Withheld(video.Path)
+		if btErr != nil {
+			result.recordError("bt_policy", "", "", btErr)
+			return result
+		}
+		if !withheld {
+			eligibleExisting = append(eligibleExisting, video)
+		}
+	}
+	allExisting = eligibleExisting
 	existingByPath := make(map[string]models.Video, len(allExisting))
 	for _, video := range allExisting {
 		existingByPath[filepath.Clean(video.Path)] = video
@@ -846,7 +931,22 @@ func (s *VideoService) reconcileOrphanedVideos(configuredRoots []string, result 
 		return
 	}
 	orphanIDs := make([]uint, 0)
+	btSnapshot, btErr := s.btPathSnapshot(context.Background())
+	if btErr != nil {
+		result.recordError("bt_policy", "", "", btErr)
+		return
+	}
+
 	for _, video := range videos {
+		withheld, btErr := btSnapshot.Withheld(video.Path)
+		if btErr != nil {
+			result.recordError("bt_policy", "", "", btErr)
+			return
+		}
+		if withheld {
+			continue
+		}
+
 		if len(configuredRoots) > 0 && videoBelongsToRoots(video, configuredRoots) {
 			continue
 		}
@@ -1707,6 +1807,8 @@ func staleReasonForGuardError(err error) string {
 // scanAddSkipReason 把 addScannedVideo 的「不算失败」结果映射成跳过原因。
 func scanAddSkipReason(err error) (string, bool) {
 	switch {
+	case errors.Is(err, ErrBTPending):
+		return skipReasonBTPending, true
 	case errors.Is(err, ErrVideoBlockedByUserDelete):
 		return skipReasonBlockedUserDelete, true
 	case errors.Is(err, ErrVideoExists):

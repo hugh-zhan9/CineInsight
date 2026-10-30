@@ -155,3 +155,5 @@ describe('扫描摘要（D-PC09）', () => {
     wrapper.unmount();
   });
 });
+
+it('reports BT withheld files separately from missing or existing files', () => { expect(formatSkipBreakdown({ skip_breakdown: { bt_pending: 2 } })).toContain('BT 文件尚未具备入库资格 2'); });

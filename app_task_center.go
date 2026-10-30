@@ -156,6 +156,7 @@ type taskCenterSources struct {
 	proxy          services.PlaybackProxyStatus
 	consolidations []services.CleanupConsolidationSummary
 	videoEdits     []services.EditProjectSummary
+	btDownloads    []services.BTTaskSummary
 }
 
 func (src *taskCenterSources) warn(message string) {
@@ -238,6 +239,16 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 		src.downloads = a.browserDownloads.ListDownloadTasks()
 	}
 	src.videoEdits = a.taskCenterVideoEditProjects(src)
+	if a.bt != nil {
+		ctx, cancel, err := a.btContext()
+		if err == nil {
+			src.btDownloads, err = a.bt.service.RecentSummaries(ctx)
+			cancel()
+		}
+		if err != nil {
+			src.warn("影视下载任务暂时无法读取")
+		}
+	}
 	if a.cleanupService != nil {
 		_, done, err := a.beginCleanupConsolidation()
 		if err == nil {
@@ -312,6 +323,9 @@ func buildTaskCenterItem(key string, state taskCenterKeyState, src *taskCenterSo
 
 func (a *App) taskCenterRecent(src *taskCenterSources) []TaskRecentJob {
 	recent := make([]TaskRecentJob, 0)
+	for _, task := range src.btDownloads {
+		recent = append(recent, TaskRecentJob{Kind: "bt_download", ID: task.ID, Title: task.Title, Status: task.Status, ErrorCode: task.ErrorCode, Message: task.Message, Actions: []string{"open_bt_downloads"}})
+	}
 	for _, job := range src.subtitleJobs {
 		recent = append(recent, TaskRecentJob{
 			Kind:       TaskRecentKindSubtitle,

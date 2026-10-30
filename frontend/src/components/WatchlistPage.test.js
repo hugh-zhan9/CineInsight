@@ -845,3 +845,9 @@ describe('嵌在片单页里（D-P2-04）', () => {
     expect(embedded.find('[data-test="watchlist-form"]').exists()).toBe(true);
   });
 });
+
+it('找资源只发出片名，不删除或改动想看条目', async () => {
+ api.ListWatchlist.mockResolvedValue({ entries: [entry(1, '沙丘')], next_id: 0 });
+ const w = await page(); await find(w, 'resources-1').trigger('click');
+ expect(w.emitted('find-resources')).toEqual([['沙丘']]); expect(w.text()).toContain('沙丘'); expect(api.DeleteWatchlistEntry).not.toHaveBeenCalled();
+});

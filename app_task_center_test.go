@@ -139,6 +139,11 @@ func TestAPP03TaskCenterSnapshotReportsRunningWaitingIdleAndIdle(t *testing.T) {
 		t.Fatalf("创建设置失败: %v", err)
 	}
 	app := NewApp()
+	app.wireBT(t.TempDir())
+	if err := app.initializeBTLocal(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.stopBT(context.Background()) })
 	app.idleGate.SetProbe(func(context.Context) (services.IdleSample, error) {
 		return services.IdleSample{Idle: 10 * time.Second, OnACPower: true}, nil
 	})

@@ -671,3 +671,15 @@ describe('relativeTimeText', () => {
     expect(relativeTimeText(undefined, now)).toBe('');
   });
 });
+
+it('projects BT status and opens downloads without coercing IDs or controlling external tasks', async () => {
+ const job = { kind: 'bt_download', id: 'uuid-not-numeric', title: '合集', status: 'needs_confirmation', actions: ['open_bt_downloads', 'cancel', 'stop'] };
+ api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({ recent: [job] }));
+ const w = mountDrawer(); await flushPromises();
+ expect(w.get('[data-test="task-recent-bt_download"]').text()).toContain('待确认');
+ expect(w.find('[data-test="task-recent-action-bt_download-uuid-not-numeric-cancel"]').exists()).toBe(false);
+ await w.get('[data-test="task-recent-action-bt_download-uuid-not-numeric-open_bt_downloads"]').trigger('click');
+ expect(w.emitted('open-bt-downloads')).toEqual([[]]); expect(w.emitted('close')).toHaveLength(1);
+ expect(api.ControlBTTask).not.toHaveBeenCalled(); expect(api.CancelBrowserDownloadTask).not.toHaveBeenCalled();
+ for (const [status, text] of Object.entries({ queued: '待执行', running: '处理中 / 下载中', stopped: '已停止', importing: '待入库', done: '已完成（可继续做种）', failed: '需处理', cancelled: '已取消', abandoned: '已放弃管理', released: '已解除管理' })) expect(w.vm.recentStatusText({ kind: 'bt_download', status })).toBe(text);
+});

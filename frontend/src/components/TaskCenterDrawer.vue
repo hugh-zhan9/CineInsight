@@ -201,6 +201,7 @@ const RECENT_KINDS = [
   { kind: 'subtitle', label: '字幕' },
   { kind: 'enhancement', label: '视频超分' },
   { kind: 'download', label: '插件下载' },
+  { kind: 'bt_download', label: 'BT 下载' },
   { kind: 'proxy', label: '播放代理' },
   { kind: 'cleanup_consolidation', label: '集中整理' },
   { kind: 'video_edit', label: '视频工作台' }
@@ -208,6 +209,7 @@ const RECENT_KINDS = [
 
 // 各类任务自己的状态码 → 中文。超分的这份在 P-033 的 utils/enhancement.js 落地后应改为引用那里。
 const RECENT_STATUS_LABELS = {
+  bt_download: { queued: '待执行', running: '处理中 / 下载中', stopped: '已停止', importing: '待入库', done: '已完成（可继续做种）', failed: '需处理', needs_confirmation: '待确认', cancelled: '已取消', abandoned: '已放弃管理', released: '已解除管理' },
   cleanup_consolidation: CONSOLIDATION_STATUS,
   subtitle: {
     queued: '排队中', running: '生成中', succeeded: '已完成', failed: '失败',
@@ -224,6 +226,7 @@ const RECENT_STATUS_LABELS = {
 };
 
 const RECENT_ACTION_LABELS = {
+  bt_download: { open_bt_downloads: '查看下载' },
   cleanup_consolidation: { open_consolidation: '查看整理结果' },
   subtitle: { cancel: '取消', force: '强制生成', discard: '放弃', retry: '重试' },
   enhancement: { cancel: '取消', retry: '重试', reveal_output: '在访达中显示', open_output_in_library: '在片库中打开' },
@@ -273,7 +276,7 @@ export default {
   props: {
     open: { type: Boolean, default: false }
   },
-  emits: ['close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit', 'open-library-missing'],
+  emits: ['open-bt-downloads', 'close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit', 'open-library-missing'],
   data() {
     return {
       snapshot: { items: [], recent: [], warnings: [] },
@@ -554,6 +557,7 @@ export default {
       });
     },
     async performRecentAction(job, action) {
+      if (job.kind === 'bt_download') { if (action === 'open_bt_downloads') { this.$emit('open-bt-downloads'); this.$emit('close'); } return; }
       if (job.kind === 'cleanup_consolidation' && action === 'open_consolidation') {
         this.$emit('open-consolidation', numericID(job.id)); this.$emit('close'); return;
       }
