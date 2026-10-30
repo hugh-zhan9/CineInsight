@@ -103,6 +103,17 @@ func (a *App) GetEditProject(projectID uint) (*services.EditProjectView, error) 
 	return videoEditResult("GetEditProject", view, err)
 }
 
+// NavigateEditFrame 在裁剪项目中按真实帧时间定位相邻画面，不写观看事实。
+func (a *App) NavigateEditFrame(request services.EditFrameRequest) (*services.EditFramePosition, error) {
+	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	position, err := service.NavigateFrame(ctx, request)
+	return videoEditResult("NavigateEditFrame", position, err)
+}
+
 // UpdateEditRecipe 以 expected_revision 乐观更新草稿配方；冲突返回 edit_project_conflict。
 func (a *App) UpdateEditRecipe(request services.EditRecipeUpdateRequest) (*services.EditProjectView, error) {
 	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)

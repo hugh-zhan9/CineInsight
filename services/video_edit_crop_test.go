@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,53 @@ import (
 
 	"video-master/models"
 )
+
+func TestVideoEditCropAnalysisProvidesCanvasWithoutPreflight(t *testing.T) {
+	for _, tc := range []struct{ status, sample string }{
+		{"detected", "crop=100:180:110:0"},
+		{"no_borders", "crop=320:180:0:0"},
+		{"undetected", ""},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			s, media := newFakeEditService(t)
+			v := media.addFakeSource(t, t.TempDir(), "a.mkv", 4000)
+			view := mustEditProject(t, s, models.VideoEditKindCrop, v.ID)
+			original := s.runOutput
+			s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
+				if strings.Contains(strings.Join(args, " "), "cropdetect") {
+					return "", tc.sample, nil
+				}
+				return original(ctx, name, args)
+			}
+			_, err := s.AnalyzeProject(context.Background(), EditAnalyzeRequest{ProjectID: view.ID, ExpectedRevision: view.Revision})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := waitEditProject(t, s, view.ID, 5*time.Second, models.VideoEditStatusDraft)
+			raw, err := json.Marshal(got.Analysis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Crops []map[string]any `json:"crops"`
+			}
+			if err := json.Unmarshal(raw, &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Crops) != 1 {
+				t.Fatalf("analysis: %s", raw)
+			}
+			size, modified, err := editFileFingerprint(v.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			crop := result.Crops[0]
+			if crop["status"] != tc.status || crop["display_width"] != float64(320) || crop["display_height"] != float64(180) || crop["duration_ms"] != float64(4000) || crop["source_version"] != editCropSourceVersion(size, modified) {
+				t.Fatalf("missing canvas for manual editing: %s", raw)
+			}
+		})
+	}
+}
 
 func TestVideoEditCropPreflight(t *testing.T) {
 	s, media := newFakeEditService(t)
@@ -78,6 +126,100 @@ func TestVideoEditCropPreflight(t *testing.T) {
 	items, _ := loadEditItems(context.Background(), view.ID)
 	if !strings.Contains(items[0].PlanJSON, `"crop":{"x":110`) {
 		t.Fatal(items[0].PlanJSON)
+	}
+}
+
+func TestVideoEditCropRangePlan(t *testing.T) {
+	s, media := newFakeEditService(t)
+	v := media.addFakeSource(t, t.TempDir(), "range.mkv", 4000)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, v.ID)
+	pre, _ := s.PreflightProject(context.Background(), view.ID)
+	project, _ := loadEditProject(context.Background(), view.ID)
+	for _, tc := range []struct {
+		name, interval  string
+		start, duration int64
+		invalid         bool
+	}{
+		{"legacy", "null", 0, 4000, false},
+		{"selection", `{"start_ms":1000,"end_ms":3000}`, 1000, 2000, false},
+		{"one_frame", `{"start_ms":1000,"end_ms":1040}`, 1000, 40, false},
+		{"empty", `{"start_ms":1000,"end_ms":1000}`, 0, 0, true},
+		{"outside", `{"start_ms":0,"end_ms":4001}`, 0, 0, true},
+		{"negative", `{"start_ms":-1,"end_ms":1000}`, 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := view.Recipe
+			r.Crop = &EditCropRecipe{Items: []EditCropItem{{}}}
+			raw := fmt.Sprintf(`{"video_id":%d,"rect":{"x":0,"y":0,"width":320,"height":180},"source_version":%q,"confirmed":true,"range":%s}`, v.ID, pre.Sources[0].SourceVersion, tc.interval)
+			if err := json.Unmarshal([]byte(raw), &r.Crop.Items[0]); err != nil {
+				t.Fatal(err)
+			}
+			p, plans, err := s.preflight(context.Background(), project, r, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.invalid {
+				if p.Ready {
+					t.Fatalf("invalid range accepted: %s", raw)
+				}
+				return
+			}
+			if !p.Ready || len(plans) != 1 {
+				t.Fatalf("range preflight: %+v", p)
+			}
+			segment := plans[0].Segments[0]
+			if segment.InMS != tc.start || segment.SidecarInMS != tc.start || segment.DurMS != tc.duration || plans[0].DurationMS != tc.duration {
+				t.Fatalf("range lost: %+v", plans[0])
+			}
+		})
+	}
+}
+
+func TestVideoEditCropTailWithoutFrameRejected(t *testing.T) {
+	ffmpeg, _ := requireEditFFmpeg(t)
+	s := newRealEditService(t)
+	path := filepath.Join(t.TempDir(), "tail.mp4")
+	runFixtureCommand(t, ffmpeg, "-v", "error", "-threads", "2", "-filter_threads", "1", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=25:d=2", "-c:v", "libx264", "-threads", "2", path)
+	v := insertEditVideo(t, path)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, v.ID)
+	pre, _ := s.PreflightProject(context.Background(), view.ID)
+	view = mustUpdateRecipe(t, s, view, func(r *EditRecipe) {
+		r.Crop.Items[0] = EditCropItem{VideoID: v.ID, Rect: &EditCropRect{Width: 160, Height: 90}, SourceVersion: pre.Sources[0].SourceVersion, Confirmed: true, Range: &EditCropRange{StartMS: 1999, EndMS: 2000}}
+	})
+	pre, err := s.PreflightProject(context.Background(), view.ID)
+	if err != nil || pre.Ready || !editIssueCodes(pre.Errors)["range_invalid"] {
+		t.Fatalf("empty tail accepted: %+v %v", pre, err)
+	}
+	view = mustUpdateRecipe(t, s, view, func(r *EditRecipe) { r.Crop.Items[0].Range.StartMS = 1960 })
+	pre, err = s.PreflightProject(context.Background(), view.ID)
+	if err != nil || !pre.Ready {
+		t.Fatalf("real last frame rejected: %+v %v", pre, err)
+	}
+	queueAllAcknowledged(t, s, view.ID)
+	done := waitEditProject(t, s, view.ID, 30*time.Second, models.VideoEditStatusCompleted, models.VideoEditStatusFailed)
+	if done.Status != models.VideoEditStatusCompleted {
+		t.Fatalf("last frame export failed: %+v", done)
+	}
+	_, out := outputPathOf(t, done, 1)
+	if p, err := s.probeEditSource(context.Background(), out); err != nil || p.Video == nil || p.DurationMS < 30 || p.DurationMS > 100 {
+		t.Fatalf("last frame output: %+v %v", p, err)
+	}
+}
+
+func TestVideoEditCropSparseRangeKeepsDistantFrame(t *testing.T) {
+	ffmpeg, _ := requireEditFFmpeg(t)
+	s := newRealEditService(t)
+	path := filepath.Join(t.TempDir(), "sparse.mkv")
+	runFixtureCommand(t, ffmpeg, "-v", "error", "-threads", "2", "-filter_threads", "1", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=1:d=3", "-vf", "setpts=20*PTS", "-fps_mode", "vfr", "-c:v", "libx264", "-threads", "2", path)
+	v := insertEditVideo(t, path)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, v.ID)
+	pre, _ := s.PreflightProject(context.Background(), view.ID)
+	view = mustUpdateRecipe(t, s, view, func(r *EditRecipe) {
+		r.Crop.Items[0] = EditCropItem{VideoID: v.ID, Rect: &EditCropRect{Width: 160, Height: 90}, SourceVersion: pre.Sources[0].SourceVersion, Confirmed: true, Range: &EditCropRange{StartMS: 5000, EndMS: 40000}}
+	})
+	pre, err := s.PreflightProject(context.Background(), view.ID)
+	if err != nil || !pre.Ready {
+		t.Fatalf("distant real frame was rejected: %+v %v", pre, err)
 	}
 }
 
@@ -196,7 +338,7 @@ func TestVideoEditCropAnalysisKeepsConfirmedAndDarkFrames(t *testing.T) {
 
 func TestVideoEditCropEndToEnd(t *testing.T) {
 	ffmpeg, ffprobe := requireEditFFmpeg(t)
-	for _, variant := range []string{"plain", "sar", "rotated"} {
+	for _, variant := range []string{"plain", "sar", "rotated", "selection"} {
 		t.Run(variant, func(t *testing.T) {
 			s := newRealEditService(t)
 			dir := t.TempDir()
@@ -235,7 +377,12 @@ func TestVideoEditCropEndToEnd(t *testing.T) {
 			if got.Recipe.Crop.Items[0].Rect == nil || *got.Recipe.Crop.Items[0].Rect != expected {
 				t.Fatalf("detection want %+v got %+v", expected, got.Recipe.Crop.Items[0].Rect)
 			}
-			got = mustUpdateRecipe(t, s, got, func(r *EditRecipe) { r.Crop.Items[0].Confirmed = true })
+			got = mustUpdateRecipe(t, s, got, func(r *EditRecipe) {
+				r.Crop.Items[0].Confirmed = true
+				if variant == "selection" {
+					r.Crop.Items[0].Range = &EditCropRange{StartMS: 500, EndMS: 1500}
+				}
+			})
 			queueAllAcknowledged(t, s, got.ID)
 			done := waitEditProject(t, s, got.ID, 30*time.Second, models.VideoEditStatusCompleted, models.VideoEditStatusFailed)
 			if done.Status != models.VideoEditStatusCompleted {
@@ -244,7 +391,11 @@ func TestVideoEditCropEndToEnd(t *testing.T) {
 			_, out := outputPathOf(t, done, 1)
 			_ = probeOutputFile(t, ffprobe, out)
 			p, err := s.probeEditSource(context.Background(), out)
-			if err != nil || p.Video.Width != expected.Width || p.Video.Height != expected.Height || len(p.Audio) != 1 || p.DurationMS < 1900 || p.DurationMS > 2200 {
+			wantDuration := int64(2000)
+			if variant == "selection" {
+				wantDuration = 1000
+			}
+			if err != nil || p.Video.Width != expected.Width || p.Video.Height != expected.Height || len(p.Audio) != 1 || p.DurationMS < wantDuration-100 || p.DurationMS > wantDuration+200 {
 				t.Fatalf("output: %+v %v", p, err)
 			}
 			if sha256OfFile(t, path) != sourceHash {
@@ -252,6 +403,9 @@ func TestVideoEditCropEndToEnd(t *testing.T) {
 			}
 			if !strings.Contains(readFileString(t, strings.TrimSuffix(out, filepath.Ext(out))+".srt"), "字幕") {
 				t.Fatal("SRT lost")
+			}
+			if variant == "selection" && !strings.Contains(readFileString(t, strings.TrimSuffix(out, filepath.Ext(out))+".srt"), "00:00:00,000 --> 00:00:00,700") {
+				t.Fatal("selection SRT was not clipped and shifted")
 			}
 			frame := grayFrame(t, ffmpeg, out, 0.5)
 			for _, pixel := range frame {

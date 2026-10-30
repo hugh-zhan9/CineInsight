@@ -33,6 +33,8 @@ export function cropFromMargins(rect, side, value, width, height) {
 }
 export function dragCrop(rect, handle, dx, dy, width, height, ratioValue = 'free') {
   if (handle === 'move') return { ...rect, x: bound(even(rect.x + dx), 0, width - rect.width), y: bound(even(rect.y + dy), 0, height - rect.height) };
+  if (handle === 'n' || handle === 's') dx = 0;
+  if (handle === 'w' || handle === 'e') dy = 0;
   const west = handle.includes('w'), north = handle.includes('n');
   const anchorX = west ? rect.x + rect.width : rect.x;
   const anchorY = north ? rect.y + rect.height : rect.y;

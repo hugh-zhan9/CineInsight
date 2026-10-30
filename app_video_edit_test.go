@@ -71,6 +71,9 @@ func TestVideoEditAppRefusesDuringMaintenance(t *testing.T) {
 	if _, err := app.ListEditProjects(10); err == nil {
 		t.Fatal("维护期间列表也应拒绝")
 	}
+	if _, err := app.NavigateEditFrame(services.EditFrameRequest{ProjectID: 1, VideoID: 1}); err == nil || !strings.HasPrefix(err.Error(), "video_edit_unavailable:") {
+		t.Fatalf("维护期间帧定位应拒绝: %v", err)
+	}
 	_ = app.GetVideoEditStatus()
 }
 

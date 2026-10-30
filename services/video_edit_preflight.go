@@ -497,7 +497,7 @@ func (s *VideoEditService) preflight(ctx context.Context, project models.VideoEd
 	var plans []editPlan
 	switch project.Kind {
 	case models.VideoEditKindCrop:
-		plans = s.buildCropPlans(pre, project.Mode, recipe, sources, completedSeqs)
+		plans = s.buildCropPlans(ctx, pre, project.Mode, recipe, sources, completedSeqs)
 	case models.VideoEditKindMerge:
 		if plan, ok := s.buildMergePlan(pre, project.Mode, recipe, sources); ok {
 			plans = append(plans, plan)

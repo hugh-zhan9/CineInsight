@@ -4552,6 +4552,10 @@ export namespace services {
 	    status: string;
 	    rect?: EditCropRect;
 	    applied: boolean;
+	    display_width: number;
+	    display_height: number;
+	    duration_ms: number;
+	    source_version: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EditCropResult(source);
@@ -4563,6 +4567,10 @@ export namespace services {
 	        this.status = source["status"];
 	        this.rect = this.convertValues(source["rect"], EditCropRect);
 	        this.applied = source["applied"];
+	        this.display_width = source["display_width"];
+	        this.display_height = source["display_height"];
+	        this.duration_ms = source["duration_ms"];
+	        this.source_version = source["source_version"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -4645,11 +4653,26 @@ export namespace services {
 	        this.window_ms = source["window_ms"];
 	    }
 	}
+	export class EditCropRange {
+	    start_ms: number;
+	    end_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new EditCropRange(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	    }
+	}
 	export class EditCropItem {
 	    video_id: number;
 	    rect?: EditCropRect;
 	    source_version: string;
 	    confirmed: boolean;
+	    range?: EditCropRange;
 	
 	    static createFrom(source: any = {}) {
 	        return new EditCropItem(source);
@@ -4661,6 +4684,7 @@ export namespace services {
 	        this.rect = this.convertValues(source["rect"], EditCropRect);
 	        this.source_version = source["source_version"];
 	        this.confirmed = source["confirmed"];
+	        this.range = this.convertValues(source["range"], EditCropRange);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -4681,6 +4705,7 @@ export namespace services {
 		    return a;
 		}
 	}
+
 	export class EditCropRecipe {
 	    items: EditCropItem[];
 	
@@ -4766,6 +4791,38 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class EditFramePosition {
+	    at_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new EditFramePosition(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.at_ms = source["at_ms"];
+	    }
+	}
+	export class EditFrameRequest {
+	    project_id: number;
+	    video_id: number;
+	    source_version: string;
+	    at_ms: number;
+	    direction: number;
+
+	    static createFrom(source: any = {}) {
+	        return new EditFrameRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.at_ms = source["at_ms"];
+	        this.direction = source["direction"];
+	    }
 	}
 	export class EditHDSegment {
 	    long_start_ms: number;

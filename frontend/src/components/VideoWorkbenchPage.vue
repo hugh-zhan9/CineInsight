@@ -1,8 +1,9 @@
 <template>
-  <section class="page-content workbench-page" data-test="workbench-page">
+  <section class="page-content workbench-page" :class="{ 'workbench-page--crop': project?.kind === 'crop', 'workbench-page--projects': projectsOpen }" data-test="workbench-page">
     <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头、高清替换与画面裁剪。成品另存入库，原片保持不变；确认成品无误后才提供原片清理入口。" />
     <div class="workbench-layout">
       <EditProjectList
+        v-show="project?.kind !== 'crop' || projectsOpen"
         :projects="projects"
         :selected-id="selectedId"
         :busy="busy"
@@ -21,6 +22,7 @@
         <div v-else-if="!project" class="workbench-loading" role="status" aria-label="正在读取项目"><SkeletonBlock :lines="4" /></div>
         <template v-else>
           <header class="workbench-project" data-test="workbench-project">
+            <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm" :aria-expanded="projectsOpen" @click="projectsOpen = !projectsOpen">编辑项目</button>
             <div>
               <h3>{{ project.title || '未命名项目' }}</h3>
               <span class="help-text">{{ kindLabel(project.kind) }} · {{ statusLabel(project.status) }} · 版本 {{ project.revision }}</span>
@@ -29,6 +31,7 @@
             <span v-if="saving" class="help-text" data-test="workbench-saving">正在保存…</span>
             <button v-if="cancellable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
             <button v-if="duplicable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
+            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :aria-expanded="exportOpen" data-test="crop-open-export" @click="exportOpen = !exportOpen">导出…</button>
           </header>
           <p v-if="project.error_message && project.status !== 'completed'" class="edit-error" data-test="workbench-project-error">{{ project.error_message }}</p>
           <p v-if="!editable && project.status !== 'analyzing'" class="help-text" data-test="workbench-readonly">项目已排队或已导出，配方只读。</p>
@@ -39,18 +42,22 @@
             :recipe="recipe"
             :editable="editable"
             :preflight="preflight"
+            :preflight-loading="preflightLoading"
             :fast-preflight="fastPreflight"
             :analysis="project.analysis"
             :analyzing="analyzing"
             :analysis-progress="analysisProgress"
+            :navigate-frame="navigateFrame"
             :videos="videos"
             @change="onRecipeChange"
             @analyze="analyze"
             @cancel-analysis="cancelAnalysis"
+            @run-preflight="runPreflight"
           />
 
+          <aside v-if="showExport" v-show="project.kind !== 'crop' || exportOpen" :class="{ 'workbench-export-drawer': project.kind === 'crop' }" aria-label="导出设置" @keydown.esc.stop="exportOpen = false">
+          <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm workbench-export-close" @click="exportOpen = false">收起导出设置</button>
           <EditExportPanel
-            v-if="showExport"
             :key="`export-${project.id}`"
             :project="project"
             :recipe="recipe"
@@ -67,6 +74,7 @@
             @change="onRecipeChange"
             @queue="queue"
           />
+          </aside>
 
           <EditResults
             v-if="project.items && project.items.length"
@@ -83,7 +91,7 @@
 
 <script>
 import {
-  AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
+  NavigateEditFrame, AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
   ListEditProjects, ListEditProjectsBefore, PreflightEditProject, QueueEditProject, RequeueEditProject, UpdateEditRecipe
 } from '../../wailsjs/go/main/App';
 import EditExportPanel from './video-workbench/EditExportPanel.vue';
@@ -143,6 +151,8 @@ export default {
       pendingRecipe: null,
       pendingMode: '',
       preflight: null,
+      projectsOpen: false,
+      exportOpen: false,
       preflightLoading: false,
       preflightError: '',
       missingKeys: [],
@@ -280,6 +290,7 @@ export default {
     async selectProject(id) {
       const projectID = Number(id);
       if (projectID !== this.selectedId) {
+        this.exportOpen = false;
         this.selectedId = projectID;
         this.project = null;
         this.recipe = null;
@@ -324,6 +335,13 @@ export default {
     },
     // 有本地改动在保存时只更新项目状态，不覆盖正在编辑的本地配方。
     applyProject(view) {
+      // 新一轮分析已复核来源；旧预检的尺寸与指纹不能盖过新检测信息。
+      if (view.analysis?.status === 'completed' && view.analysis.finished_at !== this.project?.analysis?.finished_at) {
+        this.preflightGeneration.next();
+        this.preflight = null;
+        this.preflightLoading = false;
+        this.preflightError = '';
+      }
       this.project = view;
       if (!this.saving && !this.pendingRecipe) {
         this.recipe = cloneRecipe(view.recipe);
@@ -398,6 +416,7 @@ export default {
         this.baseRevision = this.project.revision;
       }
     },
+    navigateFrame(request) { return NavigateEditFrame({ ...request, project_id: this.selectedId }); },
     async analyze(windowMs) {
       if (!this.editable) return;
       if (this.saving || this.pendingRecipe) {
@@ -568,6 +587,10 @@ export default {
 .workbench-loading { padding: var(--space-5); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
 .workbench-project { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
 .workbench-project h3 { margin: 0 0 2px; font-size: var(--fs-section); }
+.workbench-page--crop:not(.workbench-page--projects) .workbench-layout { grid-template-columns: minmax(0, 1fr); }
+.workbench-page--crop .workbench-project { flex-wrap: wrap; }
+.workbench-export-drawer { position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); box-sizing: border-box; padding: var(--space-3); overflow: auto; background: var(--panel-bg); box-shadow: var(--shadow-drawer); border-left: 1px solid var(--hairline); z-index: var(--z-drawer); }
+.workbench-export-close { margin-bottom: var(--space-3); }
 @media (max-width: 760px) {
   .workbench-page { padding: var(--space-3); }
   .workbench-layout { grid-template-columns: minmax(0, 1fr); }

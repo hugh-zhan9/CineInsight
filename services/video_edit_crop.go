@@ -21,10 +21,17 @@ type EditCropRect struct {
 
 // EditCropItem 每个来源单独产出；source_version 绑定用户所预览的文件。
 type EditCropItem struct {
-	VideoID       uint          `json:"video_id"`
-	Rect          *EditCropRect `json:"rect"`
-	SourceVersion string        `json:"source_version"`
-	Confirmed     bool          `json:"confirmed"`
+	VideoID       uint           `json:"video_id"`
+	Rect          *EditCropRect  `json:"rect"`
+	SourceVersion string         `json:"source_version"`
+	Confirmed     bool           `json:"confirmed"`
+	Range         *EditCropRange `json:"range,omitempty"`
+}
+
+// EditCropRange 是保留区间 [StartMS, EndMS)；nil 保持整片导出。
+type EditCropRange struct {
+	StartMS int64 `json:"start_ms"`
+	EndMS   int64 `json:"end_ms"`
 }
 
 // EditCropRecipe 是固定黑边裁剪批次。
@@ -34,10 +41,14 @@ type EditCropRecipe struct {
 
 // EditCropResult 是自动检测建议；已确认项不覆盖，未识别时保留原框。
 type EditCropResult struct {
-	VideoID uint          `json:"video_id"`
-	Status  string        `json:"status"`
-	Rect    *EditCropRect `json:"rect"`
-	Applied bool          `json:"applied"`
+	VideoID       uint          `json:"video_id"`
+	Status        string        `json:"status"`
+	Rect          *EditCropRect `json:"rect"`
+	Applied       bool          `json:"applied"`
+	DisplayWidth  int           `json:"display_width"`
+	DisplayHeight int           `json:"display_height"`
+	DurationMS    int64         `json:"duration_ms"`
+	SourceVersion string        `json:"source_version"`
 }
 
 func validateCropStructure(crop *EditCropRecipe) error {
@@ -52,6 +63,9 @@ func validateCropStructure(crop *EditCropRecipe) error {
 		seen[item.VideoID] = true
 		if len(item.SourceVersion) > 80 {
 			return editError("recipe_invalid", "裁剪来源版本无效")
+		}
+		if item.Range != nil && (item.Range.StartMS < 0 || item.Range.EndMS <= item.Range.StartMS) {
+			return editError("range_invalid", "裁剪保留区间无效（起点须非负且早于终点）")
 		}
 	}
 	return nil
@@ -84,7 +98,7 @@ func editCropValid(r *EditCropRect, width, height int) bool {
 		r.X%2 == 0 && r.Y%2 == 0 && r.Width%2 == 0 && r.Height%2 == 0
 }
 
-func (s *VideoEditService) buildCropPlans(pre *EditPreflight, mode string, recipe EditRecipe, sources map[uint]*editSourceCtx, completed map[int]bool) []editPlan {
+func (s *VideoEditService) buildCropPlans(ctx context.Context, pre *EditPreflight, mode string, recipe EditRecipe, sources map[uint]*editSourceCtx, completed map[int]bool) []editPlan {
 	plans := []editPlan{}
 	for index, item := range recipe.Crop.Items {
 		seq := index + 1
@@ -97,6 +111,14 @@ func (s *VideoEditService) buildCropPlans(pre *EditPreflight, mode string, recip
 		}
 		width, height := editDisplaySize(sc.probe.Video)
 		key := fmt.Sprint(seq)
+		start, end := int64(0), sc.probe.DurationMS
+		if item.Range != nil {
+			start, end = item.Range.StartMS, item.Range.EndMS
+		}
+		if start < 0 || end <= start || end > sc.probe.DurationMS {
+			pre.addError("range_invalid", "range_invalid:"+key, item.VideoID, seq, "第 %d 项的保留区间无效或超出视频时长", seq)
+			continue
+		}
 		if !editCropValid(item.Rect, width, height) {
 			pre.addError("crop_invalid", "crop_invalid:"+key, item.VideoID, seq, "第 %d 项请设置画布内的有效裁剪框（坐标和宽高须为偶数，宽高至少 2 像素）", seq)
 			continue
@@ -104,6 +126,19 @@ func (s *VideoEditService) buildCropPlans(pre *EditPreflight, mode string, recip
 		if item.SourceVersion != editCropSourceVersion(sc.size, sc.modTimeNS) {
 			pre.addError("source_changed", "source_changed:"+key, item.VideoID, seq, "第 %d 项的来源已变化，请重新预览并设置裁剪框", seq)
 		}
+		if item.Range != nil {
+			hasFrame, err := s.cropRangeHasFrame(ctx, sc, start, end)
+			if err != nil {
+				code := VideoEditErrorCode(err)
+				pre.addError(code, code+":"+key, item.VideoID, seq, "第 %d 项无法核实保留区间的画面：%s", seq, err.Error())
+				continue
+			}
+			if !hasFrame {
+				pre.addError("range_invalid", "range_invalid:"+key, item.VideoID, seq, "第 %d 项的区间内没有实际画面帧，请用逐帧按钮重新设置入点和出点", seq)
+				continue
+			}
+		}
+
 		if !item.Confirmed {
 			pre.addError("unconfirmed", "unconfirmed:"+key, item.VideoID, seq, "第 %d 项尚未确认裁剪区域", seq)
 		}
@@ -115,13 +150,39 @@ func (s *VideoEditService) buildCropPlans(pre *EditPreflight, mode string, recip
 		audio := mapEditTracks(pre, seq, editTrackAudio, item.VideoID, "source", sc.probe.Audio, nil, nil, mode)
 		subs := mapEditTracks(pre, seq, editTrackSubtitle, item.VideoID, "source", sc.probe.Subtitles, nil, nil, mode)
 		source := b.source(sc)
-		b.plan.Segments = append(b.plan.Segments, editPlanSegment{VideoSource: source, VideoStream: sc.probe.Video.Index, DurMS: sc.probe.DurationMS,
-			Audio: audio.segmentRefs(item.VideoID, source, 0), Subtitles: subs.segmentRefs(item.VideoID, source, 0), SidecarSource: source})
+		b.plan.Segments = append(b.plan.Segments, editPlanSegment{VideoSource: source, VideoStream: sc.probe.Video.Index,
+			InMS: start, RequestedInMS: start, DurMS: end - start,
+			Audio: audio.segmentRefs(item.VideoID, source, start), Subtitles: subs.segmentRefs(item.VideoID, source, start), SidecarSource: source, SidecarInMS: start})
 		s.completeEditPlan(pre, b, []*editSourceCtx{sc}, sc, " (裁剪)", audio, subs)
 		pre.addWarning("crop_content", "crop_content:"+key, item.VideoID, seq, "《%s》框外画面（包括画面内字幕）将被裁掉；内嵌字幕定位可能受影响，请检查多个时间点", sc.video.Name)
 		plans = append(plans, b.plan)
 	}
 	return plans
+}
+
+// cropRangeHasFrame 与成品准确 seek 使用同一保留区间，只解码首帧，避免扫描长选区。
+func (s *VideoEditService) cropRangeHasFrame(ctx context.Context, sc *editSourceCtx, start, end int64) (bool, error) {
+	binary, err := s.findFFmpeg()
+	if err != nil {
+		return false, err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, videoEditProbeTimeout)
+	defer cancel()
+	stdout, _, err := s.runOutput(runCtx, binary, []string{"-nostdin", "-v", "error", "-threads", "2", "-filter_threads", "1", "-ss", editSeconds(start), "-i", sc.path, "-map", fmt.Sprintf("0:%d", sc.probe.Video.Index), "-an", "-sn", "-dn", "-frames:v", "1", "-fps_mode", "passthrough", "-t", editSeconds(end - start), "-f", "framecrc", "-"})
+	if err != nil {
+		return false, editError("frame_unavailable", "无法核实保留区间画面")
+	}
+	size, modified, err := editFileFingerprint(sc.path)
+	if err != nil || size != sc.size || modified != sc.modTimeNS {
+		return false, editError("source_changed", "核实保留区间期间来源发生变化")
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") && len(strings.Split(line, ",")) >= 6 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 var editCropPattern = regexp.MustCompile(`crop=(\d+):(\d+):(\d+):(\d+)`)
@@ -205,7 +266,10 @@ func (s *VideoEditService) analyzeCrops(ctx context.Context, projectID uint, rec
 		if err != nil || size != sc.size || modTime != sc.modTimeNS {
 			return editError("source_changed", "《%s》检测期间来源发生变化", sc.video.Name)
 		}
-		detection := EditCropResult{VideoID: item.VideoID, Status: "undetected"}
+		// 检测已核实的画布同时供手动编辑使用，不依赖另一轮导出预检是否成功。
+		detection := EditCropResult{VideoID: item.VideoID, Status: "undetected",
+			DisplayWidth: width, DisplayHeight: height, DurationMS: sc.probe.DurationMS,
+			SourceVersion: editCropSourceVersion(size, modTime)}
 		if len(samples) >= 3 {
 			detection.Rect = editCropUnion(samples)
 			detection.Status, detection.Applied = "detected", true

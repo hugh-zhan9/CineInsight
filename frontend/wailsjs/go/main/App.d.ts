@@ -610,6 +610,8 @@ export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigratio
 
 export function NameFaceCluster(arg1:number,arg2:string,arg3:string):Promise<services.FaceClusterView>;
 
+export function NavigateEditFrame(arg1:services.EditFrameRequest):Promise<services.EditFramePosition>;
+
 export function NextPlaybackQueue(arg1:string,arg2:number):Promise<void>;
 
 export function OpenDirectory(arg1:number):Promise<void>;

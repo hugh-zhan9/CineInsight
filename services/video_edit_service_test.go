@@ -53,6 +53,22 @@ func (f *fakeEditMedia) output(ctx context.Context, name string, args []string) 
 	if strings.Contains(joined, "-skip_frame") {
 		return "0.000000,\n", "", nil
 	}
+	if strings.Contains(joined, "-f framecrc") {
+		return "#format: frame checksums\n0, 0, 0, 1, 43200, 0x12345678\n", "", nil
+	}
+	if strings.Contains(joined, "frame=best_effort_timestamp_time") {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		probe, err := parseEditProbe([]byte(f.probes[args[len(args)-1]]))
+		if err != nil {
+			return "", "", err
+		}
+		var frames strings.Builder
+		for ms := int64(0); ms < probe.DurationMS; ms += 40 {
+			fmt.Fprintf(&frames, "%.6f\n", float64(ms)/1000)
+		}
+		return frames.String(), "", nil
+	}
 	path := args[len(args)-1]
 	if strings.HasSuffix(path, "final.part") {
 		raw, err := os.ReadFile(path)

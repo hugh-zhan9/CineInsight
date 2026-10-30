@@ -24,6 +24,12 @@ static id evaluate(WKWebView *view, NSString *js) {
  NSDictionary *data=message.body; WKWebView *view=self.view;
  CGFloat x=[data[@"x"] doubleValue], y=[data[@"y"] doubleValue];
  NSPoint point=[view convertPoint:NSMakePoint(x,view.isFlipped?y:view.bounds.size.height-y) toView:nil];
+ NSString *phase=data[@"phase"];
+ if(phase) {
+  NSEventType type=[phase isEqualToString:@"down"]?NSEventTypeLeftMouseDown:([phase isEqualToString:@"drag"]?NSEventTypeLeftMouseDragged:NSEventTypeLeftMouseUp);
+  NSEvent *event=[NSEvent mouseEventWithType:type location:point modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:1 clickCount:1 pressure:[phase isEqualToString:@"up"]?0:1];
+  [view.window sendEvent:event];return;
+ }
  NSEvent *down=[NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:point modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:1 clickCount:1 pressure:1];
  NSEvent *up=[NSEvent mouseEventWithType:NSEventTypeLeftMouseUp location:point modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:2 clickCount:1 pressure:0];
  [view.window sendEvent:down];[view.window sendEvent:up];

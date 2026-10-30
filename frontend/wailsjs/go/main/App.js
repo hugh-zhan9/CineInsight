@@ -1210,6 +1210,10 @@ export function NameFaceCluster(arg1, arg2, arg3) {
   return window['go']['main']['App']['NameFaceCluster'](arg1, arg2, arg3);
 }
 
+export function NavigateEditFrame(arg1) {
+  return window['go']['main']['App']['NavigateEditFrame'](arg1);
+}
+
 export function NextPlaybackQueue(arg1, arg2) {
   return window['go']['main']['App']['NextPlaybackQueue'](arg1, arg2);
 }

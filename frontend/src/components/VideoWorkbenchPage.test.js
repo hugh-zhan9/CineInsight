@@ -79,6 +79,26 @@ function toastText() {
 }
 
 describe('视频工作台页（视频编辑合同「界面」）', () => {
+  it('裁剪工作区在预检超时后仍可调整；导出侧栏保留预检错误且不放行', async () => {
+    const project = mergeProject({ kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21, rect: null, source_version: '', confirmed: false }] }, tracks: tracks() },
+      analysis: { kind: 'crop', status: 'completed', crops: [{ video_id: 21, status: 'undetected', display_width: 320, display_height: 180, source_version: '12:34', duration_ms: 2000 }] } });
+    api.GetEditProject.mockResolvedValue(project);
+    api.PreflightEditProject.mockResolvedValue(preflightFor(project, { ready: false, sources: [{ video_id: 21, error: 'context deadline exceeded' }], errors: [{ key: 'probe_failed:21', message: '探测超时' }] }));
+    api.UpdateEditRecipe.mockImplementation(async request => ({ ...project, revision: 4, recipe: request.recipe }));
+    const wrapper = mount(VideoWorkbenchPage, { props: { openRequest: { projectID: 1 } } });
+    wrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.get('[data-test="edit-projects"]').isVisible()).toBe(false);
+    expect(wrapper.get('[data-test="edit-export"]').isVisible()).toBe(false);
+    await wrapper.get('[data-test="crop-margin-left"]').setValue(100);
+    await flushPromises();
+    expect(api.UpdateEditRecipe.mock.calls[0][0].recipe.crop.items[0]).toMatchObject({ rect: { x: 100, width: 220 }, source_version: '12:34' });
+    await wrapper.get('[data-test="crop-open-export"]').trigger('click');
+    expect(wrapper.vm.exportOpen).toBe(true);
+    expect(wrapper.get('[aria-label="导出设置"]').element.style.display).toBe('');
+    expect(wrapper.get('[data-test="edit-errors"]').text()).toContain('探测超时');
+    expect(wrapper.get('[data-test="edit-queue"]').element.disabled).toBe(true);
+  });
   it('裁剪项目读取来源并通过原有分析接口启动黑边检测', async () => {
     const project = mergeProject({ kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21, rect: null, source_version: '', confirmed: false }] }, tracks: tracks() } });
     const wrapper = await mountPage(project);
@@ -89,6 +109,26 @@ describe('视频工作台页（视频编辑合同「界面」）', () => {
     await flushPromises();
     expect(api.AnalyzeEditProject).toHaveBeenCalledWith({ project_id: 1, expected_revision: 3, window_ms: 0 });
     expect(wrapper.get('[data-test="crop-cancel-analysis"]').exists()).toBe(true);
+  });
+
+  it('新分析完成后丢弃旧预检画布，采用新来源尺寸和指纹', async () => {
+    const project = mergeProject({ kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21, rect: null, confirmed: false }] } } });
+    const wrapper = await mountPage(project);
+    wrapper.vm.preflight = preflightFor(project, { sources: [{ video_id: 21, display_width: 320, display_height: 180, source_version: 'old' }] });
+    const oldPreflight = deferred();
+    api.PreflightEditProject.mockReturnValueOnce(oldPreflight.promise);
+    const pending = wrapper.vm.runPreflight();
+    const rect = { x: 10, y: 0, width: 620, height: 360 };
+    wrapper.vm.acceptProject({ ...project, revision: 4, recipe: { v: 1, crop: { items: [{ video_id: 21, rect, source_version: 'new', confirmed: false }] } },
+      analysis: { kind: 'crop', status: 'completed', finished_at: '2026-10-30T10:00:00+08:00', crops: [{ video_id: 21, display_width: 640, display_height: 360, source_version: 'new' }] } });
+    await flushPromises();
+    expect(wrapper.vm.preflight).toBeNull();
+    expect(wrapper.get('[data-test="crop-output-size"]').text()).toContain('640×360');
+    expect(wrapper.get('[data-test="crop-confirm"]').element.disabled).toBe(false);
+    oldPreflight.resolve(preflightFor(project, { sources: [{ video_id: 21, display_width: 320, display_height: 180, source_version: 'old' }] }));
+    await pending;
+    expect(wrapper.vm.preflight).toBeNull();
+    expect(wrapper.vm.preflightLoading).toBe(false);
   });
 
   it('打开请求选中项目、读取来源名并自动预检', async () => {
