@@ -2250,6 +2250,7 @@ export namespace services {
 	    size: string;
 	    seeders?: number;
 	    publish_time?: string;
+	    poster_path: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new BTResource(source);
@@ -2264,6 +2265,7 @@ export namespace services {
 	        this.size = source["size"];
 	        this.seeders = source["seeders"];
 	        this.publish_time = source["publish_time"];
+	        this.poster_path = source["poster_path"];
 	    }
 	}
 	export class BTSearchResult {

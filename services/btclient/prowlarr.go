@@ -22,13 +22,14 @@ type Release struct {
 	GUID        string  `json:"guid"`
 	DownloadURL string  `json:"downloadUrl"`
 	Protocol    string  `json:"protocol"`
+	PosterURL   string  `json:"posterUrl"`
 }
 
 // Search asks one indexer; the coordinator owns fan-out and its overall deadline.
 // An empty result does not assert that Prowlarr searched the tracker successfully.
 func (c *Client) Search(ctx context.Context, query string, indexerID, limit int) ([]Release, error) {
 	query = strings.TrimSpace(query)
-	if query == "" || len([]rune(query)) > 200 || indexerID < 1 || limit < 1 || limit > 500 {
+	if len([]rune(query)) > 200 || indexerID < 1 || limit < 1 || limit > 500 {
 		return nil, ErrResponse
 	}
 	params := url.Values{"query": {query}, "type": {"search"}, "indexerIds": {strconv.Itoa(indexerID)}, "limit": {strconv.Itoa(limit)}}

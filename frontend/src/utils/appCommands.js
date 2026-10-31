@@ -30,7 +30,7 @@ import { recordBackgroundTasks } from './sessionChanges.js';
 // 「视频」是观看侧的海报墙（VideoBrowsePage，D-P2-01），「片库管理」是常挂载的片库页（VideoListPage），两页筛选各自独立；
 // 「图片」是观看侧的照片流（PhotoBrowsePage，D-P2-08），「图片管理」是图片库管理页（PhotoLibraryPage），两页筛选各自独立。
 // 下载页同时提供 BT 资源入口，不依赖浏览器插件桥接开关。
-// 「片单」是一个页面（D-P2-04，四个标签），不再是下拉；原来的四个页面 key 是它的别名，见下面的 LIST_TABS。
+// 「片单」是一个页面（D-P2-04，五个标签），不再是下拉；原来的四个页面 key 是它的别名，见下面的 LIST_TABS。
 export const VIEWER_NAV_GROUPS = [
   {
     key: 'browse',
@@ -110,7 +110,7 @@ export const MANAGE_NAV_GROUPS = [
 // 整页详情（D-UI-05）：观看区的页面，但要带视频 ID，不在顶栏与命令面板里。
 export const VIDEO_DETAIL_PAGE = 'video-detail';
 
-// 片单（D-P2-04）：一个页面 `lists`，四个标签，第一个（想看）是默认标签。原来的四个页面 key 保留为别名：
+// 片单（D-P2-04）：一个页面 `lists`，五个标签，第一个（想看）是默认标签。原来的四个页面 key 保留为别名：
 // navigateTo、命令面板里原有的页面命令（命令 ID 不变）、各页发出的 navigate(key) 与记下的旧 key 都经
 // resolvePageRoute 换成 `lists` + 对应标签，currentPage 永远不会是别名。顶栏只有「片单」一项。
 export const LISTS_PAGE = 'lists';
@@ -119,6 +119,7 @@ export const LIST_TABS = [
   { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
   // 顶栏「已看」改名「观影记录」（D-PC52），与片库的「已看」智能视图区分开；旧说法留作关键词。
   { key: 'watched-movies', label: '观影记录', keywords: ['watched', 'guanying', 'yikan', 'kanguo', '看过', '已看', '榜单已看'] },
+  { key: 'resources', label: '资源', keywords: ['Prowlarr', 'BT', 'PT', '最新资源', '下载'] },
   { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] }
 ];
 export const DEFAULT_LIST_TAB = LIST_TABS[0].key;

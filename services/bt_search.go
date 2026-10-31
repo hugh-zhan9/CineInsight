@@ -29,6 +29,7 @@ type BTResource struct {
 	Size        string  `json:"size"`
 	Seeders     *int    `json:"seeders"`
 	PublishTime *string `json:"publish_time"`
+	PosterPath  string  `json:"poster_path"`
 }
 type BTIndexerSearchStatus struct {
 	IndexerID int    `json:"indexer_id"`
@@ -49,17 +50,19 @@ type btSearchToken struct {
 
 // BTSearchService owns a bounded, backend-only cache of sensitive proxy links.
 type BTSearchService struct {
-	mu         sync.Mutex
-	source     BTSearchSource
-	generation uint64
-	tokens     map[string]btSearchToken
-	now        func() time.Time
-	timeout    time.Duration
-	sequence   uint64
+	mu          sync.Mutex
+	source      BTSearchSource
+	generation  uint64
+	tokens      map[string]btSearchToken
+	now         func() time.Time
+	timeout     time.Duration
+	sequence    uint64
+	posterSlots chan struct{}
+	fetchPoster func(context.Context, string) ([]byte, string, error)
 }
 
 func NewBTSearchService(source BTSearchSource, generation uint64) *BTSearchService {
-	return &BTSearchService{source: source, generation: generation, tokens: map[string]btSearchToken{}, now: time.Now, timeout: 90 * time.Second}
+	return &BTSearchService{source: source, generation: generation, tokens: map[string]btSearchToken{}, now: time.Now, timeout: 90 * time.Second, posterSlots: make(chan struct{}, 2), fetchPoster: defaultBTPoster}
 }
 
 // Configure invalidates links and in-flight results even when the numeric revision is reused.
@@ -72,7 +75,7 @@ func (s *BTSearchService) Configure(source BTSearchSource, generation uint64) {
 }
 func (s *BTSearchService) Search(ctx context.Context, query string, ids []int) (*BTSearchResult, error) {
 	query = strings.TrimSpace(query)
-	if query == "" || len([]rune(query)) > 200 {
+	if len([]rune(query)) > 200 {
 		return nil, ErrBTSearch
 	}
 	s.mu.Lock()
@@ -162,10 +165,11 @@ feed:
 		}
 	}
 	out := &BTSearchResult{Resources: []BTResource{}, Indexers: []BTIndexerSearchStatus{}}
+	rows := []btclient.Release{}
 	for i, id := range ordered {
 		r := results[i]
-		coverage := "unknown" // Prowlarr may suppress tracker failures, even with HTTP 200.
-		out.Indexers = append(out.Indexers, BTIndexerSearchStatus{IndexerID: id, Status: r.status, Coverage: coverage})
+		// Prowlarr may suppress tracker failures, even with HTTP 200.
+		out.Indexers = append(out.Indexers, BTIndexerSearchStatus{IndexerID: id, Status: r.status, Coverage: "unknown"})
 		if r.status != "ok" {
 			continue
 		}
@@ -176,29 +180,49 @@ feed:
 			if row.IndexerID != id || row.Protocol != "torrent" || row.DownloadURL == "" || row.Size < 0 {
 				continue
 			}
-			if len(out.Resources) >= 500 {
-				out.Truncated = true
-				break
-			}
-			if len(s.tokens) >= 500 {
-				var oldest string
-				var order uint64
-				for key, entry := range s.tokens {
-					if oldest == "" || entry.order < order {
-						oldest, order = key, entry.order
-					}
-				}
-				delete(s.tokens, oldest)
-			}
-			token, err := btSecretRef()
-			if err != nil {
-				return nil, ErrBTSearch
-			}
 			row.Indexer = allowed[id].Name
-			s.sequence++
-			s.tokens[token] = btSearchToken{order: s.sequence, release: row, expires: now.Add(10 * time.Minute), generation: generation}
-			out.Resources = append(out.Resources, BTResource{Token: token, Title: row.Title, IndexerID: id, Indexer: allowed[id].Name, Size: strconv.FormatInt(row.Size, 10), Seeders: row.Seeders, PublishTime: row.PublishDate})
+			rows = append(rows, row)
 		}
+	}
+	// Merge before applying the global cap, so a later station's newer rows survive.
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i].PublishDate, rows[j].PublishDate
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		at, _ := time.Parse(time.RFC3339, *a)
+		bt, _ := time.Parse(time.RFC3339, *b)
+		return at.After(bt)
+	})
+	if len(rows) > 500 {
+		rows = rows[:500]
+		out.Truncated = true
+	}
+	for _, row := range rows {
+		if len(s.tokens) >= 500 {
+			var oldest string
+			var order uint64
+			for key, entry := range s.tokens {
+				if oldest == "" || entry.order < order {
+					oldest, order = key, entry.order
+				}
+			}
+			delete(s.tokens, oldest)
+		}
+		token, err := btSecretRef()
+		if err != nil {
+			return nil, ErrBTSearch
+		}
+		s.sequence++
+		s.tokens[token] = btSearchToken{order: s.sequence, release: row, expires: now.Add(10 * time.Minute), generation: generation}
+		resource := BTResource{Token: token, Title: row.Title, IndexerID: row.IndexerID, Indexer: row.Indexer, Size: strconv.FormatInt(row.Size, 10), Seeders: row.Seeders, PublishTime: row.PublishDate}
+		if _, err := btPosterURL(row.PosterURL); err == nil {
+			resource.PosterPath = "/preview/bt-poster/" + token
+		}
+		out.Resources = append(out.Resources, resource)
 	}
 	return out, nil
 }

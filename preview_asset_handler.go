@@ -21,6 +21,10 @@ import (
 
 func newAssetHandler(app *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/preview/bt-poster/") {
+			app.serveBTPoster(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/preview/queue/") {
 			app.serveQueueMedia(w, r)
 			return

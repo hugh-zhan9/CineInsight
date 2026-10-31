@@ -221,15 +221,18 @@
         @navigate="navigateTo"
       />
       <DownloadsPage v-if="currentPage === 'downloads'" :initial-query="pageRequests.downloads?.query || ''" @settings="openSettingsSectionFromCommand($event)" @play="openVideoByID($event, { from: 'downloads' })" />
-      <!-- 片单（D-P2-04）：想看 · 榜单 · 观影记录 · 观看笔记四个标签。首次进入才挂载，之后只隐藏（观看笔记的
+      <!-- 片单（D-P2-04）：想看 · 榜单 · 观影记录 · 资源 · 观看笔记五个标签。首次进入才挂载，之后只隐藏（观看笔记的
            编辑与翻页状态要留着）；各标签何时挂载、何时卸载由 ListsPage 按原来四页的做法管。当前标签是页面参数
            listsTab，别名 key（watchlist 等）由 navigateTo 换成它。 -->
       <ListsPage
-        @find-resources="navigateTo('downloads', { query: $event })"
+        @find-resources="navigateTo('lists', { tab: 'resources', query: $event })"
         v-if="listsMounted"
         v-show="currentPage === 'lists'"
         :page-active="currentPage === 'lists'"
         :tab="listsTab"
+        :resource-query="pageRequests.lists?.query || ''"
+        :resource-request-token="pageRequests.lists?.token || 0"
+        @settings="openSettingsSectionFromCommand($event)"
         @update:tab="navigateTo('lists', { tab: $event })"
         @navigate="navigateTo"
         @open-video="openVideo($event, { from: 'lists' })"
@@ -950,6 +953,7 @@ export default {
     // - 人物与作品集的 { tab }（人物 · 作品集 · 人脸审阅，认不出的忽略）。
     applyPageParams(page, params) {
       if (page === 'videos' || page === 'photos' || page === 'downloads') this.setPageRequest(page, params);
+      if (page === LISTS_PAGE && typeof params?.query === 'string') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       if (page === CLEANUP_PAGE) this.applyCleanupParams(params);
       if (page === ENTITIES_MANAGE_PAGE && isEntitiesManageTab(params?.tab)) this.entitiesManageTab = params.tab;

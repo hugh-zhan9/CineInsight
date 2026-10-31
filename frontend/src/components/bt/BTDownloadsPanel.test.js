@@ -9,6 +9,35 @@ const wrappers = [];
 async function setup(overrides = {}, props = {}) { const service = { ...api(), ...overrides }; const w = mount(BTDownloadsPanel, { props: { api: service, initialQuery: '影片', ...props }, global: { stubs: { teleport: true, DialogShell: { template: '<div><slot/><slot name="footer"/></div>' } } } }); wrappers.push(w); await flushPromises(); return { w, service }; }
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); });
 describe('BT downloads panel orchestration', () => {
+  it('automatically loads latest only for an enabled empty-query view; keyword searches remain explicit', async () => {
+    const { w, service } = await setup({}, { initialQuery: '' });
+    expect(service.SearchBTResources).toHaveBeenCalledExactlyOnceWith('', []);
+    expect(w.text()).toContain('最新资源');
+    await w.get('[data-test="bt-query"]').setValue('film');
+    await w.get('form').trigger('submit'); await flushPromises();
+    expect(service.SearchBTResources).toHaveBeenLastCalledWith('film', []);
+    await w.get('[data-test="bt-show-latest"]').trigger('click'); await flushPromises();
+    expect(service.SearchBTResources).toHaveBeenLastCalledWith('', []);
+    expect(w.get('[data-test="bt-query"]').element.value).toBe('');
+  });
+  it('does not browse latest while hidden, unconfigured or without enabled stations', async () => {
+    for (const [overrides, props] of [
+      [{}, { active: false }],
+      [{ GetBTConnection: vi.fn().mockResolvedValue({ enabled: false }) }, {}],
+      [{ ListBTIndexers: vi.fn().mockResolvedValue([]) }, {}],
+    ]) {
+      const { service } = await setup(overrides, { initialQuery: '', ...props });
+      expect(service.SearchBTResources).not.toHaveBeenCalled();
+    }
+  });
+  it('ignores an automatic latest response after a newer manual query or hiding', async () => {
+    const old = pending();
+    const search = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue({ resources: [], indexers: [] });
+    const { w } = await setup({ SearchBTResources: search }, { initialQuery: '' });
+    await w.vm.search({ query: 'new', indexer_ids: [1] });
+    old.resolve({ resources: [{ title: 'stale' }], indexers: [] }); await flushPromises();
+    expect(w.vm.resultQuery).toBe('new'); expect(w.vm.result.resources).toEqual([]);
+  });
   it('searches explicitly, preserves per-site failure and submits selected IDs exactly', async () => {
     const { w, service } = await setup();
     expect(service.SearchBTResources).not.toHaveBeenCalled();

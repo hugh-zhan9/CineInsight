@@ -18,6 +18,9 @@
     <div v-if="pageActive && activeTab.key === 'watched-movies'" id="lists-panel-watched-movies" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-watched-movies">
       <WatchedMoviesPage embedded @navigate="$emit('navigate', $event)" @open-video="$emit('open-video', $event)" />
     </div>
+    <div v-if="resourcesMounted" v-show="activeTab.key === 'resources'" id="lists-panel-resources" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-resources">
+      <BTDownloadsPanel :key="resourceRequestToken" :api="btAPI" :active="resourcesVisible" :initial-query="resourceQuery" @settings="$emit('settings', 'bt')" @play="$emit('open-video-id', $event)" />
+    </div>
     <!-- 观看笔记首次进入才挂载，之后只隐藏：去原片核对再回来，编辑中的日记、年份与翻页都还在。 -->
     <div v-if="notesMounted" v-show="activeTab.key === 'viewing-notes'" id="lists-panel-viewing-notes" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-viewing-notes">
       <ViewingNotesPage
@@ -32,6 +35,8 @@
 </template>
 
 <script>
+import BTDownloadsPanel from '../bt/BTDownloadsPanel.vue';
+import { btAPI } from '../../utils/btAPI.js';
 import MovieChartPage from '../MovieChartPage.vue';
 import ViewingNotesPage from '../ViewingNotesPage.vue';
 import WatchedMoviesPage from '../WatchedMoviesPage.vue';
@@ -45,23 +50,26 @@ const TAB_DESCRIPTIONS = {
   watchlist: '记下想看但还没收进片库的影片，选好类型后自动去对应的资料源补全信息；片库里已有的可以直接播放。',
   'movie-chart': '按年份浏览在内地公映的电影（含尚未上映的），看到合适的就直接标「想看 / 不想看 / 已看」。',
   'watched-movies': '你在年度榜单上标过「已看」的电影，按影片上映年份从新到旧分组。',
+  resources: '浏览站点最新资源，或搜索片名；选择文件后交给本机 qBittorrent 下载。',
   'viewing-notes': '观影日记、片段书签，以及无法确认观看的播放记录。'
 };
 
-// 片单（D-P2-04，详细设计 §3.2）：一个页面四个标签，标签内容就是原来的四个页面（embedded，去掉各自的页头）。
+// 片单（D-P2-04，详细设计 §3.2）：一个页面五个标签，标签内容就是原来的四个页面（embedded，去掉各自的页头）。
 // 当前标签是 App 的页面参数（prop tab），点标签发 update:tab，由 App 的 navigateTo('lists', { tab }) 落下；
 // 本页不自己记标签。子页面的事件原样转给 App：navigate(key)（「去榜单」之类，别名由 App 换成标签）、
 // open-video(video) / open-video-id(id) / open-bookmark(resolution)（App 按观看区进整页详情）。
 export default {
   name: 'ListsPage',
-  components: { AppTabs, MovieChartPage, PageHeader, ViewingNotesPage, WatchedMoviesPage, WatchlistPage },
+  components: { BTDownloadsPanel, AppTabs, MovieChartPage, PageHeader, ViewingNotesPage, WatchedMoviesPage, WatchlistPage },
   props: {
+    resourceQuery: { type: String, default: '' },
+    resourceRequestToken: { type: Number, default: 0 },
     tab: { type: String, default: DEFAULT_LIST_TAB },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['find-resources', 'update:tab', 'navigate', 'open-video', 'open-video-id', 'open-bookmark'],
+  emits: ['settings', 'find-resources', 'update:tab', 'navigate', 'open-video', 'open-video-id', 'open-bookmark'],
   data() {
-    return { notesMounted: false };
+    return { notesMounted: false, resourcesMounted: false, btAPI };
   },
   computed: {
     tabs() {
@@ -72,11 +80,13 @@ export default {
       const tab = LIST_TABS.find(item => item.key === this.tab) || LIST_TABS.find(item => item.key === DEFAULT_LIST_TAB);
       return { ...tab, description: TAB_DESCRIPTIONS[tab.key] || '' };
     },
+    resourcesVisible() { return this.pageActive && this.activeTab.key === 'resources'; },
     notesVisible() {
       return this.pageActive && this.activeTab.key === 'viewing-notes';
     }
   },
   watch: {
+    resourcesVisible: { immediate: true, handler(visible) { if (visible) this.resourcesMounted = true; } },
     notesVisible: {
       immediate: true,
       handler(visible) {

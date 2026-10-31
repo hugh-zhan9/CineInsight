@@ -2,6 +2,7 @@ package btclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +62,26 @@ func TestEmptySearchAndWrongIndexer(t *testing.T) {
 	body = `[{"indexerId":2,"size":1}]`
 	if _, err := c.Search(context.Background(), "film", 1, 1); !errors.Is(err, ErrResponse) {
 		t.Fatal(err)
+	}
+}
+
+func TestLatestSearchPreservesPoster(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/api/v1/search" || r.URL.Query().Get("query") != "" || r.URL.Query().Get("type") != "search" {
+			t.Error("latest must use a read-only empty search")
+		}
+		w.Write([]byte(`[{"indexerId":1,"size":1,"posterUrl":"https://images.example/cover.jpg"}]`))
+	}))
+	defer server.Close()
+	c, _ := New(server.URL, "")
+	defer c.Close()
+	rows, err := c.Search(context.Background(), "", 1, 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("latest: %+v %v", rows, err)
+	}
+	raw, _ := json.Marshal(rows[0])
+	if !strings.Contains(string(raw), "https://images.example/cover.jpg") {
+		t.Fatal("upstream poster was lost")
 	}
 }
 

@@ -189,11 +189,11 @@ describe('应用级命令注册', () => {
     expect(VIEWER_NAV_GROUPS.find(group => group.key === 'lists')).toMatchObject({ label: '片单', pages: [{ key: LISTS_PAGE, label: '片单' }] });
     expect(VIEWER_NAV_GROUPS.some(group => 'menu' in group)).toBe(false);
     expect(LIST_TABS.map(tab => [tab.key, tab.label])).toEqual([
-      ['watchlist', '想看'], ['movie-chart', '榜单'], ['watched-movies', '观影记录'], ['viewing-notes', '观看笔记']
+      ['watchlist', '想看'], ['movie-chart', '榜单'], ['watched-movies', '观影记录'], ['resources', '资源'], ['viewing-notes', '观看笔记']
     ]);
     expect(DEFAULT_LIST_TAB).toBe('watchlist');
     const keys = COMMAND_PALETTE_PAGES.map(page => page.key);
-    expect(keys.slice(keys.indexOf('lists'), keys.indexOf('lists') + 5)).toEqual(['lists', 'watchlist', 'movie-chart', 'watched-movies', 'viewing-notes']);
+    expect(keys.slice(keys.indexOf('lists'), keys.indexOf('lists') + 6)).toEqual(['lists', 'watchlist', 'movie-chart', 'watched-movies', 'resources', 'viewing-notes']);
     expect(commandByID('nav:page:lists').label).toBe('打开片单');
     expect(commandByID('nav:page:watchlist').label).toBe('打开想看');
     expect(commandByID('nav:page:viewing-notes').label).toBe('打开观看笔记');

@@ -3184,7 +3184,7 @@ it('photo deletion uses image kind, preserves confirmation and routes refresh an
   expect(refresh).toHaveBeenCalledTimes(2);
 });
 
-it('routes watchlist resource title to downloads without auto-search', async () => { const w = await mountApp(); await openListsTab(w, 'watchlist'); w.findComponent({ name: 'ListsPage' }).vm.$emit('find-resources', '沙丘'); await flushPromises(); expect(w.vm.currentPage).toBe('downloads'); expect(w.findComponent({ name: 'DownloadsPage' }).props('initialQuery')).toBe('沙丘'); });
+it('routes watchlist resource title to the viewer resource tab without auto-search', async () => { const w = await mountApp(); await openListsTab(w, 'watchlist'); w.findComponent({ name: 'ListsPage' }).vm.$emit('find-resources', '沙丘'); await flushPromises(); expect(w.vm.currentPage).toBe('lists'); expect(w.vm.area).toBe('viewer'); expect(w.findComponent({ name: 'ListsPage' }).props()).toMatchObject({ tab: 'resources', resourceQuery: '沙丘', resourceRequestToken: 1 }); w.findComponent({ name: 'ListsPage' }).vm.$emit('find-resources', '沙丘'); await flushPromises(); expect(w.findComponent({ name: 'ListsPage' }).props('resourceRequestToken')).toBe(2); });
 
 it('task center BT navigation opens downloads without a task control request', async () => {
  const w = await mountApp(); w.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-bt-downloads'); await flushPromises(); expect(w.vm.currentPage).toBe('downloads');

@@ -97,12 +97,13 @@ export default {
       else this.connectionError = errorText(results[0].reason);
       if (results[1].status === 'fulfilled') this.indexers = results[1].value;
       else this.connectionError = errorText(results[1].reason);
+      if (!this.connectionError && this.connection?.enabled && this.indexers.some(s => s.enabled !== false) && !this.initialQuery.trim() && !this.result && !this.searchBusy) this.search({ query: '', indexer_ids: [] });
       await this.refresh(); this.schedule();
     },
     schedule() { clearTimeout(this.timer); if (!this.alive || !this.active) return; this.timer = setTimeout(async () => { await this.refresh(); this.schedule(); }, 5000); },
     cancelSearch() { this.token('search'); this.token('preview'); this.searchBusy = false; this.previewBusy = false; },
     async search(request) {
-      if (!this.active || !request.query?.trim() || request.query.trim().length > 200) return;
+      if (!this.active || typeof request.query !== 'string' || request.query.trim().length > 200) return;
       this.token('preview'); this.previewBusy = false;
       const t = this.token('search'); this.searchBusy = true; this.searchError = ''; this.result = null;
       const query = request.query.trim(); const ids = [...request.indexer_ids];

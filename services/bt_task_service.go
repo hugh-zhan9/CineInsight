@@ -25,6 +25,8 @@ type BTService struct {
 	stopped         bool
 	configuring     bool
 	operationCancel context.CancelFunc
+	posterLifetime  context.Context
+	cancelPosters   context.CancelFunc
 	lifetime        context.Context
 	cancel          context.CancelFunc
 	done            chan struct{}
@@ -81,6 +83,9 @@ func (s *BTService) enter(ctx context.Context) (context.Context, func(), error) 
 func (s *BTService) Drain(ctx context.Context) error {
 	s.mu.Lock()
 	s.accepting = false
+	if s.cancelPosters != nil {
+		s.cancelPosters()
+	}
 	if s.operationCancel != nil {
 		s.operationCancel()
 	}
@@ -96,6 +101,9 @@ func (s *BTService) Drain(ctx context.Context) error {
 func (s *BTService) invalidate(revision uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.cancelPosters != nil {
+		s.cancelPosters()
+	}
 	if s.clients != nil {
 		s.clients.Close()
 	}
@@ -279,6 +287,40 @@ func (s *BTService) Search(ctx context.Context, query string, indexerIDs []int) 
 		return nil, err
 	}
 	return s.search.Search(ctx, query, indexerIDs)
+}
+
+// Poster snapshots admission under the command gate, then fetches outside it.
+// Drain cancels the read scope without waiting on a slow external image server.
+func (s *BTService) Poster(ctx context.Context, token string) ([]byte, string, error) {
+	operation, leave, err := s.enter(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if err = s.loadClients(operation); err != nil {
+		leave()
+		return nil, "", err
+	}
+	s.mu.Lock()
+	if !s.accepting {
+		s.mu.Unlock()
+		leave()
+		return nil, "", ErrBTMaintenance
+	}
+	if s.posterLifetime == nil || s.posterLifetime.Err() != nil {
+		s.posterLifetime, s.cancelPosters = context.WithCancel(context.Background())
+	}
+	scope, search := s.posterLifetime, s.search
+	s.mu.Unlock()
+	leave()
+	read, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(scope, cancel)
+	defer stop()
+	data, mime, err := search.Poster(read, token)
+	if scope.Err() != nil {
+		return nil, "", ErrBTMaintenance
+	}
+	return data, mime, err
 }
 func (s *BTService) Indexers(ctx context.Context) ([]BTIndexerView, error) {
 	ctx, leave, err := s.enter(ctx)

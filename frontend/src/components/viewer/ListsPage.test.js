@@ -20,7 +20,7 @@ describe('片单（D-P2-04）', () => {
   it('页头「片单」+ 四个标签，默认「想看」；副标题跟着当前标签换成原来那一页的说明', async () => {
     const wrapper = mountLists();
     expect(wrapper.get('h1').text()).toBe('片单');
-    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['想看', '榜单', '观影记录', '观看笔记']);
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['想看', '榜单', '观影记录', '资源', '观看笔记']);
     expect(wrapper.get('[data-test="lists-tab-watchlist"]').attributes('aria-selected')).toBe('true');
     expect(wrapper.get('.ui-page-header__subtitle').text()).toContain('记下想看');
 
@@ -98,6 +98,30 @@ describe('片单（D-P2-04）', () => {
     await wrapper.setProps({ pageActive: true });
     expect(child(wrapper, 'ViewingNotesPage').vm).toBe(notes.vm);
     expect(child(wrapper, 'ViewingNotesPage').props('pageActive')).toBe(true);
+  });
+
+  it('资源标签在首次打开时挂载，离开暂停，返回复用；设置和播放回到宿主', async () => {
+    const wrapper = mountLists();
+    expect(child(wrapper, 'BTDownloadsPanel').exists()).toBe(false);
+    await wrapper.setProps({ tab: 'resources', resourceQuery: 'film' });
+    const resources = child(wrapper, 'BTDownloadsPanel');
+    expect(resources.props('active')).toBe(true);
+    expect(resources.props('initialQuery')).toBe('film');
+    resources.vm.$emit('settings'); expect(wrapper.emitted('settings')).toEqual([['bt']]);
+    resources.vm.$emit('play', 42); expect(wrapper.emitted('open-video-id')).toEqual([[42]]);
+    await wrapper.setProps({ pageActive: false }); expect(resources.props('active')).toBe(false);
+    await wrapper.setProps({ tab: 'watchlist', pageActive: true }); expect(resources.props('active')).toBe(false);
+    await wrapper.setProps({ tab: 'resources' }); expect(child(wrapper, 'BTDownloadsPanel').vm).toBe(resources.vm);
+    expect(resources.props('active')).toBe(true);
+  });
+
+  it('reapplies an explicit same-title resource request while ordinary tab switches preserve the panel', async () => {
+    const w = mountLists({ tab: 'resources', resourceQuery: 'A', resourceRequestToken: 1 });
+    const first = child(w, 'BTDownloadsPanel');
+    await w.setProps({ tab: 'watchlist' });
+    await w.setProps({ tab: 'resources', resourceQuery: 'A', resourceRequestToken: 2 });
+    expect(child(w, 'BTDownloadsPanel').vm).not.toBe(first.vm);
+    expect(child(w, 'BTDownloadsPanel').props('initialQuery')).toBe('A');
   });
 
   it('子页面的事件原样转给宿主：播放、打开视频、书签、去榜单', async () => {
