@@ -198,3 +198,60 @@ it('explains the restore gate at download-page entrypoints without exposing raw 
  service.PreviewBTResource.mockRejectedValue(error); await w.vm.preview('opaque'); expect(w.vm.searchError).toBe(expected);
  expect(w.text()).not.toContain('private-location'); expect(w.text()).not.toContain('检查连接设置');
 });
+
+
+it('opens resource details without creating a task, restores search position and focus, then reuses file selection', async () => {
+ const { w, service } = await setup();
+ const owner = document.createElement('main'); owner.className = 'main-view'; document.body.append(owner); owner.append(w.element);
+ try {
+  await w.get('[data-test="bt-query"]').setValue('film');
+  await w.findComponent({ name: 'BTResourceSearch' }).get('input[type="checkbox"]').setValue(true);
+  await w.get('form').trigger('submit'); await flushPromises();
+  owner.scrollTop = 460;
+  await w.get('[data-test="bt-resource-title-opaque"]').trigger('click'); await flushPromises();
+  expect(w.get('[data-test="bt-resource-detail"]').text()).toContain('影片');
+  expect(owner.scrollTop).toBe(0);
+  expect(service.PreviewBTResource).not.toHaveBeenCalled();
+  expect(service.SubmitBTDownload).not.toHaveBeenCalled();
+  await w.get('[data-test="bt-resource-back"]').trigger('click'); await flushPromises();
+  expect(owner.scrollTop).toBe(460);
+  expect(document.activeElement).toBe(w.get('[data-test="bt-resource-title-opaque"]').element);
+  expect(w.get('[data-test="bt-query"]').element.value).toBe('film');
+  expect(w.findComponent({ name: 'BTResourceSearch' }).get('input[type="checkbox"]').element.checked).toBe(true);
+  expect(service.SearchBTResources).toHaveBeenCalledTimes(1);
+  await w.get('[data-test="bt-resource-poster-opaque"]').trigger('click'); await flushPromises();
+  await w.get('[data-test="bt-resource-download"]').trigger('click'); await flushPromises();
+  expect(service.PreviewBTResource).toHaveBeenCalledExactlyOnceWith('opaque');
+  expect(w.get('[data-test="bt-files-submit"]').exists()).toBe(true);
+  expect(service.SubmitBTDownload).not.toHaveBeenCalled();
+ } finally { owner.remove(); }
+});
+
+it('shows safe resource facts and unknown values, and invalidates details for replaced results', async () => {
+ const resource = { result_token: 'opaque', title: '<b>完整标题</b>', indexer: '来源站点', size: '9007199254740993', seeders: 0, publish_time: '2026-10-30T12:00:00Z', downloadUrl: 'private-url' };
+ const { w } = await setup({ SearchBTResources: vi.fn().mockResolvedValue({ resources: [resource] }) });
+ await w.get('form').trigger('submit'); await flushPromises();
+ await w.get('[data-test="bt-resource-title-opaque"]').trigger('click'); await flushPromises();
+ let detail = w.get('[data-test="bt-resource-detail"]');
+ expect(detail.text()).toContain('<b>完整标题</b>'); expect(detail.find('b').exists()).toBe(false);
+ expect(detail.text()).toContain('来源站点'); expect(detail.text()).toContain('9,007,199,254,740,993');
+ expect(detail.get('[data-test="bt-resource-seeders"]').text()).toBe('0');
+ expect(detail.text()).not.toContain('private-url');
+ await w.vm.search({ query: '影片', indexer_ids: [] }); await flushPromises();
+ expect(w.find('[data-test="bt-resource-detail"]').exists()).toBe(false);
+ await w.get('[data-test="bt-resource-title-opaque"]').trigger('click'); await flushPromises();
+ await w.setProps({ active: false });
+ expect(w.get('[data-test="bt-resource-download"]').element.disabled).toBe(true);
+});
+
+it('keeps preview errors and missing metadata visible on the detail page', async () => {
+ const { w } = await setup({ PreviewBTResource: vi.fn().mockRejectedValue(new Error('result_expired: private-url')) });
+ await w.get('form').trigger('submit'); await flushPromises();
+ await w.get('[data-test="bt-resource-title-opaque"]').trigger('click'); await flushPromises();
+ expect(w.get('[data-test="bt-resource-detail"]').text()).toContain('暂无封面');
+ expect(w.get('[data-test="bt-resource-seeders"]').text()).toBe('未知');
+ expect(w.get('[data-test="bt-resource-published"]').text()).toBe('未知');
+ await w.get('[data-test="bt-resource-download"]').trigger('click'); await flushPromises();
+ expect(w.get('[data-test="bt-resource-detail"]').text()).toContain('已过期');
+ expect(w.text()).not.toContain('private-url');
+});

@@ -4,7 +4,7 @@
     <p class="help-text">搜索 Prowlarr 中的站点，选择文件后交给本机 qBittorrent 下载。退出应用后下载和做种会继续。</p>
     <p v-if="connectionError" role="alert">{{ connectionError }}</p>
     <p v-else-if="connection && !connection.enabled" class="help-text">请在连接设置中启用资源下载。</p>
-    <BTResourceSearch :initial-query="initialQuery" :indexers="indexers" :result="result" :result-query="resultQuery" :result-indexer-ids="resultIndexerIds" :busy="searchBusy" :preview-busy="previewBusy || Boolean(draft) || !active" :error="searchError" @search="search" @cancel="cancelSearch" @preview="preview" />
+    <BTResourceSearch :active="active" :initial-query="initialQuery" :indexers="indexers" :result="result" :result-query="resultQuery" :result-indexer-ids="resultIndexerIds" :busy="searchBusy" :preview-busy="previewBusy || Boolean(draft) || !active" :error="searchError" @search="search" @cancel="cancelSearch" @preview="preview" />
     <p v-if="notice" class="help-text" role="status">{{ notice }}</p>
     <p v-if="!tasks.length && taskError" role="alert">{{ taskError }}</p>
     <BTTaskList v-if="tasks.length || !taskError" :tasks="taskViews" :detail="detailView" :loading="listBusy" :readonly="!active" :has-more="Boolean(nextCursor) && tasks.length < 200" :busy-ids="busyIds" :error="controlError || taskError" @refresh="refresh" @load-more="loadMore" @detail="showDetail" @control="control" @play="play" />
