@@ -5,12 +5,14 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 	"video-master/database"
 	"video-master/models"
 	"video-master/services/subtitleparser"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // 场景检索查询（场景检索合同「查询」）。对白复用 subtitle_segments 的字面子串匹配；
@@ -97,6 +99,8 @@ type SceneSearchResult struct {
 // SceneSearchService 执行场景检索；与建索引共用运行时可用性判定与常驻 worker。
 // 它不持有外部描述客户端：检索只对已存的描述做字面匹配，从不调用外部接口。
 type SceneSearchService struct {
+	cursorOnce       sync.Once
+	cursorKey        []byte
 	imageVectors     sceneImageVectorSource
 	imageAvailable   func() bool
 	vectors          sceneVectorSource
@@ -275,7 +279,7 @@ func querySceneDialogue(ctx context.Context, pattern string, filter *LibraryFilt
 		return nil, err
 	}
 	var rows []sceneDialogueRow
-	err = database.DB.WithContext(ctx).Table("subtitle_segments").
+	err = database.DB.WithContext(ctx).Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Table("subtitle_segments").
 		Select("subtitle_segments.video_id, subtitle_segments.segment_index, subtitle_segments.start_time_ms, subtitle_segments.end_time_ms, subtitle_segments.text").
 		Joins("JOIN videos ON videos.id = subtitle_segments.video_id AND videos.deleted_at IS NULL").
 		Where(`LOWER(subtitle_segments.text) LIKE ? ESCAPE '\'`, pattern).
@@ -429,7 +433,7 @@ type sceneSegmentScanRow struct {
 
 // validSceneSegments 是"当前模型、已索引、源未变化、视频活跃非失效"的段查询。
 func validSceneSegments(ctx context.Context, modelID string, intervalMS int64, columns string) *gorm.DB {
-	return database.DB.WithContext(ctx).Table("scene_visual_segments AS seg").
+	return database.DB.WithContext(ctx).Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Table("scene_visual_segments AS seg").
 		Select(columns).
 		Joins("JOIN "+sceneStateTable(modelID)+" st ON st.video_id = seg.video_id AND st.model_id = seg.model_id").
 		Joins("JOIN videos ON videos.id = seg.video_id AND videos.deleted_at IS NULL").

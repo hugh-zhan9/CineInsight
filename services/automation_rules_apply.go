@@ -219,7 +219,7 @@ func insertAutomationRelationTx(tx *gorm.DB, kind string, write automationPendin
 	var result *gorm.DB
 	switch {
 	case write.Action.Type == automationActionAddToCollection:
-		if err := lockActiveCollection(tx, write.Action.CollectionID); err != nil {
+		if err := claimCollectionMutation(tx, write.Action.CollectionID); err != nil {
 			return false, err
 		}
 		var maxPosition int

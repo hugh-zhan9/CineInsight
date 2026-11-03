@@ -204,16 +204,9 @@ func (a *App) healthRuntimes() []HealthItem {
 			items = append(items, healthItem("subtitle", "字幕引擎", "unknown", "not_checked", "action:settings:subtitle-quality"))
 		} else {
 			for _, status := range statuses {
-				key, label := string(status.Engine), "WhisperX 字幕引擎"
-				if status.Engine == services.SubtitleEngineQwen {
-					label = "Qwen 字幕引擎"
-				} else if status.Engine != services.SubtitleEngineWhisperX {
-					continue
+				if item, include := healthSubtitleStatus(status, checkedAt); include {
+					items = append(items, item)
 				}
-				item := healthAvailable(key, label, status.Available, string(status.ReasonCode), "action:settings:subtitle-quality")
-				item.ObservedAt = &checkedAt
-				item.Detail += "（缓存检查于 " + checkedAt.Local().Format("2006-01-02 15:04:05") + "）"
-				items = append(items, item)
 			}
 		}
 	} else {
@@ -256,6 +249,26 @@ func (a *App) healthRuntimes() []HealthItem {
 		enhance = healthAvailable("enhancement", "视频超分", status.Available, code, "action:settings:enhance")
 	}
 	return append(items, enhance)
+}
+
+// healthSubtitleStatus projects cached facts only; it never probes or prepares a language.
+func healthSubtitleStatus(status services.SubtitleEngineStatus, checkedAt time.Time) (HealthItem, bool) {
+	if status.Engine != services.SubtitleEngineApple {
+		return HealthItem{}, false
+	}
+	item := healthAvailable("apple", "Apple 系统识别", status.Available, string(status.ReasonCode), "action:settings:subtitle-quality")
+	item.ObservedAt = &checkedAt
+	if status.ReasonMessage != "" {
+		item.Detail = status.ReasonMessage
+	}
+	installed := int64(0)
+	for _, language := range status.Languages {
+		if language.Installed {
+			installed++
+		}
+	}
+	item.Metrics = []HealthMetric{healthMetric("speech_languages_ready", "已准备识别语言", installed, "种")}
+	return item, true
 }
 
 func (a *App) healthIndexes(ctx context.Context) []HealthItem {

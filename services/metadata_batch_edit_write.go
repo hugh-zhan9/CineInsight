@@ -157,7 +157,7 @@ func insertBatchRelations(tx *gorm.DB, kind, field string, relID uint, mediaIDs 
 
 // appendBatchCollectionVideos 把视频按给定顺序接在作品集现有末位之后（同 AddCollectionVideos 的位置规则）。
 func appendBatchCollectionVideos(tx *gorm.DB, collectionID uint, videoIDs []uint) error {
-	if err := lockActiveCollection(tx, collectionID); err != nil {
+	if err := claimCollectionMutation(tx, collectionID); err != nil {
 		return err
 	}
 	var maxPosition int
@@ -178,7 +178,7 @@ func appendBatchCollectionVideos(tx *gorm.DB, collectionID uint, videoIDs []uint
 func deleteBatchRelations(tx *gorm.DB, kind, field string, relID uint, mediaIDs []uint) error {
 	table := batchRelationTableFor(kind, field)
 	if field == BatchEditFieldCollection {
-		if err := lockActiveCollection(tx, relID); err != nil {
+		if err := claimCollectionMutation(tx, relID); err != nil {
 			return err
 		}
 	}

@@ -2120,6 +2120,21 @@ func ensureNoActiveEnhancement(db *gorm.DB, videoID uint) error {
 // 否则删不掉。超分任务只在已结束时随源视频删除（它们是历史记录，产物是独立视频不受影响）；
 // 事务内复查一次非终态，与开事务前的检查之间若有新任务入队则整体回滚。
 func hardDeleteVideoTx(tx *gorm.DB, id uint) error {
+	var collectionIDs []uint
+	if err := tx.Model(&models.CollectionVideo{}).Where("video_id = ?", id).Order("collection_id").Pluck("collection_id", &collectionIDs).Error; err != nil {
+		return err
+	}
+	for _, collectionID := range collectionIDs {
+		var active int64
+		if err := tx.Model(&models.MediaCollection{}).Where("id = ?", collectionID).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			if err := claimCollectionMutation(tx, collectionID); err != nil {
+				return err
+			}
+		}
+	}
 	if err := ensureNoActiveEnhancement(tx, id); err != nil {
 		return err
 	}

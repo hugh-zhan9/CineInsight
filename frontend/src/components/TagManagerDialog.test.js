@@ -16,6 +16,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({
   CreateTagWithCategory: vi.fn(),
   MergeTags: vi.fn(),
+  PreviewTagMergePreferences: vi.fn(),
+  MergeTagsFromPreferencePreview: vi.fn(),
   UpdateTagWithCategory: vi.fn(),
   GetAITagLibrary: vi.fn(),
   TriggerAITagging: vi.fn(),
@@ -46,6 +48,8 @@ const tags = [
 beforeEach(() => {
   vi.clearAllMocks();
   api.MergeTags.mockResolvedValue({ target_tag_id: 1, merged_tag_count: 1 });
+  api.PreviewTagMergePreferences.mockResolvedValue({status:'ok',data:{has_feedback:false,token:'',effect:''}});
+  api.MergeTagsFromPreferencePreview.mockResolvedValue({status:'ok',data:{target_tag_id:1,merged_tag_count:1}});
   api.GetAITagLibrary.mockResolvedValue([]);
   api.TriggerAITagging.mockResolvedValue(false);
   api.PreviewTagPersonConversion.mockResolvedValue({ tag_id: 1, tag_name: '旅行', video_count: 2, image_count: 1, people: [] });
@@ -53,6 +57,17 @@ beforeEach(() => {
   feedback.confirmAction.mockResolvedValue(true);
   api.GetTagUsageCounts.mockResolvedValue({});
   api.ListTagPersonConversions.mockResolvedValue([]);
+});
+
+it('shows the reviewed merged preference and submits only its token', async () => {
+  api.PreviewTagMergePreferences.mockResolvedValue({status:'ok',data:{has_feedback:true,token:'frozen',effect:'downweight'}});
+  const wrapper = mount(TagManagerDialog, { props: { tags, visible: true }, global: { stubs: { Teleport: true } } });
+  await flushPromises();
+  wrapper.vm.mergeTargetId = 1; wrapper.vm.mergeSourceIds = [2]; await wrapper.vm.$nextTick();
+  await wrapper.vm.handleMergeTags(); await flushPromises();
+  expect(feedback.confirmAction.mock.calls.at(-1)[0].message).toContain('合并后的标签将减少推荐');
+  expect(api.MergeTagsFromPreferencePreview).toHaveBeenCalledWith('frozen');
+  expect(api.MergeTags).not.toHaveBeenCalled(); wrapper.unmount();
 });
 
 describe('标签转为人物入口', () => {

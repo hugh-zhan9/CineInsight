@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -27,7 +28,10 @@ const (
 const imageTakenSortKeyExpr = "COALESCE(images.taken_at, images.created_at)"
 
 // ImageLibraryService 提供照片页的查询、标签与收藏/评分能力。
-type ImageLibraryService struct{}
+type ImageLibraryService struct {
+	photoCursorOnce sync.Once
+	photoCursorKey  []byte
+}
 
 // NewImageLibraryService 构造照片页数据服务。
 func NewImageLibraryService() *ImageLibraryService {
@@ -217,7 +221,11 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 // 不软删，见 ImageService.markMissingImageStale）与扫描黑名单目录。照片页、文件夹图集、
 // 时间线分组都经由这里取活跃集，改口径只改 applyImageVisibility 一处。
 func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
-	query = applyImageVisibility(query, database.DB)
+	return applyImageFilterFrom(query, filter, database.DB)
+}
+
+func applyImageFilterFrom(query *gorm.DB, filter ImageFilter, db *gorm.DB) *gorm.DB {
+	query = applyImageVisibility(query, db)
 	if filter.ImageID != 0 {
 		query = query.Where("images.id = ?", filter.ImageID)
 	}
@@ -261,7 +269,7 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 			Where("NOT EXISTS (SELECT 1 FROM image_ai_tag_candidates c WHERE c.image_id = images.id AND c.status = ?)", models.AITagCandidateStatusPending)
 	}
 	if len(filter.TagIDs) > 0 {
-		subquery := database.DB.Table("image_tags").Select("image_id").
+		subquery := db.Table("image_tags").Select("image_id").
 			Where("tag_id IN ?", filter.TagIDs).
 			Group("image_id").
 			Having("COUNT(DISTINCT tag_id) = ?", len(filter.TagIDs))
@@ -272,7 +280,7 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 	}
 	// 人物筛选与标签同法：分组计数保证 AND 语义，而不是任一命中。
 	if len(filter.PersonIDs) > 0 {
-		subquery := database.DB.Table("image_people").Select("image_id").
+		subquery := db.Table("image_people").Select("image_id").
 			Where("person_id IN ?", filter.PersonIDs).
 			Group("image_id").
 			Having("COUNT(DISTINCT person_id) = ?", len(filter.PersonIDs))

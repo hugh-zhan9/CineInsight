@@ -604,7 +604,7 @@ describe('VideoDetailPage host contract', () => {
 
   it('warns and does not autoplay when the source changed after the bookmark was resolved', async () => {
     const wrapper = await mountPage({ bookmark: { start_ms: 5000, end_ms: 9000, source_token: 'old' } });
-    expect(wrapper.get('[data-test="detail-bookmark-changed"]').text()).toBe('原片在打开预览前已改变，请重新核对书签，未套用旧位置。');
+    expect(wrapper.get('[data-test="detail-bookmark-changed"]').text()).toBe('原片在打开预览前已改变，请重新核对时间位置，未套用旧位置。');
     expect(player(wrapper).props('autoplay')).toBe(false);
     expect(player(wrapper).props('bookmarkRange').sourceToken).toBe('old');
   });
@@ -791,4 +791,11 @@ for (const rejectOld of [false, true]) it(`old recommendation ${rejectOld ? 'fai
   finishOld(rejectOld ? new Error('旧请求失败') : { directory: [{ video: baseVideo(9) }], tags: [] }); await flushPromises();
   expect(wrapper.get('[data-test="detail-recommend-tags"]').text()).toContain('影片8');
   expect(wrapper.find('[data-test="detail-recommend-directory"]').exists()).toBe(false);
+});
+
+it('chapter navigation reuses the current player and validates the captured source through the bookmark range contract',async()=>{
+ const wrapper=await mountPage();await wrapper.vm.openPlayer({startTimeMs:0});await flushPromises();
+ const original=player(wrapper).vm;
+ wrapper.findComponent({name:'ChapterPanel'}).vm.$emit('seek',{video_id:5,start_ms:12500,source_version:'captured-chapter-source'});await flushPromises();
+ expect(player(wrapper).vm).toBe(original);expect(player(wrapper).props('bookmarkRange')).toMatchObject({videoID:5,startMS:12500,endMS:null,sourceToken:'captured-chapter-source'});
 });

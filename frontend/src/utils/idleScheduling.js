@@ -30,6 +30,7 @@ export const BACKGROUND_TASK_LABELS = {
   watchlist_enrich: '片单补全',
   movie_chart: '榜单抓取',
   scene_index: '场景画面索引',
+ chapter_summary:'字幕章节摘要',
   video_edit: '视频工作台',
   lost_media: '失联数据',
   metadata_batch_edit: '批量编辑',

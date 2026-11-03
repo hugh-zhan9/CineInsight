@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -157,6 +158,7 @@ type taskCenterSources struct {
 	consolidations []services.CleanupConsolidationSummary
 	videoEdits     []services.EditProjectSummary
 	btDownloads    []services.BTTaskSummary
+	chapterJobs    []models.ChapterDraftJob
 }
 
 func (src *taskCenterSources) warn(message string) {
@@ -218,6 +220,14 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 			src.downloads = a.browserDownloads.ListTasks()
 		}
 		return src
+	}
+	if a.chapters != nil {
+		jobs, err := a.chapters.ListChapterJobsWithOpen(a.backgroundContext(), 100)
+		if err != nil {
+			src.warn("章节任务读取失败")
+		} else {
+			src.chapterJobs = jobs
+		}
 	}
 	if a.subtitleService != nil {
 		jobs, err := a.subtitleService.ListSubtitleJobsWithOpen(taskCenterRecentPerKind)
@@ -323,6 +333,13 @@ func buildTaskCenterItem(key string, state taskCenterKeyState, src *taskCenterSo
 
 func (a *App) taskCenterRecent(src *taskCenterSources) []TaskRecentJob {
 	recent := make([]TaskRecentJob, 0)
+	for _, job := range src.chapterJobs {
+		id := uint(0)
+		if job.VideoID != nil {
+			id = *job.VideoID
+		}
+		recent = append(recent, TaskRecentJob{Kind: "chapter_summary", ID: strconv.FormatUint(uint64(job.ID), 10), VideoID: id, Title: job.TitleSnapshot, Status: job.Status, ErrorCode: job.ErrorCode, Message: fmt.Sprintf("字幕范围 %.3f–%.3f 秒；%d/%d 段", float64(job.ScopeStartMS)/1000, float64(job.ScopeEndMS)/1000, job.CompletedChunks, job.TotalChunks), FinishedAt: &job.UpdatedAt, Actions: []string{"open_chapters"}})
+	}
 	for _, task := range src.btDownloads {
 		recent = append(recent, TaskRecentJob{Kind: "bt_download", ID: task.ID, Title: task.Title, Status: task.Status, ErrorCode: task.ErrorCode, Message: task.Message, Actions: []string{"open_bt_downloads"}})
 	}

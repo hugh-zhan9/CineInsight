@@ -149,3 +149,23 @@ it('restarts an invalid queue resume using actual media duration rather than cla
   expect(video.element.currentTime).toBe(0);
   expect(events().find(event=>event.kind==='loaded')).toMatchObject({position:0,duration:3});
 });
+
+async function clipPlayer(start = 10000, end = 20000) {
+  wrapper = mount(Player, { props: { session: { ...session(), entry_kind: 'clip', clip_start_ms: start, clip_end_ms: end, start_seconds: start / 1000 } } });
+  const video = wrapper.find('video');
+  Object.defineProperty(video.element, 'duration', { configurable: true, value: 120 });
+  await video.trigger('loadedmetadata'); await flushPromises(); return video;
+}
+it('keeps a clip start near the end instead of applying the whole-video restart threshold', async () => {
+  const video = await clipPlayer(119000, 119500); expect(video.element.currentTime).toBe(119);
+});
+it('clamps clip keyboard seeks and consumes the clip end exactly once', async () => {
+  const video = await clipPlayer(); video.element.currentTime = 10.1;
+  await wrapper.trigger('keydown', { key: 'ArrowLeft' }); expect(video.element.currentTime).toBe(10);
+  video.element.currentTime = 21; await video.trigger('timeupdate'); await video.trigger('timeupdate'); await flushPromises();
+  expect(video.element.currentTime).toBe(20); expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+  expect(events().filter(event => event.kind === 'ended')).toHaveLength(1);
+});
+it('does not play a malformed clip as a whole video', async () => {
+  await clipPlayer(20000, 10000); expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled(); expect(wrapper.find('[data-test="queue-inline-error"]').exists()).toBe(true);
+});

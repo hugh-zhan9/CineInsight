@@ -56,6 +56,9 @@ func copyEnhancementSourceMetadataTx(tx *gorm.DB, sourceID, outputID uint) error
 		return fmt.Errorf("读取原片所在作品集失败: %w", err)
 	}
 	for _, collectionID := range collectionIDs {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
+			return err
+		}
 		var existing int64
 		if err := tx.Model(&models.CollectionVideo{}).
 			Where("collection_id = ? AND video_id = ?", collectionID, outputID).Count(&existing).Error; err != nil {

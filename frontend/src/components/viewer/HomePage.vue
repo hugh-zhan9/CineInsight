@@ -1,5 +1,6 @@
 <template>
   <section class="page-content viewer-home" data-test="viewer-home">
+    <CapabilitySetupPrompt :active="pageActive" @open="$emit('open-setup')" />
     <!-- 观看首页（D-UI-04）：各区块并行取数、各自加载与失败；没有数据的区块不显示。
          大图区的文字层就是本页的页头（D-UD-06 HeroHeader）；标题沿用 h2。 -->
     <RecapBackdrop v-if="hero.state === 'ready'" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="home-hero">
@@ -215,6 +216,7 @@ import RecapCountUp from '../recap/RecapCountUp.vue';
 import RecapIcon from '../recap/RecapIcon.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import AppBanner from '../ui/AppBanner.vue';
+import CapabilitySetupPrompt from '../CapabilitySetupPrompt.vue';
 import AppIcon from '../ui/AppIcon.vue';
 import HeroHeader from '../ui/HeroHeader.vue';
 import SkeletonBlock from '../ui/SkeletonBlock.vue';
@@ -287,13 +289,13 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
-  components: { MediaRail, AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
+  components: { CapabilitySetupPrompt, MediaRail, AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、追到哪了、最近添加、想看已在库、本月回顾；期间可能看过片），
   // 取回之前保留现有内容。今晚看什么整批只在「换一批」时重抽，播放后单项补位；大图仅对应推荐被补位时更新。
   props: { pageActive: { type: Boolean, default: true } },
   // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey, params?)：回顾页、片库、设置，
   // 「查看全部」带 { watch } 去「视频」页。
-  emits: ['open-video', 'navigate', 'open-person'],
+  emits: ['open-video', 'navigate', 'open-person', 'open-setup'],
   data() {
     return {
       // 各块的 loaded：上一次取成功了，块里显示的就是结果（空就是不显示）；重取期间保持这个样子（见 runBlock）。

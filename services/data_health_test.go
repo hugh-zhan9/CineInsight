@@ -514,3 +514,31 @@ func TestDataHealthManagedPathsWholeMediaDetailsUnavailable(t *testing.T) {
 		t.Fatalf("修复不应清空任何路径: %q %q", poster, avatar)
 	}
 }
+
+func TestDataHealthClipMemberPositionDuplicatesHaveCompositeKeyExamples(t *testing.T) {
+	service, db, _, videoID := setupDataHealthTest(t)
+	topic := models.ClipTopic{Name: "duplicate positions", Revision: 1}
+	if err := db.Create(&topic).Error; err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, "DROP INDEX idx_clip_topic_position")
+	for i := 0; i < 2; i++ {
+		book := models.VideoBookmark{VideoID: videoID, Title: "bookmark", Revision: 1, TagsJSON: "[]"}
+		if err := db.Create(&book).Error; err != nil {
+			t.Fatal(err)
+		}
+		member := models.ClipTopicMember{TopicID: topic.ID, BookmarkID: book.ID, Position: 1}
+		if err := db.Create(&member).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := service.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := healthCheckByKey(t, report, DataHealthCheckMissingUniqueIndexes)
+	group, ok := healthGroupByKey(unique, "idx_clip_topic_position")
+	if !ok || unique.Status != DataHealthStatusProblem || group.Count != 1 || len(group.Examples) != 1 || !strings.Contains(group.Examples[0], "2 条重复") {
+		t.Fatalf("composite key duplicate not reported: %+v", unique)
+	}
+}

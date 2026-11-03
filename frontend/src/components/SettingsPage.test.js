@@ -1105,6 +1105,15 @@ describe('设置页的保存口径（D-PC57 / D-PC58 / D-PC59）', () => {
     wrapper.unmount();
   });
 
+  it('saves independent text-purpose switches without implicitly starting tagging', async () => {
+    const wrapper=await mountPage();
+    wrapper.vm.settingsForm.query_parse_enabled=true;
+    wrapper.vm.settingsForm.chapter_summary_enabled=false;
+    await wrapper.vm.saveSettings();await flushPromises();
+    expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({query_parse_enabled:true,chapter_summary_enabled:false}));
+    expect(api.TriggerAITagging).not.toHaveBeenCalled();wrapper.unmount();
+  });
+
   it('APP-04 只有 AI 打标字段变了才触发打标并提示「已触发 AI 自动打标」', async () => {
     const wrapper = await mountPage();
     api.TriggerAITagging.mockResolvedValue(true);

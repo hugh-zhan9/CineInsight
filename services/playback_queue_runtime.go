@@ -38,6 +38,9 @@ type QueueCapability struct {
 	Reason    string `json:"reason"`
 }
 type QueueSession struct {
+	EntryKind       string  `json:"entry_kind"`
+	ClipStartMS     *int64  `json:"clip_start_ms,omitempty"`
+	ClipEndMS       *int64  `json:"clip_end_ms,omitempty"`
 	Token           string  `json:"token"`
 	VideoID         uint    `json:"video_id"`
 	SourceVersion   string  `json:"source_version"`
@@ -53,6 +56,7 @@ type QueueSession struct {
 // QueueSnapshot 显式列出 QueuePage 的字段而不是匿名嵌入：Wails 绑定生成器解析不了匿名嵌入结构体里
 // 引用的类型（models.PlaybackQueueState、*QueueEntryDTO），会报 "Not found" 并生成 any。JSON 形状不变。
 type QueueSnapshot struct {
+	HasClips       bool                      `json:"has_clips"`
 	State          models.PlaybackQueueState `json:"state"`
 	Items          []QueueEntryDTO           `json:"items"`
 	Current        *QueueEntryDTO            `json:"current"`
@@ -78,6 +82,7 @@ type InlineQueueEvent struct {
 }
 
 type playbackQueueRun struct {
+	entry                                                           models.PlaybackQueueEntry
 	cleanupPending                                                  bool
 	controlSequence                                                 uint64
 	token                                                           string
@@ -101,6 +106,7 @@ type playbackQueueRun struct {
 }
 
 type PlaybackQueueService struct {
+	clipPreviews  map[string]*clipQueueSnapshot // owned by commands
 	admission     formalPlaybackAdmission
 	commands      contextMutex
 	video         *VideoService
@@ -149,12 +155,21 @@ func (s *PlaybackQueueService) changed() {
 		s.emit(s.sequence)
 	}
 }
-func (s *PlaybackQueueService) capabilities() []QueueCapability {
+func (s *PlaybackQueueService) capabilities(hasClips bool) []QueueCapability {
 	available, reason := false, "仅 macOS 安装 IINA 后可用"
 	if s.player != nil {
 		available, reason = s.player.Available()
 	}
-	return []QueueCapability{{Player: "system", Available: true}, {Player: "inline", Available: true, Autoplay: true}, {Player: "iina", Available: available, Autoplay: true, Reason: reason}}
+	capabilities := []QueueCapability{{Player: "system", Available: true}, {Player: "inline", Available: true, Autoplay: true}, {Player: "iina", Available: available, Autoplay: true, Reason: reason}}
+	if hasClips {
+		for i := range capabilities {
+			if capabilities[i].Player != "inline" {
+				capabilities[i].Available = false
+				capabilities[i].Reason = "队列包含区间预览，仅支持应用内播放器"
+			}
+		}
+	}
+	return capabilities
 }
 func (s *PlaybackQueueService) Snapshot(ctx context.Context, query QueueQuery) (*QueueSnapshot, error) {
 	var result *QueueSnapshot
@@ -163,8 +178,8 @@ func (s *PlaybackQueueService) Snapshot(ctx context.Context, query QueueQuery) (
 		if err != nil {
 			return err
 		}
-		result = &QueueSnapshot{State: page.State, Items: page.Items, Current: page.Current, Total: page.Total, HasMore: page.HasMore,
-			CursorPosition: page.CursorPosition, CursorID: page.CursorID, Sequence: s.sequence, Capabilities: s.capabilities(), Warning: s.warning}
+		result = &QueueSnapshot{HasClips: page.HasClips, State: page.State, Items: page.Items, Current: page.Current, Total: page.Total, HasMore: page.HasMore,
+			CursorPosition: page.CursorPosition, CursorID: page.CursorID, Sequence: s.sequence, Capabilities: s.capabilities(page.HasClips), Warning: s.warning}
 		if r := s.run; r != nil && r.failed && r.token == page.State.ActiveToken {
 			result.State.Status = "failed"
 		}
@@ -174,7 +189,7 @@ func (s *PlaybackQueueService) Snapshot(ctx context.Context, query QueueQuery) (
 		}
 		if r := s.run; r != nil && !r.failed && r.lease != nil && r.player == "inline" && page.State.ActiveToken == r.token {
 			m := r.lease
-			result.Session = &QueueSession{Token: r.token, VideoID: m.video.ID, SourceVersion: m.sourceVersion(), Locator: "/preview/queue/" + r.token, MIME: m.mime, StartSeconds: m.start, Duration: m.video.Duration, ViewCycle: r.cycle, DesiredPaused: r.desiredPaused, ControlSequence: r.controlSequence}
+			result.Session = &QueueSession{EntryKind: r.entry.EntryKind, ClipStartMS: r.entry.ClipStartMS, ClipEndMS: r.entry.ClipEndMS, Token: r.token, VideoID: m.video.ID, SourceVersion: m.sourceVersion(), Locator: "/preview/queue/" + r.token, MIME: m.mime, StartSeconds: m.start, Duration: m.video.Duration, ViewCycle: r.cycle, DesiredPaused: r.desiredPaused, ControlSequence: r.controlSequence}
 		}
 		return nil
 	})
@@ -245,6 +260,13 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 		if err := db.First(&entry, entryID).Error; err != nil {
 			return err
 		}
+		if !validQueueEntryShape(entry) {
+			return ErrQueueInvalid
+		}
+		if entry.EntryKind == "clip" && state.Player != "inline" {
+			return ErrClipPlayerUnsupported
+		}
+
 		return db.Model(&models.PlaybackQueueState{}).Where("id = 1").Updates(map[string]any{"current_entry_id": entry.ID, "active_token": token, "status": "starting", "last_error_code": "", "last_error_message": ""}).Error
 	})
 	if err != nil {
@@ -258,7 +280,7 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 		return err
 	}
 	prepCtx, cancel := context.WithTimeout(prepCtx, 30*time.Second)
-	r := &playbackQueueRun{token: token, entryID: entryID, player: state.Player, cancel: cancel, prepared: make(chan struct{}), cycle: 1}
+	r := &playbackQueueRun{entry: entry, token: token, entryID: entryID, player: state.Player, cancel: cancel, prepared: make(chan struct{}), cycle: 1}
 	s.run = r
 	reserved = false
 	s.terminalToken = ""
@@ -273,7 +295,12 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 		if r.player == "system" {
 			attempt, prepareErr = s.video.PlayVideoContext(context.WithValue(prepCtx, controlledDispatchBypassKey{}, true), entry.VideoID)
 		} else {
-			lease, prepareErr = s.video.prepareQueueMedia(prepCtx, entry.VideoID, r.player == "inline")
+			if entry.EntryKind == "clip" {
+				prepareErr = clipVideoVisible(prepCtx, entry.VideoID)
+			}
+			if prepareErr == nil {
+				lease, prepareErr = s.video.prepareQueueMedia(prepCtx, entry.VideoID, r.player == "inline")
+			}
 			if prepareErr == nil && r.player == "iina" {
 				prepareErr = s.player.Load(prepCtx, lease, r.token, func(event InlineQueueEvent) error { return s.reportPlayerEvent(event) })
 			}
@@ -296,6 +323,12 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 			}
 			if err := validateQueueIINASource(ctx, lease); err != nil {
 				return s.failLocked(ctx, "queue_source_changed", "原片已改变，请重新播放")
+			}
+			if entry.EntryKind == "clip" {
+				if err := validateClipLease(ctx, lease, entry); err != nil {
+					return s.failLocked(ctx, "queue_source_changed", "原片或预览区间已变化，请重新核对")
+				}
+				lease.start = float64(*entry.ClipStartMS) / 1000
 			}
 			r.lease = lease
 			r.position = lease.start
@@ -396,6 +429,9 @@ func (s *PlaybackQueueService) Next(ctx context.Context, token string, revision 
 	})
 }
 func (s *PlaybackQueueService) nextLocked(ctx context.Context, state models.PlaybackQueueState) error {
+	if s.run != nil && s.run.entry.EntryKind == "clip" {
+		return s.finishClipLocked(ctx, s.run)
+	}
 	if state.CurrentEntryID == nil {
 		return ErrQueueChanged
 	}
@@ -496,7 +532,7 @@ func (s *PlaybackQueueService) Edit(ctx context.Context, in QueueEdit) error {
 			return err
 		}
 		state := plan.state
-		stop := in.Action == "clear" || in.Action == "replace_collection" || in.Action == "configure" && state.Player != in.Player || in.Action == "remove" && state.CurrentEntryID != nil && *state.CurrentEntryID == in.EntryID
+		stop := plan.stopPreviewBatch || in.Action == "clear" || in.Action == "replace_collection" || in.Action == "configure" && state.Player != in.Player || in.Action == "remove" && state.CurrentEntryID != nil && *state.CurrentEntryID == in.EntryID
 		if stop && s.run != nil {
 			s.stoppedToken = s.run.token
 			s.terminalToken = s.run.token
@@ -580,6 +616,11 @@ func (s *PlaybackQueueService) Media(ctx context.Context, token string) (*io.Sec
 	err = s.command(ctx, func(context.Context) error {
 		if s.run == nil || s.run.player != "inline" || s.run.token != token || s.run.lease == nil {
 			return ErrQueueLeaseExpired
+		}
+		if s.run.entry.EntryKind == "clip" {
+			if err := validateClipLease(ctx, s.run.lease, s.run.entry); err != nil {
+				return s.failClipLocked(ctx, "原片已离开当前范围，请重新核对")
+			}
 		}
 		lease = s.run.lease
 		return nil

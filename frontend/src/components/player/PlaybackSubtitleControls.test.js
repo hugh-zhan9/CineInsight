@@ -1,10 +1,17 @@
 import { mount, flushPromises } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const api = vi.hoisted(() => ({ GetPlaybackSubtitle: vi.fn() }));
+const api = vi.hoisted(() => ({ GetPlaybackSubtitle: vi.fn(), GetVideoDetails: vi.fn() }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
 import PlaybackSubtitleControls from './PlaybackSubtitleControls.vue';
+import { SUBTITLE_PREFERENCES_KEY } from '../../utils/playbackSubtitles.js';
+import { SUBTITLE_TOOL_REQUEST } from '../../utils/subtitleNavigation.js';
 const ready = text => ({ status: 'ready', cues: [{ start_ms: 1000, end_ms: 2000, text }] });
-beforeEach(() => { vi.clearAllMocks(); URL.createObjectURL = vi.fn(() => 'blob:subtitle'); URL.revokeObjectURL = vi.fn(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  const storage = new Map();
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) } });
+  URL.createObjectURL = vi.fn(() => 'blob:subtitle'); URL.revokeObjectURL = vi.fn();
+});
 describe('playback subtitles', () => {
   it('rejects late session responses and releases Blob on replacement/unmount', async () => {
     let resolveOld; api.GetPlaybackSubtitle.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; })).mockResolvedValue(ready('new'));
@@ -44,6 +51,48 @@ describe('playback subtitles', () => {
     expect(cue.line).toBeLessThan(80);
     expect([cue.startTime,cue.endTime,cue.text]).toEqual([1,2,'caption']);
     wrapper.unmount();
+  });
+  it('persists display style without reloading media, and shares the projected transcript time', async () => {
+    api.GetPlaybackSubtitle.mockResolvedValue(ready('hello\n你好'));
+    const surface = document.createElement('div'); const video = document.createElement('video'); surface.append(video); document.body.append(surface);
+    video.getBoundingClientRect = () => ({ width: 800, height: 450 });
+    video.currentTime = .25;
+    const wrapper = mount(PlaybackSubtitleControls, { props: { videoId: 1, sourceVersion: 'v1', videoElement: () => video } }); await flushPromises();
+    const cue = {};
+    Object.defineProperty(video.querySelector('track'), 'track', { configurable: true, value: { cues: [cue], mode: 'showing' } });
+    await wrapper.get('[data-test=playback-subtitle-toggle]').trigger('click');
+    await wrapper.get('[aria-label="字幕字号"]').setValue('large');
+    await wrapper.get('[aria-label="字幕位置"]').setValue('top');
+    expect(cue.line).toBe(5); expect(cue.lineAlign).toBe('start');
+    expect(video.style.getPropertyValue('--fs-subtitle-active')).toBe('32px');
+    expect(JSON.parse(window.localStorage.getItem(SUBTITLE_PREFERENCES_KEY)).position).toBe('top');
+    await wrapper.get('input[type=number]').setValue('.5'); await flushPromises();
+    expect(video.currentTime).toBe(.25);
+    await wrapper.get('[data-test=playback-transcript-toggle]').trigger('click'); await flushPromises();
+    surface.querySelector('[data-cue-id="0"]').click();
+    expect(video.currentTime).toBe(1.5);
+    expect(api.GetPlaybackSubtitle).toHaveBeenCalledTimes(1);
+    wrapper.unmount(); surface.remove();
+  });
+  it('leaves fullscreen before opening the editing tool outside the player keyboard domain', async () => {
+    api.GetPlaybackSubtitle.mockResolvedValue({ status: 'absent', cues: [] });
+    api.GetVideoDetails.mockResolvedValue({ video: { id: 1, name: 'fixture' } });
+    const dialog = document.createElement('dialog'); const surface = document.createElement('div'); const video = document.createElement('video');
+    dialog.append(surface); surface.append(video); document.body.append(dialog); video.pause = vi.fn();
+    let fullscreen = true; dialog.matches = selector => selector === ':modal' && fullscreen;
+    const leaveFullscreen = vi.fn(async () => { fullscreen = false; });
+    const toolHost = document.createElement('section'); toolHost.dataset.test = 'stub-workbench';
+    const openTool = event => { expect(fullscreen).toBe(false); event.detail.handled = true; expect(event.detail.videoID).toBe(1); document.body.append(toolHost); event.detail.resolve(true); };
+    window.addEventListener(SUBTITLE_TOOL_REQUEST, openTool);
+    const wrapper = mount(PlaybackSubtitleControls, { props: { videoId: 1, sourceVersion: 'v1', videoElement: () => video, leaveFullscreen }, global: { stubs: { SubtitleWorkbench: { template: '<section data-test="stub-workbench"><video controls /></section>' } } } });
+    await flushPromises(); await wrapper.get('[data-test=playback-subtitle-toggle]').trigger('click');
+    await wrapper.get('[data-test=playback-subtitle-edit]').trigger('click'); await flushPromises();
+    expect(leaveFullscreen).toHaveBeenCalledOnce();
+    const tool = document.querySelector('[data-test=stub-workbench]');
+    expect(tool).not.toBeNull(); expect(dialog.contains(tool)).toBe(false);
+    expect(video.pause).toHaveBeenCalledOnce();
+    wrapper.unmount(); expect(document.body.contains(toolHost)).toBe(true);
+    window.removeEventListener(SUBTITLE_TOOL_REQUEST, openTool); toolHost.remove(); dialog.remove();
   });
 
 });

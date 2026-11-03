@@ -141,6 +141,7 @@
 </template>
 
 <script>
+import {CHAPTER_JOB_LABELS} from '../utils/chapters.js';
 import TaskFailureDetails from './TaskFailureDetails.vue';
 import {
   CancelBrowserDownloadTask, CancelEditProject, CancelEnhancementTask, CancelSubtitleTask, CreatePlaybackProxy, AddDownloadDirectoryToScan,
@@ -204,11 +205,13 @@ const RECENT_KINDS = [
   { kind: 'bt_download', label: 'BT 下载' },
   { kind: 'proxy', label: '播放代理' },
   { kind: 'cleanup_consolidation', label: '集中整理' },
+  {kind:'chapter_summary',label:'章节摘要'},
   { kind: 'video_edit', label: '视频工作台' }
 ];
 
 // 各类任务自己的状态码 → 中文。超分的这份在 P-033 的 utils/enhancement.js 落地后应改为引用那里。
 const RECENT_STATUS_LABELS = {
+ chapter_summary:CHAPTER_JOB_LABELS,
   bt_download: { queued: '待执行', running: '处理中 / 下载中', stopped: '已停止', importing: '待入库', done: '已完成（可继续做种）', failed: '需处理', needs_confirmation: '待确认', cancelled: '已取消', abandoned: '已放弃管理', released: '已解除管理' },
   cleanup_consolidation: CONSOLIDATION_STATUS,
   subtitle: {
@@ -226,6 +229,7 @@ const RECENT_STATUS_LABELS = {
 };
 
 const RECENT_ACTION_LABELS = {
+ chapter_summary:{open_chapters:'查看章节'},
   bt_download: { open_bt_downloads: '查看下载' },
   cleanup_consolidation: { open_consolidation: '查看整理结果' },
   subtitle: { cancel: '取消', force: '强制生成', discard: '放弃', retry: '重试' },
@@ -276,7 +280,7 @@ export default {
   props: {
     open: { type: Boolean, default: false }
   },
-  emits: ['open-bt-downloads', 'close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit', 'open-library-missing'],
+  emits: ['open-chapters','open-bt-downloads', 'close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit', 'open-library-missing'],
   data() {
     return {
       snapshot: { items: [], recent: [], warnings: [] },
@@ -601,6 +605,7 @@ export default {
         else if (action === 'add_directory_to_scan' || action === 'reimport') notify('已提交入库，完成后片库会自动刷新');
         return result;
       }
+      if(job.kind==='chapter_summary'&&action==='open_chapters'){this.$emit('open-chapters',{videoID:numericID(job.video_id),jobID:numericID(job.id)});this.$emit('close');return;}
       if (job.kind === 'video_edit') {
         const projectID = numericID(job.id);
         if (action === 'cancel') return CancelEditProject(projectID);

@@ -1,12 +1,12 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const api = vi.hoisted(() => ({ ListVideoBookmarks: vi.fn(), SaveVideoBookmark: vi.fn(), DeleteVideoBookmark: vi.fn(), ResolveVideoBookmark: vi.fn() }));
+const api = vi.hoisted(() => ({ GetBookmarkTopicReferences: vi.fn(), ListVideoBookmarks: vi.fn(), SaveVideoBookmark: vi.fn(), DeleteVideoBookmark: vi.fn(), ResolveVideoBookmark: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('../utils/feedback.js', () => ({ confirmAction: vi.fn().mockResolvedValue(true) }));
 import BookmarkPanel from './BookmarkPanel.vue';
 enableAutoUnmount(afterEach);
 const row = (id = 1) => ({ id, revision: 3, video_id: 7, video_title: '原片', title: `笔记${id}`, note: '海边', tags: ['风景'], start_ms: 0, end_ms: 3000, source_available: true });
-beforeEach(() => { Object.values(api).forEach(mock => mock.mockReset()); api.ListVideoBookmarks.mockResolvedValue({ items: [], has_more: false }); api.SaveVideoBookmark.mockResolvedValue(row()); });
+beforeEach(() => { Object.values(api).forEach(mock => mock.mockReset()); api.GetBookmarkTopicReferences.mockResolvedValue({status:'ok',data:{bookmark_id:1,revision:3,topic_count:0}}); api.ListVideoBookmarks.mockResolvedValue({ items: [], has_more: false }); api.SaveVideoBookmark.mockResolvedValue(row()); });
 describe('BookmarkPanel', () => {
   it('captures the preview source once and saves zero/range without using a refreshed token', async () => {
     const wrapper = mount(BookmarkPanel, { props: { video: { id: 7 }, session: { source_version: 'old' }, currentPosition: () => 0 } }); await flushPromises();
@@ -81,4 +81,14 @@ it('reactivation during an unfinished next page reads the last committed page wi
   const wrapper = mount(BookmarkPanel); await flushPromises(); const pending = wrapper.vm.next();
   await wrapper.setProps({ pageActive: false }); await wrapper.setProps({ pageActive: true }); await flushPromises(); finish({ items: [row(25)], has_more: true }); await pending;
   expect(wrapper.vm.items[0].id).toBe(51); expect(wrapper.vm.cursor).toBe(0); expect(wrapper.vm.cursors).toEqual([]);
+});
+
+it('keeps a new bookmark draft when atomic topic creation fails instead of saving an orphan', async () => {
+  const topic = { topic: { id: 4, revision: 7, name: '目标专题' }, member_count: 2 };
+  const clipApi = { list: vi.fn().mockResolvedValue({items:[topic],next_cursor:0}), saveBookmark: vi.fn().mockRejectedValue(Object.assign(new Error('专题已变化'),{code:'conflict'})) };
+  const wrapper = mount(BookmarkPanel,{props:{video:{id:7},session:{source_version:'frozen-source'},clipApi}});await flushPromises();
+  wrapper.vm.create();await wrapper.vm.$nextTick();await wrapper.get('[data-test="bookmark-title"]').setValue('新片段');
+  await wrapper.get('[data-test="bookmark-create-in-topic"]').setValue(true);await flushPromises();await wrapper.get('select').setValue('4');await wrapper.vm.save();
+  expect(clipApi.saveBookmark).toHaveBeenCalledWith(expect.objectContaining({topic_id:4,expected_topic_revision:7,bookmark:expect.objectContaining({id:0,source_token:'frozen-source'})}));
+  expect(api.SaveVideoBookmark).not.toHaveBeenCalled();expect(wrapper.vm.draft.title).toBe('新片段');expect(wrapper.text()).toContain('专题已变化');
 });

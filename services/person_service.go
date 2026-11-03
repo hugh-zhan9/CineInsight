@@ -15,6 +15,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 const defaultEntityPageLimit = 50
@@ -108,7 +109,7 @@ func (s *PersonService) UpdatePerson(id uint, displayName, originalName string) 
 
 func (s *PersonService) ListPeople(keyword, cursorName string, cursorID uint, limit int) ([]PersonListItem, error) {
 	limit = normalizeEntityPageLimit(limit)
-	query := database.DB.Model(&models.Person{})
+	query := database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Model(&models.Person{})
 	if keyword = strings.TrimSpace(keyword); keyword != "" {
 		pattern := "%" + strings.ToLower(escapeSQLLike(keyword)) + "%"
 		query = query.Where("(LOWER(display_name) LIKE ? ESCAPE '\\' OR LOWER(original_name) LIKE ? ESCAPE '\\')", pattern, pattern)
@@ -160,7 +161,7 @@ func (s *PersonService) ListPeopleByCount(keyword string, cursorCount int, curso
 	counts := videos.Select("video_people.person_id AS person_id, COUNT(*) AS appearance_count").Group("video_people.person_id")
 	const countExpr = "COALESCE(pc.appearance_count, 0)"
 	const nameExpr = "LOWER(people.display_name)"
-	query := database.DB.Model(&models.Person{}).Joins("LEFT JOIN (?) AS pc ON pc.person_id = people.id", counts)
+	query := database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Model(&models.Person{}).Joins("LEFT JOIN (?) AS pc ON pc.person_id = people.id", counts)
 	if keyword = strings.TrimSpace(keyword); keyword != "" {
 		pattern := "%" + strings.ToLower(escapeSQLLike(keyword)) + "%"
 		query = query.Where("(LOWER(people.display_name) LIKE ? ESCAPE '\\' OR LOWER(people.original_name) LIKE ? ESCAPE '\\')", pattern, pattern)

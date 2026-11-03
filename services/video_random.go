@@ -43,6 +43,11 @@ type RandomPlayRequest struct {
 func normalizeRandomPlayRequest(request RandomPlayRequest) (RandomPlayRequest, error) {
 	// 「缺失某项」不是随机条件（D-MC-03）：片库带着它时随机照样在其余条件里抽。
 	request.Filter.Missing = ""
+	filter, err := normalizeLibraryFilter(request.Filter)
+	if err != nil {
+		return RandomPlayRequest{}, err
+	}
+	request.Filter = filter
 	request.ExcludeIDs = uniqueUintIDs(request.ExcludeIDs)
 	if len(request.ExcludeIDs) > 100 {
 		request.ExcludeIDs = request.ExcludeIDs[len(request.ExcludeIDs)-100:]
@@ -54,8 +59,21 @@ func normalizeRandomPlayRequest(request RandomPlayRequest) (RandomPlayRequest, e
 	if request.WatchState != RandomWatchAny && request.WatchState != RandomWatchUnwatched && request.WatchState != RandomWatchWatched {
 		return RandomPlayRequest{}, fmt.Errorf("不支持的观看状态: %s", request.WatchState)
 	}
+	if filter.WatchState != RandomWatchAny {
+		if request.WatchState != RandomWatchAny && request.WatchState != filter.WatchState {
+			return RandomPlayRequest{}, fmt.Errorf("invalid_input: 两处观看状态条件矛盾")
+		}
+		request.WatchState = filter.WatchState
+	}
+	request.FavoritesOnly = request.FavoritesOnly || filter.FavoritesOnly
 	if request.MaxDurationSeconds < 0 || request.MaxDurationSeconds > randomMaxDurationSeconds {
 		return RandomPlayRequest{}, fmt.Errorf("可用时间必须在 0–1440 分钟之间")
+	}
+	if filter.MaxDurationSeconds > 0 && (request.MaxDurationSeconds == 0 || filter.MaxDurationSeconds < request.MaxDurationSeconds) {
+		request.MaxDurationSeconds = filter.MaxDurationSeconds
+	}
+	if request.MaxDurationSeconds > 0 && filter.MinDurationSeconds > request.MaxDurationSeconds {
+		return RandomPlayRequest{}, fmt.Errorf("invalid_input: 时长条件没有交集")
 	}
 	return request, nil
 }
@@ -136,6 +154,9 @@ func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest
 	}
 	query := db.Model(&models.Video{}).Select("videos.id, videos.play_count, videos.random_play_count, videos.last_played_at").Where("videos.is_stale = ?", false)
 	fileFilter := request.Filter
+	// The shared field is a file condition in ordinary searches; random selection
+	// applies the normalized watch condition to the entire work after aggregation.
+	fileFilter.WatchState = RandomWatchAny
 	if fileFilter.SmartView == LibraryViewUnwatched || fileFilter.SmartView == LibraryViewWatched {
 		fileFilter.SmartView = ""
 	}
@@ -208,6 +229,7 @@ func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest
 		return nil, err
 	}
 	downTags := []uint{}
+	boostTags := []uint{}
 	snoozed := map[workKey]bool{}
 	for _, item := range feedback {
 		switch item.TargetKind {
@@ -216,10 +238,24 @@ func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest
 		case "work_video":
 			snoozed[key(item.TargetID)] = true
 		case "tag":
-			downTags = append(downTags, item.TargetID)
+			if item.Effect == "boost" {
+				boostTags = append(boostTags, item.TargetID)
+			} else if item.Effect == "downweight" {
+				downTags = append(downTags, item.TargetID)
+			}
 		}
 	}
 	downWorks := map[workKey]bool{}
+	boostWorks := map[workKey]bool{}
+	if len(boostTags) > 0 {
+		var tagged []uint
+		if err := db.Table("video_tags").Where("tag_id IN ?", boostTags).Where("video_id IN (?)", historyQuery.Select("videos.id")).Distinct("video_id").Pluck("video_id", &tagged).Error; err != nil {
+			return nil, err
+		}
+		for _, id := range tagged {
+			boostWorks[key(id)] = true
+		}
+	}
 	if len(downTags) > 0 {
 		var tagged []uint
 		if err := db.Table("video_tags").Where("tag_id IN ?", downTags).Where("video_id IN (?)", historyQuery.Select("videos.id")).Distinct("video_id").Pluck("video_id", &tagged).Error; err != nil {
@@ -243,6 +279,7 @@ func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest
 	seen := map[workKey]bool{}
 	suppressed := map[workKey]bool{}
 	downweighted := 0
+	boosted := 0
 	rows := make([]videoScoreRow, 0, len(eligible))
 	for _, video := range eligible {
 		k := key(video.ID)
@@ -265,6 +302,9 @@ func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest
 		if downWorks[k] {
 			factor = 0.5
 			downweighted++
+		} else if boostWorks[k] {
+			factor = 1.5
+			boosted++
 		}
 		score := scores[k]
 		rows = append(rows, videoScoreRow{ID: video.ID, PlayCount: video.PlayCount, RandomPlayCount: video.RandomPlayCount, LastPlayedAt: video.LastPlayedAt, workScore: &score, feedbackFactor: factor, workWatched: watched[k]})
@@ -272,6 +312,9 @@ func (s *VideoService) collectRandomWorks(db *gorm.DB, request RandomPlayRequest
 	summary := ""
 	if len(suppressed) > 0 || downweighted > 0 {
 		summary = fmt.Sprintf("当前范围已暂避 %d 部作品，%d 部候选因所选标签减少推荐；可在今晚看什么中管理推荐反馈", len(suppressed), downweighted)
+	}
+	if boosted > 0 {
+		summary += fmt.Sprintf("；%d 部候选因标签偏好增加推荐", boosted)
 	}
 	return &randomCandidatePool{request: request, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays, feedbackSummary: summary}, nil
 }

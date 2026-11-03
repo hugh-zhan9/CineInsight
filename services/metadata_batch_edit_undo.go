@@ -193,6 +193,21 @@ func undoBatchRelation(tx *gorm.DB, kind string, item models.MetadataBatchEditIt
 		return false, nil
 	}
 	table := batchRelationTableFor(kind, item.Field)
+	if item.Field == BatchEditFieldCollection {
+		ids := uniqueSortedIDs(append(append([]uint{}, added...), removed...))
+		var active int64
+		if err := tx.Model(&models.MediaCollection{}).Where("id IN ?", ids).Count(&active).Error; err != nil {
+			return false, err
+		}
+		if active != int64(len(ids)) {
+			return false, nil
+		}
+		for _, id := range ids {
+			if err := claimCollectionMutation(tx, id); err != nil {
+				return false, err
+			}
+		}
+	}
 	var present []uint
 	if err := tx.Table(table.name).Where(table.mediaColumn+" = ? AND "+table.relColumn+" IN ?", item.MediaID, append(append([]uint{}, added...), removed...)).
 		Pluck(table.relColumn, &present).Error; err != nil {

@@ -30,6 +30,8 @@ describe('playback keyboard', () => {
     const event = { key: 'ArrowRight', target: input, preventDefault: vi.fn(), stopPropagation: vi.fn() };
     handlePlaybackKey(event, video);
     handlePlaybackKey({ ...event, target: null, metaKey: true }, video);
+    const transcript = document.createElement('aside'); transcript.dataset.test = 'playback-transcript';
+    handlePlaybackKey({ ...event, target: transcript }, video);
     expect(video.currentTime).toBe(10); expect(event.preventDefault).not.toHaveBeenCalled();
   });
 });

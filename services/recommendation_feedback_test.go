@@ -8,6 +8,67 @@ import (
 	"video-master/models"
 )
 
+func TestRecommendationPositivePreferenceIsExclusiveAndNegativeWins(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tags := []models.Tag{{Name: "boost"}, {Name: "reduce"}}
+	for i := range tags {
+		if err := database.DB.Create(&tags[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	video := models.Video{Name: "candidate", Path: "/positive.mp4", Tags: tags}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := &VideoService{}
+	ctx := context.Background()
+	row, err := svc.SetRecommendationTagPreference(ctx, RecommendationTagPreferenceRequest{TagID: tags[0].ID, Effect: "boost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := svc.collectRandomCandidatesFrom(database.DB, RandomPlayRequest{})
+	if err != nil || len(pool.rows) != 1 || pool.rows[0].feedbackFactor != 1.5 {
+		t.Fatalf("%+v %v", pool, err)
+	}
+	if _, err := svc.SetRecommendationTagPreference(ctx, RecommendationTagPreferenceRequest{TagID: tags[0].ID, Effect: "downweight"}); err == nil {
+		t.Fatal("second direction created without reviewed revision")
+	}
+	if _, err := svc.SetRecommendationFeedback(ctx, RecommendationFeedbackRequest{TargetKind: "tag", TargetID: tags[1].ID}); err != nil {
+		t.Fatal(err)
+	}
+	pool, err = svc.collectRandomCandidatesFrom(database.DB, RandomPlayRequest{})
+	if err != nil || pool.rows[0].feedbackFactor != .5 {
+		t.Fatalf("negative did not win: %+v %v", pool, err)
+	}
+	updated, err := svc.SetRecommendationTagPreference(ctx, RecommendationTagPreferenceRequest{TagID: tags[0].ID, Effect: "downweight", ID: row.ID, ExpectedRevision: row.Revision})
+	if err != nil || updated.ID != row.ID || updated.Effect != "downweight" || updated.Revision != row.Revision+1 {
+		t.Fatalf("%+v %v", updated, err)
+	}
+	if _, err := svc.SetRecommendationTagPreference(ctx, RecommendationTagPreferenceRequest{TagID: tags[0].ID, Effect: "neutral", ID: row.ID, ExpectedRevision: row.Revision}); err == nil {
+		t.Fatal("stale neutral accepted")
+	}
+	if _, err := svc.SetRecommendationTagPreference(ctx, RecommendationTagPreferenceRequest{TagID: tags[0].ID, Effect: "neutral", ID: updated.ID, ExpectedRevision: updated.Revision}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecommendationPreferenceRejectsUnsafeIntegers(t *testing.T) {
+	for _, input := range []RecommendationTagPreferenceRequest{
+		{TagID: experienceMaxSafeInteger + 1, Effect: "boost"},
+		{TagID: 1, Effect: "boost", ID: experienceMaxSafeInteger + 1, ExpectedRevision: 1},
+		{TagID: 1, Effect: "boost", ID: 1, ExpectedRevision: experienceMaxSafeInteger},
+	} {
+		if _, err := (&VideoService{}).SetRecommendationTagPreference(context.Background(), input); err == nil {
+			t.Fatalf("unsafe integer accepted: %+v", input)
+		}
+	}
+	for _, sources := range [][]uint{{0, 1}, {1, 1}, {1, experienceMaxSafeInteger + 1}} {
+		if _, err := (&TagService{}).PreviewTagMergePreferences(context.Background(), sources, 2); err == nil {
+			t.Fatalf("invalid selection accepted: %v", sources)
+		}
+	}
+}
+
 func TestRecommendationFeedbackSnoozeDownweightRevokeAndMerge(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	if err := database.DB.AutoMigrate(&models.RecommendationFeedback{}); err != nil {

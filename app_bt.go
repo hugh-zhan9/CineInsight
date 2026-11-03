@@ -255,3 +255,12 @@ func (a *App) ControlBTTask(request services.BTControlRequest) (services.BTTaskV
 	defer cancel()
 	return a.bt.service.Control(ctx, request)
 }
+
+func (a *App) GetBTResourceDetail(token string) (*services.BTResourceDetail, error) {
+	ctx, cancel, err := a.btContext()
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return a.bt.service.ResourceDetail(ctx, token)
+}

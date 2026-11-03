@@ -17,6 +17,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -132,6 +133,7 @@ func runLocalFFProbe(ctx context.Context, path string) ([]byte, string, error) {
 		"-v", "error",
 		"-show_format",
 		"-show_streams",
+		"-show_chapters",
 		"-print_format", "json",
 		path,
 	)
@@ -165,8 +167,9 @@ func findFFProbeBinary() (string, error) {
 }
 
 type mediaProbePayload struct {
-	Streams []mediaProbeStream `json:"streams"`
-	Format  mediaProbeFormat   `json:"format"`
+	Chapters *[]mediaProbeChapter `json:"chapters"`
+	Streams  []mediaProbeStream   `json:"streams"`
+	Format   mediaProbeFormat     `json:"format"`
 }
 
 type mediaProbeFormat struct {
@@ -212,6 +215,8 @@ type mediaProbeDisposition struct {
 }
 
 type parsedMediaProbe struct {
+	ChaptersError  string
+	ChaptersJSON   *string
 	FormatName     string
 	FormatLongName string
 	Duration       *float64
@@ -237,6 +242,12 @@ func parseMediaProbeOutput(output []byte) (parsedMediaProbe, error) {
 		Duration:       parseOptionalFloat(payload.Format.Duration),
 		TotalBitRate:   parseOptionalInt64(payload.Format.BitRate),
 		Streams:        make([]models.MediaStream, 0, len(payload.Streams)),
+	}
+	chapters, err := parseProbeChapters(payload.Chapters, result.Duration)
+	if err != nil {
+		result.ChaptersError = "chapter_metadata_invalid"
+	} else {
+		result.ChaptersJSON = chapters
 	}
 	for _, source := range payload.Streams {
 		if source.CodecType != "video" && source.CodecType != "audio" && source.CodecType != "subtitle" {
@@ -470,6 +481,8 @@ func (s *MediaProbeService) persistSuccessFrom(db *gorm.DB, video models.Video, 
 		}
 		metadata := models.VideoTechnicalMetadata{
 			VideoID:                    video.ID,
+			ChaptersJSON:               parsed.ChaptersJSON,
+			ChaptersError:              parsed.ChaptersError,
 			FormatName:                 parsed.FormatName,
 			FormatLongName:             parsed.FormatLongName,
 			TotalBitRate:               parsed.TotalBitRate,
@@ -482,11 +495,11 @@ func (s *MediaProbeService) persistSuccessFrom(db *gorm.DB, video models.Video, 
 			LastError:                  "",
 		}
 		updates := []string{
-			"format_name", "format_long_name", "total_bit_rate",
+			"format_name", "format_long_name", "total_bit_rate", "chapters_json", "chapters_error",
 			"successful_source_size", "successful_source_mod_time_ns", "probed_at",
 			"last_attempt_source_size", "last_attempt_source_mod_time_ns", "last_attempt_at", "last_error", "updated_at", "failure_retry_claim",
 		}
-		if err := tx.Clauses(clause.OnConflict{
+		if err := tx.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "video_id"}},
 			DoUpdates: clause.AssignmentColumns(updates),
 		}).Create(&metadata).Error; err != nil {

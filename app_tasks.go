@@ -258,6 +258,7 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskWatchlistEnrich:      (*App).taskCenterWatchlistEnrich,
 	services.BackgroundTaskMovieChart:           (*App).taskCenterMovieChart,
 	services.BackgroundTaskSceneIndex:           (*App).taskCenterSceneIndex,
+	services.BackgroundTaskChapterSummary:       (*App).taskCenterChapters,
 	services.BackgroundTaskVideoEdit:            (*App).taskCenterVideoEdit,
 	services.BackgroundTaskLostMedia:            (*App).taskCenterLostMedia,
 	services.BackgroundTaskMetadataBatchEdit:    (*App).taskCenterMetadataEdit,
@@ -1044,4 +1045,18 @@ func (a *App) taskCenterVideoEdit(src *taskCenterSources) taskCenterKeyState {
 		state.lastRun = run
 	}
 	return state
+}
+
+func (a *App) taskCenterChapters(src *taskCenterSources) taskCenterKeyState {
+	running, queued := false, false
+	done, total := 0, 0
+	for _, job := range src.chapterJobs {
+		if job.Status == "queued" || job.Status == "running" {
+			running = true
+			queued = queued || job.Status == "queued"
+			done += job.CompletedChunks
+			total += job.TotalChunks
+		}
+	}
+	return taskCenterKeyState{running: running, preparing: queued, canCancel: a.chapters != nil && running, progress: runningProgress(running, done, total)}
 }

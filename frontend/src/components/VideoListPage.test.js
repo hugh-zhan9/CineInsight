@@ -46,7 +46,8 @@ vi.mock('./AddTagDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./DeleteConfirmDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./TagDeleteDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./PreviewDrawer.vue', () => ({ default: { props: ['bookmarkPosition'], template: '<div />' } }));
-vi.mock('./SubtitleWorkbench.vue', () => ({ default: { template: '<div />' } }));
+const editorClose = vi.hoisted(() => vi.fn());
+vi.mock('./SubtitleWorkbench.vue', () => ({ default: { name: 'SubtitleWorkbench', props: ['video'], emits: ['close'], methods: { async requestClose() { if (!await editorClose()) return false; this.$emit('close'); return true; } }, template: '<div />' } }));
 vi.mock('./LocalMetadataDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./TrashCenterDialog.vue', async (importOriginal) => ({ ...(await importOriginal()), default: { template: '<div />' } }));
 vi.mock('./VirtualVideoList.vue', () => ({ default: { template: '<div />' } }));
@@ -339,6 +340,45 @@ describe('VideoListPage media-detail integration', () => {
     wrapper.vm.closeSubtitleWorkbench();
     expect(wrapper.vm.subtitleWorkbench).toEqual({ show: false, video: null });
     wrapper.unmount();
+  });
+
+  it('reuses the same editor and requires confirmed close before remounting for another video', async () => {
+    const wrapper = await mountPage({}, { global: { stubs: { SubtitleWorkbench: false } } });
+    const a = { id: 11 }, b = { id: 12 };
+    await wrapper.vm.openSubtitleWorkbench(a); await flushPromises();
+    const original = wrapper.vm.$refs.subtitleEditor;
+    expect(await wrapper.vm.openSubtitleWorkbench(a)).toBe(true);
+    expect(wrapper.vm.$refs.subtitleEditor).toBe(original);
+    editorClose.mockResolvedValue(false);
+    expect(await wrapper.vm.openSubtitleWorkbench(b)).toBe(false);
+    expect(wrapper.vm.subtitleWorkbench.video).toEqual(a);
+    editorClose.mockResolvedValue(true);
+    expect(await wrapper.vm.openSubtitleWorkbench(b)).toBe(true); await flushPromises();
+    expect(wrapper.vm.subtitleWorkbench.video).toEqual(b);
+    expect(wrapper.vm.$refs.subtitleEditor).not.toBe(original);
+    wrapper.unmount();
+  });
+
+  it('does not open a new editor after navigation while discard confirmation was pending', async () => {
+    const wrapper = await mountPage({}, { global: { stubs: { SubtitleWorkbench: false } } });
+    await wrapper.vm.openSubtitleWorkbench({ id: 11 }); await flushPromises();
+    let resolve, current = true;
+    editorClose.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const pending = wrapper.vm.openSubtitleWorkbench({ id: 12 }, () => current);
+    current = false; resolve(true);
+    expect(await pending).toBe(false);
+    expect(wrapper.vm.subtitleWorkbench.show).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('applies parsed conditions together and preserves exact person IDs when names are unavailable', async () => {
+    const wrapper=await mountPage();
+    vi.spyOn(wrapper.vm,'handleSearch').mockResolvedValue();
+    api.GetPersonDetail.mockRejectedValueOnce(new Error('name lookup unavailable'));
+    await wrapper.vm.applyParsedQueryFilter({watch_state:'unwatched',favorites_only:true,max_duration_seconds:7200,person_ids:[7],tag_ids:[9],sort_mode:'balanced'});
+    expect(wrapper.vm.extraConditions).toEqual({watch_state:'unwatched',favorites_only:true,min_duration_seconds:0,max_duration_seconds:7200});
+    expect(wrapper.vm.selectedPeople.map(person=>person.id)).toEqual([7]);expect(wrapper.vm.selectedTags).toEqual([9]);
+    expect(wrapper.vm.currentLibraryFilter()).toEqual(expect.objectContaining({person_ids:[7],tag_ids:[9],watch_state:'unwatched',favorites_only:true,max_duration_seconds:7200}));wrapper.unmount();
   });
 
   it('sends nullable rating filters and sort mode through the generated request DTO', async () => {
@@ -2453,10 +2493,12 @@ it('刷新原片的迟到会话不能覆盖已经打开的另一个视频', asyn
 
 it('exact file focus uses its ID, never broadens to names or version groups, and can be cleared', async () => {
   const wrapper = await mountPage();
+  wrapper.vm.extraConditions = { watch_state: 'unwatched', favorites_only: true, min_duration_seconds: 1200, max_duration_seconds: 1800 };
   api.SearchLibraryVideoPage.mockClear();
   await wrapper.vm.applyVideoTargetCommand({ id: 5, keyword: 'same.mp4', path: '/one/same.mp4' });
   await flushPromises();
   expect(api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter).toMatchObject({ video_id: 5, keyword: '', collapse_versions: false });
+  expect(wrapper.vm.extraConditions).toEqual({ watch_state: 'any', favorites_only: false, min_duration_seconds: 0, max_duration_seconds: 0 });
   expect(wrapper.get('[data-test="library-focused-video"]').text()).toContain('same.mp4');
   expect(wrapper.vm.openSaveViewDialog()).toBe(false);
   await wrapper.get('[data-test="library-exit-focus"]').trigger('click'); await flushPromises();
@@ -2466,6 +2508,16 @@ it('exact file focus uses its ID, never broadens to names or version groups, and
   wrapper.vm.searchKeyword = 'different'; await wrapper.vm.$nextTick();
   expect(wrapper.vm.focusedVideo).toBeNull();
   expect(wrapper.vm.applyVideoTargetCommand({ id: 0 })).toBe(false);
+  wrapper.unmount();
+});
+
+it('tag and missing-metadata commands clear previously saved combined conditions', async () => {
+  const wrapper = await mountPage();
+  for (const run of [() => wrapper.vm.applyTagFilterCommand(2), () => wrapper.vm.applyMissingFilter('poster')]) {
+    wrapper.vm.extraConditions = { watch_state: 'watched', favorites_only: true, min_duration_seconds: 60, max_duration_seconds: 120 };
+    await run(); await flushPromises();
+    expect(wrapper.vm.extraConditions).toEqual({ watch_state: 'any', favorites_only: false, min_duration_seconds: 0, max_duration_seconds: 0 });
+  }
   wrapper.unmount();
 });
 

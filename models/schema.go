@@ -13,6 +13,7 @@ func AllModels() []interface{} {
 		// 那些表会先被复制而撞外键。它自己只有 many2many 关联（image_tags），
 		// 提到这里不会引入新的依赖倒置。
 		&Image{},
+		&PhotoRecap{},
 		&VideoTrashEntry{},
 		&SubtitleSegment{},
 		&SubtitleIndexState{},
@@ -39,6 +40,9 @@ func AllModels() []interface{} {
 		&CollectionVideo{},
 		&VideoLocalMetadataState{},
 		&VideoTechnicalMetadata{},
+		&ChapterSet{},
+		&VideoChapter{},
+		&ChapterDraftJob{},
 		&VideoPerceptualHash{},
 		&NearDuplicateDismissal{},
 		&VideoEnhancementTask{},
@@ -89,6 +93,8 @@ func AllModels() []interface{} {
 		// User-owned notes survive media deletion. Their logical references have
 		// no cascade FK; migrator preserves consumed IDs to prevent reassignment.
 		&VideoBookmark{},
+		&ClipTopic{},
+		&ClipTopicMember{},
 		&ViewingDiaryEntry{},
 		&PlaybackQueueState{},
 		&PlaybackQueueEntry{},
@@ -124,8 +130,10 @@ func AllModels() []interface{} {
 		&TaskFailureItem{},
 		&CollectionEpisodeAssignment{},
 		&CollectionSeasonExpectation{},
+		&CollectionEpisodeRevision{},
 		&BTConnection{},
 		&BTTask{},
 		&BTFile{},
+		&EpisodeAcquisitionOrigin{},
 	}
 }

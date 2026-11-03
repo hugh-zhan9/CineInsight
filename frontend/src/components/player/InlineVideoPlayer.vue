@@ -70,7 +70,7 @@
           <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
         </video>
         <PlaybackControls :key="`controls-${previewMediaGeneration}`" ref="controls" :video-element="() => $refs.videoElement" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" @seek-hover="handleSeekPointerMove" @seek-leave="seekPreview = null">
-          <template #settings><PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" @menu-change="$refs.controls?.holdControls($event)" /></template>
+          <template #settings><PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" :playback-range="bookmarkRangeActive ? readyBookmark : null" @menu-change="$refs.controls?.holdControls($event)" /></template>
           <template v-if="activeSeekSprite" #seek-preview>
           <div
             v-if="seekPreview"

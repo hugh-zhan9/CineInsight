@@ -232,7 +232,12 @@ func (a *App) DeleteTag(id uint) error {
 }
 
 func (a *App) MergeTags(sourceTagIDs []uint, targetTagID uint) (*services.MergeTagsResult, error) {
-	result, err := a.tagService.MergeTags(sourceTagIDs, targetTagID)
+	ctx, done, err := a.beginFunctionalPolish()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	result, err := a.tagService.MergeTagsWithoutFeedback(ctx, sourceTagIDs, targetTagID)
 	log.Printf("API MergeTags sources=%v target=%d result=%+v err=%v", sourceTagIDs, targetTagID, result, err)
 	return result, err
 }

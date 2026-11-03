@@ -13,6 +13,8 @@
     <!-- 当前分区的面板（role=tabpanel，与页签的 aria-controls / id 互相指向）；两种页签行只出现一种，id 相同。 -->
     <div :id="`viewing-notes-panel-${tab}`" class="viewing-notes-page__panel" role="tabpanel" :aria-labelledby="`viewing-notes-tab-${tab}`">
     <BookmarkPanel v-if="tab === 'bookmarks'" :page-active="pageActive" @open-bookmark="$emit('open-bookmark', $event)" @open-video="$emit('open-video', $event)" />
+    <ClipTopicsPanel v-else-if="tab === 'topics'" :page-active="pageActive" @browse-bookmarks="tab = 'bookmarks'" @open-video="$emit('open-video',$event)" @open-bookmark="$emit('open-bookmark',$event)" />
+    <ChapterLibraryPanel v-else-if="tab === 'chapters'" :page-active="pageActive" :request="chapterRequest" @seek="$emit('open-chapter',$event)" @subtitle-tools="$emit('subtitle-tools',$event)" @settings="$emit('settings')" />
     <template v-else>
       <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn btn--secondary btn--sm" :disabled="loading" @click="reset">刷新</button></div>
       <template v-if="tab === 'diary'">
@@ -56,6 +58,8 @@
 </template>
 <script>
 import { ListViewingDiary, DeleteViewingDiary, GetViewingYearReview, ListUnconfirmedPlaybackHistory } from '../../wailsjs/go/main/App';
+import ChapterLibraryPanel from './ChapterLibraryPanel.vue';
+import ClipTopicsPanel from './ClipTopicsPanel.vue';
 import BookmarkPanel from './BookmarkPanel.vue';
 import DiaryEditor from './DiaryEditor.vue';
 import NotesThumb from './NotesThumb.vue';
@@ -65,9 +69,9 @@ import PageHeader from './ui/PageHeader.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
 import { confirmAction } from '../utils/feedback.js';
 export default {
-  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true }, embedded: { type: Boolean, default: false } }, components: { AppTabs, BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
-  data: () => ({ tabs: [{ key: 'diary', label: '观影日记', dataTest: 'notes-tab-diary' }, { key: 'bookmarks', label: '片段书签', dataTest: 'notes-tab-bookmarks' }, { key: 'history', label: '播放记录', dataTest: 'notes-tab-history' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
-  watch: { pageActive(active) { if (active) { this.load(); this.loadReview(); } }, tab() { this.reset(); }, year() { this.reset(); }, keyword() { this.reset(); } },
+  name: 'ViewingNotesPage', props: { chapterRequest:{type:Object,default:null}, pageActive: { type: Boolean, default: true }, embedded: { type: Boolean, default: false } }, components: { ChapterLibraryPanel, ClipTopicsPanel, AppTabs, BookmarkPanel, DiaryEditor, EmptyState, NotesThumb, PageHeader, SkeletonBlock }, emits: ['open-chapter','subtitle-tools','settings','open-bookmark', 'open-video', 'open-video-id'],
+  data: () => ({ tabs: [{ key: 'diary', label: '观影日记', dataTest: 'notes-tab-diary' }, { key: 'bookmarks', label: '片段书签', dataTest: 'notes-tab-bookmarks' }, { key: 'topics', label: '片段专题', dataTest: 'notes-tab-topics' }, {key:'chapters',label:'章节',dataTest:'notes-tab-chapters'}, { key: 'history', label: '播放记录', dataTest: 'notes-tab-history' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
+  watch: { chapterRequest:{immediate:true,handler(value){if(value?.videoID)this.tab='chapters';}}, pageActive(active) { if (active) { this.load(); this.loadReview(); } }, tab() { this.reset(); }, year() { this.reset(); }, keyword() { this.reset(); } },
   mounted() { this.reset(); }, beforeUnmount() { this.generation++; this.reviewGeneration++; this._disposed = true; },
   methods: {
     thumbnailFor(item) {
@@ -84,7 +88,7 @@ export default {
     },
     async load(cursor = this.cursor, history = this.cursors) {
       const generation = ++this.generation; this.error = ''; this.loading = false;
-      if (this.tab === 'bookmarks') return;
+      if (['bookmarks', 'topics', 'chapters'].includes(this.tab)) return;
       if (this.tab === 'diary' && (!Number.isInteger(this.year) || this.year < 1 || this.year > 9999)) { this.error = '请输入1–9999之间的年份。'; return; }
       this.loading = true;
       try {

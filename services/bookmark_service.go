@@ -86,6 +86,21 @@ func validBookmarkPosition(start int64, end *int64) bool {
 	return start >= 0 && start <= 9007199254740991 && (end == nil || *end > start && *end <= 9007199254740991)
 }
 
+// bookmarkSourceInScope adds the visible-library boundary for new preview flows.
+func bookmarkSourceInScope(db *gorm.DB, id uint) (models.Video, os.FileInfo, error) {
+	query, err := visibleVideoQuery(db.Model(&models.Video{}))
+	if err != nil {
+		return models.Video{}, nil, err
+	}
+	var count int64
+	if err := query.Where("videos.id = ?", id).Count(&count).Error; err != nil {
+		return models.Video{}, nil, err
+	}
+	if count != 1 {
+		return models.Video{}, nil, ErrBookmarkSourceUnavailable
+	}
+	return bookmarkSource(db, id)
+}
 func bookmarkSource(db *gorm.DB, id uint) (models.Video, os.FileInfo, error) {
 	var video models.Video
 	if err := db.First(&video, id).Error; err != nil {
@@ -132,21 +147,27 @@ func checkBookmarkDuration(db *gorm.DB, video models.Video, size, mtime int64, s
 	return nil
 }
 
-func (s *BookmarkService) Save(ctx context.Context, in BookmarkInput) (*BookmarkDTO, error) {
+func normalizeBookmarkInput(in BookmarkInput) (BookmarkInput, string, error) {
 	in.Title = strings.TrimSpace(in.Title)
 	if !validNoteText(in.Title, in.Note) || !validBookmarkPosition(in.StartMS, in.EndMS) || in.VideoID == 0 {
-		return nil, ErrViewingNoteInvalid
+		return in, "", ErrViewingNoteInvalid
 	}
 	tags, err := bookmarkTags(in.Tags)
 	if err != nil {
-		return nil, err
+		return in, "", err
 	}
 	encoded, _ := json.Marshal(tags)
 	if in.ID == 0 && (in.SourceToken == "" || in.Revision != 0 || in.AcceptSourceToken != "") {
-		return nil, ErrViewingNoteInvalid
+		return in, "", ErrViewingNoteInvalid
 	}
-	// Match maintenance's path-before-database ordering. Ordinary text edits need
-	// no filesystem access and retain the recorded source version.
+	return in, string(encoded), nil
+}
+func (s *BookmarkService) Save(ctx context.Context, in BookmarkInput) (*BookmarkDTO, error) {
+	in, encoded, err := normalizeBookmarkInput(in)
+	if err != nil {
+		return nil, err
+	}
+	// Keep the existing path-before-database order; text-only edits retain their source.
 	if in.ID == 0 || in.AcceptSourceToken != "" {
 		unlock, err := rLockLibraryPaths()
 		if err != nil {
@@ -154,98 +175,113 @@ func (s *BookmarkService) Save(ctx context.Context, in BookmarkInput) (*Bookmark
 		}
 		defer unlock()
 	}
-	var result BookmarkDTO
-	err = database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
-		var row models.VideoBookmark
-		if in.ID != 0 {
-			if err := tx.First(&row, in.ID).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return ErrViewingNoteConflict
-				}
-				return err
-			}
-			if row.Revision != in.Revision || row.VideoID != in.VideoID {
-				return ErrViewingNoteConflict
-			}
-		}
-		if in.ID == 0 || in.AcceptSourceToken != "" {
-			video, info, err := bookmarkSource(tx, in.VideoID)
-			if err != nil {
-				return err
-			}
-			token := in.SourceToken
-			if in.ID != 0 {
-				token = in.AcceptSourceToken
-			}
-			if token != videoSourceVersion(video.ID, info.Size(), info.ModTime().UnixNano()) {
-				return ErrBookmarkSourceChanged
-			}
-			if err := checkBookmarkDuration(tx, video, info.Size(), info.ModTime().UnixNano(), in.StartMS, in.EndMS); err != nil {
-				return err
-			}
-			row.VideoTitle = diaryVideoTitle(video)
-			row.SourceSize = info.Size()
-			row.SourceModTimeNS = info.ModTime().UnixNano()
-		} else {
-			// A text edit may not stat the source. Enforce bounds only for metadata which
-			// still represents the bookmark's recorded fingerprint.
-			var video models.Video
-			lookup := tx.First(&video, in.VideoID).Error
-			if lookup != nil && !errors.Is(lookup, gorm.ErrRecordNotFound) {
-				return lookup
-			}
-			if lookup == nil {
-				if err := checkBookmarkDuration(tx, video, row.SourceSize, row.SourceModTimeNS, in.StartMS, in.EndMS); err != nil {
-					return err
-				}
-			}
-		}
-		if in.ID == 0 {
-			row.VideoID = in.VideoID
-			row.StartMS = in.StartMS
-			row.EndMS = in.EndMS
-			row.Title = in.Title
-			row.Note = in.Note
-			row.TagsJSON = string(encoded)
-			row.Revision = 1
-			if err := tx.Create(&row).Error; err != nil {
-				return err
-			}
-		} else {
-			update := tx.Model(&models.VideoBookmark{}).Where("id = ? AND revision = ?", in.ID, in.Revision).Updates(map[string]any{
-				"start_ms": in.StartMS, "end_ms": in.EndMS, "title": in.Title, "note": in.Note, "tags_json": string(encoded), "revision": gorm.Expr("revision + 1"),
-				"video_title": row.VideoTitle, "source_size": row.SourceSize, "source_mod_time_ns": row.SourceModTimeNS,
-			})
-			if update.Error != nil {
-				return update.Error
-			}
-			if update.RowsAffected != 1 {
-				return ErrViewingNoteConflict
-			}
-			if err := tx.First(&row, in.ID).Error; err != nil {
-				return err
-			}
-		}
-		dto, err := bookmarkDTO(row)
-		if err != nil {
-			return err
-		}
-		available, err := noteAvailableVideos(tx, []uint{row.VideoID})
-		dto.SourceAvailable = available[row.VideoID]
-		result = dto
-		return err
-	})
+	var result *BookmarkDTO
+	err = database.TransactionWithContext(ctx, func(tx *gorm.DB) error { var err error; result, err = saveBookmarkFrom(tx, in, encoded); return err })
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return result, nil
+}
+
+// saveBookmarkFrom is shared by ordinary saves and atomic create-and-add-to-topic.
+func saveBookmarkFrom(tx *gorm.DB, in BookmarkInput, encoded string) (*BookmarkDTO, error) {
+
+	var row models.VideoBookmark
+	if in.ID != 0 {
+		if err := tx.First(&row, in.ID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrViewingNoteConflict
+			}
+			return nil, err
+		}
+		if row.Revision != in.Revision || row.VideoID != in.VideoID {
+			return nil, ErrViewingNoteConflict
+		}
+	}
+	if in.ID == 0 || in.AcceptSourceToken != "" {
+		video, info, err := bookmarkSource(tx, in.VideoID)
+		if err != nil {
+			return nil, err
+		}
+		token := in.SourceToken
+		if in.ID != 0 {
+			token = in.AcceptSourceToken
+		}
+		if token != videoSourceVersion(video.ID, info.Size(), info.ModTime().UnixNano()) {
+			return nil, ErrBookmarkSourceChanged
+		}
+		if err := checkBookmarkDuration(tx, video, info.Size(), info.ModTime().UnixNano(), in.StartMS, in.EndMS); err != nil {
+			return nil, err
+		}
+		row.VideoTitle = diaryVideoTitle(video)
+		row.SourceSize = info.Size()
+		row.SourceModTimeNS = info.ModTime().UnixNano()
+	} else {
+		// A text edit may not stat the source. Enforce bounds only for metadata which
+		// still represents the bookmark's recorded fingerprint.
+		var video models.Video
+		lookup := tx.First(&video, in.VideoID).Error
+		if lookup != nil && !errors.Is(lookup, gorm.ErrRecordNotFound) {
+			return nil, lookup
+		}
+		if lookup == nil {
+			if err := checkBookmarkDuration(tx, video, row.SourceSize, row.SourceModTimeNS, in.StartMS, in.EndMS); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if in.ID == 0 {
+		row.VideoID = in.VideoID
+		row.StartMS = in.StartMS
+		row.EndMS = in.EndMS
+		row.Title = in.Title
+		row.Note = in.Note
+		row.TagsJSON = encoded
+		row.Revision = 1
+		if err := tx.Create(&row).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		update := tx.Model(&models.VideoBookmark{}).Where("id = ? AND revision = ?", in.ID, in.Revision).Updates(map[string]any{
+			"start_ms": in.StartMS, "end_ms": in.EndMS, "title": in.Title, "note": in.Note, "tags_json": encoded, "revision": gorm.Expr("revision + 1"),
+			"video_title": row.VideoTitle, "source_size": row.SourceSize, "source_mod_time_ns": row.SourceModTimeNS,
+		})
+		if update.Error != nil {
+			return nil, update.Error
+		}
+		if update.RowsAffected != 1 {
+			return nil, ErrViewingNoteConflict
+		}
+		if err := tx.First(&row, in.ID).Error; err != nil {
+			return nil, err
+		}
+	}
+	dto, err := bookmarkDTO(row)
+	if err != nil {
+		return nil, err
+	}
+	available, err := noteAvailableVideos(tx, []uint{row.VideoID})
+	dto.SourceAvailable = available[row.VideoID]
+	return &dto, err
 }
 func (s *BookmarkService) Delete(ctx context.Context, id uint, revision uint64) error {
 	if id == 0 || revision == 0 {
 		return ErrViewingNoteInvalid
 	}
-	return database.WithOperationContext(ctx, func(db *gorm.DB) error {
-		result := db.Where("id = ? AND revision = ?", id, revision).Delete(&models.VideoBookmark{})
+	return database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
+		if err := claimBookmarkVersion(tx, id, revision); err != nil {
+			return err
+		}
+		var topicIDs []uint
+		if err := tx.Model(&models.ClipTopicMember{}).Where("bookmark_id = ?", id).Order("topic_id ASC").Pluck("topic_id", &topicIDs).Error; err != nil {
+			return err
+		}
+		for _, topicID := range topicIDs {
+			if err := claimClipTopic(tx, topicID, 0); err != nil {
+				return err
+			}
+		}
+		result := tx.Where("id = ? AND revision = ?", id, revision+1).Delete(&models.VideoBookmark{})
 		if result.Error != nil {
 			return result.Error
 		}

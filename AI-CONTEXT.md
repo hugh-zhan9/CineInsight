@@ -40,7 +40,7 @@
 - `/database`: **持久化层**（数据库连接、迁移与初始化）。
 - `/frontend/src/components`: **UI 组件**（Vue 组件）。
   - `video-list/`：`VideoListPage.vue` 拆出的 15 个子组件（工具栏、批量操作栏、清理审阅面板、字幕生成/预览/翻译弹窗、超分弹窗、重命名与保存视图弹窗、后台任务状态条、任务失败明细、增量扫描条、语义提示条、随机批次条、删除撤销条）与 3 个共用模块（`runtimeEvents.js` 事件注册 mixin、`format.js`、`wheelForwarding.js`）。父子只经 props / emit / 父→直接子 `$refs`；需要保持 `await` 顺序的片库侧动作用函数 prop 回调。
-  - `settings/`：`SettingsPage.vue` 按分区拆成子组件，分区与锚点以 `SETTINGS_SECTIONS` 为准（2026-10-31 为 23 项，每项带 `saveMode`，扫描目录排第 2 位）。通用设置通过 `form` 保存；BT 连接分区独立保存，密钥留在系统 Keychain，未保存修改仍参与 App 的离页确认。BT 下载导航不依赖浏览器桥接开关，详见[外部入口](docs/context/integrations.md)。
+  - `settings/`：`SettingsPage.vue` 按分区拆成子组件，分区与锚点以 `SETTINGS_SECTIONS` 为准（2026-11-04 为 24 项，每项带 `saveMode`，扫描目录排第 2 位；照片地图独立保存）。通用设置通过 `form` 保存；BT 连接分区独立保存，密钥留在系统 Keychain，未保存修改仍参与 App 的离页确认。BT 下载导航不依赖浏览器桥接开关，详见[外部入口](docs/context/integrations.md)。
   - `frontend/src/utils/idleScheduling.js` 收口后台任务名与等待原因的中文口径，设置页与状态条共用。
   - `frontend/src/utils/{commandRegistry,taskCommands,appCommands}.js` 与 `frontend/src/components/CommandPalette.vue`：命令面板（见 2.21）。
   - `services/desktop_notify*.go`：桌面通知与 Dock 角标，`_darwin.go` 使用 cgo（见 2.20）；另一个 cgo 入口为 FSEvents 的 `library_watcher_backend_darwin.go`（见 2.14）。
@@ -62,8 +62,8 @@
 ## 5. 开发规范与后续演进
 
 - **规范:** Go 方法导出 PascalCase，JSON 映射 snake_case。
-- **验证入口:** `npm test` 覆盖组件与静态合同；`npm run test:macos` 串行执行虚拟窗口、观看笔记、队列播放与裁剪真实 WKWebView 检查。fixture 使用合成素材，不读取用户片库。完整应用启动、外部播放器及 TCC 权限仍需对应真实环境验收。
-- **待立项:** 照片地图及可能的人物地点足迹；EXIF GPS已入库，但尚无地图视图。底图联网与位置隐私边界须单独确定。「那年今天」已于2026-10-22授权实施，不再列为待立项。
+- **验证入口:** `npm test` 覆盖组件与静态合同；`npm run test:macos` 串行执行虚拟窗口、观看笔记、队列播放、字幕、区间预览、章节、照片地图与裁剪真实 WKWebView 检查。fixture 使用合成素材，不读取用户片库。完整应用启动、外部播放器及 TCC 权限仍需对应真实环境验收。
+- **体验扩展已实现（2026-11-04）:** [片库体验完善与内容探索](docs/loopx/design/2026-11-03-library-experience/概要设计.md)的九项功能及搜索性能评估已完成，具体行为见上列领域文档。照片/坐标本地管理，联网底图、自然语言解析与章节摘要各自显式启用并说明外发范围；不接在线地名查询。性能评估保留现有生产索引。全量Go、双库专项/实际备份迁移、race/vet、122项真实WebView和build-only签名通过；前端3244测试中3243通过，唯一既有RecapPage月份断言仍失败。真实外部模型/OSM网络和完整已安装应用TCC未实测，未安装或提交；详见[实施记录](docs/loopx/plans/2026-11-03-library-experience.md)与[性能报告](docs/loopx/design/2026-11-03-library-experience/性能评估.md)。「那年今天」沿用2026-10-22已实现合同。
 
 
 

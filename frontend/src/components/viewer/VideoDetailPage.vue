@@ -38,7 +38,7 @@
             />
             <!-- 播放代理的提示与失败（抽屉放在技术信息区块，这里跟在播放器下面）；外部预览模式下可以直接生成代理。 -->
             <!-- 书签解析之后原片变了：播放器不套用任何起播位置，也不自动开始；与抽屉同一句提示。 -->
-            <p v-if="bookmarkSourceMismatch" class="viewer-detail__error" role="alert" data-test="detail-bookmark-changed">原片在打开预览前已改变，请重新核对书签，未套用旧位置。</p>
+            <p v-if="bookmarkSourceMismatch" class="viewer-detail__error" role="alert" data-test="detail-bookmark-changed">原片在打开预览前已改变，请重新核对时间位置，未套用旧位置。</p>
             <div v-if="notesProxyNotice || notesProxyError || canCreateProxy || bookmarkRangeFinished" class="viewer-detail__player-notes">
               <p v-if="notesProxyNotice" data-test="detail-proxy-notice">{{ notesProxyNotice }}</p>
               <p v-if="notesProxyError" class="viewer-detail__error" role="alert" data-test="detail-proxy-error">{{ notesProxyError }}</p>
@@ -108,6 +108,7 @@
         </div>
       </section>
 
+      <ChapterPanel :key="`chapters-${video.id}`" :video-id="video.id" @seek="playChapter" @subtitle-tools="openChapterSubtitles" @settings="$emit('chapter-settings')" />
       <!-- 片段书签沿用 BookmarkPanel（标题、搜索与分页都在它里面）；「记下当前位置」只在应用内播放时可用。 -->
       <section class="recap-section" data-test="detail-bookmarks">
         <BookmarkPanel :key="video.id" :video="video" :session="playerOpen ? session : null" :current-position="currentPositionSeconds" @open-bookmark="openBookmark" @open-video="openBookmarkVideo" />
@@ -207,6 +208,7 @@ import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVi
 import {
   GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetSubtitleSegments, GetVideoDetails, GetVideoRecommendations,
   PreviewExternally, SearchLibraryVideoPage, SetVideoFavorite, SetVideoWatched, UpdateVideoRating, } from '../../../wailsjs/go/main/App';
+import ChapterPanel from '../ChapterPanel.vue';
 import BookmarkPanel from '../BookmarkPanel.vue';
 import QueueActionButton from '../QueueActionButton.vue';
 import QuoteCardDialog from '../QuoteCardDialog.vue';
@@ -246,7 +248,7 @@ function errorText(err) {
 export default {
   name: 'VideoDetailPage',
   components: { DetailTagPicker, MediaRail,
-    AppBanner, AppIcon, BookmarkPanel, HeroHeader, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon,
+    AppBanner, AppIcon, BookmarkPanel, ChapterPanel, HeroHeader, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon,
     RecapMediaCard, StatTile, TagPill
   },
   props: {
@@ -265,7 +267,7 @@ export default {
   // ready：每次挂载只发一次——主详情读到并渲染之后（读取失败、没有视频 ID 也发），宿主据此还原滚动等；
   // video-state-changed({ id, changes })：收藏、已看、评分、进度保存成功，或「播放」失败并标了失效之后，
   // changes 是变了的字段（videoDetail.js 的 STATE_CHANGE_FIELDS / playbackStaleChanges），宿主拿去更新片库行。
-  emits: ['delete-video', 'reload-tags', 'back', 'open-video', 'navigate', 'edit-in-manage', 'manage-in-library', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
+  emits: ['chapter-settings','subtitle-tools', 'delete-video', 'reload-tags', 'back', 'open-video', 'navigate', 'edit-in-manage', 'manage-in-library', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed', 'playback-started'],
   data() {
     return {
       loading: false, error: '', details: null, posterFailed: false,
@@ -569,6 +571,8 @@ export default {
       try { await PreviewExternally(videoID); } catch (err) { this.actionError = `外部预览失败：${errorText(err)}`; }
     },
     // 书签「定位 / 核对原片」：在应用内从书签起点播，播到区间末尾暂停（D-UI-11 的书签区间）。
+    playChapter(result) { if(Number(result?.video_id)!==Number(this.video?.id)||!result.source_version)return;this.playBookmark({start_ms:result.start_ms,end_ms:null,source_token:result.source_version}); },
+    openChapterSubtitles(id) { this.$emit('subtitle-tools',{videoID:id,kind:'edit'}); },
     openBookmark(result) {
       if (result?.status !== 'ready' || Number(result.video?.id) !== Number(this.video?.id)) return;
       this.playBookmark({ ...result.bookmark, source_token: result.source_token });

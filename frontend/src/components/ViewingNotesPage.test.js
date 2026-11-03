@@ -61,13 +61,15 @@ it('分区页签与面板互相指向，独立与嵌入两种写法都一样，�
   for (const embedded of [false, true]) {
     const wrapper = shallowMount(ViewingNotesPage, { props: { embedded }, global: { stubs: { PageHeader: false, AppTabs: false } } });
     await flushPromises();
-    for (const [key, next] of [['diary', 'ArrowRight'], ['bookmarks', 'ArrowRight'], ['history', null]]) {
+    for (const [key, next] of [['diary', 'ArrowRight'], ['bookmarks', 'ArrowRight'], ['topics', 'ArrowRight'], ['chapters','ArrowRight'], ['history', null]]) {
       const panel = wrapper.get('[role="tabpanel"]');
       expect(panel.attributes('id'), `${embedded} ${key}`).toBe(`viewing-notes-panel-${key}`);
       expect(panel.attributes('aria-labelledby')).toBe(`viewing-notes-tab-${key}`);
       expect(wrapper.get(`#viewing-notes-tab-${key}`).attributes('aria-controls')).toBe(`viewing-notes-panel-${key}`);
       expect(wrapper.get(`#viewing-notes-tab-${key}`).attributes('aria-selected')).toBe('true');
       if (key === 'bookmarks') expect(panel.find('bookmark-panel-stub').exists()).toBe(true);
+      else if (key === 'topics') expect(panel.find('clip-topics-panel-stub').exists()).toBe(true);
+      else if(key==='chapters') expect(panel.find('chapter-library-panel-stub').exists()).toBe(true);
       else expect(panel.find('.notes-pager').exists()).toBe(true);
       if (next) { await wrapper.get('[role="tablist"]').trigger('keydown', { key: next }); await flushPromises(); }
     }

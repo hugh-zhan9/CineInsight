@@ -11,7 +11,7 @@ import (
 	"video-master/models"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 var (
@@ -37,8 +37,11 @@ type CollectionDetail struct {
 }
 
 type CollectionService struct {
-	images *ManagedImageService
-	mu     sync.Mutex
+	images              *ManagedImageService
+	mu                  sync.Mutex
+	episodeMu           sync.Mutex
+	episodeSearches     map[string]*episodeSearchSnapshot
+	episodeAssociations map[string]*episodeAssociationSnapshot
 }
 
 func NewCollectionService(dataDir string) *CollectionService {
@@ -80,19 +83,21 @@ func (s *CollectionService) UpdateCollection(id uint, name, description string) 
 	if err != nil {
 		return nil, err
 	}
-	result := database.DB.Model(&models.MediaCollection{}).Where("id = ?", id).Updates(map[string]any{
-		"name":            name,
-		"normalized_name": normalizedName,
-		"description":     description,
-	})
-	if result.Error != nil {
-		return nil, classifyCollectionWriteError(result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
 	var collection models.MediaCollection
-	if err := database.DB.First(&collection, id).Error; err != nil {
+	err = database.Transaction(func(tx *gorm.DB) error {
+		if err := claimCollectionMutation(tx, id); err != nil {
+			return err
+		}
+		result := tx.Model(&models.MediaCollection{}).Where("id = ?", id).Updates(map[string]any{"name": name, "normalized_name": normalizedName, "description": description})
+		if result.Error != nil {
+			return classifyCollectionWriteError(result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return tx.First(&collection, id).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &collection, nil
@@ -108,7 +113,7 @@ func classifyCollectionWriteError(err error) error {
 
 func (s *CollectionService) ListCollections(keyword, cursorName string, cursorID uint, limit int) ([]CollectionListItem, error) {
 	limit = normalizeEntityPageLimit(limit)
-	query := database.DB.Model(&models.MediaCollection{})
+	query := database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Model(&models.MediaCollection{})
 	if keyword = strings.TrimSpace(keyword); keyword != "" {
 		pattern := "%" + strings.ToLower(escapeSQLLike(keyword)) + "%"
 		query = query.Where("(normalized_name LIKE ? ESCAPE '\\' OR LOWER(description) LIKE ? ESCAPE '\\')", pattern, pattern)
@@ -231,7 +236,7 @@ func (s *CollectionService) AddCollectionVideos(collectionID uint, videoIDs []ui
 		return fmt.Errorf("collection and at least one video are required")
 	}
 	return database.Transaction(func(tx *gorm.DB) error {
-		if err := lockActiveCollection(tx, collectionID); err != nil {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
 			return err
 		}
 		var videoCount int64
@@ -269,7 +274,7 @@ func (s *CollectionService) RemoveCollectionVideo(collectionID, videoID uint) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return database.Transaction(func(tx *gorm.DB) error {
-		if err := lockActiveCollection(tx, collectionID); err != nil {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
 			return err
 		}
 		result := tx.Where("collection_id = ? AND video_id = ?", collectionID, videoID).Delete(&models.CollectionVideo{})
@@ -284,7 +289,7 @@ func (s *CollectionService) ReorderCollectionVideos(collectionID uint, activeVid
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return database.Transaction(func(tx *gorm.DB) error {
-		if err := lockActiveCollection(tx, collectionID); err != nil {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
 			return err
 		}
 		var relations []models.CollectionVideo
@@ -365,18 +370,16 @@ func compactCollectionPositions(tx *gorm.DB, collectionID uint) error {
 	return nil
 }
 
-func lockActiveCollection(tx *gorm.DB, collectionID uint) error {
-	var collection models.MediaCollection
-	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&collection, collectionID).Error
-}
-
 func (s *CollectionService) DeleteCollection(collectionID uint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var coverPath string
 	err := database.Transaction(func(tx *gorm.DB) error {
 		var collection models.MediaCollection
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&collection, collectionID).Error; err != nil {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
+			return err
+		}
+		if err := tx.First(&collection, collectionID).Error; err != nil {
 			return err
 		}
 		coverPath = collection.CoverPath

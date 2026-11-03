@@ -21,6 +21,14 @@ import (
 
 func newAssetHandler(app *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/preview/map-tile/") {
+			app.serveMapTile(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/preview/bt-detail-image/") {
+			app.serveBTDetailImage(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/preview/bt-poster/") {
 			app.serveBTPoster(w, r)
 			return

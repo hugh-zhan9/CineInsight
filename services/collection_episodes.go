@@ -2,7 +2,10 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
@@ -51,12 +54,16 @@ type CollectionSeasonReport struct {
 	RangeConflicts    int                   `json:"range_conflicts"`
 }
 type CollectionEpisodeReport struct {
-	Seasons     []CollectionSeasonReport  `json:"seasons"`
-	Members     []CollectionEpisodeMember `json:"members"`
-	Total       int                       `json:"total"`
-	Uncertain   int                       `json:"uncertain"`
-	NextCursor  uint                      `json:"next_cursor"`
-	MixedSeries bool                      `json:"mixed_series"`
+	sourceSignature string
+	sourceRevision  int64
+	sourceName      string
+	allMembers      []CollectionEpisodeMember
+	Seasons         []CollectionSeasonReport  `json:"seasons"`
+	Members         []CollectionEpisodeMember `json:"members"`
+	Total           int                       `json:"total"`
+	Uncertain       int                       `json:"uncertain"`
+	NextCursor      uint                      `json:"next_cursor"`
+	MixedSeries     bool                      `json:"mixed_series"`
 }
 
 // SetEpisodeAssignments validates all revisions before changing any member.
@@ -78,8 +85,7 @@ func (s *CollectionService) SetEpisodeAssignmentsContext(ctx context.Context, co
 		seen[edit.VideoID] = true
 	}
 	return database.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var collection models.MediaCollection
-		if err := tx.First(&collection, collectionID).Error; err != nil {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
 			return err
 		}
 		for _, edit := range edits {
@@ -130,8 +136,7 @@ func (s *CollectionService) SetSeasonExpectationContext(ctx context.Context, col
 		return fmt.Errorf("collection_episode_invalid: 季或总集数无效")
 	}
 	return database.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var collection models.MediaCollection
-		if err := tx.First(&collection, collectionID).Error; err != nil {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
 			return err
 		}
 		var r *gorm.DB
@@ -188,8 +193,18 @@ func (s *CollectionService) GetEpisodeReportContext(ctx context.Context, collect
 	if limit > 200 {
 		limit = 200
 	}
-	report := &CollectionEpisodeReport{Seasons: []CollectionSeasonReport{}, Members: []CollectionEpisodeMember{}}
+	var report *CollectionEpisodeReport
 	err := database.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		report, err = collectionEpisodeReportFrom(ctx, tx, collectionID, cursor, limit)
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return report, err
+}
+
+func collectionEpisodeReportFrom(ctx context.Context, tx *gorm.DB, collectionID, cursor uint, limit int) (*CollectionEpisodeReport, error) {
+	report := &CollectionEpisodeReport{Seasons: []CollectionSeasonReport{}, Members: []CollectionEpisodeMember{}}
+	err := func() error {
 		var collection models.MediaCollection
 		if err := tx.First(&collection, collectionID).Error; err != nil {
 			return err
@@ -334,6 +349,31 @@ func (s *CollectionService) GetEpisodeReportContext(ctx context.Context, collect
 		}
 		sort.Slice(report.Seasons, func(i, j int) bool { return report.Seasons[i].Season < report.Seasons[j].Season })
 		report.Total = len(all)
+		report.allMembers = all
+		var revision models.CollectionEpisodeRevision
+		if err := tx.First(&revision, "collection_id = ?", collectionID).Error; err != nil {
+			return err
+		}
+		scope, err := loadCleanupPathScopeFrom(tx)
+		if err != nil {
+			return err
+		}
+		sort.Strings(scope.roots)
+		sort.Strings(scope.excluded)
+		encoded, err := json.Marshal(struct {
+			ID              uint
+			Name            string
+			Revision        int64
+			Roots, Excluded []string
+			Seasons         []CollectionSeasonReport
+			Members         []CollectionEpisodeMember
+		}{collectionID, collection.Name, revision.Revision, scope.roots, scope.excluded, report.Seasons, all})
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(encoded)
+		report.sourceSignature, report.sourceRevision, report.sourceName = hex.EncodeToString(digest[:]), revision.Revision, collection.Name
+
 		for _, m := range all {
 			if m.VideoID > cursor {
 				report.Members = append(report.Members, m)
@@ -344,6 +384,6 @@ func (s *CollectionService) GetEpisodeReportContext(ctx context.Context, collect
 			report.NextCursor = report.Members[len(report.Members)-1].VideoID
 		}
 		return nil
-	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}()
 	return report, err
 }

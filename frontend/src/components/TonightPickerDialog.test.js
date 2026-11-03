@@ -79,6 +79,18 @@ describe('TonightPickerDialog', () => {
   });
 });
 
+it('applies presets only to their named conditions', async () => {
+  const wrapper = mount(TonightPickerDialog, { props: { filter: {}, conditions: { watchState: 'any', favoritesOnly: false, maxMinutes: 90 } } });
+  await flushPromises();
+  await wrapper.findAll('button').find(button => button.text() === '短一点').trigger('click');
+  expect(wrapper.vm.currentConditions()).toEqual({ watchState: 'any', favoritesOnly: false, maxMinutes: 30 });
+  await wrapper.findAll('button').find(button => button.text() === '重温收藏').trigger('click');
+  expect(wrapper.vm.currentConditions()).toEqual({ watchState: 'watched', favoritesOnly: true, maxMinutes: 30 });
+  await wrapper.findAll('button').find(button => button.text() === '探索没看过的').trigger('click');
+  expect(wrapper.vm.currentConditions()).toEqual({ watchState: 'unwatched', favoritesOnly: true, maxMinutes: 30 });
+  wrapper.unmount();
+});
+
 describe('TonightPickerDialog 换一批', () => {
   it('excludes the current batch on top of the recent random exclusions', async () => {
     api.SuggestTonightVideos.mockResolvedValueOnce([suggestion(1), suggestion(2)]).mockResolvedValueOnce([suggestion(3)]);

@@ -59,6 +59,9 @@ export function parseSavedViewIDs(json) {
 // 只改名时原样保留视图里存的条件（包括已被删除的标签与人物 ID：设计上删除标签不改视图，D-PC35）。
 export function savedViewFilter(view) {
   return {
+    ...(view.watch_state && view.watch_state !== 'any' || view.favorites_only || view.min_duration_seconds || view.max_duration_seconds ? {
+      watch_state: view.watch_state || 'any', favorites_only: Boolean(view.favorites_only), min_duration_seconds: Number(view.min_duration_seconds || 0), max_duration_seconds: Number(view.max_duration_seconds || 0)
+    } : {}),
     search_mode: view.search_mode || 'file',
     keyword: view.keyword || '',
     path_prefix: '',

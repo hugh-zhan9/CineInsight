@@ -61,6 +61,18 @@ func (EnvAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 type SettingsAITaggingConfigProvider struct{}
 
 func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
+	var settings *models.Settings
+	if database.DB != nil {
+		var row models.Settings
+		if database.DB.First(&row).Error == nil {
+			settings = &row
+		}
+	}
+	return aiTaggingConfigFromSettings(settings)
+}
+
+// aiTaggingConfigFromSettings preserves the existing settings-over-environment precedence.
+func aiTaggingConfigFromSettings(settings *models.Settings) (AITaggingConfig, error) {
 	envConfig := AITaggingConfig{
 		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
 		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
@@ -72,31 +84,27 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 	}
 
 	config := envConfig
-	if database.DB != nil {
-		var settings models.Settings
-		if err := database.DB.First(&settings).Error; err == nil {
-			if value := strings.TrimSpace(settings.AITaggingBaseURL); value != "" {
-				config.BaseURL = value
-			}
-			if value := strings.TrimSpace(settings.AITaggingAPIKey); value != "" {
-				config.APIKey = value
-			}
-			if value := strings.TrimSpace(settings.AITaggingModel); value != "" {
-				config.Model = value
-			}
-			if settings.AITaggingImagesPerRequest > 0 {
-				config.ImagesPerRequest = settings.AITaggingImagesPerRequest
-			}
-			if settings.AITaggingSubtitleCharLimit > 0 {
-				config.SubtitleCharLimit = settings.AITaggingSubtitleCharLimit
-			}
-			if settings.AITaggingStartupBatchSize > 0 {
-				config.StartupBatchSize = settings.AITaggingStartupBatchSize
-			}
-			config.MaxExtraFrames = normalizeAITaggingMaxExtraFrames(settings.AITaggingMaxExtraFrames)
+	if settings != nil {
+		if value := strings.TrimSpace(settings.AITaggingBaseURL); value != "" {
+			config.BaseURL = value
 		}
+		if value := strings.TrimSpace(settings.AITaggingAPIKey); value != "" {
+			config.APIKey = value
+		}
+		if value := strings.TrimSpace(settings.AITaggingModel); value != "" {
+			config.Model = value
+		}
+		if settings.AITaggingImagesPerRequest > 0 {
+			config.ImagesPerRequest = settings.AITaggingImagesPerRequest
+		}
+		if settings.AITaggingSubtitleCharLimit > 0 {
+			config.SubtitleCharLimit = settings.AITaggingSubtitleCharLimit
+		}
+		if settings.AITaggingStartupBatchSize > 0 {
+			config.StartupBatchSize = settings.AITaggingStartupBatchSize
+		}
+		config.MaxExtraFrames = normalizeAITaggingMaxExtraFrames(settings.AITaggingMaxExtraFrames)
 	}
-
 	if config.BaseURL == "" || config.Model == "" {
 		return config, fmt.Errorf("AI tagging config unavailable")
 	}

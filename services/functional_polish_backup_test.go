@@ -53,18 +53,26 @@ func seedPolishBackup(t *testing.T, db *gorm.DB) polishBackupFixture {
 		t.Fatal(err)
 	}
 	season, episode := 0, 2
+	embeddedChapters := `[{"id":1,"start_ms":0,"end_ms":1000,"title":"embedded","summary":""}]`
 	fixture := polishBackupFixture{VideoID: video.ID, DeletedID: gone.ID, Rows: []any{
+		&models.PhotoRecap{Name: "保留旅行回顾", DateFrom: "2026-10-01", DateTo: "2026-10-31", PersonIDsJSON: "[999999]", Revision: 7, CreatedAt: at, UpdatedAt: at},
 		&models.RecommendationFeedback{TargetKind: "work_video", TargetID: gone.ID, Effect: "snooze", ExpiresAt: &until, Revision: 8, CreatedAt: at, UpdatedAt: at},
 		run,
 		&models.TaskFailureItem{RunID: run.ID, MediaKind: "video", MediaID: gone.ID, AttemptKey: "retained-attempt", SourceVersion: "old-source", StateVersion: "old-failure", ErrorCode: "failed", ErrorSummary: "保留已删除媒体失败", FailedAt: at},
 		&models.CollectionEpisodeAssignment{CollectionID: collection.ID, VideoID: video.ID, Season: &season, Episode: &episode, Excluded: false, Revision: 9},
 		&models.CollectionSeasonExpectation{CollectionID: collection.ID, Season: 0, EpisodeCount: 6, Revision: 10},
 		&models.AITaggingState{VideoID: video.ID, Status: "pending", FailureRetrySourceVersion: strings.Repeat("b", 64), CreatedAt: at, UpdatedAt: at},
-		&models.VideoTechnicalMetadata{VideoID: video.ID, LastError: "failed", FailureRetryClaim: "technical-claim", CreatedAt: at, UpdatedAt: at},
+		&models.VideoTechnicalMetadata{VideoID: video.ID, ChaptersJSON: &embeddedChapters, LastError: "failed", FailureRetryClaim: "technical-claim", CreatedAt: at, UpdatedAt: at},
 		&models.VideoPlaybackProxy{VideoID: video.ID, Status: "failed", Strategy: "remux", SourceSize: 123, SourceModTimeNS: 456, LastUsedAt: at, FailureRetryClaim: "proxy-claim", CreatedAt: at, UpdatedAt: at},
 		&models.PlayEvent{VideoID: video.ID, Source: "desktop_controlled_view", PlayedAt: at},
 		&models.ViewingDiaryEntry{VideoID: &video.ID, Title: "controlled", WatchedOn: "2026-10-22", Source: "desktop_controlled_view", Revision: 3, CreatedAt: at, UpdatedAt: at},
 	}}
+	connection := &models.BTConnection{ID: "00000000-0000-0000-0000-000000000011", Slot: "local", Revision: 1, ProwlarrBase: "http://127.0.0.1:9696", QBBase: "http://127.0.0.1:8081", DownloadRoot: "/fixture/bt"}
+	task := &models.BTTask{ID: "00000000-0000-0000-0000-000000000012", ConnectionID: connection.ID, Revision: 1, AttemptGeneration: 1, Title: "backup", IntentKey: "backup", OwnerTag: "backup", ManifestDigest: "backup", SaveRoot: "/fixture/bt/task", CanonicalRoot: "/fixture/bt/task", RootKey: "backup", Stage: "active"}
+	pathKey := "backup-file"
+	file := &models.BTFile{TaskID: task.ID, ManifestFileID: strings.Repeat("c", 64), PathKey: &pathKey, RelativePath: "backup.mp4", Selectable: true, Selected: true, Size: 123, ImportState: "imported", PublicationState: BTImportPublicationDone, VideoID: &video.ID}
+	origin := &models.EpisodeAcquisitionOrigin{ID: "00000000-0000-0000-0000-000000000013", TaskID: task.ID, FileID: file.ManifestFileID, CollectionID: collection.ID, CollectionTitle: collection.Name, RequestedSeason: season, RequestedEpisodesJSON: "[2,3]", MappedSeason: &season, MappedEpisode: &episode, ConfirmedMapping: true, Revision: 12, CreatedAt: at}
+	fixture.Rows = append(fixture.Rows, connection, task, file, origin)
 	for _, row := range fixture.Rows {
 		if row == run {
 			continue
@@ -73,13 +81,30 @@ func seedPolishBackup(t *testing.T, db *gorm.DB) polishBackupFixture {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Model(&models.Settings{}).Where("id > 0").Update("desktop_player", "iina_controlled").Error; err != nil {
+	root := &models.CollectionEpisodeRevision{CollectionID: collection.ID, Revision: 19}
+	if err := db.Model(root).Update("revision", root.Revision).Error; err != nil {
 		t.Fatal(err)
 	}
+	fixture.Rows = append(fixture.Rows, root)
+	if err := db.Model(&models.Settings{}).Where("id > 0").Updates(map[string]any{"desktop_player": "iina_controlled", "query_parse_enabled": true, "chapter_summary_enabled": true, "map_tiles_enabled": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.Rows = append(fixture.Rows, seedClipBackupRows(t, db, video.ID, at)...)
+	fixture.Rows = append(fixture.Rows, seedChapterBackupRows(t, db, gone.ID, at)...)
 	return fixture
 }
 func assertPolishBackup(t *testing.T, db *gorm.DB, fixture polishBackupFixture) {
 	t.Helper()
+	assertClipBackupPrivateFields(t, db)
+	assertChapterBackupFields(t, db)
+	var recap models.PhotoRecap
+	if err := db.First(&recap).Error; err != nil || recap.PersonIDsJSON != "[999999]" || recap.Revision != 7 {
+		t.Fatalf("photo recap conditions lost %+v %v", recap, err)
+	}
+	var mapSettings models.Settings
+	if err := db.First(&mapSettings).Error; err != nil || !mapSettings.MapTilesEnabled {
+		t.Fatalf("map policy lost %+v %v", mapSettings, err)
+	}
 	for _, want := range fixture.Rows {
 		got := reflect.New(reflect.TypeOf(want).Elem()).Interface()
 		if err := db.First(got).Error; err != nil {
@@ -97,6 +122,13 @@ func assertPolishBackup(t *testing.T, db *gorm.DB, fixture polishBackupFixture) 
 			t.Fatalf("restored %T differs\nwant %s\ngot %s", want, expectedJSON, actualJSON)
 		}
 	}
+	var origin models.EpisodeAcquisitionOrigin
+	if err := db.First(&origin).Error; err != nil {
+		t.Fatal(err)
+	}
+	if origin.RequestedEpisodesJSON != "[2,3]" {
+		t.Fatal("backup lost requested episode list")
+	}
 	var ai models.AITaggingState
 	var technical models.VideoTechnicalMetadata
 	var proxy models.VideoPlaybackProxy
@@ -112,7 +144,7 @@ func assertPolishBackup(t *testing.T, db *gorm.DB, fixture polishBackupFixture) 
 	if err := db.First(&settings).Error; err != nil {
 		t.Fatal(err)
 	}
-	if settings.DesktopPlayer != "iina_controlled" {
+	if settings.DesktopPlayer != "iina_controlled" || !settings.QueryParseEnabled || !settings.ChapterSummaryEnabled {
 		t.Fatal("backup lost player preference")
 	}
 	var count int64
@@ -149,7 +181,15 @@ func polishBackupJSON(row any) ([]byte, error) {
 
 func mutatePolishBackup(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	for _, table := range []string{"task_failure_items", "task_failure_runs", "recommendation_feedbacks", "collection_episode_assignments", "collection_season_expectations"} {
+	if err := db.Model(&models.VideoTechnicalMetadata{}).Where("video_id > 0").Updates(map[string]any{"chapters_json": nil, "chapters_error": "chapter_metadata_invalid"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"photo_recaps", "video_chapters", "chapter_sets", "chapter_draft_jobs", "clip_topic_members", "clip_topics", "playback_queue_states", "playback_queue_entries", "video_bookmarks"} {
+		if err := db.Exec("DELETE FROM " + table).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, table := range []string{"task_failure_items", "task_failure_runs", "recommendation_feedbacks", "collection_episode_assignments", "collection_season_expectations", "collection_episode_revision", "episode_acquisition_origins"} {
 		if err := db.Exec("DELETE FROM " + table).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -166,7 +206,17 @@ func assertPolishManifest(t *testing.T, directory string, backup *BackupFile) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"recommendation_feedbacks", "task_failure_runs", "task_failure_items", "collection_episode_assignments", "collection_season_expectations"} {
+	assertClipBackupManifest(t, manifest)
+	assertChapterBackupManifest(t, manifest)
+	if len(manifest.Models["photo_recaps"]) == 0 {
+		t.Fatal("missing photo recap manifest")
+	}
+	for _, entry := range manifest.Files.Entries {
+		if strings.HasPrefix(entry.Path, "map-tiles/") {
+			t.Fatal("derived map tiles entered backup")
+		}
+	}
+	for _, table := range []string{"recommendation_feedbacks", "task_failure_runs", "task_failure_items", "collection_episode_assignments", "collection_season_expectations", "collection_episode_revision", "episode_acquisition_origins"} {
 		if len(manifest.Models[table]) == 0 {
 			t.Fatalf("backup model manifest omitted %s", table)
 		}
@@ -185,7 +235,7 @@ func assertPolishManifest(t *testing.T, directory string, backup *BackupFile) {
 	for table, columns := range manifest.Models {
 		older[table] = columns
 	}
-	for _, table := range []string{"recommendation_feedbacks", "task_failure_runs", "task_failure_items", "collection_episode_assignments", "collection_season_expectations"} {
+	for _, table := range []string{"recommendation_feedbacks", "task_failure_runs", "task_failure_items", "collection_episode_assignments", "collection_season_expectations", "collection_episode_revision", "episode_acquisition_origins"} {
 		delete(older, table)
 	}
 	for table, column := range map[string]string{"settings": "desktop_player", "ai_tagging_states": "failure_retry_source_version", "video_technical_metadata": "failure_retry_claim", "video_playback_proxies": "failure_retry_claim"} {
@@ -197,7 +247,14 @@ func assertPolishManifest(t *testing.T, directory string, backup *BackupFile) {
 		}
 		older[table] = columns
 	}
-	if newer := unknownModelSchema(manifest.Models, older, nil); len(newer) != 9 {
+	settingsColumns := []string{}
+	for _, name := range older["settings"] {
+		if name != "query_parse_enabled" && name != "chapter_summary_enabled" {
+			settingsColumns = append(settingsColumns, name)
+		}
+	}
+	older["settings"] = settingsColumns
+	if newer := unknownModelSchema(manifest.Models, older, nil); len(newer) != 13 {
 		t.Fatalf("old model incorrectly accepted new-table backup: %v", newer)
 	}
 	if unknown := unknownModelSchema(older, manifest.Models, nil); len(unknown) != 0 {
@@ -212,6 +269,12 @@ func TestFunctionalPolishSQLiteBackupRestoreActualRows(t *testing.T) {
 	dataDir := t.TempDir()
 	db := openLiveSQLiteLibrary(t, dataDir)
 	fixture := seedPolishBackup(t, db)
+	if err := os.MkdirAll(filepath.Join(dataDir, "map-tiles"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "map-tiles", "osm-0-0-0.png"), []byte("derived fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	svc := NewBackupService(dataDir)
 	backup, err := svc.CreateBackup(context.Background())
 	if err != nil {

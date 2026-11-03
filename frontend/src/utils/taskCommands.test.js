@@ -54,9 +54,9 @@ describe('任务中心动作与绑定对齐（APP-03）', () => {
     expect(api.CancelAIReviewApproval).toHaveBeenLastCalledWith('image', '');
   });
 
-  it('APP-03 后端适配表覆盖 31 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
+  it('APP-03 后端适配表覆盖 32 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
     const capabilities = backendAdapterCapabilities();
-    expect(capabilities).toHaveLength(31);
+    expect(capabilities).toHaveLength(32);
     const missing = [];
     for (const { key, canStart, canCancel } of capabilities) {
       expect(key, '适配表里的常量应当能在登记表里找到取值').toBeTruthy();

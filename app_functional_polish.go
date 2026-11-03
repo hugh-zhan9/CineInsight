@@ -44,6 +44,15 @@ func (a *App) initializeFunctionalPolish() error {
 	}
 	previous := a.taskFailures
 	a.functionalMu.Unlock()
+	if a.textAI != nil {
+		a.textAI.Invalidate()
+	}
+	if a.mapTiles != nil {
+		a.mapTiles.StopAndWait()
+	}
+	if a.chapters != nil {
+		a.chapters.StopAndWait()
+	}
 	a.functionalActive.Wait()
 	if previous != nil {
 		previous.StopAndWait()
@@ -73,8 +82,18 @@ func (a *App) initializeFunctionalPolish() error {
 	if a.subtitleWorkbench != nil {
 		a.subtitleWorkbench.ResumeSubtitleExtraction()
 	}
+	if a.mapTiles != nil {
+		a.mapTiles.Resume()
+	}
+	chapterWarning := ""
+	if a.chapters != nil {
+		if err := a.chapters.RecoverInterrupted(context.Background()); err != nil {
+			chapterWarning = "章节任务恢复未完成，生成摘要暂不可用；人工章节仍可使用。"
+		}
+	}
 	a.functionalMu.Lock()
 	a.functionalInitialized = true
+	a.chapterInitError = chapterWarning
 	a.taskFailures = store
 	a.taskFailureInitError = ""
 	if err != nil {
@@ -99,12 +118,24 @@ func (a *App) stopFunctionalPolish(shutdown bool) {
 	if a.subtitleWorkbench != nil {
 		a.subtitleWorkbench.QuiesceSubtitleExtraction()
 	}
+	if a.textAI != nil {
+		a.textAI.Invalidate()
+	}
+	if a.mapTiles != nil {
+		a.mapTiles.StopAndWait()
+	}
+	if a.chapters != nil {
+		a.chapters.StopAndWait()
+	}
 	a.functionalActive.Wait()
 	if store != nil {
 		store.StopAndWait()
 	}
 }
 func (a *App) wireFunctionalPolish(emit func(string, any)) {
+	if a.chapters != nil {
+		a.chapters.SetChangedListener(func() { emit("chapter-draft-changed", nil); a.notifyTaskCenterChanged() })
+	}
 	services.SetSubtitleChangedListener(func() { emit("subtitle-changed", nil) })
 	if a.videoService != nil {
 		a.videoService.SetControlledPlaybackListener(func(state services.ControlledPlaybackState) { emit("controlled-playback-state", state) })
@@ -112,9 +143,17 @@ func (a *App) wireFunctionalPolish(emit func(string, any)) {
 }
 func (a *App) functionalPolishWarnings() []string {
 	a.functionalMu.Lock()
-	store, warning := a.taskFailures, a.taskFailureInitError
+	store, warning, chapterWarning := a.taskFailures, a.taskFailureInitError, a.chapterInitError
 	a.functionalMu.Unlock()
 	result := []string{}
+	if chapterWarning != "" {
+		result = append(result, chapterWarning)
+	}
+	if a.chapters != nil {
+		if warning := a.chapters.Warning(); warning != "" {
+			result = append(result, warning)
+		}
+	}
 	if warning != "" {
 		result = append(result, warning)
 	}

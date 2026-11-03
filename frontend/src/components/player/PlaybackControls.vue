@@ -1,7 +1,8 @@
 <template>
   <div class="playback-controls" data-test="playback-controls">
     <component :is="'media-control-bar'" class="playback-controls__timeline">
-      <component :is="'media-time-range'" class="playback-controls__seek" aria-label="播放进度" data-test="playback-seek" @pointermove="$emit('seek-hover', $event)" @pointerleave="$emit('seek-leave')">
+      <input v-if="seekRange" class="playback-controls__clip-seek" type="range" :min="seekRange.startMS / 1000" :max="seekRange.endMS / 1000" step="0.001" :value="currentPosition" :disabled="seekDisabled" aria-label="片段预览进度" data-test="playback-clip-seek" @input="$emit('seek', Number($event.target.value))" />
+      <component v-else :is="'media-time-range'" class="playback-controls__seek" aria-label="播放进度" data-test="playback-seek" @pointermove="$emit('seek-hover', $event)" @pointerleave="$emit('seek-leave')">
         <span v-if="$slots['seek-preview']" slot="preview"><slot name="seek-preview" /></span>
       </component>
     </component>
@@ -38,9 +39,9 @@ import './mediaChrome.js';
 const EVENTS = ['volumechange'];
 export default {
   name: 'PlaybackControls', components: { AppIcon, BasePopover },
-  props: { videoElement: { type: Function, required: true }, dialogElement: { type: Function, required: true }, surfaceElement: { type: Function, required: true } },
-  emits: ['seek-hover', 'seek-leave'],
-  data: () => ({ volume: 1, muted: false, appFullscreen: false, systemFullscreen: false, menuOpen: false, volumeOpen: false, settingsOpen: false, error: '' }),
+  props: { seekRange: { type: Object, default: null }, seekDisabled: Boolean, videoElement: { type: Function, required: true }, dialogElement: { type: Function, required: true }, surfaceElement: { type: Function, required: true } },
+  emits: ['seek-hover', 'seek-leave', 'seek'],
+  data: () => ({ currentPosition: 0, volume: 1, muted: false, appFullscreen: false, systemFullscreen: false, menuOpen: false, volumeOpen: false, settingsOpen: false, error: '' }),
   computed: { activeFullscreen() { return this.appFullscreen || this.systemFullscreen; } },
   watch: {
     volumeOpen() { this.holdControls(); this.$nextTick(() => { this.$refs.volumeRange?.setAttribute('mediacontroller', this._surface?.id || ''); }); },
@@ -50,7 +51,8 @@ export default {
     await this.$nextTick();
     if (this._disposed) return;
     this._video = this.videoElement(); this._dialog = this.dialogElement(); this._surface = this.surfaceElement();
-    for (const event of EVENTS) this._video?.addEventListener(event, this.sync);
+    this._events = this.seekRange ? [...EVENTS, 'loadedmetadata', 'timeupdate', 'seeked'] : EVENTS;
+    for (const event of this._events) this._video?.addEventListener(event, this.sync);
     this._dialog?.addEventListener('cancel', this.cancelDialog);
     this._dialog?.addEventListener('close', this.dialogClosed);
     document.addEventListener('fullscreenchange', this.syncFullscreen);
@@ -66,7 +68,7 @@ export default {
   },
   beforeUnmount() {
     this._disposed = true; this._resize?.disconnect();
-    for (const event of EVENTS) this._video?.removeEventListener(event, this.sync);
+    for (const event of this._events || []) this._video?.removeEventListener(event, this.sync);
     this._dialog?.removeEventListener('cancel', this.cancelDialog); this._dialog?.removeEventListener('close', this.dialogClosed);
     document.removeEventListener('fullscreenchange', this.syncFullscreen); document.removeEventListener('webkitfullscreenchange', this.syncFullscreen);
     window.removeEventListener('keydown', this.fullscreenKey, true);
@@ -82,6 +84,7 @@ export default {
     sync() {
       const video = this._video; if (!video) return;
       this.muted = video.muted; this.volume = video.volume;
+      if (this.seekRange) this.currentPosition = Number(video.currentTime) || 0;
     },
     async togglePlayback() {
       const video = this._video; if (!video) return;
@@ -140,6 +143,7 @@ export default {
 <style scoped>
 .playback-controls { width: 100%; box-sizing: border-box; padding: var(--space-4) var(--space-3) var(--space-2); background: linear-gradient(transparent, var(--overlay-strong)); color: var(--media-badge-fg); line-height: normal; }
 .playback-controls__timeline, .playback-controls__row { display: flex; width: 100%; align-items: center; }
+.playback-controls__clip-seek { width: 100%; min-width: 0; accent-color: var(--accent-color); }
 .playback-controls__seek { width: 100%; min-width: 0; --media-range-padding: 8px 0; }
 .playback-controls__play { flex: none; }
 .playback-controls__time { font-size: var(--fs-caption); font-variant-numeric: tabular-nums; white-space: nowrap; --media-control-padding: 0 var(--space-2); }

@@ -291,20 +291,20 @@ func (s *BTService) Search(ctx context.Context, query string, indexerIDs []int) 
 
 // Poster snapshots admission under the command gate, then fetches outside it.
 // Drain cancels the read scope without waiting on a slow external image server.
-func (s *BTService) Poster(ctx context.Context, token string) ([]byte, string, error) {
+func (s *BTService) beginResourceRead(ctx context.Context) (context.Context, *BTSearchService, func() bool, error) {
 	operation, leave, err := s.enter(ctx)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, nil, err
 	}
 	if err = s.loadClients(operation); err != nil {
 		leave()
-		return nil, "", err
+		return nil, nil, nil, err
 	}
 	s.mu.Lock()
 	if !s.accepting {
 		s.mu.Unlock()
 		leave()
-		return nil, "", ErrBTMaintenance
+		return nil, nil, nil, ErrBTMaintenance
 	}
 	if s.posterLifetime == nil || s.posterLifetime.Err() != nil {
 		s.posterLifetime, s.cancelPosters = context.WithCancel(context.Background())
@@ -313,11 +313,40 @@ func (s *BTService) Poster(ctx context.Context, token string) ([]byte, string, e
 	s.mu.Unlock()
 	leave()
 	read, cancel := context.WithCancel(ctx)
-	defer cancel()
+
 	stop := context.AfterFunc(scope, cancel)
-	defer stop()
+
+	return read, search, func() bool { stop(); cancel(); return scope.Err() != nil }, nil
+}
+func (s *BTService) Poster(ctx context.Context, token string) ([]byte, string, error) {
+	read, search, finish, err := s.beginResourceRead(ctx)
+	if err != nil {
+		return nil, "", err
+	}
 	data, mime, err := search.Poster(read, token)
-	if scope.Err() != nil {
+	if finish() {
+		return nil, "", ErrBTMaintenance
+	}
+	return data, mime, err
+}
+func (s *BTService) ResourceDetail(ctx context.Context, token string) (*BTResourceDetail, error) {
+	read, search, finish, err := s.beginResourceRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	detail, err := search.ResourceDetail(read, token)
+	if finish() {
+		return nil, ErrBTMaintenance
+	}
+	return detail, err
+}
+func (s *BTService) DetailImage(ctx context.Context, token string, detailOrder uint64, index int) ([]byte, string, error) {
+	read, search, finish, err := s.beginResourceRead(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	data, mime, err := search.DetailImage(read, token, detailOrder, index)
+	if finish() {
 		return nil, "", ErrBTMaintenance
 	}
 	return data, mime, err

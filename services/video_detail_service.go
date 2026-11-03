@@ -339,7 +339,7 @@ func validateDetailTargets(tx *gorm.DB, personIDs, collectionIDs []uint) error {
 	}
 	if len(collectionIDs) > 0 {
 		var collections []models.MediaCollection
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", collectionIDs).Order("id ASC").Find(&collections).Error; err != nil {
+		if err := tx.Where("id IN ?", collectionIDs).Order("id ASC").Find(&collections).Error; err != nil {
 			return err
 		}
 		if len(collections) != len(collectionIDs) {
@@ -435,6 +435,7 @@ func replaceVideoPeopleRelations(tx *gorm.DB, videoID uint, desired []uint, prun
 }
 
 func replaceVideoCollectionsInTransaction(tx *gorm.DB, videoID uint, desired []uint) error {
+	desiredSet := idSet(desired)
 	var relations []models.CollectionVideo
 	if err := tx.Where("video_id = ?", videoID).Find(&relations).Error; err != nil {
 		return err
@@ -444,13 +445,22 @@ func replaceVideoCollectionsInTransaction(tx *gorm.DB, videoID uint, desired []u
 		oldIDs = append(oldIDs, relation.CollectionID)
 	}
 	lockIDs := uniqueSortedIDs(append(append([]uint(nil), oldIDs...), desired...))
-	if len(lockIDs) > 0 {
-		var locked []models.MediaCollection
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", lockIDs).Order("id ASC").Find(&locked).Error; err != nil {
+	for _, collectionID := range lockIDs {
+		var active int64
+		if err := tx.Model(&models.MediaCollection{}).Where("id = ?", collectionID).Count(&active).Error; err != nil {
+			return err
+		}
+		if active == 0 {
+			if _, wanted := desiredSet[collectionID]; wanted {
+				return gorm.ErrRecordNotFound
+			}
+			continue // Removing an old orphan membership does not revive its collection.
+		}
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
 			return err
 		}
 	}
-	oldSet, desiredSet := idSet(oldIDs), idSet(desired)
+	oldSet := idSet(oldIDs)
 	for _, collectionID := range oldIDs {
 		if _, keep := desiredSet[collectionID]; keep {
 			continue

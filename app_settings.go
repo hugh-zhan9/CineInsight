@@ -170,6 +170,25 @@ func (a *App) UpdateSettings(input models.Settings) error {
 
 	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
+		sharedTextChanged := bridgeErr != nil || bridgeBefore == nil || bridgeBefore.AITaggingBaseURL != input.AITaggingBaseURL || bridgeBefore.AITaggingModel != input.AITaggingModel || bridgeBefore.AITaggingAPIKey != input.AITaggingAPIKey
+		queryChanged := sharedTextChanged || bridgeBefore.QueryParseEnabled != input.QueryParseEnabled
+		summaryChanged := sharedTextChanged || bridgeBefore.ChapterSummaryEnabled != input.ChapterSummaryEnabled
+		if a.textAI != nil {
+			if sharedTextChanged {
+				a.textAI.Invalidate()
+			} else {
+				if queryChanged {
+					a.textAI.InvalidatePurpose(services.TextAIQueryPurpose)
+				}
+				if summaryChanged {
+					a.textAI.InvalidatePurpose(services.TextAIChapterPurpose)
+				}
+			}
+		}
+		if summaryChanged && a.chapters != nil {
+			a.chapters.CancelActiveDrafts()
+		}
+
 		// 空闲调度改了要立刻生效：门自己 30 秒才刷一次快照，用户关掉开关后
 		// 不该还对着一个"仍在等空闲"的任务干等。
 		a.idleGate.InvalidateSettings()

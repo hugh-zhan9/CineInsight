@@ -24,3 +24,24 @@ func TestBTPosterAssetRejectsUnboundRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestBTDetailImageAssetRejectsUnboundRequests(t *testing.T) {
+	app := &App{}
+	for _, item := range []struct {
+		method, path string
+		status       int
+	}{
+		{"POST", "/preview/bt-detail-image/ci-bt-" + strings.Repeat("a", 48) + "/1/0", 405},
+		{"GET", "/preview/bt-detail-image/http://example.com/1/0", 404},
+		{"GET", "/preview/bt-detail-image/ci-bt-" + strings.Repeat("a", 48) + "/1/0?url=private", 404},
+		{"GET", "/preview/bt-detail-image/ci-bt-" + strings.Repeat("a", 48) + "/0/0", 404},
+		{"GET", "/preview/bt-detail-image/ci-bt-" + strings.Repeat("a", 48) + "/1/16", 404},
+		{"GET", "/preview/bt-detail-image/ci-bt-" + strings.Repeat("a", 48) + "/1/0", 404},
+	} {
+		response := httptest.NewRecorder()
+		app.serveBTDetailImage(response, httptest.NewRequest(item.method, item.path, nil))
+		if response.Code != item.status {
+			t.Error("unexpected asset response", response.Code)
+		}
+	}
+}

@@ -5,7 +5,7 @@
 ### 2.19 后台任务登记表与空闲调度
 - **完整失败诊断与选择性重试（2026-10-22，D-F04）:** ai_tagging/technical/proxy在task_failure_runs/items持久化全部失败，媒体ID逻辑引用、run级联item，attempt_key稳定去重、state_version冻结失败身份。任务中心区间/明细分页（50，最多200）不依赖摘要截断。预览冻结服务器集合（10分钟、2令牌、100万项），省略item_ids代表全区间，显式空数组拒绝；确认只消费一次，逐项报告accepted/skipped/failed，accepted不是执行成功。取消提交不扩大或重做已接受集合，执行仍归原owner。
 - **重试授权与恢复:** 技术/代理failure_retry_claim按原失败版本认领而不改失败时间，成功/失败或取消未执行项条件释放；AI的failure_retry_source_version随pending保留。队列实际执行前重新检查冻结源；技术和代理补probe还在拿到每视频gate后、runner前检查。未执行冻结请求已取消时不写新失败，普通Refresh旧取消语义保留。源变跳过，不拿旧授权处理新文件。启动把遗留诊断running改interrupted且records_complete=false，清技术/代理claim而不自动排队；明细仍可读，不完整区间拒绝批量预览。每类保留最近20个已解决结束区间，未解决/不完整的保留；store只编排提交，不替代原调度器。
-- **登记表:** `services.BackgroundTaskRegistry`（进程内计数 map，不持久化，重启清零）。taskKey 是固定集合（`backgroundTaskKeyOrder`），当前 21 项：D-014 起的清单之后陆续加入 `browser_download`、`watchlist_enrich`、`movie_chart`，2026-09-29/30 加入 `image_cleanup`（紧跟 `cleanup`）；前端每个 key 都有中文标签（`utils/idleScheduling.js`，守卫测试 APP-03）。（此处旧写法「固定 16 项」与代码不符，2026-09-30 按代码更正，APP-13。）`Snapshot()` 按面板顺序返回；未知 key 与未配对 `End` 直接 panic。12 个长任务在进入 running 时 `Begin`、终态 `defer End`；本地资料补全登记为 `local_metadata`，NFO 写出 2026-10-13 起单独登记为 `local_metadata_export`（D-P3-05，此前两者共用 `local_metadata`）。App 暴露 `GetBackgroundTasks()`，变化时发 `background-tasks` 事件（Dock 角标与命令面板都读它）。
+- **登记表:** `services.BackgroundTaskRegistry`（进程内计数 map，不持久化，重启清零）。taskKey 是固定集合（`backgroundTaskKeyOrder`），当前 32 项（以 BackgroundTaskKeys 为准）：D-014 起的清单之后陆续加入 `browser_download`、`watchlist_enrich`、`movie_chart`，2026-09-29/30 加入 `image_cleanup`（紧跟 `cleanup`）；前端每个 key 都有中文标签（`utils/idleScheduling.js`，守卫测试 APP-03）。（此处旧写法「固定 16 项」与代码不符，2026-09-30 按代码更正，APP-13。）`Snapshot()` 按面板顺序返回；未知 key 与未配对 `End` 直接 panic。12 个长任务在进入 running 时 `Begin`、终态 `defer End`；本地资料补全登记为 `local_metadata`，NFO 写出 2026-10-13 起单独登记为 `local_metadata_export`（D-P3-05，此前两者共用 `local_metadata`）。App 暴露 `GetBackgroundTasks()`，变化时发 `background-tasks` 事件（Dock 角标与命令面板都读它）。
 - **空闲门:** `services.IdleGate` + `idle_probe_darwin.go` / `idle_probe_other.go`。darwin 读 `ioreg -c IOHIDSystem` 的 `HIDIdleTime` 与 `pmset -g batt`，30 秒缓存，5 秒超时；探测失败一律视为不空闲并记 `probe_failed`；非 darwin 恒为空闲。判定 = 空闲 ≥ 阈值 ∧（不要求电源 ∨ 接着电源）∧（时间窗为空 ∨ now ∈ 窗，支持跨午夜）。开关关闭或设置读取失败时 `Run` 与钩子都直通。
 - **只挡自动路径:** 经门的是扫描后自动化三件事（技术信息、pHash、清理分析）、扫描后与片库监听触发的 AI 打标唤醒（`SyncScanDirectories` 的日志字段 `ai_wake_queued` 表示唤醒已提交、可能在门后等待）、图片 AI 打标自动触发、图片自动 EXIF；显式 `Start*` / `Trigger*` / `Retry*` 一律直通，并在启动前摘掉可能残留的项间检查点。~~AI 打标 worker 自身的启动批次与 5 分钟 ticker 不受门（它与显式触发共用一个循环，D-030 于 V1.0.6 收窄）~~——这一收窄已被 2026-09-29/30 产品完善度批次推翻（D-PC19，APP-04）：启动批次与定时轮次改经 `runWorkerOnceGated` 过门（门口的等待放在独立 goroutine，同一时刻最多一个等待中的自动轮次），显式唤醒仍直通并先摘掉门口排队的那一轮。设置页只在保存成功且 AI 相关字段（打标开关与参数、AI 接口地址 / 模型 / Key）确有变化时才触发打标并提示，保存其他设置不再触发。
 - **项间检查点:** 技术信息、pHash、图片 EXIF、图片 AI 打标四个单 worker 服务支持 `StartWithPauseHook(ctx, hook)`：装钩子与翻 Running 在服务同一把锁里完成，服务已在跑的那一轮不补装；显式 `Start` 在锁内摘钩子并 `Release` 放行已停在检查点上的 worker。`TaskPauseHook` 是接口（`Wait` + `Release`），worker 处理下一项前在锁外调用 `Wait`，阻塞时把 `Status().Gate = {waiting_idle, reason}` 回报给前端，`Gate` 由钩子返回时清零；可随 worker ctx 取消。`Release` 先在钩子实例上置 sticky `detached` 再唤醒等待者，`Wait` 在入口、注册后与每轮等待前都检查它，因此显式启动摘钩子与 worker 读钩子之间不存在丢唤醒窗口。清理分析无逐项循环，只在 `Run` 层过门。
@@ -148,3 +148,27 @@
 下载页的 `BTDownloadsPanel` 通过 Wails 适配器串起搜索、文件勾选/全选、明细、分页与控制；字节总计保持十进制字符串精度。列表、分页、详情和草稿读取共用一个请求链，事件突发最多补刷一次，离页/卸载作废旧响应。取消准备失败时明确保留任务，允许仅关闭窗口；重新读取前不提交旧清单。未入库文件没有播放入口，退休连接任务独立显示只读说明。
 
 任务中心的 `bt_download` 最近任务只有 `open_bt_downloads` 导航动作，不进入本地 kill/cancel 注册表，不把外部传输当作必须阻止退出的本地进程。退出说明明确 qBittorrent 的下载和做种继续。连接设置独立保存、测试和清除密钥，未保存修改参与既有离页确认；恢复尚未核实时提示稍后重试或重新打开应用，不误导用户重输凭据。详见[界面与恢复合同](../loopx/design/2026-10-30-prowlarr-download/需求设计文档.md#D-PT-08)。
+
+### 按目标准备能力（2026-11-03）
+
+空片库首页提示可跳过的能力准备入口，设置与命令面板可再次打开。看片、整理、搜画面、制作字幕四个目标读取既有健康与任务状态；只有明确点击检查/准备才调用相关能力，挂载不安装、不下载、不请求权限。未知、不支持、准备中和失败分开呈现，离页后任务仍归原 owner；跳过只记录本机提示偏好。
+
+### 搜索汇总入口（2026-11-04）
+
+观看侧「回顾与检索」增加 `search-results`，命令面板「汇总结果」携查询/会话图片进入；原直接跳转和「查看全部」保留。SearchResultsPage 首次进入挂载，随后 v-show 常驻；无新参数的返回不重置查询、分页或展开，详情返回栈恢复主滚动位置。专业场景页可切到同一分组预览组件。各结果组独立失败、重试和分页；跨页变化不会自动重排，subtitle-index-synced、扫描/监听与场景索引事件仅提示可刷新。
+
+### 章节与草稿入口（2026-11-04）
+
+VideoDetailPage 的 ChapterPanel 分开显示原文件与人工章节，摘要默认收起。编辑只提交本地集合；生成前有独立发送范围确认；草稿需核对证据和应用范围再采纳。保存/生成的晚响应按视频、页面和请求代次隔离，常驻页隐藏弹窗时保留人工编辑输入、撤销未提交应用token。桥接结果不明时重用原 request_id，用户重新准备范围才创建新身份。
+
+观看笔记新增「章节」，按片名查保留的人工集合；原片已删除仍可读，但禁用回跳及覆盖位置。任务中心新增 chapter_summary，展示各任务范围与分段进度，可取消当前队列或打开对应章节；全部排队/运行任务始终保留，另外最多展示100条历史记录。原播放器承担章节seek，不新建播放器owner；打开/展开章节不写已看、观看事件或进度。
+
+### 照片地图与命名回顾（2026-11-04）
+
+照片页新增地图/旅行回顾入口，沿用人物选择，并明确选择拍摄日期。查询在本地ImageLibraryService执行，复用可见性与人物AND筛选；地图视口跨日期线使用两段经度范围，±180同点只计一次。最多1000个网格聚合点，超出时合并为父层级，不丢照片；极区、无有效GPS和无拍摄日期分别说明。聚合点/图片游标绑定完整条件、格子与数据库实例，10分钟有效。条件变化、查询失败或失效人物出现时清空旧点，不让旧条件继续打开照片。
+
+旅行回顾按明确日期闭区间和人物查看全部可见照片，不以地图视口裁剪，不用入库日期填补拍摄日期，不推断路线、出行次数或城市。命名回顾只存条件，允许同名，修改/删除用revision CAS；人物删除后条件失效，用户修改前不自动扩大范围。看图复用PhotoLightbox的原查看记录边界，浏览地图、聚合或缩略图不记录查看。
+
+联网底图是Settings中独立、默认false的map_tiles_enabled，由专用接口显式确认后保存；普通设置保存Omit该字段，不能覆盖独立配置。设置「照片地图」与地图页共用控制。仅Wails桌面资源入口提供固定OSM的z/x/y瓦片，手机/Jellyfin不注册；不接受任意URL、不做在线地名查询、不转发照片/人物/路径/凭据。Leaflet1.9.4随包附许可，不加载远程脚本。
+
+瓦片最多2并发、单请求10秒，无应用重试或提供方替换。User-Agent识别CineInsight，可见OSM署名；按缓存头、Date/Age和304继承规则处理，过期时条件请求。256MiB磁盘预算（含请求预留），不足时停止新瓦片，不自动淘汰后重下；缓存不进备份。关闭/维护/退出取消网络，关闭后只可使用符合缓存限制的本地副本。缓存损坏不会妨碍关闭联网，本地照片查询不依赖底图成功。

@@ -73,6 +73,8 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.BilingualLang = input.BilingualLang
 		// Retired subtitle provider fields remain in historical storage, never drive execution.
 		settings.SubtitleTranslationProvider = "apple"
+		settings.QueryParseEnabled = input.QueryParseEnabled
+		settings.ChapterSummaryEnabled = input.ChapterSummaryEnabled
 		settings.AITaggingBaseURL = input.AITaggingBaseURL
 		settings.AITaggingAPIKey = input.AITaggingAPIKey
 		settings.AITaggingModel = input.AITaggingModel
@@ -138,7 +140,7 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		// 读取时的旧快照，就会把这些路径刚写下的值回滚——尤其是 PIN 哈希，被回滚等于悄悄撤销了
 		// 用户刚设的访问控制。
 		if err := tx.Omit("JellyfinEnabled", "JellyfinPort", "JellyfinUsername", "JellyfinPasswordHash", "JellyfinServerID",
-			"ShortFeedEnabled", "ShortFeedPINHash", "FavoritesUnifiedAt").Save(&settings).Error; err != nil {
+			"ShortFeedEnabled", "ShortFeedPINHash", "FavoritesUnifiedAt", "MapTilesEnabled").Save(&settings).Error; err != nil {
 			return err
 		}
 		return syncShortVideoTags(tx)

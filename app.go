@@ -54,6 +54,11 @@ type App struct {
 	playbackQueue                  *services.PlaybackQueueService
 	playbackQueueEmit              func(uint64)
 	ctx                            context.Context
+	textAI                         *services.TextAIService
+	chapters                       *services.ChapterService
+	mapTiles                       *services.MapTileService
+	chapterInitError               string
+	libraryQueries                 *services.LibraryQueryService
 	videoService                   *services.VideoService
 	thumbnailService               *services.ThumbnailService
 	tagService                     *services.TagService
@@ -239,6 +244,11 @@ func NewApp() *App {
 		data, _, err := app.thumbnailService.RenderFrameAt(ctx, videoID, ms, width)
 		return data, err
 	})
+	app.textAI = services.NewTextAIService()
+	app.mapTiles = services.NewMapTileService(dataDir, app.settingsService)
+	app.chapters = services.NewChapterService(app.textAI)
+	app.chapters.SetBackgroundTaskRegistry(app.backgroundTasks)
+	app.libraryQueries = services.NewLibraryQueryService(videoService, app.textAI)
 	app.wireBrowserBridge()
 	app.wireBT(dataDir)
 	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService, personService, collectionService)

@@ -21,6 +21,10 @@ function mountDialog(props = {}) {
 beforeEach(() => vi.clearAllMocks());
 
 describe('保存视图弹窗（D-PC35）', () => {
+  it('renaming preserves all combined conditions', () => {
+    const filter = savedViewFilter({ ...views[0], watch_state: 'unwatched', favorites_only: true, min_duration_seconds: 1200, max_duration_seconds: 7200 });
+    expect(filter).toMatchObject({ watch_state: 'unwatched', favorites_only: true, min_duration_seconds: 1200, max_duration_seconds: 7200 });
+  });
   it('另存为新视图带上当前条件（含人物）', async () => {
     api.SaveLibraryView.mockResolvedValueOnce({ id: 6, name: '新视图' });
     const afterSaved = vi.fn().mockResolvedValue();

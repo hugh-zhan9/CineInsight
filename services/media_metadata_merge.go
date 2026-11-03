@@ -234,6 +234,9 @@ func mergeVideoMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, options 
 		}
 	}
 	for _, collectionID := range order {
+		if err := claimCollectionMutation(tx, collectionID); err != nil {
+			return plan, err
+		}
 		row := models.CollectionVideo{CollectionID: collectionID, VideoID: keeperID, Position: positions[collectionID]}
 		inserted := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 		if inserted.Error != nil {

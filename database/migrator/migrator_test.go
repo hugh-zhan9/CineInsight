@@ -95,6 +95,9 @@ func seedEveryTable(t *testing.T, db *gorm.DB) {
 		}
 		row := reflect.New(sch.ModelType)
 		fillMinimalRow(t, db, sch, row.Elem())
+		if chapter, ok := row.Interface().(*models.VideoChapter); ok {
+			chapter.EndMS = chapter.StartMS + 1
+		}
 		if err := db.Create(row.Interface()).Error; err != nil {
 			t.Fatalf("为表 %s 造最小合法行失败（需要为它加一条专门的造数分支）: %v", sch.Table, err)
 		}

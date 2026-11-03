@@ -14,6 +14,7 @@ import {
   StartImagePerceptualHashBackfill, StartImageSemanticIndex,
   StartFrameHashBackfill, StartLocalMetadataBackfill, StartPerceptualHashBackfill, StartTechnicalBackfill, TriggerAITagging
 } from '../../wailsjs/go/main/App';
+import {chapterAPI} from './chapters.js';
 import { backgroundTaskLabel, BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdleGateNotWaitingError } from './idleScheduling.js';
 
 // 各任务的显式启动 / 取消绑定。只收零参绑定：超分要选文件与倍率、字幕要选视频、
@@ -58,6 +59,7 @@ const TASK_BINDINGS = {
   backup: { start: () => CreateDatabaseBackup() },
   movie_chart: { cancel: () => CancelMovieChartRefresh() },
   // 场景画面索引的启动要选范围（全部 / 当前筛选），只在场景检索页发起；在跑时可取消。
+  chapter_summary:{cancel:()=>chapterAPI.cancelAll()},
   scene_index: { cancel: () => CancelSceneIndex() },
   // 规则「对现有内容运行」要选规则，只在数据维护页发起；在跑时可取消。
   automation_rules: { cancel: () => CancelAutomationRuleRun() },

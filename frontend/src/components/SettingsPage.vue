@@ -1,6 +1,7 @@
 <template>
   <div class="page-content settings-page">
     <PageHeader title="设置" subtitle="标着「需保存」的分区改完点底部「保存所有设置」；「即时生效」的分区点了就生效。" />
+    <button type="button" class="btn btn--secondary" data-test="settings-capability-setup" @click="$emit('open-setup')">按目标准备</button>
     <!-- 原型 A10：分区改成左侧锚点导航 + 右侧连续长表单。
          这是全应用唯一出现侧栏的地方。它是滚动定位的锚点导航（各分区始终都在页面上），不是页签，
          所以不用 AppTabs（role=tablist 会让读屏以为一次只显示一个分区）；当前分区用 aria-current 标出。 -->
@@ -42,6 +43,7 @@
     <FaceSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
 
     <SceneSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
+    <PhotoMapSection />
 
     <MobileSection :form="settingsForm" />
 
@@ -109,6 +111,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'enhance', label: '视频超分', saveMode: 'instant' },
   { key: 'face', label: '人脸识别', saveMode: 'save' },
   { key: 'scenes', label: '场景检索', saveMode: 'save' },
+  {key:'photo-map',label:'照片地图',saveMode:'instant'},
   { key: 'mobile', label: '手机端浏览', saveMode: 'mixed' },
   { key: 'jellyfin', label: 'Jellyfin 客户端连接', saveMode: 'instant' },
   { key: 'bt', label: 'Prowlarr 与 qBittorrent', saveMode: 'instant' },
@@ -250,6 +253,8 @@ export function buildSettingsPayload(form) {
     log_enabled: form.log_enabled,
     bilingual_enabled: form.bilingual_enabled || false,
     bilingual_lang: form.bilingual_lang || 'zh',
+    query_parse_enabled: Boolean(form.query_parse_enabled),
+    chapter_summary_enabled: Boolean(form.chapter_summary_enabled),
     ai_tagging_base_url: form.ai_tagging_base_url || '',
     ai_tagging_api_key: form.ai_tagging_api_key || '',
     ai_tagging_model: form.ai_tagging_model || '',
@@ -291,6 +296,7 @@ import BasicSection from './settings/BasicSection.vue';
 import DatabaseSection from './settings/DatabaseSection.vue';
 import EnhanceSection from './settings/EnhanceSection.vue';
 import FaceSection from './settings/FaceSection.vue';
+import PhotoMapSection from './settings/PhotoMapSection.vue';
 import SceneSection from './settings/SceneSection.vue';
 import IdleSchedulingSection from './settings/IdleSchedulingSection.vue';
 import IINASyncSection from './settings/IINASyncSection.vue';
@@ -306,7 +312,7 @@ import SubtitleSection from './settings/SubtitleSection.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { BTConnectionSection, PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { PhotoMapSection, BTConnectionSection, PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -314,7 +320,7 @@ export default {
   // update:dirty（布尔）由 App.vue 监听：有未保存修改时切页前先确认（D-PC57 / APP-08）。
   // relaunch-required({ message })：数据库进入「待重启」终态，App 层据此挂全局「立即重启」遮罩
   // （主代理裁决 2026-09-30；设置页自己不做全局遮罩）。
-  emits: ['settings-saved', 'directories-changed', 'update:dirty', 'relaunch-required'],
+  emits: ['settings-saved', 'directories-changed', 'update:dirty', 'relaunch-required', 'open-setup'],
   data() {
     const form = normalizeSettingsForm(this.settings);
     return {

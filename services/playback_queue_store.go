@@ -46,6 +46,7 @@ type QueueEntryDTO struct {
 }
 
 type QueuePage struct {
+	HasClips       bool                      `json:"has_clips"`
 	State          models.PlaybackQueueState `json:"state"`
 	Items          []QueueEntryDTO           `json:"items"`
 	Current        *QueueEntryDTO            `json:"current"`
@@ -103,6 +104,11 @@ func loadQueuePage(ctx context.Context, q QueueQuery) (*QueuePage, error) {
 		if q.Revision != 0 && state.Revision != q.Revision {
 			return ErrQueueChanged
 		}
+		var clips int64
+		if err := db.Model(&models.PlaybackQueueEntry{}).Where("entry_kind = ?", "clip").Count(&clips).Error; err != nil {
+			return err
+		}
+		page.HasClips = clips > 0
 		page.State = state
 		if err := db.Model(&models.PlaybackQueueEntry{}).Count(&page.Total).Error; err != nil {
 			return err
@@ -230,9 +236,10 @@ func validateQueueEdit(in QueueEdit) error {
 }
 
 type preparedQueueEdit struct {
-	input  QueueEdit
-	state  models.PlaybackQueueState
-	videos []models.Video
+	stopPreviewBatch bool
+	input            QueueEdit
+	state            models.PlaybackQueueState
+	videos           []models.Video
 }
 
 // A bounded immutable plan belongs to the queue command owner. A collection
@@ -287,6 +294,30 @@ func preparePlaybackQueueEdit(ctx context.Context, in QueueEdit) (*preparedQueue
 			}
 			if count != int64(len(ids)) {
 				return ErrQueueChanged
+			}
+			var entry models.PlaybackQueueEntry
+			if err := db.First(&entry, in.EntryID).Error; err != nil {
+				return err
+			}
+			if in.Action == "move" && entry.EntryKind == "clip" {
+				return ErrClipBatchOrder
+			}
+			if in.Action == "remove" && state.CurrentEntryID != nil && state.ActiveToken != "" && entry.PreviewBatchID != nil {
+				var current models.PlaybackQueueEntry
+				if err := db.First(&current, *state.CurrentEntryID).Error; err != nil {
+					return err
+				}
+				plan.stopPreviewBatch = current.EntryKind == "clip" && current.PreviewBatchID != nil && *current.PreviewBatchID == *entry.PreviewBatchID
+			}
+		case "configure":
+			if in.Player != "inline" {
+				var clips int64
+				if err := db.Model(&models.PlaybackQueueEntry{}).Where("entry_kind = ?", "clip").Count(&clips).Error; err != nil {
+					return err
+				}
+				if clips > 0 {
+					return ErrClipPlayerUnsupported
+				}
 			}
 		}
 		latest, err := queueStateFrom(db)
@@ -378,6 +409,11 @@ func applyPreparedQueueEdit(ctx context.Context, plan *preparedQueueEdit) (*mode
 				updates["last_error_message"] = ""
 			}
 			if err = db.Model(&models.PlaybackQueueState{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		if plan.stopPreviewBatch {
+			if err := db.Model(&models.PlaybackQueueState{}).Where("id = 1").Updates(map[string]any{"active_token": "", "status": "stopped"}).Error; err != nil {
 				return err
 			}
 		}

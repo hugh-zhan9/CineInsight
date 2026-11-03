@@ -167,7 +167,7 @@
 </template>
 
 <script>
-import { CreateTagWithCategory, MergeTags, UpdateTagWithCategory, TriggerAITagging, CreateTagCategory, RenameTagCategory, DeleteTagCategory, GetTagUsageCounts, ListTagPersonConversions, UndoTagPersonConversion } from '../../wailsjs/go/main/App';
+import { CreateTagWithCategory, MergeTags, PreviewTagMergePreferences, MergeTagsFromPreferencePreview, UpdateTagWithCategory, TriggerAITagging, CreateTagCategory, RenameTagCategory, DeleteTagCategory, GetTagUsageCounts, ListTagPersonConversions, UndoTagPersonConversion } from '../../wailsjs/go/main/App';
 import AppIcon from './ui/AppIcon.vue';
 import DialogShell from './ui/DialogShell.vue';
 import TagPersonConversionPanel from './TagPersonConversionPanel.vue';
@@ -569,6 +569,8 @@ export default {
         .map(tag => `「${tag.name}」`)
         .join('、');
       if (!target) return;
+      this.mergeLoading = true;
+      this.mergeError = '';
       // META-14：确认框里说清受影响的视频与图片数；统计失败只在文案里说明，不挡合并本身。
       let impact = '';
       try {
@@ -578,11 +580,17 @@ export default {
       } catch (err) {
         impact = `（受影响的媒体数统计失败：${err}）`;
       }
-      if (!await confirmAction({ title: '合并标签', message: `确定将 ${sourceNames} 合并到「${target.name}」吗？${impact}源标签会被删除，此操作不能自动撤销。`, confirmText: '合并', danger: true })) return;
-      this.mergeLoading = true;
-      this.mergeError = '';
       try {
-        await MergeTags(sourceIds, Number(this.mergeTargetId));
+        const targetId = Number(target.id);
+        const prepared = await PreviewTagMergePreferences(sourceIds, targetId);
+        if (prepared.status !== 'ok') throw new Error(prepared.error?.message || '推荐偏好预览失败');
+        const preview = prepared.data;
+        const preferenceNotice = preview.has_feedback ? `合并后的标签将${preview.effect === 'boost' ? '增加' : '减少'}推荐；相反方向并存时保留减少推荐。` : '';
+        if (!await confirmAction({ title: '合并标签', message: `确定将 ${sourceNames} 合并到「${target.name}」吗？${impact}${preferenceNotice}源标签会被删除，此操作不能自动撤销。`, confirmText: '合并', danger: true })) return;
+        if (preview.has_feedback) {
+          const result = await MergeTagsFromPreferencePreview(preview.token);
+          if (result.status !== 'ok') throw new Error(result.error?.message || '合并失败，请重新预览');
+        } else await MergeTags(sourceIds, targetId);
         this.mergeSourceIds = [];
         this.mergeTargetId = 0;
         this.mergeKeyword = '';

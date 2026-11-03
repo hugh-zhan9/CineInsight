@@ -110,3 +110,11 @@ it('keeps cleanup retry available and removes buffered playback after failed mai
   expect(api.StopPlaybackQueue).toHaveBeenCalledWith(cleanupToken);
   expect(wrapper.find('[data-test="queue-cleanup-retry"]').exists()).toBe(false);
 });
+
+it('retires the queue before handing a clip to whole-video playback', async () => {
+  const clip={id:4,video_id:9,title:'clip',entry_kind:'clip',clip_start_ms:1000,clip_end_ms:2000,preview_position:1,preview_count:1};
+  api.GetPlaybackQueue.mockResolvedValueOnce(snapshot({current:clip})).mockResolvedValue(snapshot({current:clip,state:{revision:2,player:'inline',status:'stopped',active_token:''},session:null}));
+  const watchWholeVideo=vi.fn(async(id,stop)=>{expect(id).toBe(9);expect(await stop()).toBe(true);expect(api.StopPlaybackQueue).toHaveBeenCalledWith('token');return true;});
+  wrapper=mount(Panel,{props:{open:true,watchWholeVideo},global:{stubs:{QueueInlinePlayer:true}}});await flushPromises();await wrapper.get('[data-test="queue-watch-whole"]').trigger('click');await flushPromises();
+  expect(watchWholeVideo).toHaveBeenCalledTimes(1);expect(wrapper.emitted('close')).toHaveLength(1);
+});

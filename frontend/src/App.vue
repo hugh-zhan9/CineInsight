@@ -54,7 +54,7 @@
     <PersonMediaDeleteDialog v-if="viewerDeleteTarget" :target="viewerDeleteTarget" @close="viewerDeleteTarget = null" @deleted="viewerMediaDeleted" @restored="viewerMediaRestored" />
     <WallpaperStatusBar v-if="appReady" />
     <ControlledPlaybackStatus v-if="appReady" />
-    <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue', missingMessage: '这部视频已不在片库中，可能已删除或不在扫描目录内。' })" />
+    <PlaybackQueuePanel v-if="appReady" :open="playbackQueueOpen" :watch-whole-video="watchQueueWholeVideo" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID($event, { from: 'playback-queue', missingMessage: '这部视频已不在片库中，可能已删除或不在扫描目录内。' })" />
 
     <div v-if="startupError" class="startup-error-view">
       <!-- 回落保护（D-DBG-03..05）：上次用的是 PostgreSQL（或按数据目录推断如此）、这次没读到它的配置，没有打开本机库。
@@ -137,9 +137,10 @@
         @open-video="openVideoByID($event, { from: 'home' })"
         @navigate="navigateTo"
         @open-person="openPerson"
+        @open-setup="capabilitySetupOpen = true"
       />
       <!-- 整页详情（D-UI-05）：每次打开或返回都是一次新挂载（key），参数来自 detailRoute。 -->
-      <VideoDetailPage
+      <VideoDetailPage @chapter-settings="openSettingsSectionFromCommand('ai-tags')" @subtitle-tools="openSubtitleTool($event.videoID,'edit')"
         v-if="currentPage === 'video-detail'"
         :key="detailRoute.token"
         :video-id="detailRoute.videoId"
@@ -207,6 +208,7 @@
         @open-cleanup="openCleanupCenter({ ...$event, tab: 'video', open: true })"
         @trash-restored="handleLibraryTrashRestored"
         @open-task-center="openTaskCenter"
+        @open-query="libraryQueryOpen = true"
       />
 
       <!-- 观看回顾：首次进入才挂载，之后只隐藏；不可见时停掉实时刷新。 -->
@@ -220,11 +222,11 @@
         @open-entity="openRecapEntity"
         @navigate="navigateTo"
       />
-      <DownloadsPage v-if="currentPage === 'downloads'" :initial-query="pageRequests.downloads?.query || ''" @settings="openSettingsSectionFromCommand($event)" @play="openVideoByID($event, { from: 'downloads' })" />
+      <DownloadsPage v-if="currentPage === 'downloads'" :initial-query="pageRequests.downloads?.query || ''" :episode-origin="pageRequests.downloads?.episodeOrigin || null" @settings="openSettingsSectionFromCommand($event)" @play="openVideoByID($event, { from: 'downloads' })" />
       <!-- 片单（D-P2-04）：想看 · 榜单 · 观影记录 · 资源 · 观看笔记五个标签。首次进入才挂载，之后只隐藏（观看笔记的
            编辑与翻页状态要留着）；各标签何时挂载、何时卸载由 ListsPage 按原来四页的做法管。当前标签是页面参数
            listsTab，别名 key（watchlist 等）由 navigateTo 换成它。 -->
-      <ListsPage
+      <ListsPage :chapter-request="chapterReviewRequest" @open-chapter="openChapterPosition" @subtitle-tools="openSubtitleTool($event,'edit')"
         @find-resources="navigateTo('lists', { tab: 'resources', query: $event })"
         v-if="listsMounted"
         v-show="currentPage === 'lists'"
@@ -246,6 +248,7 @@
         :settings="settings"
         :directories="directories"
         @settings-saved="handleSettingsUpdate"
+        @open-setup="capabilitySetupOpen = true"
         @directories-changed="handleDirectoriesChanged"
         @update:dirty="settingsDirty = Boolean($event)"
         @relaunch-required="showRelaunchRequired($event && $event.message)"
@@ -292,6 +295,7 @@
         :focus-entity="entitiesManageFocus"
         @update:tab="navigateTo('entities-manage', { tab: $event })"
         @open-video="openVideo($event, { from: 'entities-manage' })"
+        @resource-search="navigateTo('downloads', { query: $event.query, episodeOrigin: $event })"
       />
       <!-- 清理中心（D-P3-02）：视频 · 图片两个标签。首次进入才挂载，之后只隐藏：视频这一侧的审阅进度（勾选、保留项、
            已移到废纸篓的标记）在页面里，删除宿主（撤销提示、「最近操作」的撤销回调）也一直在。当前标签是页面参数
@@ -330,7 +334,8 @@
 	    @navigate="navigateTo"
 	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
-	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
+	  <SearchResultsPage v-if="searchResultsMounted" v-show="currentPage === 'search-results'" :page-active="currentPage === 'search-results'" :initial-request="searchResultsRequest" :watch-whole-video="watchQueueWholeVideo" @open-video="openVideo($event, { from: 'search-results' })" @open-entity="openRecapEntity" />
+	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" :watch-whole-video="watchQueueWholeVideo" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
 	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->
 	  <VideoWorkbenchPage
 	    v-if="workbenchMounted"
@@ -369,6 +374,8 @@
 	  />
     </div>
 
+    <LibraryQueryDialog v-if="appReady && libraryQueryOpen" :apply-filter="applyParsedQueryFilter" @close="libraryQueryOpen = false" @settings="libraryQueryOpen = false; openSettingsSectionFromCommand('ai-tags')" />
+    <CapabilitySetup v-if="appReady && capabilitySetupOpen" @close="capabilitySetupOpen = false" />
     <!-- 命令面板（⌘K 或 ⌘⇧P，D-UD-03）：不新增顶栏按钮，只有快捷键这一个入口 -->
     <CommandPalette
       v-if="appReady"
@@ -380,7 +387,7 @@
     />
 
     <!-- 任务中心常挂载（关着也在），顶栏任务指示才能跟着事件走。待处理角标由 App 自己定时读（refreshPendingWorkTotal）。 -->
-    <TaskCenterDrawer
+    <TaskCenterDrawer @open-chapters="openChapterReview"
       @open-bt-downloads="navigateTo('downloads')"
       v-if="appReady"
       :open="taskCenterOpen"
@@ -457,6 +464,7 @@ import ManageHomePage from './components/manage/ManageHomePage.vue';
 import PendingWorkPage from './components/manage/PendingWorkPage.vue';
 import CleanupCenterPage from './components/manage/CleanupCenterPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
+import SearchResultsPage from './components/SearchResultsPage.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
@@ -469,6 +477,9 @@ import AppBadge from './components/ui/AppBadge.vue';
 import AppBanner from './components/ui/AppBanner.vue';
 import AppSpinner from './components/ui/AppSpinner.vue';
 import SystemHealthPanel from './components/SystemHealthPanel.vue';
+import LibraryQueryDialog from './components/LibraryQueryDialog.vue';
+import CapabilitySetup from './components/CapabilitySetup.vue';
+import { SUBTITLE_TOOL_REQUEST } from './utils/subtitleNavigation.js';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
@@ -517,12 +528,14 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
-    AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
-    DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
+    AppFeedback, CommandPalette, SearchResultsPage, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
+    DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, CapabilitySetup, LibraryQueryDialog, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, PersonMediaDeleteDialog, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
   data() {
     return {
+      capabilitySetupOpen: false,
+      libraryQueryOpen: false,
       // 默认落在观看首页（D-UI-01、D-UI-09）；片库页仍常挂载，只是不再是默认可见页。
       currentPage: 'home',
       playbackQueueOpen: false,
@@ -559,7 +572,8 @@ export default {
       collectionsMounted: false,
       entityBrowseEpoch: 0,
       recapMounted: false,
-      scenesMounted: false,
+      chapterReviewRequest:null,
+      scenesMounted: false, searchResultsMounted: false, searchResultsRequest: null,
       // 片库带过来的场景检索范围：{ filter, token }；为空表示全部视频。
       scenesScope: null,
       // 带关键词进人物 / 作品集观看页（命令面板「查看全部」）：{ keyword, token }，离开那一页时清空。
@@ -619,6 +633,13 @@ export default {
     };
   },
   async mounted() {
+    this._subtitleToolListener = event => {
+      const request = event.detail;
+      if (!request || typeof request.resolve !== 'function' || typeof request.reject !== 'function') return;
+      request.handled = true;
+      this.openSubtitleTool(request.videoID, request.action, request.isCurrent).then(request.resolve, error => { notifyError('无法打开字幕工具，请在片库管理中重试'); request.reject(error); });
+    };
+    window.addEventListener(SUBTITLE_TOOL_REQUEST, this._subtitleToolListener);
     // 前后台上报（D-013）：后端据此决定长任务终态要不要发系统通知。
     // 放在最前面，数据库连不上时也要报——通知开关与库无关。
     this.attachForegroundReporting();
@@ -690,6 +711,7 @@ export default {
     }
   },
   beforeUnmount() {
+    window.removeEventListener(SUBTITLE_TOOL_REQUEST, this._subtitleToolListener);
     this.detachForegroundReporting();
     clearInterval(this._pendingWorkTimer);
     document.body.classList.remove('surface-cinema');
@@ -735,6 +757,7 @@ export default {
         if (page === 'collections') this.collectionsMounted = true;
         if (page === 'recap') this.recapMounted = true;
         if (page === 'scenes') this.scenesMounted = true;
+        if (page === 'search-results') this.searchResultsMounted = true;
         if (page === 'video-workbench') this.workbenchMounted = true;
         // 返回栈只在整页详情上用得到：落到任何别的页面（包括进管理区）就清空（D-UI-10）。
         // 留着的层再也回不去——别的页面没有「返回」，从那里再开一部片会重新压栈。
@@ -879,7 +902,8 @@ export default {
     // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
     // params 是交给目标页的一次性参数（见 applyPageParams）；片单的四个别名 key 先换成 `lists` + 标签（D-P2-04），
     // 已在目标页时也照样交过去（片单只换标签）。
-    navigateTo(target, targetParams = null) {
+    navigateTo(target, targetParams = null, guard = null) {
+      if (guard && !guard.isCurrent()) return false;
       const { page, params } = resolvePageRoute(target, targetParams);
       if (!page) return true;
       if (page === this.currentPage) {
@@ -890,6 +914,7 @@ export default {
           return false;
         }
         this.applyPageParams(page, params);
+        guard?.committed();
         return true;
       }
       // 存储体检正在移到废纸篓：撤销条与「不支持废纸篓」二选一都挂在洞察页上，切走会丢掉它们，
@@ -911,13 +936,15 @@ export default {
           cancelText: '继续编辑',
           danger: true
         }).then(ok => {
-          if (!ok) return false;
+          if (!ok || (guard && !guard.isCurrent())) return false;
           this.settingsDirty = false;
           this.commitPage(page, params);
+          guard?.committed();
           return true;
         });
       }
       this.commitPage(page, params);
+      guard?.committed();
       return true;
     },
     // 真正切页的唯一出口：顺带作废还在取视频的「打开一部片」（M-1），用户已经去了别处，取回来也不再把人拽回去。
@@ -959,6 +986,7 @@ export default {
       if (page === ENTITIES_MANAGE_PAGE && isEntitiesManageTab(params?.tab)) this.entitiesManageTab = params.tab;
       const entityKind = { people: 'person', collections: 'collection' }[page];
       if (entityKind && typeof params?.keyword === 'string') this.requestEntityKeyword(entityKind, params.keyword);
+      if (page === 'search-results' && params) { this._handOffSeq++; this.searchResultsRequest = { ...params, token: this._handOffSeq }; }
       if (page === 'scenes' && params && (typeof params.query === 'string' || params.mode || params.image?.dataURL)) {
         this._handOffSeq = (this._handOffSeq || 0) + 1;
         this.scenesScope = { filter: null, ...params, token: this._handOffSeq };
@@ -1082,6 +1110,8 @@ export default {
         .catch(err => notifyError(`打开「${label || '待处理事项'}」失败：${err}`));
     },
     // 书签定位（观看笔记）：观看区进整页详情、从书签起点起播（D-UI-07）；其他来源沿片库页既有的书签入口开抽屉。
+    openChapterPosition(result) { return this.openBookmark({status:'ready',video:{id:result.video_id},bookmark:{start_ms:result.start_ms,end_ms:null},source_token:result.source_version},{from:'lists'}); },
+    async openChapterReview({videoID,jobID}) { if(await this.navigateTo('lists',{tab:'viewing-notes'})===false||this.currentPage!=='lists')return;this._handOffSeq++;this.chapterReviewRequest={videoID,jobID,token:this._handOffSeq}; },
     async openBookmark(resolution, { from } = {}) {
       if (opensVideoDetail(from, this.currentPage)) {
         if (resolution?.status !== 'ready' || !resolution.video) return false;
@@ -1289,6 +1319,54 @@ export default {
     handleDetailVideoStateChange(payload) {
       this.$refs.videoBrowsePage?.applyExternalVideoStateChange(payload);
       return this.$refs.videoListPage?.applyExternalVideoStateChange(payload);
+    },
+    async watchQueueWholeVideo(videoID, stopQueue) {
+      if (!this.appReady || !Number.isSafeInteger(videoID) || videoID <= 0 || typeof stopQueue !== 'function') return false;
+      const generation = this.supersedeVideoOpen();
+      const current = () => this.appReady && generation === this._videoOpenGeneration;
+      if (await stopQueue() === false || !current()) return false;
+      const [video] = await GetVideosByIDs([videoID]) || [];
+      if (!current()) return false;
+      if (!video) throw new Error('这部视频已不在当前片库中');
+      const source = { page: this.currentPage, params: this.currentPageParams(), scrollTop: this.$refs.mainView?.scrollTop || 0 };
+      let committed;
+      if (await this.navigateTo(VIDEO_DETAIL_PAGE, null, { isCurrent: current, committed: () => { committed = this._videoOpenGeneration; } }) === false) return false;
+      if (!this.appReady || this.currentPage !== VIDEO_DETAIL_PAGE || committed !== this._videoOpenGeneration) return false;
+      this.$refs.homePage?.clearPendingTonight();
+      this.detailReturnStack = pushDetailReturn(this.detailReturnStack, source, videoID);
+      this.showVideoDetail(videoID, { startAtMs: 0, bookmark: null });
+      return true;
+    },
+    async applyParsedQueryFilter(filter, isCurrent) {
+      let generation;
+      if (await this.navigateTo('library-manage', null, { isCurrent, committed: () => { generation = this._videoOpenGeneration; } }) === false) return false;
+      await this.$nextTick();
+      const current = () => isCurrent() && this.currentPage === 'library-manage' && generation === this._videoOpenGeneration;
+      if (!current()) return false;
+      const page = this.$refs.videoListPage;
+      if (!page) throw new Error('片库管理尚未就绪');
+      return page.applyParsedQueryFilter(filter, current);
+    },
+    async openSubtitleTool(videoID, action, isCurrent = () => true) {
+      if (!this.appReady || !Number.isSafeInteger(videoID) || videoID <= 0 || !['edit', 'generate'].includes(action) || typeof isCurrent !== 'function') return false;
+      const generation = this.supersedeVideoOpen();
+      const current = () => generation === this._videoOpenGeneration && isCurrent();
+      let video;
+      try { [video] = await GetVideosByIDs([videoID]) || []; }
+      catch (error) { if (!current()) return false; throw error; }
+      if (!current()) return false;
+      if (!video) throw new Error('这部视频已不在当前片库中');
+      let committedGeneration;
+      if (await this.navigateTo('library-manage', null, {
+        isCurrent: current, committed: () => { committedGeneration = this._videoOpenGeneration; }
+      }) === false) return false;
+      const stillHere = () => this.appReady && this.currentPage === 'library-manage' && committedGeneration === this._videoOpenGeneration;
+      await this.$nextTick();
+      if (!stillHere()) return false;
+      const page = this.$refs.videoListPage;
+      if (!page) throw new Error('片库管理尚未就绪');
+      if (action === 'edit') return await page.openSubtitleWorkbench(video, stillHere) !== false;
+      return await page.generateSubtitle(video, stillHere) !== false;
     },
     // 整页详情「编辑资料」：切到片库管理，在抽屉里打开这部片（详细设计「整页详情」）。
     editVideoInManage(videoID) {

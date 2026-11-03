@@ -18,6 +18,7 @@ import (
 	"video-master/services/subtitleparser"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -68,12 +69,16 @@ const recentlyAddedWindow = 30 * 24 * time.Hour
 
 // LibraryFilter 描述主片库和随机播放共享的筛选边界。
 type LibraryFilter struct {
-	VideoID    uint   `json:"video_id,omitempty"`
-	SearchMode string `json:"search_mode"`
-	Keyword    string `json:"keyword"`
-	PathPrefix string `json:"path_prefix"`
-	SmartView  string `json:"smart_view"`
-	TagIDs     []uint `json:"tag_ids"`
+	WatchState         string `json:"watch_state"`
+	FavoritesOnly      bool   `json:"favorites_only"`
+	MinDurationSeconds int64  `json:"min_duration_seconds"`
+	MaxDurationSeconds int64  `json:"max_duration_seconds"`
+	VideoID            uint   `json:"video_id,omitempty"`
+	SearchMode         string `json:"search_mode"`
+	Keyword            string `json:"keyword"`
+	PathPrefix         string `json:"path_prefix"`
+	SmartView          string `json:"smart_view"`
+	TagIDs             []uint `json:"tag_ids"`
 	// PersonIDs 是人物筛选（D-PC33）：AND 语义，空表示不筛。
 	PersonIDs []uint `json:"person_ids"`
 	// StaleReason 只在「路径失效」视图里生效，精确匹配 models.StaleReason*；
@@ -205,6 +210,16 @@ var validStaleReasons = map[string]struct{}{
 }
 
 func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
+	filter.WatchState = strings.TrimSpace(filter.WatchState)
+	if filter.WatchState == "" {
+		filter.WatchState = RandomWatchAny
+	}
+	if filter.WatchState != RandomWatchAny && filter.WatchState != RandomWatchUnwatched && filter.WatchState != RandomWatchWatched {
+		return LibraryFilter{}, fmt.Errorf("invalid_input: 不支持的观看状态")
+	}
+	if filter.MinDurationSeconds < 0 || filter.MaxDurationSeconds < 0 || filter.MinDurationSeconds > randomMaxDurationSeconds || filter.MaxDurationSeconds > randomMaxDurationSeconds || filter.MaxDurationSeconds > 0 && filter.MinDurationSeconds > filter.MaxDurationSeconds {
+		return LibraryFilter{}, fmt.Errorf("invalid_input: 时长范围必须在0–1440分钟之间且下限不超过上限")
+	}
 	if filter.VideoID != 0 {
 		filter.CollapseVersions = false
 	}
@@ -221,6 +236,9 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 		filter.PathPrefix = filepath.Clean(filter.PathPrefix)
 	}
 	filter.SmartView = strings.TrimSpace(filter.SmartView)
+	if filter.WatchState == RandomWatchWatched && filter.SmartView == LibraryViewUnwatched || filter.WatchState == RandomWatchUnwatched && filter.SmartView == LibraryViewWatched {
+		return LibraryFilter{}, fmt.Errorf("invalid_input: 观看状态与智能视图矛盾，请调整条件")
+	}
 	if _, ok := validLibraryViews[filter.SmartView]; !ok {
 		return LibraryFilter{}, fmt.Errorf("不支持的智能视图: %s", filter.SmartView)
 	}
@@ -372,11 +390,24 @@ func applyScanScope(query *gorm.DB, includeRoots bool) (*gorm.DB, error) {
 }
 
 func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*gorm.DB, error) {
+	query = query.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	normalized, err := normalizeLibraryFilter(filter)
 	if err != nil {
 		return nil, err
 	}
 	filter = normalized
+	if filter.WatchState != RandomWatchAny {
+		query = query.Where("videos.is_watched = ?", filter.WatchState == RandomWatchWatched)
+	}
+	if filter.FavoritesOnly {
+		query = query.Where("videos.is_favorite = ?", true)
+	}
+	if filter.MinDurationSeconds > 0 {
+		query = query.Where("videos.duration > 0 AND videos.duration >= ?", filter.MinDurationSeconds)
+	}
+	if filter.MaxDurationSeconds > 0 {
+		query = query.Where("videos.duration > 0 AND videos.duration <= ?", filter.MaxDurationSeconds)
+	}
 	if filter.VideoID != 0 {
 		query = query.Where("videos.id = ?", filter.VideoID)
 	}
@@ -873,6 +904,7 @@ func buildSavedLibraryView(name string, input LibraryFilter) (models.SavedLibrar
 		return models.SavedLibraryView{}, fmt.Errorf("编码人物筛选失败: %w", err)
 	}
 	return models.SavedLibraryView{
+		WatchState: filter.WatchState, FavoritesOnly: filter.FavoritesOnly, MinDurationSeconds: filter.MinDurationSeconds, MaxDurationSeconds: filter.MaxDurationSeconds,
 		Name: name, SearchMode: filter.SearchMode, Keyword: filter.Keyword, SmartView: filter.SmartView,
 		TagIDsJSON: string(tagJSON), PersonIDsJSON: string(personJSON), MinSize: filter.MinSize, MaxSize: filter.MaxSize,
 		MinHeight: filter.MinHeight, MaxHeight: filter.MaxHeight,
@@ -917,6 +949,7 @@ func (s *VideoService) UpdateSavedLibraryView(id uint, name string, filter Libra
 		return nil, ErrSavedViewNameTaken
 	}
 	updates := map[string]interface{}{
+		"watch_state": next.WatchState, "favorites_only": next.FavoritesOnly, "min_duration_seconds": next.MinDurationSeconds, "max_duration_seconds": next.MaxDurationSeconds,
 		"name": next.Name, "search_mode": next.SearchMode, "keyword": next.Keyword, "smart_view": next.SmartView,
 		"tag_ids_json": next.TagIDsJSON, "person_ids_json": next.PersonIDsJSON,
 		"min_size": next.MinSize, "max_size": next.MaxSize, "min_height": next.MinHeight, "max_height": next.MaxHeight,

@@ -1,8 +1,10 @@
 <template>
   <section class="viewing-notes-panel" data-test="bookmark-panel">
+    <template v-if="!editorOnly">
     <header class="notes-toolbar">
       <h3>片段书签</h3>
       <button v-if="video" type="button" class="btn btn--primary" :disabled="!session?.source_version" data-test="bookmark-add" @click="create">记下当前位置</button>
+      <button type="button" class="btn btn--secondary" :disabled="!selectedBookmarkIDs.length || selectedBookmarkIDs.length > 200" @click="addingIDs = [...selectedBookmarkIDs]">加入专题（{{ selectedBookmarkIDs.length }}）</button>
       <input v-model="keyword" class="search-input notes-search" aria-label="搜索片段书签" placeholder="搜索片名、笔记或标签" data-test="bookmark-search" />
     </header>
     <p v-if="error" class="notes-alert" role="alert">{{ error }}</p>
@@ -11,19 +13,22 @@
     <article v-for="item in items" :key="item.id" class="notes-entry notes-entry--media" data-test="bookmark-row">
       <NotesThumb :src="frameFor(item)" fallback="原片不可用" :clickable="item.source_available" :title="item.title" @open="resolve(item)" />
       <div class="notes-entry__body">
+<label class="notes-check"><input v-model="selectedBookmarkIDs" type="checkbox" :value="item.id" />选择书签</label>
       <h4>{{ item.title }}</h4><p>{{ item.video_title }} · {{ position(item.start_ms) }}<template v-if="item.end_ms != null"> — {{ position(item.end_ms) }}</template></p>
       <p class="notes-body">{{ item.note }}</p><p>{{ (item.tags || []).join(' · ') }}</p>
       <small v-if="!item.source_available" class="notes-unavailable">原片不可用；笔记仍保留</small>
       <div class="notes-toolbar">
         <button type="button" class="btn btn--secondary btn--sm" @click="resolve(item)">定位 / 核对原片</button>
         <button type="button" class="btn btn--secondary btn--sm" @click="edit(item)">编辑笔记</button>
+        <button type="button" class="btn btn--secondary btn--sm" @click="addingIDs = [item.id]">加入专题…</button>
         <button type="button" class="btn btn--secondary btn--sm" @click="remove(item)">删除书签</button>
       </div>
       </div>
     </article>
     <nav class="notes-toolbar notes-pager" aria-label="书签分页"><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn btn--secondary btn--sm" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
+    </template>
     <div v-if="draft && editorSuspended" class="notes-toolbar" data-test="bookmark-checking"><span>核对原片后可继续编辑，草稿已保留。</span><button type="button" class="btn btn--secondary btn--sm" @click="editorSuspended = false">返回书签编辑</button></div>
-    <DialogShell v-if="draft && !editorSuspended" :title="draft.id ? '编辑片段书签' : '新建片段书签'" size="md" :busy="saving" :close-on-overlay="false" @close="closeEditor">
+    <DialogShell v-if="draft && !editorSuspended && pageActive" :title="draft.id ? '编辑片段书签' : '新建片段书签'" size="md" :busy="saving" :close-on-overlay="false" @close="closeEditor">
       <form :id="formID" class="notes-editor" @submit.prevent="save">
         <fieldset :disabled="saving" class="notes-editor-fields">
         <p v-if="sourceChanged" class="notes-alert" role="alert">原片内容已改变。请打开当前原片，核对起止位置后再确认；只保存文字不会接受新原片。</p>
@@ -33,6 +38,7 @@
         <label>结束（秒，留空为时间点）<input v-model="draft.endSeconds" class="number-input" type="number" min="0" step="0.001" data-test="bookmark-end" /></label>
         <label>笔记<textarea v-model="draft.note" class="text-input settings-textarea" rows="5" /></label>
         <label>标签（每行一个，最多20个）<textarea v-model="draft.tagText" class="text-input settings-textarea" rows="3" /></label>
+        <template v-if="!draft.id"><label><input v-model="addToTopic" :disabled="requireTopic" type="checkbox" data-test="bookmark-create-in-topic" />保存时同时加入专题</label><ClipTopicSelect v-if="addToTopic" v-model="selectedTopic" :api="clipApi" :disabled="saving" /></template>
         <label v-if="sourceChanged" class="notes-check"><input v-model="acceptSource" type="checkbox" data-test="bookmark-accept-source" />我已核对当前原片与以上位置</label>
         <p v-if="formError" class="notes-alert" role="alert">{{ formError }}</p>
         </fieldset>
@@ -40,32 +46,37 @@
       <!-- 底部按钮在表单外（DialogShell 的 footer 插槽），保存靠 form 属性提交同一张表单。 -->
       <template #footer>
         <button type="button" class="btn btn--secondary" :disabled="saving" @click="closeEditor">取消</button>
-        <button type="submit" :form="formID" class="btn btn--primary" :disabled="saving" data-test="bookmark-save">{{ saving ? '保存中…' : '保存' }}</button>
+        <button type="submit" :form="formID" class="btn btn--primary" :disabled="saving || (addToTopic && !selectedTopic)" data-test="bookmark-save">{{ saving ? '保存中…' : '保存' }}</button>
       </template>
     </DialogShell>
+    <ClipTopicAddDialog v-if="addingIDs && pageActive" :bookmark-ids="addingIDs" :api="clipApi" @close="addingIDs = null" @saved="topicAdded" />
   </section>
 </template>
 <script>
 import { ListVideoBookmarks, SaveVideoBookmark, DeleteVideoBookmark, ResolveVideoBookmark } from '../../wailsjs/go/main/App';
+import ClipTopicSelect from './ClipTopicSelect.vue';
+import ClipTopicAddDialog from './ClipTopicAddDialog.vue';
+import { clipTopicAPI } from '../utils/clipTopics.js';
 import DialogShell from './ui/DialogShell.vue';
 import NotesThumb from './NotesThumb.vue';
 import { confirmAction } from '../utils/feedback.js';
 
 let formSeq = 0;
 export default {
-  name: 'BookmarkPanel', components: { DialogShell, NotesThumb },
-  props: { pageActive: { type: Boolean, default: true }, video: { type: Object, default: null }, session: { type: Object, default: null }, currentPosition: { type: Function, default: () => 0 } },
-  emits: ['open-bookmark', 'open-video'],
-  data: () => ({ formID: `bookmark-editor-form-${++formSeq}`, items: [], keyword: '', cursor: 0, cursors: [], hasMore: false, loading: false, error: '', draft: null, saving: false, formError: '', sourceChanged: false, editorSuspended: false, currentVideo: null, currentToken: '', acceptSource: false, generation: 0, resolveGeneration: 0 }),
-  watch: { pageActive(active) { if (active) this.load(); }, keyword() { this.reset(); }, 'video.id'() { this.draft = null; this.resolveGeneration++; this.reset(); } },
+  name: 'BookmarkPanel', components: { ClipTopicSelect, ClipTopicAddDialog, DialogShell, NotesThumb },
+  props: { editorOnly: Boolean, requireTopic: Boolean, clipApi: { type: Object, default: () => clipTopicAPI }, pageActive: { type: Boolean, default: true }, video: { type: Object, default: null }, session: { type: Object, default: null }, currentPosition: { type: Function, default: () => 0 } },
+  emits: ['open-bookmark', 'open-video', 'saved'],
+  data: () => ({ selectedBookmarkIDs: [], addingIDs: null, addToTopic: false, selectedTopic: null, formID: `bookmark-editor-form-${++formSeq}`, items: [], keyword: '', cursor: 0, cursors: [], hasMore: false, loading: false, error: '', draft: null, saving: false, formError: '', sourceChanged: false, editorSuspended: false, currentVideo: null, currentToken: '', acceptSource: false, generation: 0, resolveGeneration: 0 }),
+  watch: { pageActive(active) { if (active) this.load(); else { this.resolveGeneration++; this.generation++; this.loading = false; this.addingIDs = null; } }, keyword() { this.reset(); }, 'video.id'() { this.draft = null; this.resolveGeneration++; this.reset(); } },
   mounted() { this.load(); }, beforeUnmount() { this.generation++; this.resolveGeneration++; this._disposed = true; },
   methods: {
     frameFor(item) {
       return item.source_available && item.video_id ? `/preview/frame/${item.video_id}?ms=${Math.max(0, Number(item.start_ms) || 0)}&w=320` : '';
     },
     position(ms) { return `${(Number(ms) / 1000).toFixed(3)} 秒`; },
-    reset() { this.cursor = 0; this.cursors = []; this.items = []; this.load(); },
+    reset() { this.selectedBookmarkIDs = []; this.cursor = 0; this.cursors = []; this.items = []; this.load(); },
     async load(cursor = this.cursor, history = this.cursors) {
+      if (this.editorOnly || !this.pageActive) return;
       const generation = ++this.generation; this.loading = true; this.error = '';
       try { const page = await ListVideoBookmarks({ video_id: this.video?.id || 0, keyword: this.keyword, cursor_id: cursor, limit: 50 }); if (generation !== this.generation) return; this.items = page.items || []; this.hasMore = !!page.has_more; this.cursor = cursor; this.cursors = history; return true; }
       catch (err) { if (generation === this.generation) this.error = `读取书签失败：${err}`; }
@@ -81,6 +92,7 @@ export default {
       this.edit({ video_id: this.video.id, start_ms: start, end_ms: null, title: '', note: '', tags: [], source_token: this.session.source_version });
     },
     edit(item, resolution = null) {
+      this.addToTopic = this.requireTopic; this.selectedTopic = null;
       this.resolveGeneration++; this.editorSuspended = false; this.sourceChanged = resolution?.status === 'source_changed'; this.acceptSource = false;
       this.currentVideo = resolution?.video || null; this.currentToken = resolution?.source_token || ''; this.formError = '';
       this.draft = { id: item.id || 0, revision: item.revision || 0, video_id: item.video_id, title: item.title, note: item.note, startSeconds: item.start_ms / 1000, endSeconds: item.end_ms == null ? '' : item.end_ms / 1000, tagText: (item.tags || []).join('\n'), source_token: item.source_token || '' };
@@ -106,16 +118,27 @@ export default {
       // that representation tolerance, never silently round a finer user cut.
       const validMS = value => Number.isFinite(value) && Number.isSafeInteger(Math.round(value)) && Math.abs(value - Math.round(value)) < 0.00001;
       if (draft.startSeconds === '' || !validMS(start) || start < 0 || (end != null && (!validMS(end) || end <= start))) { this.formError = '请输入毫秒精度的有效起止时间，结束须晚于开始。'; return; }
+      if (this.addToTopic && !this.selectedTopic) { this.formError = '请选择要加入的专题'; return; }
       this.saving = true; this.formError = '';
       try {
-        await SaveVideoBookmark({ id: draft.id, revision: draft.revision, video_id: draft.video_id, title: draft.title, note: draft.note, start_ms: Math.round(start), end_ms: end == null ? null : Math.round(end), tags: draft.tagText.split('\n').map(value => value.trim()).filter(Boolean), source_token: draft.source_token, accept_source_token: this.acceptSource ? this.currentToken : '' });
+        const input = { id: draft.id, revision: draft.revision, video_id: draft.video_id, title: draft.title, note: draft.note, start_ms: Math.round(start), end_ms: end == null ? null : Math.round(end), tags: draft.tagText.split('\n').map(value => value.trim()).filter(Boolean), source_token: draft.source_token, accept_source_token: this.acceptSource ? this.currentToken : '' };
+        const saved = this.addToTopic
+          ? (await this.clipApi.saveBookmark({ topic_id: this.selectedTopic.topic.id, expected_topic_revision: this.selectedTopic.topic.revision, bookmark: input })).bookmark
+          : await SaveVideoBookmark(input);
         if (this._disposed || this.draft !== draft) return;
-        this.draft = null; await this.load();
+        this.draft = null; this.$emit('saved', saved); await this.load();
       } catch (err) { this.formError = `保存失败：${err}`; } finally { this.saving = false; }
     },
+    async topicAdded() { this.addingIDs = null; this.selectedBookmarkIDs = []; await this.load(); },
     async remove(item) {
-      if (!await confirmAction({ title: '删除书签', message: '删除这条笔记和位置记录？原视频不会删除。', danger: true })) return;
-      try { await DeleteVideoBookmark(item.id, item.revision); await this.load(); } catch (err) { this.error = `删除失败：${err}`; }
+      const ticket = ++this.resolveGeneration; this.error = '';
+      try {
+        const refs = await this.clipApi.references(item.id,item.revision);
+        if (this._disposed || !this.pageActive || ticket !== this.resolveGeneration) return;
+        const message = `删除“${item.title}”的笔记和位置记录，并从 ${refs.topic_count} 个专题中移除？原视频不会删除。`;
+        if (!await confirmAction({ title: '删除书签', message, danger: true }) || this._disposed || ticket !== this.resolveGeneration) return;
+        await DeleteVideoBookmark(item.id,refs.revision); this.selectedBookmarkIDs = this.selectedBookmarkIDs.filter(id => id !== item.id); await this.load();
+      } catch (err) { if (!this._disposed && ticket === this.resolveGeneration) this.error = `删除失败：${err}`; }
     }
   }
 };

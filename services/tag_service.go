@@ -1,10 +1,12 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"video-master/database"
@@ -15,6 +17,8 @@ import (
 )
 
 type TagService struct {
+	mergeMu       sync.Mutex
+	mergePreviews map[string]*tagMergePreview
 	// removeAvatar 由 App 接线时经 SetAvatarRemover 注入，撤销转换删除新建人物时清理头像文件。
 	// avatarMu 保护它：注入与撤销可能在不同 goroutine 里。
 	avatarMu     sync.RWMutex
@@ -449,6 +453,10 @@ func (s *TagService) GetImageTags() ([]models.Tag, error) {
 // MergeTags retains targetTagID, unions all video and recommendation links into
 // it, rewrites AI history references, and soft-deletes the source tags.
 func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTagsResult, error) {
+	return s.mergeTags(context.Background(), sourceTagIDs, targetTagID, nil)
+}
+
+func (s *TagService) mergeTags(ctx context.Context, sourceTagIDs []uint, targetTagID uint, guard func(*gorm.DB, []models.Tag) error) (*MergeTagsResult, error) {
 	uniqueSources := make([]uint, 0, len(sourceTagIDs))
 	seen := make(map[uint]struct{}, len(sourceTagIDs))
 	for _, id := range sourceTagIDs {
@@ -466,7 +474,7 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 	}
 
 	result := &MergeTagsResult{TargetTagID: targetTagID, MergedTagCount: len(uniqueSources)}
-	err := database.Transaction(func(tx *gorm.DB) error {
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		var target models.Tag
 		if err := tx.First(&target, targetTagID).Error; err != nil {
 			return fmt.Errorf("目标标签不存在: %w", err)
@@ -487,6 +495,18 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 			}
 		}
 
+		tags := append(append([]models.Tag{}, sources...), target)
+		sort.Slice(tags, func(i, j int) bool { return tags[i].ID < tags[j].ID })
+		if guard != nil {
+			if err := guard(tx, tags); err != nil {
+				return err
+			}
+		}
+		for _, tag := range tags {
+			if err := claimTagPreference(tx, tag); err != nil {
+				return err
+			}
+		}
 		if err := mergeRecommendationTagFeedback(tx, uniqueSources, targetTagID); err != nil {
 			return err
 		}

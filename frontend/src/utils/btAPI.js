@@ -1,4 +1,4 @@
-import { GetBTConnection, ConfigureBTConnection, TestBTConnection, ListBTIndexers, SearchBTResources, PreviewBTResource, SubmitBTDownload, ListBTTasks, GetBTTask, ControlBTTask } from '../../wailsjs/go/main/App';
+import { GetBTConnection, ConfigureBTConnection, TestBTConnection, ListBTIndexers, SearchBTResources, GetBTResourceDetail, PreviewBTResource, SubmitBTDownload, ListBTTasks, GetBTTask, ControlBTTask } from '../../wailsjs/go/main/App';
 
 // Only this adapter knows the Wails list shape. All other DTOs remain unchanged.
 export const btAPI = {
@@ -7,6 +7,7 @@ export const btAPI = {
   TestBTConnection: (...args) => TestBTConnection(...args),
   ListBTIndexers: (...args) => ListBTIndexers(...args),
   SearchBTResources: (...args) => SearchBTResources(...args),
+  GetBTResourceDetail: (...args) => GetBTResourceDetail(...args),
   PreviewBTResource: (...args) => PreviewBTResource(...args),
   SubmitBTDownload: (...args) => SubmitBTDownload(...args),
   GetBTTask: (...args) => GetBTTask(...args),

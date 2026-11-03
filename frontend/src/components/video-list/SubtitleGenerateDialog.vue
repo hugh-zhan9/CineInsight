@@ -378,8 +378,8 @@ export default {
       } catch (err) { if (sequence === this.languageRequest) this.languageMessage = subtitleExceptionText(err); }
       finally { if (sequence === this.languageRequest) { this.preparingLanguage = false; this.prepareState.cancelling = false; } }
     },
-    generate(video) {
-      return this.generateSubtitle(video);
+    generate(video, isCurrent = () => true) {
+      return this.generateSubtitle(video, isCurrent);
     },
     formatElapsedDuration,
     debugLog(message, payload = null, isError = false) {
@@ -744,12 +744,13 @@ export default {
         if (this.pendingSubtitleVideo?.id === video.id) this.overwriteInfo = { unknown: true };
       }
     },
-    async generateSubtitle(video) {
+    async generateSubtitle(video, isCurrent = () => true) {
       console.log('[Subtitle] generateSubtitle called for video:', video.id);
-      if (this.generatingSubtitleIds.includes(video.id)) return;
+      if (!isCurrent() || this.generatingSubtitleIds.includes(video.id)) return false;
 
       try {
         await this.loadSubtitleEngineStatuses();
+        if (!isCurrent()) return false;
         this.pendingSubtitleVideo = video;
         this.pendingForceRequest = null;
         this.batchConfirm = null;
@@ -760,6 +761,7 @@ export default {
         this.refreshSubtitleConfirmCopy();
         await this.loadOverwriteInfo(video);
       } catch (err) {
+        if (!isCurrent()) return false;
         console.error('[Subtitle] Error:', err);
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';

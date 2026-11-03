@@ -10,6 +10,7 @@
       <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || !snapshot.state.active_token" data-test="queue-stop" @click="stop">停止队列</button>
       <button type="button" class="btn btn--secondary btn--sm" @click="$emit('open')">查看队列</button>
       <button type="button" class="btn btn--secondary btn--sm" @click="$emit('open-video', snapshot.current.video_id)">原片详情</button>
+      <button v-if="snapshot.current.entry_kind === 'clip'" type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable" data-test="queue-watch-whole" @click="watchWhole(snapshot.current)">从头看整片</button>
     </div>
     <p v-if="error" role="alert" data-test="queue-error">{{ error }} <button type="button" class="btn btn--secondary btn--sm" @click="load(cursor, history)">刷新</button></p>
     <button v-if="cleanupPending" type="button" class="btn btn--secondary btn--sm" data-test="queue-cleanup-retry" :disabled="busy" @click="stop">重试停止队列</button>
@@ -24,24 +25,25 @@
       <template v-if="snapshot">
         <div class="queue-settings">
           <label class="queue-field">播放器 <select class="select-input queue-player" :value="snapshot.state.player" :disabled="busy || unavailable || loading" data-test="queue-player" @change="configure($event.target.value, snapshot.state.autoplay)"><option v-for="cap in snapshot.capabilities" :key="cap.player" :value="cap.player" :disabled="!cap.available">{{ playerLabel(cap.player) }}{{ !cap.available ? ' · 不可用' : '' }}</option></select></label>
-          <label class="queue-field"><input type="checkbox" :checked="snapshot.state.player !== 'system' && snapshot.state.autoplay" :disabled="busy || unavailable || loading || snapshot.state.player === 'system'" data-test="queue-autoplay" @change="configure(snapshot.state.player, $event.target.checked)" /> 自动连播</label>
+          <label class="queue-field"><input type="checkbox" :checked="snapshot.state.player !== 'system' && snapshot.state.autoplay" :disabled="busy || unavailable || loading || snapshot.state.player === 'system'" data-test="queue-autoplay" @change="configure(snapshot.state.player, $event.target.checked)" /> 整片自动连播</label>
           <button type="button" class="btn btn--danger btn--sm" :disabled="busy || unavailable || loading || !snapshot.total" data-test="queue-clear" @click="clear">清空队列…</button>
         </div>
         <p v-if="snapshot.state.player === 'system'">系统默认播放器仅支持手动下一项。停止队列后，请在系统播放器中停止当前视频。</p>
         <p v-else-if="snapshot.state.player === 'iina'">使用本次专用 IINA 窗口，停止队列会关闭它。请在此队列调整观看顺序。</p>
         <p v-else>关闭此列表仍会继续播放；播放器和停止按钮留在主窗口。</p>
         <p v-for="cap in snapshot.capabilities.filter(item => !item.available)" :key="cap.player">{{ playerLabel(cap.player) }}：{{ cap.reason }}</p>
+        <p v-if="snapshot.has_clips" class="help-text">区间预览按各自批次连续播放，到批次末尾停止；请回到专题调整片段顺序。</p>
         <ol class="queue-items">
           <li v-for="(item, index) in snapshot.items" :key="item.id" :class="{ current: item.id === snapshot.current?.id }" :data-test="`queue-item-${item.id}`">
             <!-- 缩略图与片名是一个按钮：进这部片的详情，并关掉队列列表（否则详情页压在对话框下面）。 -->
             <button type="button" class="btn-plain queue-open" :title="`打开「${item.title}」的详情`" :data-test="`queue-item-open-${item.id}`" @click="openItem(item)">
               <span class="queue-thumb" aria-hidden="true"><img v-if="!thumbFailed[item.video_id]" :src="thumb(item)" alt="" loading="lazy" decoding="async" :data-test="`queue-item-thumb-${item.id}`" @error="markThumbFailed(item)" /></span>
-              <span class="queue-item__title">{{ item.title }}<small v-if="!item.source_available"> · 原片不可用</small></span>
+              <span class="queue-item__title">{{ item.title }}<small v-if="item.entry_kind === 'clip'"> · 预览 {{ item.preview_position }}/{{ item.preview_count }} · {{ clipTime(item.clip_start_ms) }}—{{ clipTime(item.clip_end_ms) }}</small><small v-if="!item.source_available"> · 原片不可用</small></span>
             </button>
             <button type="button" class="btn btn--primary btn--sm" :disabled="busy || unavailable || loading" @click="play(item)">播放</button>
-            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || (index === 0 && !history.length)" @click="moveAdjacent(item, index, -1)">上移</button>
-            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || (index === snapshot.items.length - 1 && !snapshot.has_more)" @click="moveAdjacent(item, index, 1)">下移</button>
-            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading" @click="move(item, 0)">移至末尾</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || item.entry_kind === 'clip' || (index === 0 && !history.length)" @click="moveAdjacent(item, index, -1)">上移</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || item.entry_kind === 'clip' || (index === snapshot.items.length - 1 && !snapshot.has_more)" @click="moveAdjacent(item, index, 1)">下移</button>
+            <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading || item.entry_kind === 'clip'" @click="move(item, 0)">移至末尾</button>
             <button type="button" class="btn btn--secondary btn--sm" :disabled="busy || unavailable || loading" @click="remove(item)">移除</button>
           </li>
         </ol>
@@ -58,18 +60,19 @@ import QueueInlinePlayer from './QueueInlinePlayer.vue';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 import { confirmAction } from '../utils/feedback.js';
 import { queueStatusLabel, queuePlayerLabel } from '../utils/playbackQueue.js';
+import { clipTime } from '../utils/playbackClip.js';
 import { videoThumbnail } from '../utils/recap.js';
 const firstCursor = () => ({ revision: 0, cursor_position: 0, cursor_id: 0 });
 export default {
   name: 'PlaybackQueuePanel',
   components: { DialogShell, QueueInlinePlayer }, mixins: [runtimeEventsMixin],
-  props: { open: Boolean }, emits: ['open', 'close', 'open-video'],
+  props: { open: Boolean, watchWholeVideo: { type: Function, default: null } }, emits: ['open', 'close', 'open-video'],
   data: () => ({ snapshot: null, error: '', unavailable: false, cleanupPending: false, cleanupToken: '', loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [], thumbFailed: {} }),
   mounted() { this.registerRuntimeEvent('playback-queue-state', () => this.load(this.cursor, this.history)); this.load(); },
-  beforeUnmount() { this.generation++; },
+  beforeUnmount() { this._disposed = true; this.generation++; },
   watch: { open(value) { if (value) this.load(this.cursor, this.history); } },
   methods: {
-    statusLabel: queueStatusLabel, playerLabel: queuePlayerLabel,
+    clipTime, statusLabel: queueStatusLabel, playerLabel: queuePlayerLabel,
     // 缩略图按视频取（同一部片可以排进队列好几次）；取不到（还没生成、视频已删）就留一块底色占位。
     thumb(item) { return videoThumbnail(Number(item?.video_id || 0)); },
     markThumbFailed(item) { this.thumbFailed = { ...this.thumbFailed, [item.video_id]: true }; },
@@ -102,6 +105,21 @@ export default {
     next() { const state = { ...this.snapshot.state }; return this.perform(() => NextPlaybackQueue(state.active_token, state.revision)); },
     stop() { const token = this.cleanupPending ? this.cleanupToken : this.snapshot.state.active_token; return this.perform(() => StopPlaybackQueue(token)); },
     control() { const state = { ...this.snapshot.state }; return this.perform(() => ControlPlaybackQueue(state.active_token, state.status === 'paused' ? 'resume' : 'pause')); },
+    async watchWhole(item) {
+      if (this.busy || this.unavailable || !item?.video_id) return;
+      if (!this.watchWholeVideo) { this.error = '整片播放宿主尚未就绪，请重试。'; return; }
+      const id = item.video_id, token = this.snapshot?.state.active_token; this.busy = true; this.error = '';
+      try {
+        const opened = await this.watchWholeVideo(id, async () => {
+          if (token) await StopPlaybackQueue(token);
+          await this.load(); if (this._disposed) return false;
+          if (this.snapshot?.state.active_token) { this.error = '队列已切换，请重新选择整片播放。'; return false; }
+          return true;
+        });
+        if (opened !== false && !this._disposed) this.$emit('close');
+      } catch (error) { if (!this._disposed) this.error = String(error); }
+      finally { if (!this._disposed) this.busy = false; }
+    },
     async configure(player, autoplay) {
       const revision = this.snapshot.state.revision;
       if (this.snapshot.state.active_token && player !== this.snapshot.state.player && !await confirmAction({ title: '切换播放器', message: '切换会停止当前队列播放。', confirmText: '切换' })) return;

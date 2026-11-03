@@ -65,9 +65,13 @@
       @clear-conditions="clearAllConditions"
       @apply-filter="applyFilterConditions"
       @open-save-view="openSaveViewDialog"
+      @open-query="$emit('open-query')"
       @manage-select="onManageSelect"
       @view-select="onViewSelect"
     />
+    <div v-if="extraConditionChips.length" class="library-notice" data-test="library-combined-conditions">
+      <FilterChip v-for="chip in extraConditionChips" :key="chip.key" :label="chip.label" active removable @remove="removeExtraCondition(chip.key)" />
+    </div>
     <div v-if="focusedVideo" class="library-focus" data-test="library-focused-video">
       <span :title="focusedVideo.path">当前视频 · {{ focusedVideo.keyword || focusedVideo.path }}</span>
       <button type="button" class="btn btn--ghost btn--sm" data-test="library-exit-focus" @click="exitVideoFocus">退出定位</button>
@@ -320,6 +324,8 @@
     />
 
     <SubtitleWorkbench
+      ref="subtitleEditor"
+      :key="subtitleWorkbench.video?.id"
       v-if="subtitleWorkbench.show && subtitleWorkbench.video"
       :video="subtitleWorkbench.video"
       @close="closeSubtitleWorkbench"
@@ -630,7 +636,7 @@ export default {
   // open-cleanup({ relationId? })：进清理中心的视频标签（AI 审阅「去清理」带上要定位的同源对）；
   // trash-restored({ videoIDs, fromTrashDialog })：本页回收站恢复了视频，清理中心的审阅放掉对应的「已移到废纸篓」标记。
   // open-task-center：「管理」菜单发起的任务，提示里点「查看」打开任务中心。
-  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'search-scenes', 'find-similar-scenes', 'open-video-edit', 'open-cleanup', 'trash-restored', 'open-task-center'],
+  emits: ['open-query', 'reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'search-scenes', 'find-similar-scenes', 'open-video-edit', 'open-cleanup', 'trash-restored', 'open-task-center'],
   data() {
     return {
       consolidationRefreshVersions: new Map(),
@@ -644,6 +650,7 @@ export default {
       semanticSearchError: '',
       semanticStatus: null,
       smartView: '',
+      extraConditions: { watch_state: 'any', favorites_only: false, min_duration_seconds: 0, max_duration_seconds: 0 },
       // 「缺失某项」筛选（D-MC-03）：'' 不筛；与智能视图正交。
       missingFilter: '',
       // 「路径失效」视图里按原因筛（D-PC06）：'' 为全部，unknown 为原因未记录。
@@ -710,6 +717,7 @@ export default {
       localMetadataDialog: { show: false, videoIds: [] },
       // 切走前记下共用滚动容器的位置，切回来照原样恢复（图片页也在用同一个容器）。
       subtitleWorkbench: { show: false, video: null },
+      subtitleToolOpening: false,
       selectedPreviewVideoId: null,
       previewVideoSnapshot: null,
       previewOpen: false,
@@ -857,6 +865,15 @@ export default {
     this.teardownRuntimeEvents();
   },
   computed: {
+    extraConditionChips() {
+      const value = this.extraConditions;
+      return [
+        ...(value.watch_state !== 'any' ? [{ key: 'watch_state', label: value.watch_state === 'watched' ? '已看' : '未看' }] : []),
+        ...(value.favorites_only ? [{ key: 'favorites_only', label: '仅收藏' }] : []),
+        ...(value.min_duration_seconds > 0 ? [{ key: 'min_duration_seconds', label: `时长 ≥ ${value.min_duration_seconds / 60} 分钟` }] : []),
+        ...(value.max_duration_seconds > 0 ? [{ key: 'max_duration_seconds', label: `时长 ≤ ${value.max_duration_seconds / 60} 分钟` }] : [])
+      ];
+    },
     // 列表是不是「当前筛选」的结果：语义检索与相似视频列出的是排序结果（语义检索没有距离阈值，
     // 「全部」就是整个已索引的片库），没有命中数，也不能当筛选范围用。
     listIsFilterResult() {
@@ -1004,6 +1021,7 @@ export default {
     },
     virtualListQueryKey() {
       return JSON.stringify({
+        extraConditions: this.extraConditions,
         mode: this.searchMode,
         keyword: this.currentQueryKeyword(),
         similarVideoID: this.semanticSimilarVideoID,
@@ -1318,8 +1336,19 @@ export default {
       // 译文覆盖了同一个 .srt，字幕索引已经重建，列表里的字幕命中要跟着刷新。
       await this.reloadCurrentView();
     },
-    openSubtitleWorkbench(video) {
-      this.subtitleWorkbench = { show: true, video };
+    async openSubtitleWorkbench(video, isCurrent = () => true) {
+      if (this.subtitleToolOpening || !isCurrent()) return false;
+      if (this.subtitleWorkbench.show && Number(this.subtitleWorkbench.video?.id) === Number(video.id)) return true;
+      this.subtitleToolOpening = true;
+      try {
+        if (this.subtitleWorkbench.show) {
+          if (!await this.$refs.subtitleEditor?.requestClose()) return false;
+          await this.$nextTick();
+        }
+        if (!isCurrent()) return false;
+        this.subtitleWorkbench = { show: true, video };
+        return true;
+      } finally { this.subtitleToolOpening = false; }
     },
     closeSubtitleWorkbench() {
       this.subtitleWorkbench = { show: false, video: null };
@@ -1334,8 +1363,19 @@ export default {
       this.selectedVideoIds = [];
       await this.reloadCurrentView();
     },
-    generateSubtitle(video) {
-      return this.$refs.subtitleTasks?.generate(video);
+    async generateSubtitle(video, isCurrent = () => true) {
+      if (this.subtitleToolOpening || !isCurrent()) return false;
+      this.subtitleToolOpening = true;
+      try {
+        if (this.subtitleWorkbench.show) {
+          if (!await this.$refs.subtitleEditor?.requestClose()) return false;
+          await this.$nextTick();
+        }
+        if (!isCurrent()) return false;
+        const tool = this.$refs.subtitleTasks;
+        if (!tool) return false;
+        return await tool.generate(video, isCurrent) !== false && isCurrent();
+      } finally { this.subtitleToolOpening = false; }
     },
     // 批量生成字幕（D-PC23、MEDIA-14）：只有已加载的选中行才有名字；没加载到的按 ID 补上，名字由队列回报。
     generateSubtitlesForSelected() {
@@ -1562,7 +1602,19 @@ export default {
       this.maxRating = draft.maxRating;
       this.handleSearch(true);
     },
+    async applyParsedQueryFilter(filter, isCurrent = () => true) {
+      if (!isCurrent()) return false;
+      const people = await this.resolvePeople(filter.person_ids || []);
+      if (!isCurrent()) return false;
+      this.leaveSavedView(); this.resetConditionsForCommand();
+      this.searchMode = 'file'; this.sortMode = filter.sort_mode || 'balanced';
+      this.extraConditions = { watch_state: filter.watch_state || 'any', favorites_only: Boolean(filter.favorites_only), min_duration_seconds: Number(filter.min_duration_seconds || 0), max_duration_seconds: Number(filter.max_duration_seconds || 0) };
+      this.selectedTags = [...(filter.tag_ids || [])]; this.selectedPeople = people;
+      this.collapseVersions = Boolean(filter.collapse_versions);
+      await this.handleSearch(true, true); return true;
+    },
     clearAllConditions() {
+      this.extraConditions = { watch_state: 'any', favorites_only: false, min_duration_seconds: 0, max_duration_seconds: 0 };
       this.focusedVideo = null;
       this.smartView = '';
       this.missingFilter = '';
@@ -1575,6 +1627,12 @@ export default {
       this.maxRating = '';
       this.searchKeyword = '';
       this.handleSearch(true, true);
+    },
+    removeExtraCondition(key) {
+      const defaults = { watch_state: 'any', favorites_only: false, min_duration_seconds: 0, max_duration_seconds: 0 };
+      if (!(key in defaults)) return;
+      this.extraConditions = { ...this.extraConditions, [key]: defaults[key] };
+      this.handleSearch(true);
     },
     // 结果条与浮层预览共用一份筛选 DTO 构造：给定一份区间条件覆盖，
     // 其余维度沿用当前生效值。
@@ -1720,11 +1778,11 @@ export default {
       return estimateVideoRowHeight(video, widthBucket, subtitleMode, density) + versions;
     },
     hasStructuredFilters() {
-      return !!this.focusedVideo || !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
+      return this.extraConditionChips.length > 0 || !!this.focusedVideo || !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
     },
     // 当前有没有会让结果变少的条件：决定空列表显示「筛选没命中」还是「目录里没有视频」。
     hasActiveConditions() {
-      return !!this.focusedVideo || !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
+      return this.extraConditionChips.length > 0 || !!this.focusedVideo || !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
         this.selectedTags.length > 0 || this.selectedPeople.length > 0 ||
         this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '';
     },
@@ -1735,6 +1793,7 @@ export default {
       // 随机播放、保存视图、批量导出等消费方拿到的是纯结构化筛选。
       const semantic = this.searchMode === 'semantic';
       return {
+        ...(this.extraConditionChips.length ? this.extraConditions : {}),
         search_mode: semantic ? 'file' : this.searchMode,
         keyword: this.focusedVideo || semantic ? '' : this.currentQueryKeyword(),
         ...(this.focusedVideo ? { video_id: this.focusedVideo.id } : {}),
@@ -1754,6 +1813,10 @@ export default {
     },
     // 与后端 applyLibraryFilter 同口径的本地判定：就地改完一行后据此决定它还在不在当前视图里。
     matchesSmartView(video) {
+      if (this.extraConditions.favorites_only && !video.is_favorite) return false;
+      if (this.extraConditions.watch_state !== 'any' && Boolean(video.is_watched) !== (this.extraConditions.watch_state === 'watched')) return false;
+      if (this.extraConditions.min_duration_seconds > 0 && !(video.duration >= this.extraConditions.min_duration_seconds)) return false;
+      if (this.extraConditions.max_duration_seconds > 0 && !(video.duration > 0 && video.duration <= this.extraConditions.max_duration_seconds)) return false;
       // 失效记录只属于「路径失效」视图（D-S02），其余视图一律不含。
       if (this.smartView === 'stale') {
         if (!video.is_stale) return false;
@@ -1896,6 +1959,7 @@ export default {
     },
     // 跳转类命令（按标签、按缺失项）先清掉其余条件。
     resetConditionsForCommand() {
+      this.extraConditions = { watch_state: 'any', favorites_only: false, min_duration_seconds: 0, max_duration_seconds: 0 };
       this.focusedVideo = null;
       this.smartView = '';
       this.missingFilter = '';
@@ -1956,6 +2020,7 @@ export default {
       this.searchMode = view.search_mode || 'file';
       this.searchKeyword = view.keyword || '';
       this.smartView = viewRemoved ? '' : storedView;
+      this.extraConditions = { watch_state: view.watch_state || 'any', favorites_only: Boolean(view.favorites_only), min_duration_seconds: Number(view.min_duration_seconds || 0), max_duration_seconds: Number(view.max_duration_seconds || 0) };
       this.missingFilter = view.missing || '';
       this.selectedTags = tagIDs;
       this.selectedPeople = people;

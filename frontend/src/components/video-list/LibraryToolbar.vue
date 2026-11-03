@@ -30,6 +30,7 @@
           <kbd class="search-field__hint">⌘F</kbd>
         </div>
 
+        <button type="button" class="btn btn--secondary" data-test="library-query-open" @click="$emit('open-query')">组合搜索…</button>
         <select v-model="smartViewModel" @change="$emit('search', true)" class="select-input toolbar-control" aria-label="智能视图">
           <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
         </select>
@@ -363,7 +364,7 @@ export default {
     collapseVersions: { type: Boolean, default: true }
   },
   emits: [
-    'search-scenes',
+    'search-scenes', 'open-query',
     'update:searchKeyword', 'update:smartView', 'update:missing', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
     'search', 'set-search-mode', 'toggle-tag', 'clear-tags', 'open-tag-manager',

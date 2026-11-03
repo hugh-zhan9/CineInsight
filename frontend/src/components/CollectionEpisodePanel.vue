@@ -11,6 +11,7 @@
         <span>编号空缺：{{ season.missing_ranges.map(range => range.start === range.end ? `E${range.start}` : `E${range.start}–E${range.end}`).join('、') || '无' }}</span>
         <label>手填总集数 <input v-model.number="totals[season.season]" type="number" min="1" max="1000000" class="number-input" /></label>
         <button type="button" class="btn btn--secondary btn--sm" :disabled="busy" @click="saveTotal(season)">保存总集数</button>
+        <button v-if="season.missing_ranges.length" type="button" class="btn btn--primary btn--sm" :disabled="busy" data-test="episode-find-missing" @click="chooseMissing(season)">查找缺集资源…</button>
       </div>
       <div v-for="member in members" :key="member.video_id" class="episode-panel__member">
         <span>{{ member.name }} {{ member.offline ? '（离线）' : '' }} {{ member.issue }} {{ member.version_group_id ? '· 已确认版本组' : '' }}</span>
@@ -21,20 +22,35 @@
       </div>
       <button v-if="cursor" type="button" class="btn btn--secondary" :disabled="busy" @click="load(false)">加载更多成员</button>
     </template>
+    <EpisodeAcquisitionPanel :collection-id="collectionId" @associated="associated" />
+    <Teleport v-if="searchChoice" to="body"><DialogShell title="查找缺集资源" :busy="busy" @close="searchChoice = null">
+      <p>第 {{ searchChoice.season }} 季；仅选择上方报告中的缺集，每次最多 200 集。</p>
+      <label>要找的集号 <input v-model="searchChoice.episodes" class="text-input" aria-label="要找的集号" placeholder="例如 3、5-8" /></label>
+      <label v-if="report?.mixed_series"><input v-model="searchChoice.confirmed" type="checkbox" />已核对这些缺集属于要找的系列；下一步继续核对搜索词</label>
+      <p v-if="searchError" role="alert">{{ searchError }}</p>
+      <p class="help-text">下一步可修改搜索词。只进入搜索页面，不会自动下载。</p>
+      <template #footer><button type="button" class="btn btn--primary" :disabled="busy || (report?.mixed_series && !searchChoice.confirmed)" data-test="episode-prepare-search" @click="prepareSearch">进入资源搜索</button></template>
+    </DialogShell></Teleport>
   </section>
 </template>
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue';
 import { GetCollectionEpisodeReport, SetCollectionEpisodeAssignments, SetCollectionSeasonExpectation } from '../../wailsjs/go/main/App';
+import EpisodeAcquisitionPanel from './EpisodeAcquisitionPanel.vue';
+import DialogShell from './ui/DialogShell.vue';
+import { episodeAPI, episodeNumbers, episodeError } from '../utils/episodeAcquisition.js';
 import AppBanner from './ui/AppBanner.vue';
 import { functionalPolishError } from '../utils/functionalPolishErrors.js';
 
 const props = defineProps({ collectionId: { type: Number, required: true } });
+const emit = defineEmits(['resource-search', 'associated']);
+const searchChoice = ref(null), searchError = ref('');
 const report = ref(null), members = ref([]), totals = ref({}), cursor = ref(0);
 const error = ref(''), busy = ref(false);
 let generation = 0;
 watch(() => props.collectionId, () => {
   generation++;
+  searchChoice.value = null; searchError.value = '';
   report.value = null;
   members.value = [];
   cursor.value = 0;
@@ -60,6 +76,24 @@ async function load(reset) {
     if (ticket === generation) busy.value = false;
   }
 }
+function chooseMissing(season) {
+  const first = season.missing_ranges[0];
+  searchChoice.value = { season: season.season, episodes: String(first.start), confirmed: false };
+  searchError.value = '';
+}
+async function prepareSearch() {
+  if (busy.value || !searchChoice.value || (report.value?.mixed_series && !searchChoice.value.confirmed)) return;
+  let episodes;
+  try { episodes = episodeNumbers(searchChoice.value.episodes); } catch (err) { searchError.value = err.message; return; }
+  const ticket = generation; busy.value = true; searchError.value = '';
+  try {
+    const source = await episodeAPI.prepare({ collection_id: props.collectionId, season: searchChoice.value.season, episodes, series_confirmed: searchChoice.value.confirmed });
+    if (ticket !== generation) return;
+    searchChoice.value = null; emit('resource-search', source);
+  } catch (err) { if (ticket === generation) searchError.value = episodeError(err); }
+  finally { if (ticket === generation) busy.value = false; }
+}
+async function associated(result) { emit('associated', result); await load(true); }
 function nullableNumber(value) { return value === '' || value == null ? null : Number(value); }
 async function saveMember(member) {
   const edit = {

@@ -2,6 +2,12 @@
   <DialogShell title="今晚看什么" size="lg" class="tonight-picker" @close="$emit('close')">
     <p class="help-text">沿用打开弹窗时的片库筛选，包括关键词、标签、人物、评分和智能视图。需要改变这些条件时，可关闭后调整。</p>
     <p v-if="filter.keyword" class="help-text">当前关键词：{{ filter.keyword }}</p>
+    <div class="tonight-picker__presets" aria-label="选片预设">
+      <button type="button" class="btn btn--ghost btn--sm" @click="applyPreset('short')">短一点</button>
+      <button type="button" class="btn btn--ghost btn--sm" @click="applyPreset('revisit')">重温收藏</button>
+      <button type="button" class="btn btn--ghost btn--sm" @click="applyPreset('explore')">探索没看过的</button>
+    </div>
+    <p v-if="presetNotice" class="help-text" role="status">{{ presetNotice }}</p>
     <form class="tonight-picker__form" @submit.prevent="reroll">
       <label>可用时间（分钟）<input v-model.number="minutes" class="number-input" type="number" min="0" max="1440" step="1" data-test="tonight-minutes" /></label>
       <label>观看状态
@@ -62,7 +68,7 @@ export default {
   emits: ['close', 'preview', 'play', 'play-random', 'update:conditions'],
   data() {
     const conditions = normalizeRandomConditions(this.conditions);
-    return { minutes: conditions.maxMinutes, watchState: conditions.watchState, favoritesOnly: conditions.favoritesOnly, items: [], loading: false, queried: false, error: '', notice: '', generation: 0, recentLimit: RANDOM_RECENT_LIMIT };
+    return { minutes: conditions.maxMinutes, watchState: conditions.watchState, favoritesOnly: conditions.favoritesOnly, items: [], loading: false, queried: false, error: '', notice: '', presetNotice: '', generation: 0, recentLimit: RANDOM_RECENT_LIMIT };
   },
   computed: { queryKey() { return JSON.stringify([this.filter, this.minutes, this.watchState, this.favoritesOnly]); } },
   // 条件一变就重新抽（实时生效）：旧结果立即作废，分钟数输入期间按 300ms 合并一次请求；合法的条件同步回片库页。
@@ -77,6 +83,11 @@ export default {
   mounted() { this.load(); },
   beforeUnmount() { this.generation++; clearTimeout(this.reloadTimer); },
   methods: {
+    applyPreset(preset) {
+      if (preset === 'short') { this.minutes = 30; this.presetNotice = '时长上限已改为 30 分钟，其它条件保留。'; }
+      if (preset === 'revisit') { this.watchState = 'watched'; this.favoritesOnly = true; this.presetNotice = '观看状态已改为重温，并开启仅收藏；其它条件保留。'; }
+      if (preset === 'explore') { this.watchState = 'unwatched'; this.presetNotice = '观看状态已改为探索，其它条件保留。'; }
+    },
     tagColor(hex) { return tagBackgroundColor(hex); },
     currentConditions() { return { watchState: this.watchState, favoritesOnly: this.favoritesOnly, maxMinutes: this.minutes }; },
     // 换一批：在原条件上再排除这一批，抽不出新的就留着这一批并说明。

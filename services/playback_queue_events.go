@@ -49,6 +49,9 @@ func (s *PlaybackQueueService) report(ctx context.Context, event InlineQueueEven
 		if event.Seq <= r.seq {
 			return ErrQueueStaleEvent
 		}
+		if r.entry.EntryKind == "clip" {
+			return s.reportClipLocked(ctx, r, event)
+		}
 		if event.ViewCycle != r.cycle {
 			if !r.ended || event.Kind != "playing" || event.ViewCycle != r.cycle+1 {
 				return ErrQueueChanged
@@ -179,6 +182,9 @@ func (s *PlaybackQueueService) report(ctx context.Context, event InlineQueueEven
 }
 func (r *playbackQueueRun) viewKey() string { return fmt.Sprintf("%s:%d", r.token, r.cycle) }
 func (s *PlaybackQueueService) sampleQueueView(r *playbackQueueRun, position float64, now time.Time, finish bool) float64 {
+	if r.entry.EntryKind == "clip" {
+		return 0
+	}
 	if !r.playing {
 		return r.played
 	}
@@ -190,6 +196,9 @@ func (s *PlaybackQueueService) sampleQueueView(r *playbackQueueRun, position flo
 	return r.played + segment
 }
 func (s *PlaybackQueueService) saveProgress(ctx context.Context, r *playbackQueueRun, completed bool) error {
+	if r.entry.EntryKind == "clip" {
+		return nil
+	}
 	r.lastSaved = s.now()
 	_, err := s.video.UpdateVideoWatchProgressContext(ctx, r.lease.video.ID, r.position, r.duration, completed, r.lease.origin)
 	return err

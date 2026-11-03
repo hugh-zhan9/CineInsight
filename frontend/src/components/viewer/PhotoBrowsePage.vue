@@ -1,11 +1,12 @@
 <template>
   <section class="page-content photo-browse" data-test="photo-browse">
-    <PageHeader title="图片" :subtitle="anniversaries ? '往年同月同日的照片 · 可按人物筛选' : countText">
+    <PageHeader title="图片" :subtitle="mapMode ? '本地照片地图与日期回顾 · 底图需明确开启联网' : anniversaries ? '往年同月同日的照片 · 可按人物筛选' : countText">
       <template #below>
         <div class="photo-browse__toolbar" role="search">
-          <button type="button" class="btn btn--secondary" :aria-pressed="anniversaries" @click="anniversaries = !anniversaries">那年今天</button>
+          <button type="button" class="btn btn--secondary" :aria-pressed="anniversaries" @click="mapMode=false; anniversaries = !anniversaries">那年今天</button>
+          <button type="button" class="btn btn--secondary" :aria-pressed="mapMode" data-test="photo-map-toggle" @click="togglePhotoMap">照片地图与旅行回顾</button>
           <input
-            v-if="!anniversaries"
+            v-if="!anniversaries && !mapMode"
             v-model="keyword"
             type="search"
             class="search-input photo-browse__search"
@@ -16,7 +17,7 @@
             @keyup.enter="reloadNow"
           />
           <SegmentedControl
-            v-if="!anniversaries"
+            v-if="!anniversaries && !mapMode"
             label="范围"
             :options="scopeOptions"
             :model-value="favoriteOnly ? 'favorites' : ''"
@@ -33,7 +34,7 @@
             @click="toggleMenu('people', 'personTrigger')"
           >人物<AppBadge v-if="people.length" tone="accent" :count="people.length" /><AppIcon name="chevron-down" :size="16" /></button>
           <button
-            v-if="!anniversaries"
+            v-if="!anniversaries && !mapMode"
             ref="folderTrigger"
             type="button"
             :class="['btn', 'btn--secondary', { 'photo-browse__trigger--on': Boolean(folder) }]"
@@ -43,7 +44,7 @@
             @click="toggleMenu('folders', 'folderTrigger')"
           >文件夹<AppIcon name="chevron-down" :size="16" /></button>
         </div>
-        <div v-if="people.length || (!anniversaries && folder)" class="photo-browse__chips" data-test="photo-browse-active-filters">
+        <div v-if="people.length || (!anniversaries && !mapMode && folder)" class="photo-browse__chips" data-test="photo-browse-active-filters">
           <FilterChip
             v-for="person in people"
             :key="`person-${person.id}`"
@@ -55,7 +56,7 @@
             @remove="removePerson(person.id)"
           />
           <FilterChip
-            v-if="folder && !anniversaries"
+            v-if="folder && !anniversaries && !mapMode"
             :label="folder.name"
             :title="folder.directory"
             active
@@ -69,8 +70,9 @@
       </template>
     </PageHeader>
 
-    <PhotoAnniversaries v-if="anniversaries" :page-active="pageActive" :person-ids="people.map(person => person.id)" @navigate="$emit('navigate', $event)" @open-in-manage="$emit('open-in-manage', $event)" @open-person="$emit('open-person', $event)" />
-    <section v-show="!anniversaries" class="photo-browse__stream" :aria-busy="list.loading ? 'true' : 'false'" aria-label="照片流">
+    <PhotoMapPanel v-if="mapMounted" v-show="mapMode" ref="photoMap" :page-active="pageActive && mapMode" :people="people" @select-people="applyMapPeople" @open-in-manage="$emit('open-in-manage',$event)" @open-person="$emit('open-person',$event)" @delete-image="$emit('delete-image',$event)" @image-changed="$emit('image-changed',$event)" />
+    <PhotoAnniversaries v-if="anniversaries && !mapMode" :page-active="pageActive" :person-ids="people.map(person => person.id)" @navigate="$emit('navigate', $event)" @open-in-manage="$emit('open-in-manage', $event)" @open-person="$emit('open-person', $event)" />
+    <section v-show="!anniversaries && !mapMode" class="photo-browse__stream" :aria-busy="list.loading ? 'true' : 'false'" aria-label="照片流">
       <AppBanner v-if="list.error && !list.items.length" tone="danger" title="读取图片失败" :message="list.error" data-test="photo-browse-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="photo-browse-retry" @click="reloadNow">重试</button></template>
       </AppBanner>
@@ -232,6 +234,7 @@
 // 事件：navigate(key)、open-person({ id, name })、open-in-manage({ id, name })（「在图片管理中打开」）、image-changed(fields)（看图里存成功的收藏 / 评分）。
 import { ListImageFolderGroups, ListImageTimelineBuckets, ListPeople, SearchImagePage } from '../../../wailsjs/go/main/App';
 import PhotoLightbox from './PhotoLightbox.vue';
+import PhotoMapPanel from './PhotoMapPanel.vue';
 import PhotoAnniversaries from './PhotoAnniversaries.vue';
 import AppBadge from '../ui/AppBadge.vue';
 import AppBanner from '../ui/AppBanner.vue';
@@ -325,7 +328,7 @@ function errorText(err) {
 export default {
   name: 'PhotoBrowsePage',
   components: {
-    AppBadge, AppBanner, AppIcon, AppSpinner, BasePopover, EmptyState, FilterChip, PageHeader, PhotoLightbox, PhotoAnniversaries, SegmentedControl, SkeletonBlock
+    AppBadge, AppBanner, AppIcon, AppSpinner, BasePopover, EmptyState, FilterChip, PageHeader, PhotoLightbox, PhotoMapPanel, PhotoAnniversaries, SegmentedControl, SkeletonBlock
   },
   props: {
     pageActive: { type: Boolean, default: true },
@@ -337,7 +340,7 @@ export default {
   data() {
     return {
       keyword: '',
-      anniversaries: false,
+      anniversaries: false, mapMode:false,mapMounted:false,
       favoriteOnly: false,
       people: [],
       folder: null,
@@ -418,6 +421,7 @@ export default {
     },
     // 别处改了图片：先记下；正在显示时等这一拍的显隐切换落定再重取（滚动位置要先放回去）。
     imagesVersion() {
+ this.$refs.photoMap?.invalidateData();
       this.imagesStale = true;
       this.$nextTick(() => {
         if (this.pageActive && this.imagesStale) this.refreshInPlace();
@@ -471,6 +475,8 @@ export default {
     for (const key of Object.keys(this._tokens)) this._tokens[key] += 1;
   },
   methods: {
+ togglePhotoMap(){this.mapMode=!this.mapMode;if(this.mapMode){this.mapMounted=true;this.anniversaries=false;this.closeMenu();this.lightboxIndex=-1;}},
+ applyMapPeople(people){this.people=people;this.reloadNow();},
     currentFilter() {
       return photoBrowseFilter({ keyword: this.keyword, favoriteOnly: this.favoriteOnly, people: this.people, folder: this.folder });
     },
@@ -745,6 +751,7 @@ export default {
     },
     // 看图改了这一张（收藏、评分、详情、查看次数）：就地并进列表。
     removeDeletedImage(id) {
+ this.$refs.photoMap?.removeDeletedImage(id);
       if (Number(this.lightboxImage?.id) === Number(id)) this.lightboxIndex = -1;
       else if (this.lightboxIndex >= 0) {
         const currentID = this.lightboxImage?.id;

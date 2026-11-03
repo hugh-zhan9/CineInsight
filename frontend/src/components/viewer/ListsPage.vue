@@ -19,11 +19,11 @@
       <WatchedMoviesPage embedded @navigate="$emit('navigate', $event)" @open-video="$emit('open-video', $event)" />
     </div>
     <div v-if="resourcesMounted" v-show="activeTab.key === 'resources'" id="lists-panel-resources" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-resources">
-      <BTDownloadsPanel :key="resourceRequestToken" :api="btAPI" :active="resourcesVisible" :initial-query="resourceQuery" @settings="$emit('settings', 'bt')" @play="$emit('open-video-id', $event)" />
+      <BTDownloadsPanel :key="resourceRequestToken" :api="btAPI" :episode-api="episodeAPI" :active="resourcesVisible" :initial-query="resourceQuery" @settings="$emit('settings', 'bt')" @play="$emit('open-video-id', $event)" />
     </div>
     <!-- 观看笔记首次进入才挂载，之后只隐藏：去原片核对再回来，编辑中的日记、年份与翻页都还在。 -->
     <div v-if="notesMounted" v-show="activeTab.key === 'viewing-notes'" id="lists-panel-viewing-notes" class="lists-page__panel" role="tabpanel" aria-labelledby="lists-tab-viewing-notes">
-      <ViewingNotesPage
+      <ViewingNotesPage :chapter-request="chapterRequest" @open-chapter="$emit('open-chapter',$event)" @subtitle-tools="$emit('subtitle-tools',$event)" @settings="$emit('settings','ai-tags')"
         embedded
         :page-active="pageActive && activeTab.key === 'viewing-notes'"
         @open-bookmark="$emit('open-bookmark', $event)"
@@ -36,6 +36,7 @@
 
 <script>
 import BTDownloadsPanel from '../bt/BTDownloadsPanel.vue';
+import { episodeAPI } from '../../utils/episodeAcquisition.js';
 import { btAPI } from '../../utils/btAPI.js';
 import MovieChartPage from '../MovieChartPage.vue';
 import ViewingNotesPage from '../ViewingNotesPage.vue';
@@ -61,15 +62,15 @@ const TAB_DESCRIPTIONS = {
 export default {
   name: 'ListsPage',
   components: { BTDownloadsPanel, AppTabs, MovieChartPage, PageHeader, ViewingNotesPage, WatchedMoviesPage, WatchlistPage },
-  props: {
+  props: { chapterRequest:{type:Object,default:null},
     resourceQuery: { type: String, default: '' },
     resourceRequestToken: { type: Number, default: 0 },
     tab: { type: String, default: DEFAULT_LIST_TAB },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['settings', 'find-resources', 'update:tab', 'navigate', 'open-video', 'open-video-id', 'open-bookmark'],
+  emits: ['open-chapter','subtitle-tools','settings', 'find-resources', 'update:tab', 'navigate', 'open-video', 'open-video-id', 'open-bookmark'],
   data() {
-    return { notesMounted: false, resourcesMounted: false, btAPI };
+    return { notesMounted: false, resourcesMounted: false, btAPI, episodeAPI };
   },
   computed: {
     tabs() {

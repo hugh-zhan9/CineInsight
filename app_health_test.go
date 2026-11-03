@@ -31,6 +31,21 @@ func TestHealthSectionAllowsOnlyKnownSections(t *testing.T) {
 	}
 }
 
+func TestHealthSubtitleUsesCurrentAppleEngine(t *testing.T) {
+	at := time.Now()
+	item, include := healthSubtitleStatus(services.SubtitleEngineStatus{Engine: services.SubtitleEngineApple, Supported: true, Available: true, ReasonCode: services.SubtitleReasonReady}, at)
+	if !include || item.Key != "apple" || item.Label != "Apple 系统识别" || item.State != "ok" || item.ObservedAt == nil {
+		t.Fatalf("Apple status was not projected: %+v", item)
+	}
+	if _, include := healthSubtitleStatus(services.SubtitleEngineStatus{Engine: services.SubtitleEngineWhisperX, Available: true}, at); include {
+		t.Fatal("retired engine must not appear as a preparation choice")
+	}
+	item, _ = healthSubtitleStatus(services.SubtitleEngineStatus{Engine: services.SubtitleEngineApple, ReasonCode: services.SubtitleReasonUnsupportedPlatform}, at)
+	if item.State != "unavailable" || item.ReasonCode != "unsupported_platform" {
+		t.Fatalf("%+v", item)
+	}
+}
+
 func TestHealthRuntimeWithConstructedFaceServiceAndNilDatabase(t *testing.T) {
 	previous := database.DB
 	database.DB = nil

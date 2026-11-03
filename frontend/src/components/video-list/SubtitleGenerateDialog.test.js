@@ -61,6 +61,19 @@ afterEach(() => {
   delete window.runtime;
 });
 
+it.each(['success', 'failure'])('does not open a stale generation dialog after navigation: %s', async outcome => {
+  const wrapper = await mountDialog();
+  let resolve, reject, current = true;
+  api.GetSubtitleEngineStatuses.mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
+  const pending = wrapper.vm.generate(video, () => current);
+  current = false;
+  if (outcome === 'success') resolve([READY_ENGINE]); else reject(new Error('fixture failure'));
+  await pending; await flushPromises();
+  expect(wrapper.vm.subtitleDialog.show).toBe(false);
+  expect(api.GetSubtitleOverwriteInfo).not.toHaveBeenCalled();
+  wrapper.unmount();
+});
+
 describe('字幕生成：覆盖与待确认', () => {
   it('MEDIA-01 已有同名字幕时确认框写明会先备份，并列出共用这份字幕的其他视频', async () => {
     api.GetSubtitleOverwriteInfo.mockResolvedValue({ exists: true, shared_with: [{ id: 8, name: '黑客帝国.mp4' }] });

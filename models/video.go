@@ -125,24 +125,26 @@ type SubtitleIndexState struct {
 
 // Tag 标签模型
 type Tag struct {
-	ID             uint           `gorm:"primarykey" json:"id"`
-	Name           string         `gorm:"unique" json:"name"` // 标签名称
-	Color          string         `json:"color"`              // 标签颜色
-	Namespace      string         `gorm:"index" json:"namespace"`
-	AutomaticKind  string         `gorm:"uniqueIndex:idx_tags_automatic_kind,where:automatic_kind <> ''" json:"automatic_kind"`
-	IsSystem       bool           `gorm:"index;default:false" json:"is_system"`
-	IsActive       bool           `gorm:"index;default:true" json:"is_active"`
-	ReviewRequired bool           `gorm:"default:false" json:"review_required"`
-	SortOrder      int            `json:"sort_order"`
-	Videos         []Video        `gorm:"many2many:video_tags;" json:"-"`
-	CreatedAt      time.Time      `json:"created_at" ts_type:"string"`
-	UpdatedAt      time.Time      `json:"updated_at" ts_type:"string"`
-	DeletedAt      SoftDeleteTime `gorm:"index" json:"-"`
+	PreferenceRevision int64          `gorm:"not null;default:0" json:"-"` // CAS covers absence of a recommendation preference during a reviewed merge.
+	ID                 uint           `gorm:"primarykey" json:"id"`
+	Name               string         `gorm:"unique" json:"name"` // 标签名称
+	Color              string         `json:"color"`              // 标签颜色
+	Namespace          string         `gorm:"index" json:"namespace"`
+	AutomaticKind      string         `gorm:"uniqueIndex:idx_tags_automatic_kind,where:automatic_kind <> ''" json:"automatic_kind"`
+	IsSystem           bool           `gorm:"index;default:false" json:"is_system"`
+	IsActive           bool           `gorm:"index;default:true" json:"is_active"`
+	ReviewRequired     bool           `gorm:"default:false" json:"review_required"`
+	SortOrder          int            `json:"sort_order"`
+	Videos             []Video        `gorm:"many2many:video_tags;" json:"-"`
+	CreatedAt          time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt          time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt          SoftDeleteTime `gorm:"index" json:"-"`
 }
 
 // Settings 应用设置
 type Settings struct {
-	DesktopPlayer string `json:"desktop_player"` // Empty/system keeps the system player; iina_controlled is explicit.
+	MapTilesEnabled bool   `gorm:"not null;default:false" json:"map_tiles_enabled"`
+	DesktopPlayer   string `json:"desktop_player"` // Empty/system keeps the system player; iina_controlled is explicit.
 	// Jellyfin 配置只由独立配置入口维护，不进入通用设置写回。
 	JellyfinEnabled       bool    `json:"jellyfin_enabled"`
 	JellyfinPort          int     `json:"jellyfin_port"`
@@ -187,9 +189,11 @@ type Settings struct {
 	SubtitleTranslationModel     string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
 	SubtitleWhisperXModel        string     `gorm:"default:'medium'" json:"-"`          // Retired subtitle setting retained for historical database compatibility.
 	SubtitleWhisperXBatchSize    int        `gorm:"default:8" json:"-"`                 // Retired subtitle setting retained for historical database compatibility.
-	AITaggingBaseURL             string     `json:"ai_tagging_base_url"`                // OpenAI 兼容接口地址
-	AITaggingAPIKey              string     `json:"ai_tagging_api_key"`                 // AI 标签 API Key
-	AITaggingModel               string     `json:"ai_tagging_model"`                   // AI 标签模型
+	QueryParseEnabled            bool       `gorm:"not null;default:false" json:"query_parse_enabled"`
+	ChapterSummaryEnabled        bool       `gorm:"not null;default:false" json:"chapter_summary_enabled"`
+	AITaggingBaseURL             string     `json:"ai_tagging_base_url"` // OpenAI 兼容接口地址
+	AITaggingAPIKey              string     `json:"ai_tagging_api_key"`  // AI 标签 API Key
+	AITaggingModel               string     `json:"ai_tagging_model"`    // AI 标签模型
 	SemanticEmbeddingModel       string     `gorm:"type:text;not null;default:''" json:"semantic_embedding_model"`
 	AITaggingFrameCount          int        `gorm:"default:0" json:"ai_tagging_frame_count"` // 兼容旧设置；抽帧现按视频时长自动规划
 	AITaggingImagesPerRequest    int        `gorm:"default:10" json:"ai_tagging_images_per_request"`
@@ -330,12 +334,16 @@ type ScanDirectory struct {
 
 // SavedLibraryView 保存用户命名的片库筛选条件。
 type SavedLibraryView struct {
-	ID         uint   `gorm:"primarykey" json:"id"`
-	Name       string `gorm:"not null;uniqueIndex:idx_saved_library_views_name_active,where:deleted_at IS NULL" json:"name"`
-	SearchMode string `gorm:"not null;default:'file'" json:"search_mode"`
-	Keyword    string `json:"keyword"`
-	SmartView  string `gorm:"index" json:"smart_view"`
-	TagIDsJSON string `gorm:"type:text;not null;default:'[]'" json:"tag_ids_json"`
+	WatchState         string `gorm:"not null;default:any" json:"watch_state"`
+	FavoritesOnly      bool   `gorm:"not null;default:false" json:"favorites_only"`
+	MinDurationSeconds int64  `gorm:"not null;default:0" json:"min_duration_seconds"`
+	MaxDurationSeconds int64  `gorm:"not null;default:0" json:"max_duration_seconds"`
+	ID                 uint   `gorm:"primarykey" json:"id"`
+	Name               string `gorm:"not null;uniqueIndex:idx_saved_library_views_name_active,where:deleted_at IS NULL" json:"name"`
+	SearchMode         string `gorm:"not null;default:'file'" json:"search_mode"`
+	Keyword            string `json:"keyword"`
+	SmartView          string `gorm:"index" json:"smart_view"`
+	TagIDsJSON         string `gorm:"type:text;not null;default:'[]'" json:"tag_ids_json"`
 	// PersonIDsJSON 是保存视图里的人物筛选（D-PC33），JSON 数组，空为 []。
 	PersonIDsJSON string         `gorm:"type:text;not null;default:'[]'" json:"person_ids_json"`
 	MinSize       int64          `json:"min_size"`

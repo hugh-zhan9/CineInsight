@@ -14,6 +14,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 type SubtitleSearchMatch struct {
@@ -481,6 +482,7 @@ func rebuildSubtitleIndexTx(tx *gorm.DB, video models.Video) error {
 }
 
 func replaceSubtitleIndexTx(tx *gorm.DB, video models.Video, srtPath string, info os.FileInfo, segments []subtitleparser.Segment) error {
+	tx = tx.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	if err := tx.Where("video_id = ?", video.ID).Delete(&models.SubtitleSegment{}).Error; err != nil {
 		return err
 	}
@@ -542,6 +544,7 @@ func isSubtitleIndexCurrentOn(db *gorm.DB, video models.Video, srtPath string) (
 }
 
 func upsertSubtitleIndexStateTx(tx *gorm.DB, videoID uint, srtPath string, modTime int64, size int64, segmentCount int) error {
+	tx = tx.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	now := time.Now()
 	state := models.SubtitleIndexState{
 		VideoID:         videoID,

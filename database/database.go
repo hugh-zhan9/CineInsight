@@ -495,6 +495,9 @@ func Init() error {
 // （ensureMediaDetailConstraints 里的 Postgres DO 块），而两个后端的全套测试都没
 // 拦住——测试根本没跑到这条路径上。
 func ApplySchema(db *gorm.DB) error {
+	if err := validateRecommendationIdentity(db); err != nil {
+		return err
+	}
 	// 想看片单的唯一键是 (title, kind)，索引由 AutoMigrate 建。这里只负责在建索引
 	// 之前把老库里重复的片名合并掉；补齐 kind 与删掉旧的单列索引在 AutoMigrate
 	// 之后由 migrateWatchlistKind 收尾。
@@ -668,10 +671,13 @@ func ApplySchema(db *gorm.DB) error {
 	if err := migrateUnifyFavorites(db); err != nil {
 		return fmt.Errorf("合并收藏与点赞失败: %w", err)
 	}
+	if err := ensureCollectionEpisodeRoots(db); err != nil {
+		return fmt.Errorf("初始化作品集版本失败: %w", err)
+	}
 	if err := registerMaintenanceCallbacks(db); err != nil {
 		return fmt.Errorf("注册数据库维护屏障失败: %w", err)
 	}
-	return nil
+	return finishRecommendationIdentity(db)
 }
 
 func migrateLibraryWatchSetting(db *gorm.DB, settingsTableExisted, libraryWatchColumnExisted bool) error {

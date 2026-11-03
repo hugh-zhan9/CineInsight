@@ -35,7 +35,10 @@ assert.match(tagManagerSource, /v-model\.trim="mergeKeyword"/, 'tag merge should
 assert.match(tagManagerSource, /v-for="tag in filteredMergeSourceTags"/, 'tag merge should render filtered source choices');
 assert.match(tagManagerSource, /type="checkbox"[\s\S]+toggleMergeSource/, 'tag merge should support visible checkbox multi-selection');
 assert.match(tagManagerSource, /selectAllVisibleMergeSources/, 'tag merge should support selecting all filtered sources');
-assert.match(tagManagerSource, /await MergeTags\(sourceIds, Number\(this\.mergeTargetId\)\)/, 'tag merge should call the backend operation');
+assert.match(tagManagerSource, /const targetId = Number\(target\.id\)/, 'tag merge should freeze the reviewed target');
+assert.match(tagManagerSource, /await PreviewTagMergePreferences\(sourceIds, targetId\)/, 'tag merge should preview recommendation impact');
+assert.match(tagManagerSource, /await MergeTagsFromPreferencePreview\(preview\.token\)/, 'tag merge with preferences should submit the reviewed token');
+assert.match(tagManagerSource, /else await MergeTags\(sourceIds, targetId\)/, 'tag merge without preferences should preserve the original backend operation');
 assert.match(tagManagerSource, /confirmAction\(\{ title: '合并标签'/, 'destructive tag merge should require final confirmation');
 assert.match(tagManagerSource, /return this\.mergeableTags\.filter\(tag => Number\(tag\.id\) !== Number\(target\.id\)\)/, 'source choices should include both ordinary and AI-library tags');
 assert.doesNotMatch(tagManagerSource, /mergeType/, 'tag merge must not distinguish legacy tag types');

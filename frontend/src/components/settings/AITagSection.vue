@@ -41,6 +41,13 @@
       </div>
       <p class="help-text">用上面填写的地址、Key 与模型发一条极短的文本请求，只验证接口与模型可达（不验证图像输入）。打标失败率高时先据此排除接口问题，剩下的就是抽帧或扫描那一侧。留空字段按已保存或环境变量配置。</p>
     </div>
+    <div class="setting-item">
+      <h4>可选文本能力</h4>
+      <label><input v-model="form.query_parse_enabled" type="checkbox" data-test="query-parse-enabled" />允许外部 AI 解析组合搜索</label>
+      <p class="help-text">只在主动点击解析后发送查询文字；调用前显示服务与模型。不发送图片、视频、路径或片库清单。</p>
+      <label><input v-model="form.chapter_summary_enabled" type="checkbox" data-test="chapter-summary-enabled" />允许外部 AI 生成章节摘要</label>
+      <p class="help-text">只在明确选择字幕范围并启动后发送所选字幕。两种用途均复用上方地址与模型；关闭会取消未完成请求，已经发送的内容无法撤回。</p>
+    </div>
     <div class="setting-grid">
       <div class="setting-item">
         <label>单次请求图片上限</label>

@@ -4,7 +4,7 @@ import BTDownloadsPanel from './BTDownloadsPanel.vue';
 const pending = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const file = (extra = {}) => ({ id: 'f', path: 'film.mkv', size: '9007199254740993', selected: true, selectable: true, kind: 'video', progress: 0, import_state: 'pending', ...extra });
 const task = (extra = {}) => ({ id: 't', revision: 1, title: '影片', stage: 'draft', save_path: '/movies/CineInsight/t', files: [file()], actions: ['cancel_draft'], expires_at: '2099-01-01T00:00:00Z', ...extra });
-function api() { return { GetBTConnection: vi.fn().mockResolvedValue({ enabled: true }), ListBTIndexers: vi.fn().mockResolvedValue([{ id: 1, name: '站点', enabled: true }]), SearchBTResources: vi.fn().mockResolvedValue({ resources: [{ result_token: 'opaque', title: '影片', size: '5', indexer: '站点' }], indexers: [{ indexer_id: 1, status: 'failed' }] }), PreviewBTResource: vi.fn().mockResolvedValue(task()), SubmitBTDownload: vi.fn().mockResolvedValue(task({ stage: 'active', revision: 2, actions: ['stop'] })), ListBTTasks: vi.fn().mockResolvedValue({ tasks: [], next_cursor: '' }), GetBTTask: vi.fn().mockResolvedValue(task()), ControlBTTask: vi.fn().mockResolvedValue(task({ stage: 'cancelled', revision: 2 })) }; }
+function api() { return { GetBTResourceDetail: vi.fn().mockResolvedValue({ description: '站点正文', media_info: '', image_paths: [] }), GetBTConnection: vi.fn().mockResolvedValue({ enabled: true }), ListBTIndexers: vi.fn().mockResolvedValue([{ id: 1, name: '站点', enabled: true }]), SearchBTResources: vi.fn().mockResolvedValue({ resources: [{ result_token: 'opaque', title: '影片', size: '5', indexer: '站点' }], indexers: [{ indexer_id: 1, status: 'failed' }] }), PreviewBTResource: vi.fn().mockResolvedValue(task()), SubmitBTDownload: vi.fn().mockResolvedValue(task({ stage: 'active', revision: 2, actions: ['stop'] })), ListBTTasks: vi.fn().mockResolvedValue({ tasks: [], next_cursor: '' }), GetBTTask: vi.fn().mockResolvedValue(task()), ControlBTTask: vi.fn().mockResolvedValue(task({ stage: 'cancelled', revision: 2 })) }; }
 const wrappers = [];
 async function setup(overrides = {}, props = {}) { const service = { ...api(), ...overrides }; const w = mount(BTDownloadsPanel, { props: { api: service, initialQuery: '影片', ...props }, global: { stubs: { teleport: true, DialogShell: { template: '<div><slot/><slot name="footer"/></div>' } } } }); wrappers.push(w); await flushPromises(); return { w, service }; }
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); });
@@ -254,4 +254,24 @@ it('keeps preview errors and missing metadata visible on the detail page', async
  await w.get('[data-test="bt-resource-download"]').trigger('click'); await flushPromises();
  expect(w.get('[data-test="bt-resource-detail"]').text()).toContain('已过期');
  expect(w.text()).not.toContain('private-url');
+});
+
+it('keeps supplement selection explicit and submits source plus optional mapping only through its API', async () => {
+  const source={origin_token:'origin',collection_id:3,collection_title:'Series',season:1,targets:[2],expires_at:'2099-01-01T00:00:00Z'};
+  const episodeApi={submit:vi.fn().mockResolvedValue(task({stage:'active',revision:2})),list:vi.fn().mockResolvedValue({items:[],next_cursor:null})};
+  const {w,service}=await setup({}, {episodeOrigin:source,episodeApi});
+  await w.vm.preview('opaque');await flushPromises();
+  expect(w.get('[data-test="bt-file-f"]').element.checked).toBe(false);
+  await w.get('[data-test="bt-file-f"]').setValue(true);
+  await w.get('[data-test="bt-files-submit"]').trigger('click');await flushPromises();
+  expect(episodeApi.submit).toHaveBeenCalledWith({draft_id:'t',expected_revision:1,selected_file_ids:['f'],origin_token:'origin',file_episode_choices:[]});
+  expect(service.SubmitBTDownload).not.toHaveBeenCalled();
+});
+it('never converts a failed supplement submission to an ordinary download', async () => {
+  const episodeApi={submit:vi.fn().mockRejectedValue(Object.assign(new Error('季集已变化'),{code:'episode_context_changed'}))};
+  const source={origin_token:'origin',collection_title:'Series',season:1,targets:[2],expires_at:'2099-01-01T00:00:00Z'};
+  const {w,service}=await setup({}, {episodeOrigin:source,episodeApi});
+  await w.vm.preview('opaque');await flushPromises();await w.get('[data-test="bt-file-f"]').setValue(true);
+  await w.get('[data-test="bt-files-submit"]').trigger('click');await flushPromises();
+  expect(w.text()).toContain('季集已变化');expect(service.SubmitBTDownload).not.toHaveBeenCalled();expect(w.vm.draft).not.toBeNull();
 });

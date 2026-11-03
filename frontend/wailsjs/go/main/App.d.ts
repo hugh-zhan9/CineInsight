@@ -32,6 +32,10 @@ export function AddVersionMembers(arg1:number,arg2:number,arg3:Array<number>):Pr
 
 export function AnalyzeEditProject(arg1:services.EditAnalyzeRequest):Promise<services.EditProjectView>;
 
+export function AppendClipQueue(arg1:services.AppendClipQueueRequest):Promise<services.ClipQueueResult>;
+
+export function ApplyChapterDraft(arg1:string):Promise<services.ChapterApplicationResult>;
+
 export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
 
 export function ApplyLostPurge(arg1:services.LostPurgeRequest):Promise<services.LostMediaBatchResult>;
@@ -60,11 +64,15 @@ export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise
 
 export function CancelAIReviewApproval(arg1:string,arg2:string):Promise<void>;
 
+export function CancelAllChapterDrafts():Promise<services.ExperienceMutationResult>;
+
 export function CancelAutomationRuleRun():Promise<services.AutomationRuleRunStatus>;
 
 export function CancelBatchDelete(arg1:string):Promise<boolean>;
 
 export function CancelBrowserDownloadTask(arg1:string):Promise<void>;
+
+export function CancelChapterDraft(arg1:number,arg2:number):Promise<services.ExperienceMutationResult>;
 
 export function CancelCleanupAnalysis():Promise<void>;
 
@@ -95,6 +103,8 @@ export function CancelImageEXIFBackfill():Promise<void>;
 export function CancelImagePerceptualHashBackfill():Promise<void>;
 
 export function CancelImageSemanticIndex():Promise<void>;
+
+export function CancelLibraryQuery(arg1:string):Promise<services.LibraryQueryCancelResult>;
 
 export function CancelLocalMetadataBackfill():Promise<void>;
 
@@ -136,6 +146,8 @@ export function ClearDownloadDuplicate(arg1:string,arg2:number):Promise<services
 
 export function ClearFaceData():Promise<services.FaceDataUsage>;
 
+export function ClearMapTileCache():Promise<services.MapTileStatusResult>;
+
 export function ClearMigrationTarget(arg1:string,arg2:string):Promise<services.DatabaseTargetClearResult>;
 
 export function ClearMovieChartMark(arg1:string):Promise<void>;
@@ -153,6 +165,8 @@ export function ConfigureBTConnection(arg1:services.BTConnectionRequest):Promise
 export function ConfigureJellyfin(arg1:services.JellyfinConfigInput):Promise<services.JellyfinStatus>;
 
 export function ConfirmCollectionSuggestion(arg1:number,arg2:string,arg3:Array<number>):Promise<services.CollectionDetail>;
+
+export function ConfirmEpisodeAssociation(arg1:string):Promise<services.EpisodeAssociationConfirmResult>;
 
 export function ConfirmFaceClusterAppend(arg1:number):Promise<void>;
 
@@ -202,6 +216,8 @@ export function CreateWatchlistEntry(arg1:string,arg2:string):Promise<models.Wat
 
 export function DeleteAutomationRule(arg1:number):Promise<void>;
 
+export function DeleteClipTopic(arg1:number,arg2:number):Promise<services.ExperienceMutationResult>;
+
 export function DeleteCollection(arg1:number):Promise<void>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
@@ -215,6 +231,8 @@ export function DeleteImagesInDirectoryWithResult(arg1:string,arg2:boolean,arg3:
 export function DeleteImagesWithResult(arg1:Array<number>,arg2:boolean,arg3:string):Promise<services.BatchResult>;
 
 export function DeletePerson(arg1:number):Promise<void>;
+
+export function DeletePhotoRecap(arg1:number,arg2:number):Promise<services.ExperienceMutationResult>;
 
 export function DeletePlaybackProxy(arg1:number):Promise<void>;
 
@@ -234,7 +252,15 @@ export function DeleteViewingDiary(arg1:number,arg2:number):Promise<void>;
 
 export function DeleteWatchlistEntry(arg1:number):Promise<void>;
 
+export function DescribeEpisodeCandidates(arg1:services.EpisodeCandidatesRequest):Promise<services.EpisodeCandidatesResult>;
+
 export function DetectSubtitleLanguage(arg1:number):Promise<services.AppleLanguageDetection>;
+
+export function DiscardChapterApplication(arg1:string):Promise<services.ExperienceMutationResult>;
+
+export function DiscardChapterDraft(arg1:number,arg2:number):Promise<services.ExperienceMutationResult>;
+
+export function DiscardClipQueuePreview(arg1:string):Promise<services.ExperienceMutationResult>;
 
 export function DiscardEnhancementProgress(arg1:number):Promise<services.EnhancementTaskView>;
 
@@ -267,6 +293,8 @@ export function DismissVersionGroupSuggestion(arg1:Array<number>):Promise<void>;
 export function DissolveVersionGroup(arg1:number,arg2:number):Promise<void>;
 
 export function DuplicateEditProject(arg1:number):Promise<services.EditProjectView>;
+
+export function EditClipTopic(arg1:services.ClipTopicEdit):Promise<services.ClipTopicResult>;
 
 export function EditPlaybackQueue(arg1:services.QueueEdit):Promise<void>;
 
@@ -308,13 +336,19 @@ export function GetAutomationRuleRunStatus():Promise<services.AutomationRuleRunS
 
 export function GetBTConnection():Promise<services.BTConnectionView>;
 
+export function GetBTResourceDetail(arg1:string):Promise<services.BTResourceDetail>;
+
 export function GetBTTask(arg1:string):Promise<services.BTTaskView>;
 
 export function GetBackgroundTasks():Promise<Array<string>>;
 
 export function GetBackupStatus():Promise<services.BackupStatus>;
 
+export function GetBookmarkTopicReferences(arg1:number,arg2:number):Promise<services.BookmarkTopicReferencesResult>;
+
 export function GetBrowserBridgeStatus():Promise<services.BrowserBridgeStatus>;
+
+export function GetChapterDraft(arg1:number):Promise<services.ChapterDraftResult>;
 
 export function GetCleanupConsolidationReview(arg1:number):Promise<services.CleanupConsolidationReview>;
 
@@ -396,6 +430,8 @@ export function GetLocalMetadataExportStatus():Promise<services.LocalMetadataExp
 
 export function GetLostMediaReport(arg1:string):Promise<services.LostMediaReport>;
 
+export function GetMapTileStatus():Promise<services.MapTileStatusResult>;
+
 export function GetMetadataCompleteness():Promise<services.MetadataCompleteness>;
 
 export function GetMetadataCompletenessByDirectory(arg1:string,arg2:string,arg3:number):Promise<Array<services.MetadataCompletenessDirectory>>;
@@ -470,11 +506,15 @@ export function GetTaskFailureRetryResults(arg1:string,arg2:number,arg3:number):
 
 export function GetTechnicalBackfillStatus():Promise<services.TechnicalBackfillStatus>;
 
+export function GetTextAIStatus():Promise<services.TextAIStatusResult>;
+
 export function GetTrashUsage():Promise<services.TrashUsage>;
 
 export function GetVersionGroup(arg1:number):Promise<services.VersionGroupDetail>;
 
 export function GetVideoAutomaticTagOverrides(arg1:number):Promise<Array<models.VideoAutomaticTagOverride>>;
+
+export function GetVideoChapterSets(arg1:number):Promise<services.ChapterSetsResult>;
 
 export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 
@@ -506,7 +546,15 @@ export function ListBTIndexers():Promise<Array<services.BTIndexerView>>;
 
 export function ListBTTasks(arg1:string,arg2:number):Promise<Array<services.BTTaskView>>;
 
+export function ListChapterDraftJobs(arg1:services.ChapterJobQuery):Promise<services.ChapterJobListResult>;
+
+export function ListChapterSets(arg1:services.ChapterSetQuery):Promise<services.ChapterSetListResult>;
+
 export function ListCleanupDismissals(arg1:string,arg2:number,arg3:number):Promise<services.CleanupDismissalPage>;
+
+export function ListClipTopicMembers(arg1:services.ClipTopicMembersQuery):Promise<services.ClipTopicMembersResult>;
+
+export function ListClipTopics(arg1:services.ClipTopicQuery):Promise<services.ClipTopicListResult>;
 
 export function ListCollectionProgress(arg1:services.CollectionProgressRequest):Promise<Array<services.CollectionProgress>>;
 
@@ -520,6 +568,8 @@ export function ListContinueWatchingWithFilter(arg1:services.LibraryFilter,arg2:
 
 export function ListDatabaseBackups():Promise<Array<services.BackupFile>>;
 
+export function ListDialogueVideoHits(arg1:services.DialogueSearchRequest):Promise<services.DialogueHitResult>;
+
 export function ListDownloadTasks():Promise<Array<services.BrowserDownloadTask>>;
 
 export function ListEditProjects(arg1:number):Promise<Array<services.EditProjectSummary>>;
@@ -527,6 +577,8 @@ export function ListEditProjects(arg1:number):Promise<Array<services.EditProject
 export function ListEditProjectsBefore(arg1:number,arg2:number):Promise<Array<services.EditProjectSummary>>;
 
 export function ListEnhancementTasks(arg1:number):Promise<Array<services.EnhancementTaskView>>;
+
+export function ListEpisodeAcquisitions(arg1:services.EpisodeAcquisitionRequest):Promise<services.EpisodeAcquisitionListResult>;
 
 export function ListExtractableSubtitleTracks(arg1:number):Promise<services.ExtractableSubtitleTracks>;
 
@@ -557,6 +609,12 @@ export function ListMovieChartYears():Promise<Array<number>>;
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
 
 export function ListPeopleByCount(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number):Promise<Array<services.PersonListItem>>;
+
+export function ListPhotoMapCluster(arg1:services.PhotoMapPageRequest):Promise<services.PhotoMapImagesResult>;
+
+export function ListPhotoRecapImages(arg1:services.PhotoRecapImagesRequest):Promise<services.PhotoMapImagesResult>;
+
+export function ListPhotoRecaps(arg1:services.PhotoRecapQuery):Promise<services.PhotoRecapListResult>;
 
 export function ListRecapItems(arg1:services.RecapListRequest):Promise<services.RecapListPage>;
 
@@ -616,6 +674,8 @@ export function MergePeople(arg1:number,arg2:Array<number>):Promise<services.Mer
 
 export function MergeTags(arg1:Array<number>,arg2:number):Promise<services.MergeTagsResult>;
 
+export function MergeTagsFromPreferencePreview(arg1:string):Promise<services.ReviewedTagMergeResult>;
+
 export function MoveDirectory(arg1:string,arg2:string):Promise<services.FolderMigrationResult>;
 
 export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigrationResult>;
@@ -631,6 +691,8 @@ export function OpenDirectory(arg1:number):Promise<void>;
 export function OpenImageDirectory(arg1:string):Promise<void>;
 
 export function OpenMovieChartYear(arg1:number):Promise<boolean>;
+
+export function ParseLibraryQuery(arg1:services.ParseLibraryQueryRequest):Promise<services.LibraryQueryDraftResult>;
 
 export function PermanentlyDeleteImages(arg1:Array<number>):Promise<services.BatchResult>;
 
@@ -648,6 +710,10 @@ export function PreflightEditProject(arg1:number):Promise<services.EditPreflight
 
 export function PrepareAppleSubtitleLanguage(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
+export function PrepareChapterDraft(arg1:services.PrepareChapterRequest):Promise<services.ChapterPreparationResult>;
+
+export function PrepareEpisodeResourceSearch(arg1:services.EpisodeResourceSearchRequest):Promise<services.EpisodeSearchResult>;
+
 export function PrepareFaceRuntime():Promise<services.FaceRuntimeStatus>;
 
 export function PrepareSceneRuntime():Promise<services.SceneRuntimeStatus>;
@@ -660,7 +726,13 @@ export function PreviewAutomationRule(arg1:number):Promise<services.AutomationRu
 
 export function PreviewBTResource(arg1:string):Promise<services.BTTaskView>;
 
+export function PreviewChapterApplication(arg1:services.ChapterApplicationRequest):Promise<services.ChapterApplicationPreviewResult>;
+
 export function PreviewCleanupConsolidation(arg1:services.CleanupConsolidationRequest):Promise<services.CleanupConsolidationPreview>;
+
+export function PreviewClipQueue(arg1:services.ClipQueueRequest):Promise<services.ClipQueuePreviewResult>;
+
+export function PreviewEpisodeAssociation(arg1:services.EpisodeAssociationRequest):Promise<services.EpisodeAssociationPreviewResult>;
 
 export function PreviewExternally(arg1:number):Promise<void>;
 
@@ -676,13 +748,19 @@ export function PreviewLostRelinkSearch(arg1:services.LostRelinkSearchRequest):P
 
 export function PreviewMetadataBatchEdit(arg1:services.MetadataBatchEditRequest):Promise<services.MetadataBatchEditPreview>;
 
+export function PreviewSearchClips(arg1:services.SearchClipRequest):Promise<services.ClipQueuePreviewResult>;
+
 export function PreviewSubtitleExtraction(arg1:services.SubtitleExtractRequest):Promise<services.SubtitleExtractPreview>;
+
+export function PreviewTagMergePreferences(arg1:Array<number>,arg2:number):Promise<services.TagMergePreviewResult>;
 
 export function PreviewTagPersonConversion(arg1:number):Promise<services.TagPersonConversionPreview>;
 
 export function PreviewTaskFailureRetry(arg1:services.TaskFailureRetryRequest):Promise<services.TaskFailureRetryPreview>;
 
 export function PurgeTrashEntries(arg1:string,arg2:Array<number>):Promise<services.BatchResult>;
+
+export function QueryPhotoMap(arg1:services.PhotoMapRequest):Promise<services.PhotoMapResultEnvelope>;
 
 export function QueueEditProject(arg1:services.EditQueueRequest):Promise<services.EditQueueResult>;
 
@@ -768,6 +846,8 @@ export function RequeueInterruptedSubtitleJobs():Promise<number>;
 
 export function RerollRandom(arg1:string):Promise<services.PlaybackAttemptResult>;
 
+export function ResolveChapter(arg1:services.ResolveChapterRequest):Promise<services.ChapterResolutionResult>;
+
 export function ResolveSubtitleJob(arg1:number,arg2:string):Promise<services.SubtitleJobResolveResult>;
 
 export function ResolveVideoBookmark(arg1:number):Promise<services.BookmarkResolution>;
@@ -812,7 +892,13 @@ export function RunGatedTaskNow(arg1:string):Promise<void>;
 
 export function SaveAutomationRule(arg1:services.AutomationRuleInput):Promise<services.AutomationRuleView>;
 
+export function SaveClipBookmark(arg1:services.ClipBookmarkInput):Promise<services.ClipBookmarkSaveResult>;
+
+export function SaveClipTopic(arg1:services.ClipTopicInput):Promise<services.ClipTopicResult>;
+
 export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
+
+export function SavePhotoRecap(arg1:services.PhotoRecapInput):Promise<services.PhotoRecapResult>;
 
 export function SaveQuoteCard(arg1:string,arg2:string):Promise<string>;
 
@@ -820,25 +906,35 @@ export function SaveSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Prom
 
 export function SaveVideoBookmark(arg1:services.BookmarkInput):Promise<services.BookmarkDTO>;
 
+export function SaveVideoChapters(arg1:services.SaveChaptersRequest):Promise<services.ChapterSetResult>;
+
 export function SaveViewingDiary(arg1:services.DiaryInput):Promise<services.DiaryEntryDTO>;
 
 export function SearchAITagCandidatePage(arg1:services.ReviewSearchRequest):Promise<services.AITagCandidatePage>;
 
 export function SearchBTResources(arg1:string,arg2:Array<number>):Promise<services.BTSearchResult>;
 
+export function SearchDialogueVideoGroups(arg1:services.DialogueSearchRequest):Promise<services.DialogueVideoResult>;
+
 export function SearchImageAITagCandidatePage(arg1:services.ReviewSearchRequest):Promise<services.ImageAITagCandidatePage>;
 
 export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
 
+export function SearchImageResults(arg1:services.SceneImageSearchRequest):Promise<services.RankedSearchResult>;
+
 export function SearchImagesSemantic(arg1:services.ImageSemanticSearchRequest):Promise<services.ImageSemanticSearchPage>;
 
 export function SearchLibraryVideoPage(arg1:services.LibraryVideoPageRequest):Promise<services.LibraryVideoPage>;
+
+export function SearchParsedLibraryQuery(arg1:services.SearchParsedLibraryQueryRequest):Promise<services.ParsedLibraryQueryResult>;
 
 export function SearchScenes(arg1:services.SceneSearchRequest):Promise<services.SceneSearchResult>;
 
 export function SearchScenesByImage(arg1:services.SceneImageSearchRequest):Promise<services.SceneSearchResult>;
 
 export function SearchSemanticVideos(arg1:services.SemanticSearchRequest):Promise<services.SemanticSearchPage>;
+
+export function SearchVisualResults(arg1:services.SceneSearchRequest):Promise<services.RankedSearchResult>;
 
 export function SelectBrowserDownloadDirectory():Promise<string>;
 
@@ -868,9 +964,13 @@ export function SetImageFavorite(arg1:number,arg2:boolean):Promise<models.Image>
 
 export function SetImageRating(arg1:number,arg2:any):Promise<models.Image>;
 
+export function SetMapTilesEnabled(arg1:services.MapTilePolicyRequest):Promise<services.MapTileStatusResult>;
+
 export function SetPersonAvatar(arg1:number,arg2:string):Promise<models.Person>;
 
 export function SetRecommendationFeedback(arg1:services.RecommendationFeedbackRequest):Promise<models.RecommendationFeedback>;
+
+export function SetRecommendationTagPreference(arg1:services.RecommendationTagPreferenceRequest):Promise<services.RecommendationPreferenceResult>;
 
 export function SetShortFeedEnabled(arg1:boolean):Promise<void>;
 
@@ -887,6 +987,8 @@ export function SetWallpaper(arg1:string,arg2:number):Promise<services.Wallpaper
 export function SetWindowForeground(arg1:boolean):Promise<void>;
 
 export function StartAIReviewApproval(arg1:string,arg2:string):Promise<services.ReviewApprovalState>;
+
+export function StartChapterDraft(arg1:services.StartChapterRequest):Promise<services.ChapterStartResult>;
 
 export function StartCleanupAnalysisFromSettings():Promise<services.CleanupStatus>;
 
@@ -931,6 +1033,8 @@ export function StopPlaybackQueue(arg1:string):Promise<void>;
 export function StopVideoWallpaper():Promise<services.WallpaperStatus>;
 
 export function SubmitBTDownload(arg1:services.BTSubmitRequest):Promise<services.BTTaskView>;
+
+export function SubmitEpisodeDownload(arg1:services.EpisodeDownloadRequest):Promise<services.EpisodeDownloadResult>;
 
 export function SuggestLibraryMatchesBatch(arg1:Array<services.LibraryMatchQuery>):Promise<Record<string, Array<services.LibraryMatchSuggestion>>>;
 

@@ -147,6 +147,7 @@ const PAGE_FILES = {
   cleanup: 'components/manage/CleanupCenterPage.vue',
   recap: 'components/RecapPage.vue',
   scenes: 'components/ScenesPage.vue',
+  'search-results': 'components/SearchResultsPage.vue',
   'manage-home': 'components/manage/ManageHomePage.vue',
   // 待处理（D-P3-01）：原先是弹窗动作，三期起是管理侧页面。
   'pending-work': 'components/manage/PendingWorkPage.vue',

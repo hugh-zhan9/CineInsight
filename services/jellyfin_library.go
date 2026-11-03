@@ -517,7 +517,7 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 		if err := database.DB.WithContext(r.Context()).First(&view, id).Error; err != nil {
 			return nil, 0, start, err
 		}
-		filter = LibraryFilter{SearchMode: view.SearchMode, Keyword: view.Keyword, SmartView: view.SmartView, MinSize: view.MinSize, MaxSize: view.MaxSize, MinHeight: view.MinHeight, MaxHeight: view.MaxHeight, MinRating: view.MinRating, MaxRating: view.MaxRating, SortMode: view.SortMode}
+		filter = LibraryFilter{SearchMode: view.SearchMode, Keyword: view.Keyword, SmartView: view.SmartView, MinSize: view.MinSize, MaxSize: view.MaxSize, MinHeight: view.MinHeight, MaxHeight: view.MaxHeight, MinRating: view.MinRating, MaxRating: view.MaxRating, SortMode: view.SortMode, WatchState: view.WatchState, FavoritesOnly: view.FavoritesOnly, MinDurationSeconds: view.MinDurationSeconds, MaxDurationSeconds: view.MaxDurationSeconds}
 		if err := json.Unmarshal([]byte(view.TagIDsJSON), &filter.TagIDs); err != nil {
 			return nil, 0, start, err
 		}

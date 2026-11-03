@@ -16,6 +16,41 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../wailsjs/go/main/App', () => api);
 
 import App from './App.vue';
+
+it('routes subtitle edits to the persistent library and rejects a superseded player request', async () => {
+  const video = { id: 17, name: 'fixture.mp4' };
+  api.GetVideosByIDs.mockResolvedValue([video]);
+  const page = { openSubtitleWorkbench: vi.fn(), generateSubtitle: vi.fn() };
+  const host = { appReady: true, currentPage: 'videos', supersedeVideoOpen: App.methods.supersedeVideoOpen, navigateTo: vi.fn(async (target, params, guard) => { host.currentPage = target; host.supersedeVideoOpen(); guard.committed(); return true; }), $nextTick: async () => {}, $refs: { videoListPage: page } };
+  expect(await App.methods.openSubtitleTool.call(host, 17, 'edit', () => false)).toBe(false);
+  expect(host.navigateTo).not.toHaveBeenCalled();
+  expect(await App.methods.openSubtitleTool.call(host, 17, 'edit', () => true)).toBe(true);
+  expect(host.currentPage).toBe('library-manage'); expect(page.openSubtitleWorkbench).toHaveBeenCalledWith(video, expect.any(Function));
+  expect(await App.methods.openSubtitleTool.call(host, 17, 'generate', () => true)).toBe(true);
+  expect(page.generateSubtitle).toHaveBeenCalledWith(video, expect.any(Function));
+});
+it('ignores subtitle lookups after another navigation', async () => {
+  let resolve;
+  api.GetVideosByIDs.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const host = { appReady: true, currentPage: 'videos', supersedeVideoOpen: App.methods.supersedeVideoOpen, $nextTick: async () => {}, $refs: { videoListPage: { openSubtitleWorkbench: vi.fn().mockResolvedValue(true) } }, navigateTo: vi.fn(async (target, params, guard) => { host.currentPage = target; host.supersedeVideoOpen(); guard.committed(); return true; }) };
+  const pending = App.methods.openSubtitleTool.call(host, 17, 'edit');
+  host.supersedeVideoOpen(); resolve([{ id: 17 }]);
+  expect(await pending).toBe(false); expect(host.navigateTo).not.toHaveBeenCalled();
+  const guard = { isCurrent: () => false, committed: vi.fn() };
+  const navigation = { currentPage: 'videos', commitPage: vi.fn() };
+  expect(App.methods.navigateTo.call(navigation, 'library-manage', null, guard)).toBe(false);
+  expect(navigation.commitPage).not.toHaveBeenCalled();
+});
+it('starts whole-video playback only after queue retirement and ignores navigation while stopping', async () => {
+  const host={appReady:true,currentPage:'lists',detailReturnStack:[],currentPageParams:()=>null,$refs:{},showVideoDetail:vi.fn(),supersedeVideoOpen:App.methods.supersedeVideoOpen};
+  host.navigateTo=vi.fn(async(page,params,guard)=>{if(!guard.isCurrent())return false;host.currentPage=page;host.supersedeVideoOpen();guard.committed();return true;});
+  let stopped;const stop=new Promise(resolve=>{stopped=resolve;});
+  const stale=App.methods.watchQueueWholeVideo.call(host,17,()=>stop);host.supersedeVideoOpen();stopped(true);
+  expect(await stale).toBe(false);expect(host.showVideoDetail).not.toHaveBeenCalled();
+  api.GetVideosByIDs.mockResolvedValue([{id:17}]);
+  expect(await App.methods.watchQueueWholeVideo.call(host,17,async()=>true)).toBe(true);
+  expect(host.showVideoDetail).toHaveBeenCalledWith(17,{startAtMs:0,bookmark:null});
+});
 import BaseModal from './components/ui/BaseModal.vue';
 import { findCommand, registerCommands, unregisterCommands } from './utils/commandRegistry.js';
 import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
@@ -621,7 +656,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(groupLabels(wrapper)).toEqual([
       { key: 'browse', label: '浏览', pages: ['首页', '视频', '人物', '作品集', '图片'] },
       { key: 'lists', label: '片单', pages: ['片单'] },
-      { key: 'review', label: '回顾与检索', pages: ['回顾', '场景检索'] }
+      { key: 'review', label: '回顾与检索', pages: ['回顾', '搜索汇总', '场景检索'] }
     ]);
     expect(wrapper.findAll('.header-nav__divider')).toHaveLength(2);
     expect(wrapper.find('[data-test="nav-back-to-viewer"]').exists()).toBe(false);
@@ -3188,4 +3223,22 @@ it('routes watchlist resource title to the viewer resource tab without auto-sear
 
 it('task center BT navigation opens downloads without a task control request', async () => {
  const w = await mountApp(); w.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-bt-downloads'); await flushPromises(); expect(w.vm.currentPage).toBe('downloads');
+});
+
+it('keeps the full search page mounted and preserves its request when returning without new params', async () => {
+ const wrapper = await mountApp();
+ await wrapper.vm.navigateTo('search-results',{query:'雨夜'}); await flushPromises();
+ const page=wrapper.findComponent({name:'SearchResultsPage'});const request=wrapper.vm.searchResultsRequest;
+ expect(page.exists()).toBe(true);expect(page.props('initialRequest').query).toBe('雨夜');
+ await wrapper.vm.navigateTo('home');await flushPromises();expect(page.props('pageActive')).toBe(false);
+ await wrapper.vm.navigateTo('search-results');await flushPromises();expect(wrapper.vm.searchResultsRequest).toBe(request);expect(wrapper.findComponent({name:'SearchResultsPage'}).vm).toBe(page.vm);
+});
+
+it('chapter task review opens retained notes and source-aware chapter seeks use the formal detail owner',async()=>{
+ const wrapper=await mountApp();await wrapper.vm.openChapterReview({videoID:7,jobID:11});await flushPromises();
+ expect(wrapper.vm.currentPage).toBe('lists');expect(wrapper.vm.listsTab).toBe('viewing-notes');
+ expect(wrapper.findComponent({name:'ListsPage'}).props('chapterRequest')).toMatchObject({videoID:7,jobID:11});
+ const open=vi.spyOn(wrapper.vm,'openVideoDetail').mockResolvedValue(true);
+ await wrapper.vm.openChapterPosition({video_id:7,start_ms:1200,source_version:'captured'});
+ expect(open).toHaveBeenCalledWith(7,{startAtMs:1200,bookmark:{start_ms:1200,end_ms:null,source_token:'captured'}});
 });

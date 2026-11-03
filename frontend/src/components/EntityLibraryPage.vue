@@ -38,7 +38,7 @@
       </PageHeader>
     </template>
 
-    <CollectionEpisodePanel v-if="selectedEntity && !isPeople && !isFacesTab" :collection-id="Number(selectedEntity.id)" />
+    <CollectionEpisodePanel v-if="selectedEntity && !isPeople && !isFacesTab" :collection-id="Number(selectedEntity.id)" @resource-search="$emit('resource-search', $event)" @associated="loadEntityVideos(true)" />
     <section v-if="!selectedEntity" class="entity-library__create glass-surface">
       <input ref="createName" v-model="createForm.name" :placeholder="isPeople ? '显示姓名' : '作品集名称'" :aria-label="isPeople ? '新人物的显示姓名' : '新作品集的名称'" maxlength="200" />
       <input v-model="createForm.secondary" :placeholder="isPeople ? '原始姓名（可空）' : '简介（可空）'" :aria-label="isPeople ? '新人物的原始姓名' : '新作品集的简介'" :maxlength="isPeople ? 200 : 4000" />
@@ -267,7 +267,7 @@ export default {
   name: 'EntityLibraryPage',
   components: { CollectionEpisodePanel, AppBanner, AppIcon, AppTabs, EmptyState, FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PageHeader, PersonMediaDeleteDialog, SkeletonBlock },
   // open-video(video)：点了某部相关视频，App 按管理区分流（片库管理 + 详情抽屉）。update:tab(key)：用户点了标签。
-  emits: ['open-video', 'update:tab'],
+  emits: ['open-video', 'update:tab', 'resource-search'],
   props: {
     tab: { type: String, default: DEFAULT_ENTITIES_MANAGE_TAB },
     focusEntity: { type: Object, default: null }

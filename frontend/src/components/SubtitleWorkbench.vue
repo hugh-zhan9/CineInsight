@@ -690,8 +690,10 @@ export default {
       await this.loadWorkbench();
     },
     async requestClose() {
-      if (this.isDirty && !await confirmAction({ title: '关闭字幕工作台', message: '字幕还有未保存修改，确定关闭并丢弃吗？', confirmText: '丢弃并关闭', danger: true })) return;
+      if (this.saving || this.restoringBackup || this.creatingBlank || this.translating || this.extracting) return false;
+      if (this.isDirty && !await confirmAction({ title: '关闭字幕工作台', message: '字幕还有未保存修改，确定关闭并丢弃吗？', confirmText: '丢弃并关闭', danger: true })) return false;
       this.$emit('close');
+      return true;
     },
     handleBeforeUnload(event) {
       if (!this.isDirty) return;

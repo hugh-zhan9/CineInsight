@@ -30,10 +30,73 @@ type RecommendationFeedbackRequest struct {
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
+// RecommendationTagPreferenceRequest edits one reviewed target, never an inferred preference.
+type RecommendationTagPreferenceRequest struct {
+	TagID            uint   `json:"tag_id"`
+	Effect           string `json:"effect"`
+	ID               uint   `json:"id"`
+	ExpectedRevision int64  `json:"expected_revision"`
+}
+
+func claimTagPreference(tx *gorm.DB, tag models.Tag) error {
+	changed := tx.Model(&models.Tag{}).Where("id = ? AND preference_revision = ?", tag.ID, tag.PreferenceRevision).UpdateColumn("preference_revision", gorm.Expr("preference_revision + 1"))
+	if changed.Error != nil {
+		return changed.Error
+	}
+	if changed.RowsAffected != 1 {
+		return ErrRecommendationFeedbackConflict
+	}
+	return nil
+}
+
+// SetRecommendationTagPreference supports explicit positive, negative and neutral choices.
+func (s *VideoService) SetRecommendationTagPreference(ctx context.Context, input RecommendationTagPreferenceRequest) (*models.RecommendationFeedback, error) {
+	if input.TagID == 0 || input.TagID > experienceMaxSafeInteger || input.ID > experienceMaxSafeInteger || input.ExpectedRevision >= experienceMaxSafeInteger || (input.Effect != "boost" && input.Effect != "downweight" && input.Effect != "neutral") || (input.ID == 0) != (input.ExpectedRevision == 0) || input.ExpectedRevision < 0 {
+		return nil, errors.New("invalid_input: 标签推荐偏好无效")
+	}
+	if input.Effect == "neutral" {
+		if input.ID == 0 {
+			return nil, errors.New("invalid_input: 请先读取当前偏好")
+		}
+		err := database.WithOperationContext(ctx, func(db *gorm.DB) error {
+			return db.Transaction(func(tx *gorm.DB) error {
+				var row models.RecommendationFeedback
+				if err := tx.Where("id = ? AND revision = ? AND target_kind = ? AND target_id = ?", input.ID, input.ExpectedRevision, "tag", input.TagID).First(&row).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return ErrRecommendationFeedbackConflict
+					}
+					return err
+				}
+				var tag models.Tag
+				if err := tx.First(&tag, input.TagID).Error; err != nil {
+					return err
+				}
+				if err := claimTagPreference(tx, tag); err != nil {
+					return err
+				}
+				changed := tx.Where("id = ? AND revision = ?", row.ID, row.Revision).Delete(&models.RecommendationFeedback{})
+				if changed.Error != nil {
+					return changed.Error
+				}
+				if changed.RowsAffected != 1 {
+					return ErrRecommendationFeedbackConflict
+				}
+				return nil
+			})
+		})
+		return nil, err
+	}
+	return s.setRecommendationFeedback(ctx, RecommendationFeedbackRequest{TargetKind: "tag", TargetID: input.TagID, ID: input.ID, ExpectedRevision: input.ExpectedRevision}, input.Effect)
+}
+
 var ErrRecommendationFeedbackConflict = errors.New("推荐反馈已变化，请刷新列表后重试")
 
 // SetRecommendationFeedback creates a preference or updates the exact row/revision the user reviewed.
 func (s *VideoService) SetRecommendationFeedback(ctx context.Context, request RecommendationFeedbackRequest) (*models.RecommendationFeedback, error) {
+	return s.setRecommendationFeedback(ctx, request, "downweight")
+}
+
+func (s *VideoService) setRecommendationFeedback(ctx context.Context, request RecommendationFeedbackRequest, tagEffect string) (*models.RecommendationFeedback, error) {
 	kind, id := request.TargetKind, request.TargetID
 	if id == 0 || (kind != "work_video" && kind != "tag" && kind != "work_group") || (request.ID == 0) != (request.ExpectedRevision == 0) || request.ExpectedRevision < 0 || kind == "work_group" && request.ID == 0 {
 		return nil, errors.New("推荐反馈目标无效")
@@ -42,7 +105,7 @@ func (s *VideoService) SetRecommendationFeedback(ctx context.Context, request Re
 	err := database.WithOperationContext(ctx, func(db *gorm.DB) error {
 		return db.Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
-			effect := "downweight"
+			effect := tagEffect
 			var expires *time.Time
 			scope, err := applyScanScope(tx.Model(&models.Video{}), true)
 			if err != nil {
@@ -53,6 +116,9 @@ func (s *VideoService) SetRecommendationFeedback(ctx context.Context, request Re
 				var tag models.Tag
 				if err := tx.First(&tag, id).Error; err != nil {
 					return errors.New("标签已不存在，请刷新")
+				}
+				if err := claimTagPreference(tx, tag); err != nil {
+					return err
 				}
 			case "work_video":
 				var video models.Video
@@ -94,7 +160,7 @@ func (s *VideoService) SetRecommendationFeedback(ctx context.Context, request Re
 				}
 				return nil
 			}
-			changed := tx.Model(&models.RecommendationFeedback{}).Where("id = ? AND revision = ? AND target_kind = ? AND target_id = ? AND effect = ?", request.ID, request.ExpectedRevision, kind, id, effect).Updates(map[string]any{"expires_at": expires, "revision": gorm.Expr("revision + 1"), "updated_at": now})
+			changed := tx.Model(&models.RecommendationFeedback{}).Where("id = ? AND revision = ? AND target_kind = ? AND target_id = ?", request.ID, request.ExpectedRevision, kind, id).Updates(map[string]any{"effect": effect, "expires_at": expires, "revision": gorm.Expr("revision + 1"), "updated_at": now})
 			if changed.Error != nil {
 				return changed.Error
 			}
@@ -186,28 +252,83 @@ func (s *VideoService) ListRecommendationFeedback(ctx context.Context) ([]Recomm
 }
 func (s *VideoService) RevokeRecommendationFeedback(ctx context.Context, id uint, revision int64) error {
 	return database.WithOperationContext(ctx, func(db *gorm.DB) error {
-		result := db.Where("id = ? AND revision = ?", id, revision).Delete(&models.RecommendationFeedback{})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrRecommendationFeedbackConflict
-		}
-		return nil
+		return db.Transaction(func(tx *gorm.DB) error {
+			var row models.RecommendationFeedback
+			if err := tx.First(&row, "id = ? AND revision = ?", id, revision).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrRecommendationFeedbackConflict
+				}
+				return err
+			}
+			if row.TargetKind == "tag" {
+				var tag models.Tag
+				err := tx.First(&tag, row.TargetID).Error
+				if err == nil {
+					if err := claimTagPreference(tx, tag); err != nil {
+						return err
+					}
+				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+			}
+			result := tx.Where("id = ? AND revision = ?", id, revision).Delete(&models.RecommendationFeedback{})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrRecommendationFeedbackConflict
+			}
+			return nil
+		})
 	})
 }
 
 func mergeRecommendationTagFeedback(tx *gorm.DB, sources []uint, target uint) error {
-	var count int64
-	if err := tx.Model(&models.RecommendationFeedback{}).Where("target_kind = ? AND target_id IN ?", "tag", sources).Count(&count).Error; err != nil {
+	var rows []models.RecommendationFeedback
+	if err := tx.Where("target_kind = ? AND target_id IN ?", "tag", append(append([]uint{}, sources...), target)).Find(&rows).Error; err != nil {
 		return err
 	}
-	if count > 0 {
-		now := time.Now()
-		row := models.RecommendationFeedback{TargetKind: "tag", TargetID: target, Effect: "downweight", Revision: 1, CreatedAt: now, UpdatedAt: now}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "target_kind"}, {Name: "target_id"}, {Name: "effect"}}, DoUpdates: clause.Assignments(map[string]any{"revision": gorm.Expr("recommendation_feedbacks.revision + 1"), "updated_at": now})}).Create(&row).Error; err != nil {
-			return err
+	effect := "boost"
+	var destination *models.RecommendationFeedback
+	for i := range rows {
+		if rows[i].Effect == "downweight" {
+			effect = "downweight"
+		}
+		if rows[i].TargetID == target {
+			destination = &rows[i]
 		}
 	}
-	return tx.Where("target_kind = ? AND target_id IN ?", "tag", sources).Delete(&models.RecommendationFeedback{}).Error
+	if len(rows) == 0 {
+		return nil
+	}
+	if destination != nil {
+		changed := tx.Model(&models.RecommendationFeedback{}).Where("id = ? AND revision = ?", destination.ID, destination.Revision).Updates(map[string]any{"effect": effect, "revision": destination.Revision + 1, "updated_at": time.Now()})
+		if changed.Error != nil {
+			return changed.Error
+		}
+		if changed.RowsAffected != 1 {
+			return ErrRecommendationFeedbackConflict
+		}
+	} else {
+		created := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.RecommendationFeedback{TargetKind: "tag", TargetID: target, Effect: effect, Revision: 1})
+		if created.Error != nil {
+			return created.Error
+		}
+		if created.RowsAffected != 1 {
+			return ErrRecommendationFeedbackConflict
+		}
+	}
+	for _, row := range rows {
+		if row.TargetID == target {
+			continue
+		}
+		changed := tx.Where("id = ? AND revision = ?", row.ID, row.Revision).Delete(&models.RecommendationFeedback{})
+		if changed.Error != nil {
+			return changed.Error
+		}
+		if changed.RowsAffected != 1 {
+			return ErrRecommendationFeedbackConflict
+		}
+	}
+	return nil
 }

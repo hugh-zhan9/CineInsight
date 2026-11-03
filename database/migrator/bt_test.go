@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"video-master/database"
 	"video-master/internal/dbtest"
 
 	"gorm.io/gorm"
@@ -26,6 +27,18 @@ func seedBTRows(t *testing.T, db *gorm.DB) {
 	if err := db.Omit("Task").Create(&file).Error; err != nil {
 		t.Fatal(err)
 	}
+	collection := models.MediaCollection{Name: "补缺迁移", NormalizedName: "补缺迁移"}
+	if err := db.Create(&collection).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.CollectionEpisodeRevision{}).Where("collection_id = ?", collection.ID).Update("revision", 17).Error; err != nil {
+		t.Fatal(err)
+	}
+	season, episode := 0, 2
+	origin := models.EpisodeAcquisitionOrigin{ID: "00000000-0000-0000-0000-000000000003", TaskID: task.ID, FileID: file.ManifestFileID, CollectionID: collection.ID, CollectionTitle: collection.Name, RequestedSeason: 0, RequestedEpisodesJSON: "[2,3]", MappedSeason: &season, MappedEpisode: &episode, ConfirmedMapping: true, Revision: 9}
+	if err := db.Create(&origin).Error; err != nil {
+		t.Fatal(err)
+	}
 	for index, letter := range []string{"b", "c"} {
 		padding := models.BTFile{TaskID: task.ID, ManifestFileID: strings.Repeat(letter, 64), Position: index + 1, Padding: true, Size: 12, ImportState: "pending"}
 		if err := db.Omit("Task").Create(&padding).Error; err != nil {
@@ -35,10 +48,10 @@ func seedBTRows(t *testing.T, db *gorm.DB) {
 }
 
 func TestMigrateBTStringFileIdentityRoundTrip(t *testing.T) {
-	source, middle, back := dbtest.Open(t), dbtest.Open(t), dbtest.Open(t)
+	source, middle, back := sequenceSQLite(t), dbtest.Open(t), sequenceSQLite(t)
 	seedSource(t, source)
 	for _, step := range []struct{ from, to *gorm.DB }{{source, middle}, {middle, back}} {
-		if _, err := Migrate(context.Background(), Options{Source: step.from, Target: step.to, TargetBackend: backendOfTest()}); err != nil {
+		if _, err := Migrate(context.Background(), Options{Source: step.from, Target: step.to, TargetBackend: database.Backend(step.to.Dialector.Name())}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -49,6 +62,18 @@ func TestMigrateBTStringFileIdentityRoundTrip(t *testing.T) {
 	if task.Title != "资源标题快照" || task.IndexerID != 42 || task.IndexerName != "站点快照" || task.PendingAction != "start" || !task.UnresolvedWrite || task.ObservationEpoch != 31 {
 		t.Fatalf("task display snapshot lost: %+v", task)
 	}
+	var origin models.EpisodeAcquisitionOrigin
+	if err := back.First(&origin).Error; err != nil {
+		t.Fatal(err)
+	}
+	var root models.CollectionEpisodeRevision
+	if err := back.First(&root, "collection_id = ?", origin.CollectionID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if root.Revision != 17 || origin.Revision != 9 || origin.RequestedEpisodesJSON != "[2,3]" || !origin.ConfirmedMapping || origin.MappedSeason == nil || *origin.MappedSeason != 0 || origin.MappedEpisode == nil || *origin.MappedEpisode != 2 {
+		t.Fatalf("lost acquisition facts: %+v %+v", root, origin)
+	}
+
 	var files []models.BTFile
 	if err := back.Order("position ASC").Find(&files).Error; err != nil {
 		t.Fatal(err)

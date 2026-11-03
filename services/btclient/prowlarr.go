@@ -23,6 +23,7 @@ type Release struct {
 	DownloadURL string  `json:"downloadUrl"`
 	Protocol    string  `json:"protocol"`
 	PosterURL   string  `json:"posterUrl"`
+	InfoURL     string  `json:"infoUrl"`
 }
 
 // Search asks one indexer; the coordinator owns fan-out and its overall deadline.

@@ -103,6 +103,13 @@ type expectedUniqueIndex struct {
 }
 
 var dataHealthUniqueIndexes = []expectedUniqueIndex{
+	{"idx_chapter_set_video", "chapter_sets", []string{"video_id"}, ""},
+	{"idx_chapter_position", "video_chapters", []string{"set_id", "position"}, ""},
+	{"idx_chapter_request", "chapter_draft_jobs", []string{"request_id"}, ""},
+	{"idx_clip_topic_position", "clip_topic_members", []string{"topic_id", "position"}, ""},
+	{"idx_queue_preview_position", "playback_queue_entries", []string{"preview_batch_id", "preview_position"}, ""},
+	{"idx_episode_acquisition_file", "episode_acquisition_origins", []string{"task_id", "file_id", "collection_id"}, ""},
+	{"idx_recommendation_feedback_identity", "recommendation_feedbacks", []string{"target_kind", "target_id"}, ""},
 	{"idx_videos_path_active", "videos", []string{"path"}, "deleted_at IS NULL AND path <> ''"},
 	{"idx_images_path_active", "images", []string{"path"}, "deleted_at IS NULL"},
 	{"idx_saved_library_views_name_active", "saved_library_views", []string{"name"}, "deleted_at IS NULL"},
@@ -165,8 +172,12 @@ func uniqueIndexDuplicates(db *gorm.DB, index expectedUniqueIndex) (DataHealthGr
 	for _, column := range index.columns {
 		conditions = append(conditions, column+" IS NOT NULL")
 	}
-	grouped := fmt.Sprintf("SELECT MIN(id) AS first_id, COUNT(*) AS row_count FROM %s WHERE %s GROUP BY %s HAVING COUNT(*) > 1",
-		index.table, strings.Join(conditions, " AND "), healthColumnList(index.columns))
+	exampleColumn := "id"
+	if index.table == "clip_topic_members" {
+		exampleColumn = "bookmark_id"
+	}
+	grouped := fmt.Sprintf("SELECT MIN(%s) AS first_id, COUNT(*) AS row_count FROM %s WHERE %s GROUP BY %s HAVING COUNT(*) > 1",
+		exampleColumn, index.table, strings.Join(conditions, " AND "), healthColumnList(index.columns))
 	group := DataHealthGroup{Key: index.name, Label: fmt.Sprintf("%s（%s）", index.table, healthColumnList(index.columns)), Examples: []string{}}
 	if err := db.Raw("SELECT COUNT(*) FROM (" + grouped + ") duplicate_groups").Scan(&group.Count).Error; err != nil {
 		return group, err

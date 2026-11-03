@@ -13,7 +13,7 @@
       </template>
     </PageHeader>
 
-    <BTDownloadsPanel :api="btAPI" :initial-query="initialQuery" :refresh-key="btRefresh" @settings="$emit('settings', 'bt')" @play="$emit('play', $event)" />
+    <BTDownloadsPanel :api="btAPI" :episode-api="episodeAPI" :episode-origin="episodeOrigin" :initial-query="initialQuery" :refresh-key="btRefresh" @settings="$emit('settings', 'bt')" @play="$emit('play', $event)" />
     <h2>浏览器下载</h2>
     <AppBanner v-if="errorMessage" tone="danger" :title="errorMessage" data-test="downloads-error" />
     <!-- 查重提示里「把这次下载移到废纸篓」走片库同一个删除宿主：进度、磁盘不支持废纸篓时的二选一、整批撤销。
@@ -94,6 +94,7 @@ import {
   ReimportDownload, RetryDownload, RevealDownload
 } from '../../wailsjs/go/main/App';
 import BTDownloadsPanel from './bt/BTDownloadsPanel.vue';
+import { episodeAPI } from '../utils/episodeAcquisition.js';
 import { btAPI } from '../utils/btAPI.js';
 import DownloadRow from './downloads/DownloadRow.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
@@ -142,11 +143,11 @@ const ACTION_SUCCESS_TEXTS = {
 // 既看不到又要手动刷新。这里由后端推 browser-download-tasks 事件驱动，不轮询。
 export default {
   name: 'DownloadsPage',
-  props: { initialQuery: { type: String, default: '' } },
+  props: { episodeOrigin: { type: Object, default: null }, initialQuery: { type: String, default: '' } },
   emits: ['settings', 'play'],
   components: { BTDownloadsPanel, AppBanner, DownloadRow, EmptyState, PageHeader, TrashUndoBanner },
   data() {
-    return { btAPI, btRefresh: 0, btOff: null, tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
+    return { btAPI, episodeAPI, btRefresh: 0, btOff: null, tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
   },
   computed: {
     visibleTasks() {

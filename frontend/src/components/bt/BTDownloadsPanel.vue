@@ -2,19 +2,30 @@
   <section class="bt-downloads-panel" aria-label="资源搜索与下载">
     <div class="bt-panel-heading"><h2>资源与下载</h2><button class="btn btn--secondary" type="button" data-test="bt-settings" @click="$emit('settings')">连接设置</button></div>
     <p class="help-text">搜索 Prowlarr 中的站点，选择文件后交给本机 qBittorrent 下载。退出应用后下载和做种会继续。</p>
+    <div v-if="sourceOrigin" class="bt-source-context" data-test="bt-source-context">
+      <strong>为「{{ sourceOrigin.collection_title }}」查找第 {{ sourceOrigin.season }} 季</strong>
+      <p class="help-text">目标集号：{{ sourceOrigin.targets.join('、') }}。标题只是线索，请核对作品和文件内容。</p>
+      <p v-if="sourceOrigin.notice" class="help-text">{{ sourceOrigin.notice }}</p>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="draftBusy || Boolean(draft) || sourceBusy" @click="refreshSource">重新检查来源</button>
+      <button type="button" class="btn btn--ghost btn--sm" :disabled="draftBusy || Boolean(draft) || sourceBusy" @click="sourceOrigin = null; episodeHints = {}">结束本次补集搜索</button>
+      <p v-if="sourceError" role="alert">{{ sourceError }}</p>
+    </div>
     <p v-if="connectionError" role="alert">{{ connectionError }}</p>
     <p v-else-if="connection && !connection.enabled" class="help-text">请在连接设置中启用资源下载。</p>
-    <BTResourceSearch :active="active" :initial-query="initialQuery" :indexers="indexers" :result="result" :result-query="resultQuery" :result-indexer-ids="resultIndexerIds" :busy="searchBusy" :preview-busy="previewBusy || Boolean(draft) || !active" :error="searchError" @search="search" @cancel="cancelSearch" @preview="preview" />
+    <BTResourceSearch :episode-hints="episodeHints" :load-detail="api.GetBTResourceDetail" :active="active" :initial-query="initialQuery" :indexers="indexers" :result="result" :result-query="resultQuery" :result-indexer-ids="resultIndexerIds" :busy="searchBusy" :preview-busy="previewBusy || Boolean(draft) || !active" :error="searchError" @search="search" @cancel="cancelSearch" @preview="preview" />
     <p v-if="notice" class="help-text" role="status">{{ notice }}</p>
     <p v-if="!tasks.length && taskError" role="alert">{{ taskError }}</p>
     <BTTaskList v-if="tasks.length || !taskError" :tasks="taskViews" :detail="detailView" :loading="listBusy" :readonly="!active" :has-more="Boolean(nextCursor) && tasks.length < 200" :busy-ids="busyIds" :error="controlError || taskError" @refresh="refresh" @load-more="loadMore" @detail="showDetail" @control="control" @play="play" />
     <div class="bt-panel-pages"><button v-if="previousWindows.length" class="btn btn--secondary btn--sm" type="button" :disabled="listBusy" data-test="bt-previous-window" @click="previousWindow">上一组任务</button><button v-if="nextCursor && tasks.length >= 200" class="btn btn--secondary btn--sm" type="button" :disabled="listBusy" data-test="bt-next-window" @click="nextWindow">查看更早任务</button><button v-if="windowCursor" class="btn btn--secondary btn--sm" type="button" :disabled="listBusy" data-test="bt-latest-window" @click="latestWindow">返回最新任务</button></div>
     <p v-if="detailBusy" role="status" class="help-text">正在读取文件明细…</p>
     <div v-if="detail && ['draft', 'metadata_ready'].includes(detail.stage)"><button class="btn btn--secondary" type="button" data-test="bt-open-selection" @click="openSelection(detail)">选择文件…</button></div>
-    <BTFileSelectionDialog :visible="Boolean(draft) && active" :draft="draftView" :busy="draftBusy" :readonly="!active || cancelFailed" :cancel-label="cancelFailed ? '关闭窗口' : '取消'" :error="draftError" @close="cancelDraft" @submit="submit" />
+    <EpisodeAcquisitionPanel v-if="detailID && episodeApi && active" :task-id="detailID" :api="episodeApi" @associated="refresh" />
+    <BTFileSelectionDialog :episode-origin="draftOrigin" :visible="Boolean(draft) && active" :draft="draftView" :busy="draftBusy" :readonly="!active || cancelFailed" :cancel-label="cancelFailed ? '关闭窗口' : '取消'" :error="draftError" @close="cancelDraft" @submit="submit" />
   </section>
 </template>
 <script>
+import EpisodeAcquisitionPanel from '../EpisodeAcquisitionPanel.vue';
+import { episodeError } from '../../utils/episodeAcquisition.js';
 import BTResourceSearch from './BTResourceSearch.vue';
 import BTTaskList from './BTTaskList.vue';
 import BTFileSelectionDialog from './BTFileSelectionDialog.vue';
@@ -64,10 +75,10 @@ function taskView(task) {
       error_message: f.error_code ? btFileErrorText({ error_code: f.error_code }) : '' })) };
 }
 export default {
-  name: 'BTDownloadsPanel', components: { BTResourceSearch, BTTaskList, BTFileSelectionDialog },
-  props: { api: { type: Object, required: true }, active: { type: Boolean, default: true }, initialQuery: { type: String, default: '' }, refreshKey: { type: [String, Number], default: 0 } },
+  name: 'BTDownloadsPanel', components: { EpisodeAcquisitionPanel, BTResourceSearch, BTTaskList, BTFileSelectionDialog },
+  props: { episodeOrigin: { type: Object, default: null }, episodeApi: { type: Object, default: null }, api: { type: Object, required: true }, active: { type: Boolean, default: true }, initialQuery: { type: String, default: '' }, refreshKey: { type: [String, Number], default: 0 } },
   emits: ['settings', 'play', 'changed'],
-  data: () => ({ readFlight: null, pendingRefresh: false, pendingPage: null, pendingDetail: null, alive: true, generation: 0, requests: {}, timer: null, connection: null, indexers: [], connectionError: '',
+  data: () => ({ sourceOrigin: null, draftOrigin: null, sourceBusy: false, sourceError: '', episodeHints: {}, readFlight: null, pendingRefresh: false, pendingPage: null, pendingDetail: null, alive: true, generation: 0, requests: {}, timer: null, connection: null, indexers: [], connectionError: '',
     result: null, resultQuery: '', resultIndexerIds: [], searchError: '', searchBusy: false, previewBusy: false,
     tasks: [], nextCursor: '', windowCursor: '', previousWindows: [], listBusy: false, taskError: '', controlError: '', detail: null, detailID: '', detailBusy: false,
     draft: null, draftBusy: false, cancelFailed: false, draftError: '', busyIds: [], notice: '' }),
@@ -77,6 +88,8 @@ export default {
       preparation: PREPARING.includes(this.draft.stage) ? 'metadata_pending' : this.draft.stage } : null; },
   },
   watch: {
+    episodeOrigin: { immediate: true, handler(value) { this.sourceOrigin = value; this.sourceError = ''; this.episodeHints = {}; } },
+    sourceOrigin() { this.episodeHints = {}; if (!this.draft) { this.token('preview'); this.previewBusy = false; } },
     active(value) { this.invalidate(); if (value) this.activate(); },
     api() { this.invalidate(); this.result = null; this.draft = null; this.cancelFailed = false; this.detail = null; this.detailID = ''; this.tasks = []; this.nextCursor = ''; this.windowCursor = ''; this.previousWindows = []; if (this.active) this.activate(); },
     initialQuery() { this.cancelSearch(); this.result = null; },
@@ -85,9 +98,18 @@ export default {
   mounted() { if (this.active) this.activate(); },
   beforeUnmount() { this.alive = false; this.invalidate(); },
   methods: {
+    async refreshSource() {
+      if (!this.sourceOrigin || this.sourceBusy || this.draft || !this.episodeApi) return;
+      const source = this.sourceOrigin, t = this.token('source'); this.sourceBusy = true; this.sourceError = '';
+      try {
+        const current = await this.episodeApi.prepare({ collection_id: source.collection_id, season: source.season, episodes: source.targets, series_confirmed: false });
+        if (this.current(t) && this.sourceOrigin === source) this.sourceOrigin = current;
+      } catch (error) { if (this.current(t) && this.sourceOrigin === source) this.sourceError = episodeError(error); }
+      finally { if (this.current(t)) this.sourceBusy = false; }
+    },
     token(kind) { const serial = (this.requests[kind] || 0) + 1; this.requests[kind] = serial; return { kind, serial, generation: this.generation }; },
     current(t) { return this.alive && this.active && t.generation === this.generation && this.requests[t.kind] === t.serial; },
-    invalidate() { this.generation++; this.pendingRefresh = false; this.pendingPage = null; this.pendingDetail = null; clearTimeout(this.timer); this.timer = null; this.searchBusy = false; this.previewBusy = false; this.listBusy = false; this.detailBusy = false; this.draftBusy = false; this.busyIds = []; },
+    invalidate() { this.generation++; this.pendingRefresh = false; this.pendingPage = null; this.pendingDetail = null; clearTimeout(this.timer); this.timer = null; this.sourceBusy = false; this.searchBusy = false; this.previewBusy = false; this.listBusy = false; this.detailBusy = false; this.draftBusy = false; this.busyIds = []; },
     async activate() {
       const t = this.token('configuration');
       const results = await Promise.allSettled([this.api.GetBTConnection(), this.api.ListBTIndexers()]);
@@ -105,9 +127,23 @@ export default {
     async search(request) {
       if (!this.active || typeof request.query !== 'string' || request.query.trim().length > 200) return;
       this.token('preview'); this.previewBusy = false;
-      const t = this.token('search'); this.searchBusy = true; this.searchError = ''; this.result = null;
+      const t = this.token('search'); this.searchBusy = true; this.searchError = ''; this.result = null; this.episodeHints = {};
       const query = request.query.trim(); const ids = [...request.indexer_ids];
-      try { const result = await this.api.SearchBTResources(query, ids); if (this.current(t)) { this.result = result; this.resultQuery = query; this.resultIndexerIds = ids; } }
+      try {
+        const result = await this.api.SearchBTResources(query, ids);
+        if (!this.current(t)) return;
+        this.result = result; this.resultQuery = query; this.resultIndexerIds = ids;
+        const origin = this.sourceOrigin;
+        if (origin && this.episodeApi && result.resources?.length) {
+          try {
+            for (let offset = 0; offset < result.resources.length; offset += 200) {
+              if (!this.current(t) || this.sourceOrigin !== origin) return;
+              const hints = await this.episodeApi.candidates({ origin_token: origin.origin_token, result_tokens: result.resources.slice(offset, offset + 200).map(row => row.result_token) });
+              if (this.current(t) && this.sourceOrigin === origin) this.episodeHints = { ...this.episodeHints, ...Object.fromEntries(hints.items.map(row => [row.result_token, row])) };
+            }
+          } catch (error) { if (this.current(t) && this.sourceOrigin === origin) this.sourceError = `季集提示未更新：${episodeError(error)}`; }
+        }
+      }
       catch (error) { if (this.current(t)) this.searchError = errorText(error); }
       finally { if (this.current(t)) this.searchBusy = false; }
     },
@@ -118,7 +154,7 @@ export default {
       catch (error) { if (this.current(t)) this.searchError = errorText(error); }
       finally { if (this.current(t)) this.previewBusy = false; }
     },
-    openSelection(task) { if (this.active && !this.cancelFailed && DRAFTS.includes(task.stage)) { this.draft = task; this.draftError = ''; } },
+    openSelection(task) { if (this.active && !this.cancelFailed && DRAFTS.includes(task.stage)) { this.draft = task; this.draftOrigin = this.sourceOrigin; this.draftError = ''; } },
     async submit(request) {
       const draft = this.draft;
       if (!this.active || this.draftBusy || this.cancelFailed || !draft || !['draft', 'metadata_ready'].includes(draft.stage)) return;
@@ -126,8 +162,13 @@ export default {
       const selected = new Set(request.selected_file_ids);
       if (!selected.size || selected.size !== request.selected_file_ids.length || [...selected].some(id => !(draft.files || []).some(f => f.id === id && f.selectable !== false && !f.padding))) { this.draftError = ERROR_TEXT.selection_invalid; return; }
       const t = this.token('draftWrite'); this.draftBusy = true; this.draftError = ''; this.token('list'); this.token('detail');
-      try { const task = await this.api.SubmitBTDownload({ ...request, selected_file_ids: [...selected] }); if (this.current(t)) { this.upsert(task); this.draft = null; this.windowCursor = ''; this.previousWindows = []; this.$emit('changed', task.id); this.notice = '任务已提交，请在下载列表查看进度。'; } }
-      catch (error) { if (this.current(t)) this.draftError = errorText(error); }
+      try {
+        const payload = { draft_id: request.draft_id, expected_revision: request.expected_revision, selected_file_ids: [...selected] };
+        if (this.draftOrigin && !this.episodeApi) throw new Error('补集服务不可用');
+        const task = this.draftOrigin
+          ? await this.episodeApi.submit({ ...payload, origin_token: this.draftOrigin.origin_token, file_episode_choices: request.file_episode_choices || [] })
+          : await this.api.SubmitBTDownload(payload); if (this.current(t)) { this.upsert(task); this.detailID = task.id; this.detail = task; this.draft = null; this.windowCursor = ''; this.previousWindows = []; this.$emit('changed', task.id); this.notice = '任务已提交，请在下载列表查看进度。'; } }
+      catch (error) { if (this.current(t)) this.draftError = this.draftOrigin ? episodeError(error) : errorText(error); }
       finally { if (this.current(t)) { this.draftBusy = false; await this.refresh(); } }
     },
     async cancelDraft() {

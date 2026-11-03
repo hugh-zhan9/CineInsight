@@ -1,19 +1,21 @@
 <template>
   <dialog open ref="playerShell" class="queue-inline-player playback-shell surface-cinema" aria-label="队列播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
-    <component :is="'media-controller'" ref="playerSurface" :id="`queue-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand">
-    <video slot="media" ref="video" :src="identity.locator" playsinline preload="metadata" @click="$refs.controls?.togglePlayback()" data-test="queue-inline-video"
+    <component :is="'media-controller'" ref="playerSurface" :id="`queue-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand" @mediaseekrequest.capture="seekRequest" @mediaplayrequest.capture="guardPlayRequest">
+    <video slot="media" ref="video" :src="identity.locator" playsinline preload="metadata" @click="togglePlayback" data-test="queue-inline-video"
       @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
-      @timeupdate="progress" @ended="ended" @error="failed" />
-    <PlaybackControls ref="controls" :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface">
-      <template #settings><PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :video-element="() => $refs.video" @menu-change="$refs.controls?.holdControls($event)" /></template>
+      @ratechange="scheduleClipEnd" @timeupdate="progress" @ended="ended" @error="failed" />
+    <PlaybackControls v-if="!isClip || clipRange" ref="controls" :seek-range="clipRange" :seek-disabled="isClip && (!initialized || clipCompleting)" @seek="seekClip" :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface">
+      <template #settings><PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :playback-range="clipRange" :video-element="() => $refs.video" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" @menu-change="$refs.controls?.holdControls($event)" /></template>
     </PlaybackControls>
     </component>
+    <p v-if="isClip && clipRange" class="help-text" data-test="queue-clip-range">区间预览：{{ (clipRange.startMS / 1000).toFixed(3) }} — {{ (clipRange.endMS / 1000).toFixed(3) }} 秒；本批结束后停止，不计入观看记录。</p>
     <p v-if="error" role="alert" data-test="queue-inline-error">{{ error }}</p>
   </dialog>
 </template>
 <script>
+import { queueClipRange, clampClipSeconds } from '../utils/playbackClip.js';
 import { isWatchCompleted } from '../utils/watchState.js';
-import { handlePlaybackKey } from '../utils/playbackKeyboard.js';
+import { handlePlaybackKey, isPlaybackKeyboardControl } from '../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './player/PlaybackSubtitleControls.vue';
 import PlaybackControls from './player/PlaybackControls.vue';
 import { GetPlaybackQueue, ReportInlineQueuePlayback } from '../../wailsjs/go/main/App';
@@ -26,10 +28,11 @@ export default {
   props: { session: { type: Object, required: true } },
   emits: ['error'],
   data() {
-    return { identity: { ...this.session }, seq: 0, cycle: Number(this.session.view_cycle || 1), wasEnded: false, endConsumed: false, initialized: false, seekingNow: false, lastProgressAt: 0, error: '', retired: false, desynced: false };
+    return { clipTimer: null, clipCompleting: false, identity: { ...this.session }, seq: 0, cycle: Number(this.session.view_cycle || 1), wasEnded: false, endConsumed: false, initialized: false, seekingNow: false, lastProgressAt: 0, error: '', retired: false, desynced: false };
   },
   // 同一时间只有一个内嵌播放器在播（D-UI-11，utils/activePlayer.js）：这里开始播放会暂停详情 / 抽屉里的播放器，
   // 反过来那边开始播放时暂停这里；被暂停照常按 paused 上报队列。
+  computed: { isClip() { return this.identity.entry_kind === 'clip'; }, clipRange() { return queueClipRange(this.identity); } },
   created() { this._reports = Promise.resolve(); this._activeHandle = { pause: () => this.$refs.video?.pause() }; },
   watch: {
     'session.control_sequence'() {
@@ -39,16 +42,49 @@ export default {
     }
   },
   beforeUnmount() {
-    this.retired = true;
+    this.retired = true; this.clearClipTimer();
     releaseActivePlayer(this._activeHandle);
     const video = this.$refs.video;
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   },
   methods: {
-    handlePlaybackKey(event) { handlePlaybackKey(event, this.$refs.video); },
+    handlePlaybackKey(event) {
+      if (isPlaybackKeyboardControl(event)) return;
+      if (this.isClip && (!this.initialized || this.clipCompleting || !this.clipRange) && [' ', 'ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); return; }
+      handlePlaybackKey(event, this.$refs.video, this.clipRange);
+      if (this.isClip && ['ArrowLeft', 'ArrowRight'].includes(event.key)) this.checkClipBoundary();
+    },
+    togglePlayback() { if (!this.isClip || (this.initialized && !this.clipCompleting)) this.$refs.controls?.togglePlayback(); },
+    guardPlayRequest(event) { if (this.isClip && (!this.initialized || this.clipCompleting || !this.clipRange)) { event.preventDefault(); event.stopImmediatePropagation(); } },
+    seekRequest(event) { if (!this.isClip) return; event.preventDefault(); event.stopImmediatePropagation(); this.seekClip(Number(event.detail)); },
+    seekClip(seconds) {
+      if (!this.initialized || this.clipCompleting || !this.clipRange) return;
+      const target = clampClipSeconds(seconds, this.clipRange); if (!Number.isFinite(target)) return;
+      this.$refs.video.currentTime = target; this.checkClipBoundary();
+    },
+    clearClipTimer() { if (this.clipTimer !== null) clearTimeout(this.clipTimer); this.clipTimer = null; },
+    scheduleClipEnd() {
+      this.clearClipTimer(); const video = this.$refs.video;
+      if (!this.isClip || !this.clipRange || !this.initialized || this.clipCompleting || this.retired || this.desynced || !video || video.paused || this.seekingNow || !(video.playbackRate > 0)) return;
+      const delay = (this.clipRange.endMS / 1000 - video.currentTime) / video.playbackRate * 1000;
+      this.clipTimer = setTimeout(() => { this.clipTimer = null; if (!this.checkClipBoundary()) this.scheduleClipEnd(); }, Math.max(10, Math.min(2147483647, delay)));
+    },
+    checkClipBoundary() {
+      if (!this.isClip || !this.initialized || this.retired || this.desynced || this.clipCompleting) return this.clipCompleting;
+      const video = this.$refs.video;
+      if (!this.clipRange) { this.desync('预览区间无效，请重新加入队列。'); return true; }
+      if (video.currentTime >= this.clipRange.endMS / 1000) { this.completeClip(); return true; }
+      if (video.currentTime < this.clipRange.startMS / 1000) video.currentTime = this.clipRange.startMS / 1000;
+      return false;
+    },
+    completeClip() {
+      if (this.clipCompleting || this.retired || !this.clipRange) return;
+      this.clipCompleting = true; this.wasEnded = true; this.seekingNow = false; this.clearClipTimer();
+      const video = this.$refs.video; video.pause(); video.currentTime = this.clipRange.endMS / 1000; this.report('ended');
+    },
     report(kind) {
       const video = this.$refs.video;
-      if (this.retired || this.desynced || !video) return;
+      if (this.retired || (this.desynced && !(this.isClip && kind === 'error')) || !video) return;
       const position = Number(video.currentTime);
       const duration = Number(video.duration);
       const fact = { kind, position: Number.isFinite(position) ? Math.max(0, position) : 0, duration: Number.isFinite(duration) ? Math.max(0, duration) : 0, message: kind === 'error' ? '当前文件无法在应用内播放，请检查原片或生成播放代理后重试。' : '' };
@@ -56,7 +92,7 @@ export default {
       this._reports = this._reports.then(() => this.deliver(fact));
     },
     async deliver(fact) {
-      if (this.retired || this.desynced) return;
+      if (this.retired || (this.desynced && !(this.isClip && fact.kind === 'error'))) return;
       // A replay opens a new view cycle only after the backend consumed the
       // previous natural end; an end it refused keeps the current cycle.
       if (fact.kind === 'playing' && this.endConsumed) { this.cycle++; this.endConsumed = false; }
@@ -67,7 +103,8 @@ export default {
       } catch (error) {
         const text = String(error);
         if (this.retired || /playback_quiesced|queue_end_ignored/.test(text)) return;
-        if (text.includes('queue_changed')) return this.verifyCurrent();
+        if (text.includes('queue_changed')) { if (this.isClip) { this.clearClipTimer(); this.$refs.video?.pause(); } return this.verifyCurrent(); }
+        if (this.isClip) return this.desync('预览已停止，请在队列中核对后重新播放。');
         // The backend already accepted a higher seq for this token (e.g. this is
         // a remount); continuing would mix two players' facts.
         if (text.includes('queue_stale_event')) return this.desync(STALE_MESSAGE);
@@ -84,7 +121,7 @@ export default {
     },
     desync(message) {
       if (this.desynced) return;
-      this.desynced = true;
+      this.desynced = true; this.clearClipTimer();
       this.$refs.video?.pause();
       this.showError(message);
     },
@@ -93,26 +130,28 @@ export default {
       if (this.initialized) return;
       const video = this.$refs.video;
       const requested = Number(this.identity.start_seconds || 0);
-      const start = isWatchCompleted(requested, video.duration) ? 0 : requested;
-      video.currentTime = Number.isFinite(video.duration) ? Math.min(start, Math.max(0, video.duration - 0.01)) : start;
+      if (this.isClip && (!this.clipRange || !Number.isFinite(video.duration) || this.clipRange.endMS / 1000 > video.duration)) { this.desync('预览区间无效或超出当前片长，请重新核对。'); this.report('error'); return; }
+      const start = this.isClip ? this.clipRange.startMS / 1000 : (isWatchCompleted(requested, video.duration) ? 0 : requested);
+      video.currentTime = this.isClip ? start : (Number.isFinite(video.duration) ? Math.min(start, Math.max(0, video.duration - 0.01)) : start);
       this.initialized = true; this.report('loaded');
       if (!this.session.desired_paused) this.play();
     },
     play() {
+      if (this.isClip && (!this.initialized || this.clipCompleting || !this.clipRange)) return;
       Promise.resolve(this.$refs.video?.play()).catch(error => {
         // A pause or source change interrupting play() is not a media failure.
         if (this.retired || error?.name === 'AbortError') return;
         this.failed();
       });
     },
-    playing() { if (!this.initialized || this.retired) return; this.wasEnded = false; this.seekingNow = false; this.report('playing'); },
+    playing() { if (this.isClip && (!this.initialized || this.clipCompleting || this.desynced)) { this.$refs.video?.pause(); return; } if (!this.initialized || this.retired) return; this.wasEnded = false; this.seekingNow = false; this.report('playing'); this.scheduleClipEnd(); },
     claimActive() { if (!this.retired) claimActivePlayer(this._activeHandle); },
-    paused() { releaseActivePlayer(this._activeHandle); if (this.initialized && !this.wasEnded) this.report('paused'); },
-    seeking() { if (!this.initialized) return; this.seekingNow = true; this.report('seeking'); },
-    seeked() { this.seekingNow = false; if (!this.initialized) return; this.report('seeked'); if (!this.$refs.video.paused) this.playing(); },
-    progress() { if (!this.initialized || this.seekingNow || this.$refs.video?.paused || performance.now() - this.lastProgressAt < 1000) return; this.lastProgressAt = performance.now(); this.report('progress'); },
-    ended() { if (!this.initialized || this.retired || this.seekingNow || this.wasEnded) return; this.wasEnded = true; this.report('ended'); },
-    failed() { if (this.retired) return; this.error = '无法播放当前文件，可在详情中生成播放代理后重试。'; this.report('error'); this.$emit('error', this.error); }
+    paused() { this.clearClipTimer(); releaseActivePlayer(this._activeHandle); if (this.initialized && !this.wasEnded) this.report('paused'); },
+    seeking() { if (!this.initialized || this.clipCompleting) return; this.clearClipTimer(); this.seekingNow = true; if (this.isClip) { const target = clampClipSeconds(this.$refs.video.currentTime, this.clipRange); if (target !== this.$refs.video.currentTime) this.$refs.video.currentTime = target; } this.report('seeking'); this.checkClipBoundary(); },
+    seeked() { this.seekingNow = false; if (!this.initialized || this.clipCompleting) return; if (this.checkClipBoundary()) return; this.report('seeked'); if (!this.$refs.video.paused) this.playing(); },
+    progress() { if (this.checkClipBoundary()) return; this.scheduleClipEnd(); if (!this.initialized || this.seekingNow || this.$refs.video?.paused || performance.now() - this.lastProgressAt < 1000) return; this.lastProgressAt = performance.now(); this.report('progress'); },
+    ended() { if (!this.initialized || this.retired || this.seekingNow || this.wasEnded) return; if (this.isClip) { if (this.$refs.video.currentTime < this.clipRange.endMS / 1000) { this.clearClipTimer(); this.report('error'); this.desync('原片在预览终点前结束，请重新核对。'); } else this.completeClip(); return; } this.wasEnded = true; this.report('ended'); },
+    failed() { if (this.retired || (this.isClip && this.desynced)) return; this.error = '无法播放当前文件，可在详情中生成播放代理后重试。'; this.report('error'); this.$emit('error', this.error); }
   }
 };
 </script>

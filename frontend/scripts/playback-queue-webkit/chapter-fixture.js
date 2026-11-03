@@ -1,0 +1,51 @@
+import {createApp,h,nextTick} from 'vue';
+import VideoDetailPage from '../../src/components/viewer/VideoDetailPage.vue';
+import AppFeedback from '../../src/components/AppFeedback.vue';
+import '../../src/styles/tokens.css';
+import '../../src/styles/components.css';
+const calls=[];let source='source-a',swapAfterResolve=false;
+const video={id:1,name:'合成章节验收.mp4',display_title:'合成章节验收',duration:3,tags:[],play_count:0,random_play_count:0,is_watched:false,watch_position_seconds:0};
+let manual={set_id:'manual:1',kind:'manual',revision:1,source_version:'source-a',source_status:'ready',chapters:[{id:101,title:'第一章',summary:'本地章节摘要',start_ms:500,end_ms:1000},{id:102,title:'第二章',summary:'后半段',start_ms:1500,end_ms:2500}]};
+const ok=data=>({status:'ok',data});
+window.go={main:{App:new Proxy({},{get:(_,method)=>async(...args)=>{
+ calls.push({method,args});
+ if(method==='GetVideoDetails')return {video,effective_title:video.display_title,people:[],collections:[],artwork:{},streams:[]};
+ if(method==='GetVideoRecommendations')return {directory:[],tags:[]};
+ if(method==='GetPlaybackSubtitle')return {status:'ready',cues:[]};
+ if(method==='GetPreviewSession')return {video_id:1,mode:'inline',source_version:source,inline_source:{locator_value:'./clip.mp4',mime:'video/mp4'}};
+ if(method==='GetPlaybackProxyStatus')return {running:false,queued:0,results:[]};
+ if(method==='ListVideoBookmarks')return {items:[],has_more:false};
+ if(method==='GetVideoChapterSets')return ok({video_id:1,title:video.display_title,duration_ms:3000,source_version:source,embedded:{set_id:'embedded:1',kind:'embedded',revision:1,source_status:'unread',chapters:[]},manual});
+ if(method==='ListChapterDraftJobs')return ok({items:[],next_cursor:0});
+ if(method==='ResolveChapter'){const chapter=manual.chapters.find(row=>row.id===args[0].chapter_id);const result={video_id:1,start_ms:chapter.start_ms,source_version:manual.source_version};if(swapAfterResolve)source='source-b';return ok(result);}
+ if(method==='SaveVideoChapters'){manual={...manual,revision:manual.revision+1,chapters:args[0].chapters};return ok(manual);}
+ if(method==='UpdateVideoWatchProgress')return video;
+ if(method.startsWith('List'))return [];
+ return null;
+}})}};
+createApp({render(){return [h(VideoDetailPage,{videoId:1}),h(AppFeedback)];}}).mount('#app');
+const assert=(condition,label)=>{if(!condition)throw new Error(label);};
+const until=async(test,label)=>{window.progress=label;const end=Date.now()+8000;while(!test()&&Date.now()<end){await new Promise(resolve=>setTimeout(resolve,20));await nextTick();}assert(test(),label);};
+const button=label=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim().startsWith(label));
+const click=async label=>{const el=button(label);assert(el,'missing '+label);el.click();await nextTick();};
+const nativeClick=async el=>{el.scrollIntoView({block:'center'});await new Promise(resolve=>setTimeout(resolve,80));const r=el.getBoundingClientRect();window.webkit.messageHandlers.nativeClick.postMessage({x:r.left+r.width/2,y:r.top+r.height/2});};
+window.fixture={async run(){
+ await until(()=>button('第二章'),'chapter content');
+ document.querySelector('.chapter-sources details').open=true;await nextTick();
+ assert(!document.querySelector('video'),'reading chapter does not open media');
+ assert(!calls.some(call=>['RecordViewEvent','UpdateVideoWatchProgress','PlayVideo'].includes(call.method)),'reading summary writes no viewing fact');
+ await nativeClick(button('第二章'));
+ await until(()=>document.querySelector('video')?.readyState>=2&&document.querySelector('video').currentTime>=1.45,'real chapter seek');
+ const element=document.querySelector('video');element.pause();
+ await click('第一章');await until(()=>!element.seeking&&element.currentTime>=.45&&element.currentTime<.8,'second chapter seek');element.pause();assert(document.querySelector('video')===element,'chapter seek reuses owner');
+ await click('编辑人工章节');await until(()=>document.querySelector('.chapter-edit-row input'),'manual editor');
+ const title=document.querySelector('.chapter-edit-row .text-input');title.value='本地修订';title.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();await click('保存人工章节');
+ await until(()=>button('本地修订'),'saved manual chapter');assert(calls.filter(call=>call.method==='SaveVideoChapters').length===1,'single manual save');
+ assert(!calls.some(call=>['PrepareChapterDraft','StartChapterDraft'].includes(call.method)),'manual work never starts external AI');
+ await click('收起播放器');await until(()=>!document.querySelector('video'),'retire formal player');swapAfterResolve=true;await click('第二章');
+ await until(()=>document.querySelector('video')?.readyState>=1&&document.querySelector('[data-test=detail-bookmark-changed]'),'changed source banner');
+ const replaced=document.querySelector('video');assert(replaced.paused&&replaced.currentTime<.2,'stale chapter position is not played');
+ document.querySelector('[data-test=chapter-panel]').scrollIntoView({block:'center'});await new Promise(resolve=>setTimeout(resolve,100));
+ window.results={passed:true,realDecodedMedia:true,cases:['read-summary-no-view-facts','native-chapter-click','decoded-seek','same-player-owner','manual-save','manual-no-external-ai','changed-source-no-old-seek']};
+}};
+window.ready=true;

@@ -163,3 +163,32 @@ func TestRememberDeleteFileChoicePreservesAllOtherSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateSettingsTextPurposesRemainIndependent(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	service := &SettingsService{}
+	settings, err := service.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.QueryParseEnabled || settings.ChapterSummaryEnabled {
+		t.Fatal("default enabled")
+	}
+	settings.QueryParseEnabled = true
+	if err := service.UpdateSettings(*settings); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = service.GetSettings()
+	if err != nil || !settings.QueryParseEnabled || settings.ChapterSummaryEnabled {
+		t.Fatalf("%+v %v", settings, err)
+	}
+	settings.QueryParseEnabled = false
+	settings.ChapterSummaryEnabled = true
+	if err := service.UpdateSettings(*settings); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = service.GetSettings()
+	if err != nil || settings.QueryParseEnabled || !settings.ChapterSummaryEnabled {
+		t.Fatalf("%+v %v", settings, err)
+	}
+}

@@ -32,6 +32,7 @@
       <button type="button" class="btn btn--secondary btn--sm" data-test="scenes-clear-image" @click="clearImageQuery">清除</button>
     </div>
 
+    <button v-if="searched" type="button" class="btn btn--secondary" data-test="scenes-grouped-preview" @click="openGroupedPreview">按影片分组与预览</button>
     <div class="scenes-scope" data-test="scenes-scope">
       <span>范围：{{ scopeFilter ? '片库当前筛选' : '全部视频' }}</span>
       <button v-if="scopeFilter" type="button" class="btn btn--secondary btn--sm" data-test="scenes-clear-scope" @click="clearScope">改为全部视频</button>
@@ -80,7 +81,7 @@
       data-test="scenes-idle"
     />
 
-    <div v-else class="scenes-results" data-test="scenes-results">
+    <div v-else-if="!groupedRequest" class="scenes-results" data-test="scenes-results">
       <section v-for="group in groups" :key="group.videoID" class="scenes-group" :data-test="`scenes-group-${group.videoID}`">
         <h3 class="scenes-group__title">{{ group.title }} <small :data-test="`scenes-count-${group.videoID}`">{{ truncated ? `已列出 ${group.hits.length} 处` : `${group.hits.length} 处` }}</small></h3>
         <div v-for="(hit, index) in group.hits" :key="`${hit.source}-${hit.start_ms}-${index}`" class="scenes-hit-row">
@@ -127,6 +128,11 @@
         <p v-else class="help-text" data-test="scenes-cap-note">{{ capNote }}</p>
       </div>
     </div>
+    <template v-if="groupedRequest">
+      <button type="button" class="btn btn--ghost" @click="groupedRequest = null">返回原场景结果</button>
+      <SearchSceneGroup v-for="kind in groupedKinds" :key="kind" :kind="kind" :request="groupedRequest" :page-active="pageActive" :busy="$refs.searchPreview?.busy" @preview="$refs.searchPreview.prepare($event)" @bookmark="$refs.searchPreview.bookmark($event)" @watch-whole="$refs.searchPreview.watchWhole($event)" />
+    </template>
+    <SearchPreviewHost ref="searchPreview" :page-active="pageActive" :context-key="groupedRequest" :watch-whole-video="watchWholeVideo" />
     <QuoteCardDialog v-if="quoteCard" v-bind="quoteCard" @close="quoteCard = null" />
   </section>
 </template>
@@ -163,6 +169,8 @@ import {
   sceneVisualCoveragePercent
 } from '../utils/sceneSearch.js';
 import { quoteCardMomentMS } from '../utils/quoteCard.js';
+import SearchSceneGroup from './SearchSceneGroup.vue';
+import SearchPreviewHost from './SearchPreviewHost.vue';
 import QuoteCardDialog from './QuoteCardDialog.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
@@ -187,8 +195,9 @@ const RUNTIME_STATE_TEXT = {
 // 每次检索取一个请求代次，晚到的旧结果直接丢弃；点击命中交给宿主打开详情抽屉并内嵌播放。
 export default {
   name: 'ScenesPage',
-  components: { EmptyState, PageHeader, ProgressBar, QuoteCardDialog, SegmentedControl, SkeletonBlock },
+  components: { SearchSceneGroup, SearchPreviewHost, EmptyState, PageHeader, ProgressBar, QuoteCardDialog, SegmentedControl, SkeletonBlock },
   props: {
+    watchWholeVideo: { type: Function, default: null },
     pageActive: { type: Boolean, default: true },
     // 片库工具栏「在当前筛选中搜场景」带来的范围：{ filter, token }；为空表示全部视频。
     // 详情抽屉「找相似画面」另带 similar：{ videoID, atMS, title }，进来直接按这一刻的画面检索。
@@ -199,6 +208,7 @@ export default {
   emits: ['open-video-at'],
   data() {
     return {
+      groupedRequest: null, lastInput: null,
       query: '',
       mode: 'all',
       modes: SCENE_MODES,
@@ -224,6 +234,7 @@ export default {
     };
   },
   computed: {
+    groupedKinds() { const request = this.groupedRequest; return request?.image || request?.similar ? ['image'] : request?.mode === 'dialogue' ? ['dialogue'] : request?.mode === 'visual' ? ['visual'] : ['dialogue','visual']; },
     modeOptions() {
       return this.modes.map(option => ({ value: option.value, label: option.label, dataTest: `scenes-mode-${option.value}` }));
     },
@@ -363,6 +374,7 @@ export default {
     (this.eventOffs || []).forEach(off => off());
   },
   methods: {
+    openGroupedPreview() { if (this.lastInput) this.groupedRequest = { ...this.lastInput }; },
     noticeText: sceneNoticeText,
     sourceLabel(source) {
       return SCENE_SOURCE_LABELS[source] || source;
@@ -378,6 +390,7 @@ export default {
       return hit.source === 'visual' ? '画面与检索描述相近' : '';
     },
     resetResults() {
+      this.groupedRequest = null; this.lastInput = null;
       this.searchGeneration?.next();
       this.result = null;
       this.searched = false;
@@ -408,6 +421,7 @@ export default {
       this.imageQuery = null;
       this.similarSource = null;
       const request = { query: this.query.trim(), mode: this.mode, filter: this.scopeFilter };
+      this.lastInput = request; this.groupedRequest = null;
       return this.startSearch(limit => SearchScenes({ ...request, limit }));
     },
     searchImage(image) {
@@ -415,6 +429,7 @@ export default {
       this.similarSource = null;
       const encoded = image.dataURL.slice(image.dataURL.indexOf(',') + 1);
       const filter = this.scopeFilter;
+      this.lastInput = { image, filter }; this.groupedRequest = null;
       return this.startSearch(limit => SearchScenesByImage({ image_base64: encoded, video_id: 0, at_ms: 0, filter, limit }));
     },
     searchSimilar(source) {
@@ -422,6 +437,7 @@ export default {
       this.similarSource = { videoID: Number(source.videoID), atMS: Math.max(0, Math.round(Number(source.atMS) || 0)), title: source.title || '' };
       const { videoID, atMS } = this.similarSource;
       const filter = this.scopeFilter;
+      this.lastInput = { similar: { ...this.similarSource }, filter }; this.groupedRequest = null;
       return this.startSearch(limit => SearchScenesByImage({ image_base64: '', video_id: videoID, at_ms: atMS, filter, limit }));
     },
     clearImageQuery() {

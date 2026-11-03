@@ -55,6 +55,7 @@ export const VIEWER_NAV_GROUPS = [
     label: '回顾与检索',
     pages: [
       { key: 'recap', label: '回顾', keywords: ['recap', 'huigu', '月度回顾', '年度回顾', '实时', '最爱', '播放次数', '称号'] },
+      { key: 'search-results', label: '搜索汇总', keywords: ['search', '搜索汇总', '预览'] },
       { key: 'scenes', label: '场景检索', keywords: ['scene', 'search', 'changjing', '对白', '画面', '台词'] }
     ]
   }
@@ -532,6 +533,14 @@ export const appCommandsMixin = {
           label: '打开任务中心',
           keywords: ['task', 'tasks', '任务', '后台任务', 'renwu'],
           run: () => this.openTaskCenter()
+        },
+        {
+          id: 'action:library-query', group: 'action', label: '自然语言组合搜索', keywords: ['query', '条件', '自然语言'], run: () => { this.libraryQueryOpen = true; }
+        },
+        {
+          id: 'action:capability-setup', group: 'action', label: '按目标准备',
+          keywords: ['setup', '开始使用', '引导', '准备', '字幕', '画面'],
+          run: () => { this.capabilitySetupOpen = true; }
         },
         {
           id: 'action:pending-work',

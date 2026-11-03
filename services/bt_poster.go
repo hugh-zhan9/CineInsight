@@ -11,7 +11,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"video-master/services/btclient"
 )
+
+var errBTUnsafeResolution = errors.New("detail_dns_unsafe: 站点解析到了非公网地址，请检查代理与 DNS 配置")
 
 var errBTPoster = errors.New("poster_unavailable: 资源封面暂不可用")
 
@@ -56,6 +59,19 @@ type btPosterClient func() (*http.Client, error)
 // fetchBTPoster pins the destination before passing it to a direct dialer or proxy.
 // The original hostname remains the HTTP Host and TLS certificate identity.
 func fetchBTPoster(ctx context.Context, raw string, lookup btPosterLookup, factory btPosterClient) ([]byte, string, error) {
+	data, _, err := fetchBTPublic(ctx, raw, nil, btPosterMaxBytes, lookup, factory)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err = managedImageExtension(data); err != nil {
+		return nil, "", errBTPoster
+	}
+	return data, http.DetectContentType(data), nil
+}
+
+// fetchBTPublic pins public destinations and never follows redirects. Headers
+// belong to the validated site request; images pass nil and receive no secrets.
+func fetchBTPublic(ctx context.Context, raw string, headers http.Header, limit int64, lookup btPosterLookup, factory btPosterClient) ([]byte, string, error) {
 	u, err := btPosterURL(raw)
 	if err != nil {
 		return nil, "", errBTPoster
@@ -67,7 +83,7 @@ func fetchBTPoster(ctx context.Context, raw string, lookup btPosterLookup, facto
 	}
 	for _, ip := range ips {
 		if !publicBTPosterIP(ip) {
-			return nil, "", errBTPoster
+			return nil, "", errBTUnsafeResolution
 		}
 	}
 	client, err := factory()
@@ -111,6 +127,9 @@ func fetchBTPoster(ctx context.Context, raw string, lookup btPosterLookup, facto
 	req.Host = originalHost
 	req.Header.Set("User-Agent", watchlistPosterUserAgent)
 	req.Header.Set("Accept", "image/webp,image/png,image/jpeg")
+	for key, values := range headers {
+		req.Header[key] = append([]string(nil), values...)
+	}
 	req.Header.Set("Referer", u.Scheme+"://"+originalHost+"/")
 	client.Transport = transport
 	client.Jar = nil
@@ -120,17 +139,17 @@ func fetchBTPoster(ctx context.Context, raw string, lookup btPosterLookup, facto
 		return nil, "", errBTPoster
 	}
 	defer response.Body.Close()
+	if response.StatusCode == 401 || response.StatusCode == 403 {
+		return nil, "", btclient.ErrAuthentication
+	}
 	if response.StatusCode != http.StatusOK {
 		return nil, "", errBTPoster
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, btPosterMaxBytes+1))
-	if err != nil || len(data) == 0 || len(data) > btPosterMaxBytes {
+	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil || len(data) == 0 || int64(len(data)) > limit {
 		return nil, "", errBTPoster
 	}
-	if _, err = managedImageExtension(data); err != nil {
-		return nil, "", errBTPoster
-	}
-	return data, http.DetectContentType(data), nil
+	return data, response.Header.Get("Content-Type"), nil
 }
 
 // Poster accepts only a live search token, never a caller-supplied URL.

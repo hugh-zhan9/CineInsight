@@ -823,3 +823,9 @@ describe('统一搜索：以图', () => {
     expect(wrapper.find('[data-test="command-palette-group-image"]').exists()).toBe(false);
   });
 });
+
+it('opens the full summary without changing original direct jump behavior', async () => {
+ const navigate = vi.fn(); const wrapper = mountPalette(vi.fn(),{navigate}); await typeQuery(wrapper,'台词');
+ await wrapper.get('[data-test="command-palette-summary"]').trigger('click');
+ expect(navigate).toHaveBeenCalledWith('search-results',{query:'台词',image:null}); expect(wrapper.emitted('close')).toBeTruthy();
+});

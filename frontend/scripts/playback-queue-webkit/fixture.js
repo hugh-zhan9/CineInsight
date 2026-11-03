@@ -38,6 +38,21 @@ async function verifyControls(video, label) {
   assert(Math.abs(video.getBoundingClientRect().bottom - surface.getBoundingClientRect().bottom) < 1, 'video fills player');
   await until(() => video.textTracks[0]?.cues?.length === 1, 'caption loaded');
   assert(video.textTracks[0].cues[0].line < 90, 'caption avoids control overlay');
+  const select = async (label, value) => {
+    const input = document.querySelector(`[aria-label="${label}"]`); assert(input, `Missing ${label}`);
+    input.value = value; input.dispatchEvent(new Event('change', {bubbles:true})); await nextTick();
+  };
+  click('[data-test="playback-subtitle-toggle"]'); await nextTick();
+  await select('字幕字号', 'large'); await select('字幕背景', 'solid'); await select('字幕位置', 'top');
+  assert(video.textTracks[0].cues[0].line === 5 && video.textTracks[0].cues[0].lineAlign === 'start', 'top caption projection');
+  assert(parseFloat(video.style.getPropertyValue('--fs-subtitle-active')) >= 16, 'bounded caption type size');
+  await select('字幕位置', 'middle'); assert(video.textTracks[0].cues[0].line === 50, 'middle caption projection');
+  await select('字幕位置', 'bottom'); await select('字幕背景', 'translucent'); await select('字幕字号', 'medium');
+  click('[data-test="playback-transcript-toggle"]'); await nextTick();
+  assert(surface.querySelector('[data-test="playback-transcript"]'), 'transcript belongs to fullscreen surface');
+  assert(document.querySelector('[data-cue-id="0"] span').textContent === subtitles[0].text, 'transcript preserves plain bilingual text');
+  click('[data-cue-id="0"]'); await until(() => !video.seeking && Math.abs(video.currentTime - .1) < .05, 'transcript seeks cue');
+  click('[aria-label="关闭台词"]'); await nextTick();
   for (const ratio of [.25, .65]) {
     trustedClick(seek.range, ratio);
     try {
@@ -80,6 +95,11 @@ async function verifyControls(video, label) {
   assert(document.elementFromPoint(rect.left + 20, rect.top + 20)?.closest('.playback-subtitles__panel'), 'subtitle settings visible in application fullscreen');
   panel.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true,cancelable:true})); await nextTick();
   assert(document.querySelector('dialog.playback-shell').matches(':modal'), 'settings Escape keeps fullscreen');
+  click('[data-test="playback-subtitle-toggle"]'); await nextTick(); click('[data-test="playback-transcript-toggle"]'); await nextTick();
+  const transcript = document.querySelector('[data-test="playback-transcript"]'); const tr = transcript.getBoundingClientRect();
+  assert(document.elementFromPoint(tr.left + 20, tr.top + 20)?.closest('[data-test="playback-transcript"]'), 'transcript visible in application fullscreen');
+  transcript.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true,cancelable:true})); await nextTick();
+  assert(document.querySelector('dialog.playback-shell').matches(':modal') && !document.querySelector('[data-test="playback-transcript"]'), 'transcript Escape does not exit fullscreen');
   window.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true,cancelable:true})); await nextTick();
   assert(!document.querySelector('dialog.playback-shell').matches(':modal'), 'application fullscreen exit');
   click('[data-test="inline-player-fullscreen"]'); await nextTick();

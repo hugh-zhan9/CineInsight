@@ -328,6 +328,9 @@ func (s *BTService) Submit(ctx context.Context, r BTSubmitRequest) (BTTaskView, 
 	return view, err
 }
 func (s *BTService) submitTaskLocked(ctx context.Context, r BTSubmitRequest) (BTTaskView, error) {
+	return s.submitTaskWithOriginLocked(ctx, r, nil, nil)
+}
+func (s *BTService) submitTaskWithOriginLocked(ctx context.Context, r BTSubmitRequest, origin func(*gorm.DB, models.BTTask, []models.BTFile) error, committed func()) (BTTaskView, error) {
 	task, files, err := btLoadTask(ctx, r.DraftID)
 	if err != nil {
 		return BTTaskView{}, err
@@ -359,6 +362,9 @@ func (s *BTService) submitTaskLocked(ctx context.Context, r BTSubmitRequest) (BT
 	}
 	digest := btSelectionDigest(r.SelectedFileIDs)
 	if task.Stage != "draft" && task.Stage != "metadata_ready" {
+		if origin != nil {
+			return BTTaskView{}, ErrEpisodeContextChanged
+		}
 		if task.SelectionDigest == digest {
 			return s.Get(ctx, task.ID)
 		}
@@ -387,10 +393,19 @@ func (s *BTService) submitTaskLocked(ctx context.Context, r BTSubmitRequest) (BT
 		if tx.Model(&models.BTFile{}).Where("task_id = ?", task.ID).Update("selected", false).Error != nil {
 			return ErrBTTask
 		}
-		return tx.Model(&models.BTFile{}).Where("task_id = ? AND manifest_file_id IN ?", task.ID, r.SelectedFileIDs).Update("selected", true).Error
+		if err := tx.Model(&models.BTFile{}).Where("task_id = ? AND manifest_file_id IN ?", task.ID, r.SelectedFileIDs).Update("selected", true).Error; err != nil {
+			return err
+		}
+		if origin != nil {
+			return origin(tx, task, files)
+		}
+		return nil
 	})
 	if err != nil {
 		return BTTaskView{}, err
+	}
+	if committed != nil {
+		committed()
 	}
 	s.notify()
 	return s.Get(ctx, task.ID)

@@ -38,6 +38,7 @@
         >清除</button>
       </div>
       <p v-if="imageError" class="command-palette__image-error" role="alert" data-test="command-palette-image-error">{{ imageError }}</p>
+      <button v-if="keyword || image" type="button" class="btn btn--secondary btn--sm" data-test="command-palette-summary" @click="openSummary">汇总结果</button>
       <p class="command-palette__legend">↑ ↓ 选择 · 回车执行 · Esc 关闭 · 粘贴或拖入图片可按图找画面</p>
 
       <div ref="list" class="command-palette__list" role="listbox" data-test="command-palette-list">
@@ -382,6 +383,11 @@ export default {
       return false;
     },
     // 组标题旁「查看全部」：关掉面板，带着关键词（或这张图）切到对应页面（utils/unifiedSearch.js 的 viewAllTarget）。
+    async openSummary() {
+      if (!this.navigate || (!this.keyword && !this.image)) return;
+      const params = { query: this.keyword, image: this.image }; this.$emit('close');
+      try { await this.navigate('search-results', params); } catch (error) { notifyError(`打开搜索汇总失败：${error}`); }
+    },
     async viewAll(group) {
       const target = viewAllTarget(group.key, { keyword: this.keyword, image: this.image });
       if (!target || !this.navigate) return;

@@ -42,10 +42,12 @@ type BTSearchResult struct {
 	Truncated bool                    `json:"truncated"`
 }
 type btSearchToken struct {
-	release    btclient.Release
-	expires    time.Time
-	generation uint64
-	order      uint64
+	detailOrder uint64
+	images      []string
+	release     btclient.Release
+	expires     time.Time
+	generation  uint64
+	order       uint64
 }
 
 // BTSearchService owns a bounded, backend-only cache of sensitive proxy links.
@@ -58,11 +60,12 @@ type BTSearchService struct {
 	timeout     time.Duration
 	sequence    uint64
 	posterSlots chan struct{}
+	fetchDetail func(context.Context, btclient.SiteDetailRequest) ([]byte, error)
 	fetchPoster func(context.Context, string) ([]byte, string, error)
 }
 
 func NewBTSearchService(source BTSearchSource, generation uint64) *BTSearchService {
-	return &BTSearchService{source: source, generation: generation, tokens: map[string]btSearchToken{}, now: time.Now, timeout: 90 * time.Second, posterSlots: make(chan struct{}, 2), fetchPoster: defaultBTPoster}
+	return &BTSearchService{source: source, generation: generation, tokens: map[string]btSearchToken{}, now: time.Now, timeout: 90 * time.Second, posterSlots: make(chan struct{}, 2), fetchDetail: defaultBTDetail, fetchPoster: defaultBTPoster}
 }
 
 // Configure invalidates links and in-flight results even when the numeric revision is reused.

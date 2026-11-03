@@ -28,6 +28,12 @@ import (
 // This opt-in test transfers only generated media between two owned loopback
 // clients. Prowlarr is an HTTP fixture; every downloader/import operation is real.
 func TestBTIsolatedSelectiveDownloadToLibrary(t *testing.T) {
+	runBTSelectiveDownloadToLibrary(t, false)
+}
+func TestBTIsolatedEpisodeDownloadToCollection(t *testing.T) {
+	runBTSelectiveDownloadToLibrary(t, true)
+}
+func runBTSelectiveDownloadToLibrary(t *testing.T, supplement bool) {
 	if os.Getenv("CINEINSIGHT_BT_QB_PROBE") != "1" {
 		t.Skip("explicit isolated-profile test only")
 	}
@@ -194,7 +200,27 @@ func TestBTIsolatedSelectiveDownloadToLibrary(t *testing.T) {
 	if selectedID == "" {
 		t.Fatal("selected video absent")
 	}
-	submitted, err := service.Submit(ctx, BTSubmitRequest{DraftID: draft.ID, ExpectedRevision: draft.Revision, SelectedFileIDs: []string{selectedID}})
+	var submitted BTTaskView
+	var collections *CollectionService
+	var collectionID uint
+	if supplement {
+		collections = NewCollectionService(t.TempDir())
+		collection, createErr := collections.CreateCollection("Synthetic series", "")
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		collectionID = collection.ID
+		if err := collections.SetSeasonExpectation(collectionID, 1, 2, 0); err != nil {
+			t.Fatal(err)
+		}
+		origin, prepareErr := collections.PrepareEpisodeResourceSearch(ctx, EpisodeResourceSearchRequest{CollectionID: collectionID, Season: 1, Episodes: []int{1}})
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		submitted, err = service.SubmitEpisodeDownload(ctx, collections, EpisodeDownloadRequest{DraftID: draft.ID, ExpectedRevision: draft.Revision, SelectedFileIDs: []string{selectedID}, OriginToken: origin.OriginToken})
+	} else {
+		submitted, err = service.Submit(ctx, BTSubmitRequest{DraftID: draft.ID, ExpectedRevision: draft.Revision, SelectedFileIDs: []string{selectedID}})
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +277,27 @@ func TestBTIsolatedSelectiveDownloadToLibrary(t *testing.T) {
 	if len(rows) != 1 || rows[0].Path != selectedPath || rows[0].Name != "chosen.mp4" || rows[0].IsStale || rows[0].Duration <= 0 {
 		t.Fatalf("unexpected library: %+v", rows)
 	}
+	if supplement {
+		source, err := collections.ListEpisodeAcquisitions(ctx, EpisodeAcquisitionRequest{CollectionID: collectionID})
+		if err != nil || len(source.Items) != 1 || source.Items[0].State != "imported_unlinked" || source.Items[0].Season != nil {
+			t.Fatalf("source after import: %+v %v", source, err)
+		}
+		item := source.Items[0]
+		preview, err := collections.PreviewEpisodeAssociation(ctx, EpisodeAssociationRequest{TaskID: draft.ID, Items: []EpisodeAssociationChoice{{OriginID: item.OriginID, FileID: item.FileID, ExpectedOriginRevision: item.Revision, Season: 1, Episode: 1}}})
+		if err != nil || preview.Conflicts != 0 || preview.PreviewToken == "" {
+			t.Fatalf("preview: %+v %v", preview, err)
+		}
+		for range 2 {
+			if _, err := collections.ConfirmEpisodeAssociation(ctx, preview.PreviewToken); err != nil {
+				t.Fatal(err)
+			}
+		}
+		report, err := collections.GetEpisodeReportContext(ctx, collectionID, 0, 50)
+		if err != nil || report.Total != 1 || len(report.Seasons) != 1 || report.Seasons[0].Recognized != 1 {
+			t.Fatalf("association: %+v %v", report, err)
+		}
+	}
+
 	actual, err := os.ReadFile(selectedPath)
 	if err != nil || sha256.Sum256(actual) != sha256.Sum256(videoBytes) {
 		t.Fatal("import changed payload", err)
