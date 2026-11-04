@@ -42,3 +42,4 @@ video-master
 
 # 第三方研究副本（各自带 go.mod，不属于本应用）
 search/
+__pycache__/

@@ -56,6 +56,7 @@
 - **开发模式:** `GOTOOLCHAIN=go1.24.9 wails dev`（Wails 2.11.0 的 `go/packages` 与本机 Go 1.27.1 不兼容；开发模式尚未实测） 使用系统字幕前先执行 `bash scripts/build_apple_ai.sh`，开发二进制读取该原生产物。该脚本部署目标 macOS 15.0；SDK ≥ 26 时以 `-D APPLE_AI_SDK26` 编入新接口，SDK 低于 15 跳过构建（打包同样跳过）。
 - **构建应用:** `GOTOOLCHAIN=go1.24.9 wails build`（2026-09-23 darwin/arm64 已完整出包；默认 Go 1.27.1 在 Wails 扫描嵌入资源阶段报 `package "fmt" without types`，`go test ./...` 不受影响）
 - **构建并安装脚本:** `scripts/build_and_install_app.sh` 在 `GOTOOLCHAIN` 未设置或为 `auto` 时只为 Wails 构建使用 Go 1.24.9；`--build-only` 可安全验证构建和 sidecar 打包而不替换 `/Applications` 中的应用。 脚本会先编译并打包苹果系统字幕辅助程序；只执行原始 `wails build` 不会自动打包它。
+- **本机识别资源脚本:** `bash scripts/install_speech_assets.sh`（`--status` / `--dry-run` / `--languages` / `--timeout` / `--helper`）为 macOS 15 本机识别补下载系统模型。macOS 只为已注册成听写语言的语言下载 `com.apple.speech.asr.transcription.<lang>`，而听写语言跟随 `com.apple.HIToolbox` 启用的输入源；脚本临时追加对应输入源发起下载、等到 `status` 报 installed 后把输入源原样还原（`defaults export` 备份 + `diff` 校验无差异）。默认 ja,ko,en,zh，当前只有 ja（Kotoeri 罗马字）与 ko（2-Set Korean）可自动添加输入源，其他语种提示手动处理。纯状态查询与偏好编辑在 `scripts/speech_assets.py`。不改变应用行为与隐私承诺：仍仅本机识别，缺失时仍报 `apple_speech_dictation_missing`。
 - **数据库:** 默认 SQLite（`~/.CineInsight/library.db`），不需要任何配置；要用 PostgreSQL 时在 `.env` 写 `DB_BACKEND=postgres` 与 `PG_*` 连接项（有 `PG_HOST` 而没有 `DB_BACKEND` 的老安装自动沿用 PostgreSQL），或在设置页「数据库」分区迁移并切换，见 §1。备份在设置页「数据库备份」：SQLite 用 `VACUUM INTO` 写 `.sqlite` 快照，PostgreSQL 用 `pg_dump` 写 `.dump`，默认目录 `~/.CineInsight/backups`（可改、可在访达中显示），默认每 24 小时一份、保留 7 份，运行期间每小时检查一次是否到期（D-PC54 / D-PC56）；恢复前先给当前库做安全备份（SQLite 在进入维护模式之前做），恢复完成后应用自动退出，重新打开即用恢复的数据。
 - **测试:** 默认 `go test ./...` 走 SQLite；PG 腿用 `CINEINSIGHT_TEST_PG_DSN` 指向一次性库，`./services` 在 PG 上耗时较长，必须加 `-timeout`（如 `-timeout 1500s`）。
 
@@ -66,6 +67,12 @@
 - **体验扩展已实现（2026-11-04）:** [片库体验完善与内容探索](docs/loopx/design/2026-11-03-library-experience/概要设计.md)的九项功能及搜索性能评估已完成，具体行为见上列领域文档。照片/坐标本地管理，联网底图、自然语言解析与章节摘要各自显式启用并说明外发范围；不接在线地名查询。性能评估保留现有生产索引。全量Go、双库专项/实际备份迁移、race/vet、122项真实WebView和build-only签名通过；前端3244测试中3243通过，唯一既有RecapPage月份断言仍失败。真实外部模型/OSM网络和完整已安装应用TCC未实测，未安装或提交；详见[实施记录](docs/loopx/plans/2026-11-03-library-experience.md)与[性能报告](docs/loopx/design/2026-11-03-library-experience/性能评估.md)。「那年今天」沿用2026-10-22已实现合同。
 
 
+
+## 2026-11-04 本机识别资源安装
+
+- 韩语/日语本机识别在 macOS 15.7.2 上实测可下载可用：`{operation:status}` 从 `installed:false` 变为 installed，`prepare_speech` 返回 `supported`，`transcribe` 对合成语音正确转写出 `ko-KR`/`ja-JP` 文本。触发条件是系统把该语种登记成听写语言（跟随 `com.apple.HIToolbox` 启用的输入源），单纯发起 `SFSpeechRecognizer` 请求只会得到 `kLSRErrorDomain 101 No Assistant asset`，不会触发下载。
+- 该机制固化为 `scripts/install_speech_assets.sh` + `scripts/speech_assets.py`；系统偏好只做临时追加并在结束时原样还原，模型装好后与输入源设置无关（还原后仍 installed）。输入源改动的备份、还原与 `diff` 无差异验证、超时与无映射语种失败路径均已实测。
+- 应用侧不做改动：仍要求 `requiresOnDeviceRecognition=true`，缺资源时界面仍显示 `apple_speech_dictation_missing` 引导；脚本只是让用户在系统侧补齐资源，音频仍不出本机。
 
 ## 2026-11-04 视觉探索与字幕提示
 
