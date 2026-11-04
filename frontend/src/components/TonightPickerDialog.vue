@@ -9,6 +9,7 @@
     </div>
     <p v-if="presetNotice" class="help-text" role="status">{{ presetNotice }}</p>
     <form class="tonight-picker__form" @submit.prevent="reroll">
+      <label>候选数量<input v-model.number="candidateCount" class="number-input" type="number" min="1" max="12" step="1" data-test="tonight-count" /></label>
       <label>可用时间（分钟）<input v-model.number="minutes" class="number-input" type="number" min="0" max="1440" step="1" data-test="tonight-minutes" /></label>
       <label>观看状态
         <select v-model="watchState" class="select-input tonight-picker__watch" data-test="tonight-watch-state">
@@ -51,9 +52,19 @@ import RelatedVideoItem from './RelatedVideoItem.vue';
 import { tagBackgroundColor } from '../utils/tagColor.js';
 import { normalizeRandomConditions, randomConditionFields, RANDOM_RECENT_LIMIT, validRandomMinutes } from '../utils/randomPlayback.js';
 
-const TONIGHT_LIMIT = 6;
+const TONIGHT_DEFAULT_COUNT = 6;
+const TONIGHT_COUNT_KEY = 'cineinsight-tonight-count';
+const validCandidateCount = value => Number.isInteger(value) && value >= 1 && value <= 12;
 
-// 今晚看什么与随机播放合并（2026-10-11）：用同一套随机条件和均衡加权抽 6 部候选，
+function readCandidateCount() {
+  try {
+    const value = Number(window.localStorage.getItem(TONIGHT_COUNT_KEY));
+    if (validCandidateCount(value)) return value;
+  } catch { /* 本机存储不可用时仍可正常选片。 */ }
+  return TONIGHT_DEFAULT_COUNT;
+}
+
+// 今晚看什么与随机播放合并：同一套随机条件和均衡加权，候选数量独立记忆，
 // 条件改动回写给片库页（随机播放主键随之改用），播放候选仍是普通播放。
 export default {
   name: 'TonightPickerDialog',
@@ -68,21 +79,30 @@ export default {
   emits: ['close', 'preview', 'play', 'play-random', 'update:conditions'],
   data() {
     const conditions = normalizeRandomConditions(this.conditions);
-    return { minutes: conditions.maxMinutes, watchState: conditions.watchState, favoritesOnly: conditions.favoritesOnly, items: [], loading: false, queried: false, error: '', notice: '', presetNotice: '', generation: 0, recentLimit: RANDOM_RECENT_LIMIT };
+    return { candidateCount: readCandidateCount(), minutes: conditions.maxMinutes, watchState: conditions.watchState, favoritesOnly: conditions.favoritesOnly, items: [], loading: false, queried: false, error: '', notice: '', presetNotice: '', generation: 0, recentLimit: RANDOM_RECENT_LIMIT };
   },
   computed: { queryKey() { return JSON.stringify([this.filter, this.minutes, this.watchState, this.favoritesOnly]); } },
   // 条件一变就重新抽（实时生效）：旧结果立即作废，分钟数输入期间按 300ms 合并一次请求；合法的条件同步回片库页。
   watch: {
     queryKey() {
-      this.generation++; this.items = []; this.error = ''; this.notice = ''; this.queried = false; this.loading = false;
       if (validRandomMinutes(this.minutes)) this.$emit('update:conditions', this.currentConditions());
-      clearTimeout(this.reloadTimer);
-      this.reloadTimer = setTimeout(() => this.load(), 300);
+      this.queueReload();
+    },
+    candidateCount(value) {
+      if (validCandidateCount(value)) {
+        try { window.localStorage.setItem(TONIGHT_COUNT_KEY, String(value)); } catch { /* 只影响记忆，不影响本次选择。 */ }
+      }
+      this.queueReload();
     }
   },
   mounted() { this.load(); },
   beforeUnmount() { this.generation++; clearTimeout(this.reloadTimer); },
   methods: {
+    queueReload() {
+      this.generation++; this.items = []; this.error = ''; this.notice = ''; this.queried = false; this.loading = false;
+      clearTimeout(this.reloadTimer);
+      this.reloadTimer = setTimeout(() => this.load(), 300);
+    },
     applyPreset(preset) {
       if (preset === 'short') { this.minutes = 30; this.presetNotice = '时长上限已改为 30 分钟，其它条件保留。'; }
       if (preset === 'revisit') { this.watchState = 'watched'; this.favoritesOnly = true; this.presetNotice = '观看状态已改为重温，并开启仅收藏；其它条件保留。'; }
@@ -97,13 +117,18 @@ export default {
       const generation = ++this.generation;
       const previous = this.items;
       this.items = []; this.error = ''; this.notice = ''; this.queried = false;
+      if (!validCandidateCount(this.candidateCount)) {
+        this.loading = false;
+        this.error = '候选数量请输入 1–12 之间的整数'; return;
+      }
       if (!validRandomMinutes(this.minutes)) {
+        this.loading = false;
         this.error = '可用时间请输入 0–1440 之间的整数分钟'; return;
       }
       this.loading = true;
       try {
         const request = { filter: this.filter, ...randomConditionFields(this.currentConditions()), exclude_ids: [...new Set([...this.excludeIds, ...extraExcludeIDs])] };
-        const result = (await SuggestTonightVideos(request, TONIGHT_LIMIT)) || [];
+        const result = (await SuggestTonightVideos(request, this.candidateCount)) || [];
         if (generation !== this.generation) return;
         if (!result.length && extraExcludeIDs.length) {
           this.items = previous; this.notice = '符合条件的候选都在这里了，没有更多可换的。';

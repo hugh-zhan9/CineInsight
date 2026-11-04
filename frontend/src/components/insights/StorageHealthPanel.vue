@@ -24,6 +24,7 @@
       </div>
 
       <section class="storage-section" data-test="storage-reclaim">
+        <StorageGoalPanel :disabled="processing || undoing" @run-command="(id, label) => $emit('run-command', id, label)" @open-video-id="$emit('open-video-id', $event)" />
         <header class="storage-section__head">
           <h3>可回收空间</h3>
           <small>来自清理中心最近一次分析。精确重复可以放心删；其余类别要到清理中心逐组确认</small>
@@ -234,6 +235,7 @@
 import { markRaw } from 'vue';
 import { GetCleanupStatus, GetImageCleanupStatus, GetStorageReport, OpenDirectory, StartTechnicalBackfill } from '../../../wailsjs/go/main/App';
 import BucketChart from './BucketChart.vue';
+import StorageGoalPanel from './StorageGoalPanel.vue';
 import AppBanner from '../ui/AppBanner.vue';
 import AppIcon from '../ui/AppIcon.vue';
 import DialogShell from '../ui/DialogShell.vue';
@@ -264,7 +266,7 @@ const STATE_TEXT = {
 
 export default {
   name: 'StorageHealthPanel',
-  components: { AppBanner, AppIcon, BucketChart, DialogShell, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner },
+  components: { AppBanner, AppIcon, BucketChart, DialogShell, SelectionBar, SkeletonBlock, StatTile, TrashUndoBanner, StorageGoalPanel },
   // open-video-id：打开片库详情；run-command：按固定命令 ID 打开清理中心；open-library-missing：片库管理的缺失筛选
   // （没有技术信息的视频 → 缺失「技术信息」）；
   // status-change：{ loading, processing }，宿主据此显示刷新状态、删除进行中不让离开。

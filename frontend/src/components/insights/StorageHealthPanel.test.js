@@ -54,6 +54,7 @@ beforeEach(() => {
   recentOperations.clear();
   document.body.innerHTML = '';
   api.GetStorageReport.mockResolvedValue(report());
+  api.GetStorageGoalVolumes.mockResolvedValue({ epoch: 'test-library', sampled_at: '2026-11-04T00:00:00Z', items: [] });
   api.GetCleanupStatus.mockResolvedValue({
     running: false, completed: true, stale: false,
     analysis: { duplicate_groups: [{ original: { id: 50, size: GIB }, candidates: [{ id: 51, size: GIB }] }] }

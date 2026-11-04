@@ -21,6 +21,7 @@ func writeEnhancementRuntimeFixture(t *testing.T, dir string, mutate func(*enhan
 		"licenses/REAL-ESRGAN-LICENSE.txt":      "license",
 		"licenses/NCNN-LICENSE.txt":             "license",
 		"lib/libMoltenVK.dylib":                 "molten",
+		"licenses/MoltenVK-LICENSE.txt":         "license",
 		"models/realesrgan-x4plus.license.note": "note",
 	}
 	manifest := enhancementManifest{
@@ -130,6 +131,8 @@ func writeEnhancementBinaryOnlyFixture(t *testing.T, dir string, models map[stri
 	bundled := map[string]string{
 		"bin/realesrgan-ncnn-vulkan":       "fake-binary",
 		"licenses/REAL-ESRGAN-LICENSE.txt": "license",
+		"lib/libMoltenVK.dylib":            "molten",
+		"licenses/MoltenVK-LICENSE.txt":    "license",
 	}
 	manifest := enhancementManifest{
 		RuntimeVersion: EnhancementRuntimeIdentity,

@@ -18,7 +18,7 @@ import (
 // 身份固定，清单记录每个文件的 SHA-256；任何校验失败都视为能力不可用，
 // 不下载、不安装、不降级。
 const (
-	EnhancementRuntimeIdentity = "realesrgan-ncnn-vulkan-v0.2.0-cineinsight1"
+	EnhancementRuntimeIdentity = "realesrgan-ncnn-vulkan-v0.2.0-cineinsight2"
 	enhancementRuntimeDirName  = "enhance-runtime"
 	enhancementManifestName    = "manifest.json"
 )
@@ -80,6 +80,9 @@ func (c EnhancementRuntimeCapability) withReadiness() EnhancementRuntimeCapabili
 		c.Hint = "超分模型校验没通过，请在设置页「视频超分」中重新下载"
 	default:
 		c.Hint = "超分组件没有随应用安装，暂时无法使用"
+		if strings.Contains(c.Message, "版本不匹配") {
+			c.Hint = "超分组件需要更新，请重新构建或安装新版应用"
+		}
 	}
 	return c
 }
@@ -141,6 +144,20 @@ func probeEnhancementRuntime(runtimeDir string, installedModelDir string) Enhanc
 	}
 	if manifest.Binary == "" || len(manifest.Files) == 0 {
 		return EnhancementRuntimeCapability{ReasonCode: "runtime_unavailable", Message: "超分运行时清单不完整"}
+	}
+	if manifest.Binary != "bin/realesrgan-ncnn-vulkan" || manifest.ModelDir != "models" {
+		return EnhancementRuntimeCapability{ReasonCode: "runtime_unavailable", Message: "超分运行时目录与固定合同不符"}
+	}
+	required := map[string]bool{"bin/realesrgan-ncnn-vulkan": false, "lib/libMoltenVK.dylib": false, "licenses/MoltenVK-LICENSE.txt": false}
+	for _, file := range manifest.Files {
+		if _, exists := required[file.Path]; exists {
+			required[file.Path] = true
+		}
+	}
+	for _, present := range required {
+		if !present {
+			return EnhancementRuntimeCapability{ReasonCode: "runtime_unavailable", Message: "超分运行时未完整打包GPU驱动与许可"}
+		}
 	}
 	for _, file := range manifest.Files {
 		if strings.Contains(file.Path, "..") || filepath.IsAbs(file.Path) {

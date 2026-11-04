@@ -334,7 +334,7 @@
 	    @navigate="navigateTo"
 	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
-      <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" />
+      <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" @open-cleanup="openCleanupCenter({ tab: 'image', open: true })" />
 	  <SearchResultsPage v-if="searchResultsMounted" v-show="currentPage === 'search-results'" :page-active="currentPage === 'search-results'" :initial-request="searchResultsRequest" :watch-whole-video="watchQueueWholeVideo" @open-video="openVideo($event, { from: 'search-results' })" @open-entity="openRecapEntity" />
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" :watch-whole-video="watchQueueWholeVideo" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
 	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->
@@ -359,6 +359,7 @@
 	    @navigate="navigateTo"
 	    @open-person="openPerson"
 	    @open-in-manage="openImageInManage"
+        @open-cleanup="openCleanupCenter({ tab: 'image', open: true })"
         @delete-image="viewerDeleteTarget = { kind: 'image', media: $event }"
 	    @image-changed="handleViewerImageChanged"
 	  />
@@ -409,6 +410,7 @@
       :right-video-id="versionCompare.rightVideoID"
       @close="handleVersionCompareClose"
     />
+    <VideoFrameOverviewDialog v-if="appReady && videoOverview.video" :key="videoOverview.session" :video="videoOverview.video" @close="videoOverview.video = null" />
 
     <!-- 「待重启」终态（D-PC55 / APP-02）：切换后端或切回之前的后端成功后，维护围栏一直保持到重启，
          任何数据库读写都会被拒绝。这层遮罩不可关闭，唯一出口是「立即重启」。 -->
@@ -473,6 +475,9 @@ import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
 import VersionCompareDialog from './components/VersionCompareDialog.vue';
+import VideoFrameOverviewDialog from './components/VideoFrameOverviewDialog.vue';
+import { videoOverviewState } from './utils/videoThumbnail.js';
+import { requestImageEditorsLeave } from './utils/imageEditingGuard.js';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
 import ControlledPlaybackStatus from './components/ControlledPlaybackStatus.vue';
@@ -532,7 +537,7 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
-    ExplorePage, ExplorationQuitDialog, AppFeedback, CommandPalette, SearchResultsPage, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
+    ExplorePage, ExplorationQuitDialog, AppFeedback, CommandPalette, SearchResultsPage, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, VideoFrameOverviewDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, CapabilitySetup, LibraryQueryDialog, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, PersonMediaDeleteDialog, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
@@ -566,6 +571,7 @@ export default {
       viewerDeleteTarget: null,
       // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
       versionCompare: versionCompareState,
+      videoOverview: videoOverviewState,
       // 图片管理首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"；观看侧照片流同理（D-P2-08）。
       exploreMounted: false,
       photosMounted: false,
@@ -722,6 +728,7 @@ export default {
     document.body.classList.remove('surface-cinema');
   },
   watch: {
+    'videoOverview.previewRequest'(request) { if (!request) return; this.videoOverview.previewRequest = null; this.videoOverview.video = null; this.openVideoByID(request.videoID, { from: this.currentPage, startAtMs: request.atMs }); },
     'settings.theme'() {
       this.applyTheme();
     },
@@ -912,6 +919,10 @@ export default {
       if (guard && !guard.isCurrent()) return false;
       const { page, params } = resolvePageRoute(target, targetParams);
       if (!page) return true;
+      if (page !== this.currentPage || params != null) {
+        const leave = requestImageEditorsLeave();
+        if (leave !== true) return leave.then(allowed => allowed ? this.navigateTo(target, targetParams, guard) : false);
+      }
       if (page === this.currentPage) {
         // 清理中心删除流程中换标签或接新请求（命令面板「清理中心 · 视频 / 图片」、打开集中整理任务……）与离开同样拦下：
         // 另一个标签一挂上 / 卸下会打断正在进行的删除（D-P3-02，见 CLEANUP_BUSY_NOTICE）。

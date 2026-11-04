@@ -6,9 +6,88 @@ import TonightPickerDialog from './TonightPickerDialog.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 enableAutoUnmount(afterEach);
 const suggestion = id => ({ video: { id, name: `video ${id}`, duration: 60 }, reasons: ['符合本次时间预算'] });
-beforeEach(() => { api.SuggestTonightVideos.mockReset().mockResolvedValue([]); });
+beforeEach(() => {
+  const values = new Map();
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value))
+  } });
+  api.SuggestTonightVideos.mockReset().mockResolvedValue([]);
+});
 
 describe('TonightPickerDialog', () => {
+  it('lets the user choose and remember the candidate count without changing random conditions', async () => {
+    const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+    await flushPromises();
+    await wrapper.get('[data-test="tonight-count"]').setValue(1);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 1);
+    expect(wrapper.emitted('update:conditions')).toBeUndefined();
+    wrapper.unmount();
+    const reopened = mount(TonightPickerDialog, { props: { filter: {} } });
+    await flushPromises();
+    expect(reopened.get('[data-test="tonight-count"]').element.value).toBe('1');
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 1);
+    await reopened.get('[data-test="tonight-count"]').setValue(12);
+    await reopened.get('form').trigger('submit');
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 12);
+  });
+
+  it.each(['', 0, -1, 13, 1.5])('rejects invalid count %s without querying or overwriting the saved count', async value => {
+    window.localStorage.setItem('cineinsight-tonight-count', '3');
+    const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+    await flushPromises();
+    await wrapper.get('[data-test="tonight-count"]').setValue(value);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem('cineinsight-tonight-count')).toBe('3');
+    expect(wrapper.get('[data-test="tonight-error"]').text()).toContain('1–12');
+  });
+
+  it('uses six for damaged preferences and ignores responses for the previous count', async () => {
+    window.localStorage.setItem('cineinsight-tonight-count', 'broken');
+    let resolveOld;
+    api.SuggestTonightVideos.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 6);
+    await wrapper.get('[data-test="tonight-count"]').setValue(1);
+    api.SuggestTonightVideos.mockResolvedValueOnce([suggestion(9)]);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    resolveOld([suggestion(1), suggestion(2)]);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test="tonight-result"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain('video 9');
+    expect(wrapper.text()).not.toContain('video 1');
+  });
+
+  it('still queries when local preferences are unavailable', async () => {
+    Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('disabled'); } });
+    const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+    await flushPromises();
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 6);
+    await wrapper.get('[data-test="tonight-count"]').setValue(2);
+    await wrapper.get('form').trigger('submit');
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 2);
+  });
+
+  it('automatically applies the latest count and displays fewer candidates without duplication', async () => {
+    vi.useFakeTimers();
+    try {
+      api.SuggestTonightVideos.mockResolvedValue([suggestion(1)]);
+      const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+      await flushPromises();
+      await wrapper.get('[data-test="tonight-count"]').setValue(3);
+      await wrapper.get('[data-test="tonight-count"]').setValue(12);
+      await vi.advanceTimersByTimeAsync(350);
+      expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
+      expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 12);
+      expect(wrapper.findAll('[data-test="tonight-result"]')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('sends the entire library filter, the shared random conditions and recent exclusions', async () => {
     const filter = { keyword: '海边', tag_ids: [3, 5], person_ids: [7], smart_view: 'watched', min_rating: 7 };
     const wrapper = mount(TonightPickerDialog, { props: { filter, conditions: { watchState: 'watched', favoritesOnly: false, maxMinutes: 90 }, excludeIds: [4, 9] } });

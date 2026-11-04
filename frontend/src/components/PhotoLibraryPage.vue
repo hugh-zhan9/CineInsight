@@ -479,6 +479,7 @@
       @clear="clearSelection"
     >
       <template #actions>
+        <button type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy || selectedImageIDs.length !== 2" data-test="photo-compare-selected" @click="openSelectedComparison">对比两张图片</button>
         <button type="button" class="btn btn--secondary btn--sm" :disabled="batchBusy" data-test="photo-batch-tag-open" @click="openBatchTagPicker">批量添加标签</button>
         <div class="photo-tag-combobox photo-batch-tag-search">
           <input
@@ -523,11 +524,13 @@
       <button type="button" class="btn-icon btn--secondary photo-viewer__close" aria-label="关闭" title="关闭 (Esc)" data-test="photo-viewer-close" @click="closeViewer"><AppIcon name="close" :size="20" /></button>
       <button type="button" class="btn-icon photo-viewer__nav photo-viewer__nav--prev" aria-label="上一张" :disabled="viewerIndex <= 0" title="上一张 (←)" @click="viewerPrev"><AppIcon name="chevron-left" :size="24" /></button>
       <div class="photo-viewer__stage" @click.self="closeViewer">
-        <img
+        <ImageViewport
           v-if="!viewerImageError"
-          :key="viewerImage.id"
+          ref="imageViewport"
           :src="`/preview/image/${viewerImage.id}`"
-          :alt="viewerImage.name"
+          :name="viewerImage.name"
+          :image-width="Number(viewerImage.width) || 1"
+          :image-height="Number(viewerImage.height) || 1"
           class="photo-viewer__img"
           @error="viewerImageError = true"
         />
@@ -545,6 +548,7 @@
         <h3 :title="viewerImage.name">{{ viewerImage.name }}</h3>
         <button type="button" class="btn btn--secondary btn--sm photo-viewer__reveal" data-test="photo-viewer-directory" @click="revealViewerImage">在访达中显示</button>
         <WallpaperButton kind="image" :media-id="Number(viewerImage.id)" />
+        <button type="button" class="btn btn--secondary btn--sm" data-test="photo-viewer-edit" @click="toolsImage = viewerImage">处理图片…</button>
         <p v-if="viewerDirectoryError" class="photo-viewer__error" role="alert">{{ viewerDirectoryError }}</p>
         <dl class="photo-viewer__facts">
           <dt>路径</dt><dd :title="viewerImage.path">{{ viewerImage.path }}</dd>
@@ -752,6 +756,9 @@
       </template>
     </DialogShell>
 
+    <ImageCompareDialog v-if="comparisonImages && pageActive" :left="comparisonImages[0]" :right="comparisonImages[1]" @close="comparisonImages = null" />
+    <ImageToolsDialog v-if="toolsImage && pageActive" :image="toolsImage" @close="toolsImage = null" @review-source="$emit('open-cleanup')" />
+
     <MetadataBatchEditDialog
       v-if="metadataBatchEdit"
       kind="image"
@@ -822,6 +829,9 @@ import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialo
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 import MetadataBatchEditDialog from './MetadataBatchEditDialog.vue';
+import ImageViewport from './ImageViewport.vue';
+import ImageCompareDialog from './ImageCompareDialog.vue';
+import ImageToolsDialog from './ImageToolsDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { logFrontend } from '../utils/frontendLog.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
@@ -873,7 +883,7 @@ export default {
   components: {
     AppBadge, AppBanner, AppIcon, BaseMenu, BasePopover, DialogShell, EmptyState, FilterChip, ImageAITagReviewPanel,
     MetadataBatchEditDialog, PageHeader, SegmentedControl, SelectionBar, SkeletonBlock, TrashUndoBanner,
-    WallpaperButton
+    WallpaperButton, ImageViewport, ImageCompareDialog, ImageToolsDialog
   },
   props: {
     settings: { type: Object, required: true },
@@ -886,6 +896,8 @@ export default {
   data() {
     return {
       viewerDirectoryError: '',
+      comparisonImages: null,
+      toolsImage: null,
       deletingImageIDs: [],
       photoMenu: null,
       photoMenuAnchor: null,
@@ -1247,6 +1259,8 @@ export default {
       // 离开本页时查看器虽然还开着，但图已经不在眼前：取消未到点的查看计时，回来再重新计。
       this.scheduleViewRecord(active ? this.viewerImage?.id : null);
       if (!active) {
+        this.comparisonImages = null;
+        this.toolsImage = null;
         this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
         return;
       }
@@ -1294,6 +1308,11 @@ export default {
     stopPhotoCleanupPolling();
   },
   methods: {
+    openSelectedComparison() {
+      if (this.batchBusy || this.selectedImageIDs.length !== 2) return;
+      const images = this.selectedImageIDs.map(id => this.images.find(image => Number(image.id) === Number(id)));
+      if (images.every(Boolean)) this.comparisonImages = images;
+    },
     async openSystemFolder(directory) {
       try { await OpenImageDirectory(directory); }
       catch (err) { this.error = `在访达中显示失败：${err}`; }

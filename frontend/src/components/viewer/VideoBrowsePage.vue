@@ -180,9 +180,8 @@
       >
         <div v-if="wallWindowed && wallWindow.topSpacer > 0" :style="{ height: `${wallWindow.topSpacer}px` }" aria-hidden="true" data-test="browse-window-top"></div>
         <div ref="grid" class="video-browse__grid" :style="wallGridStyle" data-test="browse-grid">
+          <div v-for="(video, offset) in renderedVideos" :key="video.id" class="video-browse__card-wrap">
           <button
-            v-for="(video, offset) in renderedVideos"
-            :key="video.id"
             type="button"
             class="btn-plain video-browse__card"
             :title="cardTitle(video)"
@@ -191,7 +190,7 @@
             @click="openVideoID(video.id)"
           >
             <span class="video-browse__poster">
-              <img v-if="!posterFailed[video.id]" :src="posterURL(video.id)" alt="" loading="lazy" decoding="async" @error="markPosterFailed(video.id)" />
+              <VideoThumbnail v-if="!posterFailed[video.id]" :video="video" :src="posterURL(video.id)" alt="" @error="markPosterFailed(video.id)" />
               <span v-else class="video-browse__poster-fallback"><AppIcon name="videos" :size="24" /></span>
               <span v-if="cardMark(video)" :class="['video-browse__mark', `video-browse__mark--${cardMark(video).kind}`]" data-test="browse-card-mark">{{ cardMark(video).label }}</span>
               <span v-if="versionCount(video) > 1" class="video-browse__versions">{{ versionCount(video) }} 个版本</span>
@@ -201,6 +200,8 @@
               <small>{{ cardYear(video) }}</small>
             </span>
           </button>
+            <button type="button" class="btn btn--ghost btn--sm video-browse__overview" @click.stop="openVideoOverview(video)">画面概览</button>
+          </div>
         </div>
         <div v-if="wallWindowed && wallWindow.bottomSpacer > 0" :style="{ height: `${wallWindow.bottomSpacer}px` }" aria-hidden="true" data-test="browse-window-bottom"></div>
       </div>
@@ -301,6 +302,8 @@
 
 <script>
 import MediaRail from '../ui/MediaRail.vue';
+import VideoThumbnail from '../VideoThumbnail.vue';
+import { openVideoOverview } from '../../utils/videoThumbnail.js';
 import { playVideoAfterProgress as PlayVideo } from '../../utils/watchProgress.js';
 // 视频海报墙（UI 二期 D-P2-01，详细设计 §3.1）：观看侧的「视频」页，只做浏览。
 // - 筛选状态归本页（不与片库管理共享）：片名搜索（file 模式）、观看状态（对应智能视图）、标签、人物、排序；
@@ -451,7 +454,7 @@ function emptyList() {
 
 export default {
   name: 'VideoBrowsePage',
-  components: { MediaRail,
+  components: { MediaRail, VideoThumbnail,
     AppBadge, AppBanner, AppIcon, AppSpinner, BaseMenu, BasePopover, EmptyState, FilterChip, PageHeader, RandomPickBanner,
     RecapMediaCard, SegmentedControl, SkeletonBlock, TonightPickerDialog, ViewAllDialog
   },
@@ -646,6 +649,7 @@ export default {
     for (const key of Object.keys(this._tokens)) this._tokens[key] += 1;
   },
   methods: {
+    openVideoOverview,
     currentFilter() {
       return videoBrowseFilter({ keyword: this.keyword, watch: this.watch, tagIDs: this.tagIDs, people: this.people, sort: this.sort });
     },
@@ -1149,6 +1153,7 @@ export default {
 /* 卡片等高：海报 2:3 + 单行片名 + 年份。原先的 content-visibility 已由按行窗口化取代——视口外的卡不在 DOM 里，
    而留着它会让视口外几行按占位高度排，与行布局对不上。 */
 .video-browse__card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1156,6 +1161,10 @@ export default {
   color: var(--text-primary);
   text-align: left;
 }
+.video-browse__card-wrap { position: relative; min-width: 0; }
+.video-browse__card { width: 100%; }
+.video-browse__overview { position: absolute; top: 8px; right: 8px; background: var(--panel-bg); opacity: 0; }
+.video-browse__card-wrap:hover .video-browse__overview, .video-browse__card-wrap:focus-within .video-browse__overview { opacity: 1; }
 .video-browse__poster {
   position: relative;
   display: block;

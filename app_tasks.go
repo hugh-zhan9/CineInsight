@@ -264,6 +264,12 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskMetadataBatchEdit:    (*App).taskCenterMetadataEdit,
 	services.BackgroundTaskAutomationRules:      (*App).taskCenterAutomationRules,
 	services.BackgroundTaskDataHealth:           (*App).taskCenterDataHealth,
+	services.BackgroundTaskMediaProcessing:      (*App).taskCenterMediaProcessing,
+}
+
+func (a *App) taskCenterMediaProcessing(src *taskCenterSources) taskCenterKeyState {
+	service := a.currentMediaProcessing()
+	return taskCenterKeyState{running: service != nil && len(service.ActiveViews(false)) > 0}
 }
 
 // runningProgress 给运行中的批量任务报进度；总数还不知道（准备阶段）时为 nil。

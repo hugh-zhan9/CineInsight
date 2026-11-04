@@ -21,12 +21,19 @@ class BuildSigningSetupTests(unittest.TestCase):
         self.config = self.root / 'identity'
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                         TEST_EVENTS=str(self.log), TEST_IDENTITY=str(self.config),
-                        TEST_ROOT=str(self.root), TEST_SETUP_FAIL='0', TEST_SIGN_FAIL='0')
+                        TEST_ROOT=str(self.root), TEST_SETUP_FAIL='0', TEST_SIGN_FAIL='0', TEST_IMAGE_TOOLS_FAIL='0')
         self.stub('uname', 'echo Darwin')
         self.stub('xcrun', 'echo 14.0')
         self.stub('wails', '''echo build >> "$TEST_EVENTS"
 mkdir -p "$TEST_ROOT/build/bin/析微影策.app"''')
-        self.stub('python3', '''case "$2" in
+        self.stub('python3', '''case "$1" in
+*/bundle_image_tools.py)
+  echo image-tools >> "$TEST_EVENTS"
+  [ "$TEST_IMAGE_TOOLS_FAIL" = 0 ] || exit 44
+  exit 0
+  ;;
+esac
+case "$2" in
 setup)
   echo setup >> "$TEST_EVENTS"
   [ "$TEST_SETUP_FAIL" = 0 ] || exit 42
@@ -62,7 +69,7 @@ esac''')
     def test_first_build_initializes_before_compilation_and_signs(self):
         result = self.run_build('--build-only')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.events(), ['setup', 'created', 'apple', 'build', 'sign'])
+        self.assertEqual(self.events(), ['setup', 'created', 'apple', 'build', 'image-tools', 'sign'])
 
     def test_repeated_build_reuses_identity(self):
         self.config.write_text('original identity')
@@ -70,7 +77,7 @@ esac''')
             result = self.run_build('--build-only')
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.config.read_text(), 'original identity')
-        self.assertEqual(self.events(), ['setup', 'apple', 'build', 'sign'] * 2)
+        self.assertEqual(self.events(), ['setup', 'apple', 'build', 'image-tools', 'sign'] * 2)
 
     def test_setup_failure_stops_before_build_and_install(self):
         self.env['TEST_SETUP_FAIL'] = '1'
@@ -83,7 +90,14 @@ esac''')
         self.env['TEST_SIGN_FAIL'] = '1'
         result = self.run_build('--skip-build')
         self.assertEqual(result.returncode, 43, result.stderr)
-        self.assertEqual(self.events(), ['setup', 'created', 'sign'])
+        self.assertEqual(self.events(), ['setup', 'created', 'image-tools', 'sign'])
+
+    def test_image_packaging_failure_blocks_signing_and_install(self):
+        self.env['TEST_IMAGE_TOOLS_FAIL'] = '1'
+        result = self.run_build('--build-only')
+        self.assertEqual(result.returncode, 44, result.stderr)
+        self.assertNotIn('sign', self.events())
+        self.assertNotIn('forbidden-install', self.events())
 
     def test_help_and_invalid_options_do_not_initialize(self):
         self.assertEqual(self.run_build('--help').returncode, 0)

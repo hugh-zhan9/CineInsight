@@ -21,6 +21,10 @@ import (
 
 func newAssetHandler(app *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/preview/processing/") {
+			app.serveProcessingAsset(w, r)
+			return
+		}
 		for key := range r.URL.Query() {
 			if strings.HasPrefix(key, "exploration_") {
 				app.serveExplorationAsset(w, r)

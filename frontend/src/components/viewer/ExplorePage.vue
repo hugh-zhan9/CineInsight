@@ -38,7 +38,7 @@
       <p v-if="remainingFailed" class="explore-status">剩余内容暂时无法预览，可重试当前内容或重新洗牌。</p>
     </template>
 
-    <PhotoLightbox v-if="pageActive && preview?.entry.kind === 'image'" :key="preview.entry.entry_id" :image="preview.image" :asset-url="photoAssetURL" :allow-remove="false" mixed-media :has-prev="previewIndex > 0" :has-next="previewIndex < snapshot.entries.length - 1" @close="closePreview" @prev="stepPreview(-1)" @next="stepPreview(1)" @patch="patchImage" @open-person="openPerson" @open-in-manage="openImageManage" />
+    <PhotoLightbox v-if="pageActive && preview?.entry.kind === 'image'" :key="preview.entry.entry_id" :image="preview.image" :asset-url="photoAssetURL" :allow-remove="false" mixed-media :has-prev="previewIndex > 0" :has-next="previewIndex < snapshot.entries.length - 1" @close="closePreview" @prev="stepPreview(-1)" @next="stepPreview(1)" @patch="patchImage" @open-person="openPerson" @open-in-manage="openImageManage" @open-cleanup="closePreview(); $emit('open-cleanup')" />
     <Teleport v-if="pageActive && preview?.entry.kind === 'video'" to="body">
       <DialogShell :title="preview.card.title || '视频预览'" size="xl" data-test="explore-preview" @close="closePreview">
         <AppBanner v-if="previewError" tone="danger" :title="previewError" />
@@ -77,7 +77,7 @@ import { confirmAction } from '../../utils/feedback.js';
 export default {
   name: 'ExplorePage', components: { SegmentedControl, PageHeader, AppBanner, EmptyState, DialogShell, MediaWall, RandomGallery, PhotoLightbox, InlineVideoPlayer },
   props: { pageActive: { type: Boolean, default: true }, api: { type: Object, default: () => mediaExplorationAPI } },
-  emits: ['open-video', 'open-person', 'open-in-manage'],
+  emits: ['open-video', 'open-person', 'open-in-manage', 'open-cleanup'],
   data() { return { snapshot: null, scope: 'all', view: { mode: 'wall', scale: .35, x: 0, y: 0, selected_id: 0, gallery_id: 0, gallery_entry_ids: [] }, cards: {}, failedCards: {}, retrySignal: 0, loader: markRaw(createExplorationImageLoader()), loading: false, busy: false, frozen: false, error: '', notice: '', libraryChanged: false, focused: true, preview: null, previewSession: null, previewError: '', previewBusy: false, generation: 0, previewGeneration: 0 }; },
   computed: {
     modeOptions() { return [{ value: 'gallery', label: '随机画廊', disabled: this.locked, dataTest: 'explore-gallery' }, { value: 'wall', label: '媒体墙', disabled: this.locked, dataTest: 'explore-wall' }]; },

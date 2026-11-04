@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 	"video-master/models"
 	"video-master/services"
 )
@@ -50,6 +51,38 @@ func (a *App) GetLibraryInsights() (*services.LibraryStats, error) {
 // GetStorageReport 是洞察页「存储体检」页签的数据：总占用、编码分布、久未观看的大文件与转码可省估算。
 func (a *App) GetStorageReport(request services.StorageReportRequest) (*services.StorageReport, error) {
 	return a.storageReportService.GetStorageReport(request)
+}
+
+// GetStorageGoalVolumes 返回可见媒体所在的在线磁盘与实测可用空间。
+func (a *App) GetStorageGoalVolumes() (*services.StorageGoalVolumes, error) {
+	ctx, done, err := a.beginFunctionalPolish()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return a.storageReportService.GetStorageGoalVolumes(ctx)
+}
+
+// GetStorageGoalPlan 只生成审阅方案，原清理服务继续拥有实际删除与撤销。
+func (a *App) GetStorageGoalPlan(request services.StorageGoalRequest) (*services.StorageGoalPlan, error) {
+	ctx, done, err := a.beginFunctionalPolish()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var video *services.CleanupStatus
+	var image *services.ImageCleanupStatus
+	if a.cleanupService != nil {
+		video = a.cleanupService.Status()
+	}
+	if a.imageCleanupService != nil {
+		image = a.imageCleanupService.GetImageCleanupStatus()
+	}
+	return a.storageReportService.GetStorageGoalPlan(ctx, request, video, image)
 }
 
 // RerollRandom 是随机结果条上的「换一个」：丢弃上一次随机的统计并在同一范围内抽下一条；

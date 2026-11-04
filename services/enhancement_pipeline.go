@@ -507,6 +507,11 @@ func enhancementSourceStable(path string, task models.VideoEnhancementTask) (boo
 
 // runChunk 处理一批固定帧数：无损 PNG 抽帧 → sidecar 超分 → HEVC 分段。
 func (s *EnhancementService) runChunk(ctx context.Context, ffmpeg string, spec EnhancementProfileSpec, task models.VideoEnhancementTask, sourcePath, workdir, segmentName string, info enhancementProbeInfo, startFrame, frames int64) error {
+	return s.runChunkWithPhase(ctx, ffmpeg, spec, sourcePath, workdir, segmentName, info, startFrame, frames, func(phase string) { s.updatePhase(task.ID, phase) }, false)
+}
+
+// runChunkWithPhase 不持有任务ID；临时样片传空回调，不能改持久任务阶段或检查点。
+func (s *EnhancementService) runChunkWithPhase(ctx context.Context, ffmpeg string, spec EnhancementProfileSpec, sourcePath, workdir, segmentName string, info enhancementProbeInfo, startFrame, frames int64, phase func(string), bounded bool) error {
 	inDir := filepath.Join(workdir, "frames-in")
 	outDir := filepath.Join(workdir, "frames-out")
 	for _, dir := range []string{inDir, outDir} {
@@ -518,7 +523,7 @@ func (s *EnhancementService) runChunk(ctx context.Context, ffmpeg string, spec E
 	defer os.RemoveAll(inDir)
 	defer os.RemoveAll(outDir)
 
-	s.updatePhase(task.ID, models.EnhancementPhaseExtract)
+	phase(models.EnhancementPhaseExtract)
 	// 目标定到批首帧前半帧处：输入侧 -ss 输出 pts >= 目标 的帧，半帧偏移
 	// 使浮点微秒舍入不会丢掉边界帧（非整数 fps 也稳定）。
 	startSeconds := (float64(startFrame) - 0.5) / info.FPS
@@ -542,9 +547,9 @@ func (s *EnhancementService) runChunk(ctx context.Context, ffmpeg string, spec E
 		return fmt.Errorf("decode_failed: 抽帧数量不完整（%d/%d）", extracted, frames)
 	}
 
-	s.updatePhase(task.ID, models.EnhancementPhaseEnhance)
-	sidecarArgs := append([]string{"-i", inDir, "-o", outDir, "-n", spec.ModelName, "-m", s.capability.ModelDir}, spec.ExtraArgs...)
-	if tail, err := s.runCommand(ctx, s.capability.BinaryPath, sidecarArgs); err != nil {
+	phase(models.EnhancementPhaseEnhance)
+	sidecarArgs := append([]string{"-i", inDir, "-o", outDir, "-n", spec.ModelName, "-m", s.Capability().ModelDir}, spec.ExtraArgs...)
+	if tail, err := s.runInference(ctx, sidecarArgs); err != nil {
 		return fmt.Errorf("inference_failed: 超分推理失败: %v: %s", err, tail)
 	}
 	if err := removeAppleDoubleFrames(outDir); err != nil {
@@ -555,14 +560,18 @@ func (s *EnhancementService) runChunk(ctx context.Context, ffmpeg string, spec E
 		return fmt.Errorf("inference_failed: 输出帧数不完整（%d/%d）", enhanced, extracted)
 	}
 
-	s.updatePhase(task.ID, models.EnhancementPhaseEncode)
+	phase(models.EnhancementPhaseEncode)
 	segmentPath := filepath.Join(workdir, segmentName)
-	if tail, err := s.runCommand(ctx, ffmpeg, []string{
+	encodeArgs := []string{
 		"-v", "error", "-framerate", info.RealFrameRate,
 		"-i", filepath.Join(outDir, "%06d.png"),
 		"-c:v", "libx265", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-		"-f", "matroska", "-y", segmentPath,
-	}); err != nil {
+	}
+	if bounded {
+		encodeArgs = append(encodeArgs, "-threads", "2", "-x265-params", "pools=2:frame-threads=1")
+	}
+	encodeArgs = append(encodeArgs, "-f", "matroska", "-y", segmentPath)
+	if tail, err := s.runCommand(ctx, ffmpeg, encodeArgs); err != nil {
 		return fmt.Errorf("encode_failed: 分段编码失败: %v: %s", err, tail)
 	}
 	if info, err := os.Stat(segmentPath); err != nil || info.Size() == 0 {

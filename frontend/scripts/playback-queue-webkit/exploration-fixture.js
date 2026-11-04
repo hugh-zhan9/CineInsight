@@ -41,7 +41,7 @@ window.fixture = { async run() {
   assert(page.snapshot.entries.length === 1024, '1024 lightweight scene entries');
   const initialTiles = document.querySelectorAll('.media-tile').length;
   assert(initialTiles <= 1024 && !document.querySelector('video'), 'bounded static wall');
-  await until(() => calls.some(c => c.method === 'UpdateMediaExploration' && c.args[0].action === 'present'), 'real visible exposure acknowledgement');
+  await until(() => calls.some(c => c.method === 'UpdateMediaExploration' && c.args[0].action === 'present'), 'real visible exposure acknowledgement').catch(error => { error.message += ' ' + JSON.stringify({ focused: page.focused, hasFocus: document.hasFocus(), visibility: document.visibilityState, busy: page.busy, loaded: [...document.querySelectorAll('.media-tile img')].filter(img => img.complete && img.naturalWidth > 0).length }); throw error; });
   const firstPresentedSavedMS = performance.now() - started;
   const viewport = document.querySelector('.media-wall__viewport'), beforeIDs = page.snapshot.entries.map(e => e.entry_id).join(',');
   page.$refs.wall.setCamera({ scale: 1, x: -900, y: -700 }); await pause(40); await nextTick();

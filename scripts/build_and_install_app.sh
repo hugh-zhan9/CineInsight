@@ -28,7 +28,8 @@ usage() {
 
 说明:
   1. 自动初始化或复用本机签名配置，再执行 wails build（默认使用 Go 1.24.9）
-  2. 产出 ${BUILD_APP_PATH}、打包已构建的超分运行时并完成签名验证
+  2. 产出 ${BUILD_APP_PATH}、打包已构建的超分/JPEG运行时并完成签名验证
+     JPEG 前置构建：bash scripts/build_image_tools.sh
   3. 默认关闭正在运行的 ${APP_NAME}，将新包替换到 ${INSTALL_APP_PATH}
   4. --build-only 在第 2 步结束，不替换已安装应用
 
@@ -238,6 +239,7 @@ main() {
 
   bundle_enhance_runtime
   bundle_apple_ai
+  python3 "${SCRIPT_DIR}/bundle_image_tools.py" "${BUILD_APP_PATH}"
   python3 "${SCRIPT_DIR}/macos_signing.py" sign "${BUILD_APP_PATH}"
 
   if (( BUILD_ONLY == 1 )); then

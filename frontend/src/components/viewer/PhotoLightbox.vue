@@ -10,15 +10,16 @@
       data-test="photo-lightbox"
       @close="$emit('close')"
     >
-      <div class="photo-lightbox__layout">
+      <div :class="['photo-lightbox__layout', { 'photo-lightbox__layout--focused': !showInfo }]">
         <div class="photo-lightbox__stage">
-          <img
+          <ImageViewport
             v-if="!imageFailed"
-            :key="image.id"
+            ref="viewport"
             :src="originalURL"
-            :alt="image.name"
-            class="photo-lightbox__img"
-            data-test="photo-lightbox-img"
+            :name="image.name"
+            :image-width="Number(image.width) || 1"
+            :image-height="Number(image.height) || 1"
+            image-data-test="photo-lightbox-img"
             @error="imageFailed = true"
           />
           <div v-else class="photo-lightbox__fallback" role="status" data-test="photo-lightbox-fallback">
@@ -46,9 +47,22 @@
           <AppBanner v-if="nextError" class="photo-lightbox__next-error" tone="danger" title="下一批没有加载出来" :message="nextError" data-test="photo-lightbox-next-error">
             <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="photo-lightbox-next-retry" @click="$emit('next')">重试</button></template>
           </AppBanner>
+          <div class="photo-lightbox__tools">
+            <button type="button" class="btn btn--secondary btn--sm" data-test="photo-lightbox-fit" @click="$refs.viewport?.reset()">适应窗口</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="photo-lightbox-natural" @click="$refs.viewport?.toggleNatural()">原始尺寸</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="photo-lightbox-toggle-info" @click="showInfo = !showInfo">{{ showInfo ? '隐藏信息' : '显示信息' }}</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="photo-lightbox-compare" @click="comparePicker = true">对比图片…</button>
+            <button type="button" class="btn btn--secondary btn--sm" data-test="photo-lightbox-edit" @click="toolsOpen = true">处理图片…</button>
+          </div>
+          <nav v-if="neighbors.length > 1" class="photo-lightbox__filmstrip" aria-label="附近图片" data-test="photo-lightbox-filmstrip">
+            <button v-for="item in neighbors.slice(0, 9)" :key="item.id" type="button" class="btn btn--ghost" :aria-label="`查看 ${item.name}`"
+              :aria-current="Number(item.id) === Number(image.id) ? 'true' : undefined" @click="$emit('select-neighbor', Number(item.id))">
+              <img :src="`/preview/image-thumbnail/${Number(item.id)}`" :alt="item.name" />
+            </button>
+          </nav>
         </div>
 
-        <aside class="photo-lightbox__info" aria-label="图片信息" data-test="photo-lightbox-info">
+        <aside v-show="showInfo" class="photo-lightbox__info" aria-label="图片信息" data-test="photo-lightbox-info">
           <div class="photo-lightbox__actions">
             <button
               type="button"
@@ -95,6 +109,10 @@
         </aside>
       </div>
     </DialogShell>
+    <ImageLibraryPicker v-if="comparePicker" title="选择另一张图片进行对比" hint="选择后可同步缩放和拖动，两张原图保持不变。" selection-label="选择"
+      :exclude-ids="[Number(image.id)]" @close="comparePicker = false" @select="selectComparison" />
+    <ImageCompareDialog v-if="compareImage" :left="comparisonLeft" :right="compareImage" @close="compareImage = null" />
+    <ImageToolsDialog v-if="toolsOpen" :image="image" @close="toolsOpen = false" @review-source="$emit('open-cleanup')" />
   </Teleport>
 </template>
 
@@ -116,6 +134,10 @@ import AppSpinner from '../ui/AppSpinner.vue';
 import DialogShell from '../ui/DialogShell.vue';
 import TagPill from '../ui/TagPill.vue';
 import RatingStars from './RatingStars.vue';
+import ImageViewport from '../ImageViewport.vue';
+import ImageCompareDialog from '../ImageCompareDialog.vue';
+import ImageLibraryPicker from '../ImageLibraryPicker.vue';
+import ImageToolsDialog from '../ImageToolsDialog.vue';
 import { translateBackendError } from '../../utils/feedback.js';
 import { logFrontend } from '../../utils/frontendLog.js';
 import { isTextEntryTarget } from '../../utils/keyboardShortcuts.js';
@@ -163,7 +185,7 @@ function errorText(err) {
 
 export default {
   name: 'PhotoLightbox',
-  components: { AppBanner, AppIcon, AppSpinner, DialogShell, RatingStars, TagPill, WallpaperButton },
+  components: { AppBanner, AppIcon, AppSpinner, DialogShell, RatingStars, TagPill, WallpaperButton, ImageViewport, ImageCompareDialog, ImageLibraryPicker, ImageToolsDialog },
   props: {
     image: { type: Object, required: true },
     assetUrl: { type: String, default: '' },
@@ -173,12 +195,17 @@ export default {
     hasNext: { type: Boolean, default: false },
     // 正在为「下一张」续载下一批；续载失败的原因（宿主的翻页错误）。
     loadingNext: { type: Boolean, default: false },
-    nextError: { type: String, default: '' }
+    nextError: { type: String, default: '' },
+    neighbors: { type: Array, default: () => [] }
   },
-  emits: ['delete-image', 'close', 'prev', 'next', 'patch', 'changed', 'open-person', 'open-in-manage'],
+  emits: ['delete-image', 'close', 'prev', 'next', 'patch', 'changed', 'open-person', 'open-in-manage', 'select-neighbor', 'open-cleanup'],
   data() {
     return {
       imageFailed: false,
+      showInfo: true,
+      comparePicker: false,
+      compareImage: null,
+      toolsOpen: false,
       detail: { loading: false, error: '', people: [] },
       favoriteBusy: false,
       ratingBusy: false,
@@ -187,6 +214,8 @@ export default {
   },
   computed: {
     originalURL() { return this.assetUrl || photoOriginalURL(this.image.id); },
+    comparisonLeft() { return { ...this.image, asset_url: this.originalURL }; },
+    preloadKey() { return JSON.stringify([this.image.id, ...this.neighbors.map(item => item.id)]); },
     facts() { return photoLightboxFacts(this.image); },
     rating() {
       const value = this.image?.personal_rating;
@@ -199,21 +228,41 @@ export default {
       immediate: true,
       handler(id) {
         this.imageFailed = false;
+        this.comparePicker = false; this.compareImage = null; this.toolsOpen = false;
         this.actionError = '';
         this.loadDetail(Number(id));
         this.scheduleViewRecord(Number(id));
       }
-    }
+    },
+    preloadKey: { immediate: true, handler() { this.preloadNeighbors(); } },
+    comparePicker() { this.updateNestedView(); },
+    compareImage() { this.updateNestedView(); },
+    toolsOpen() { this.updateNestedView(); }
   },
   mounted() {
     document.addEventListener('keydown', this.handleKeydown);
+    document.addEventListener('keyup', this.handleKeyup);
   },
   beforeUnmount() {
     document.removeEventListener('keydown', this.handleKeydown);
+    document.removeEventListener('keyup', this.handleKeyup);
+    this.clearPreloads();
     clearTimeout(this._viewTimer);
     this._detailToken = (this._detailToken || 0) + 1;
   },
   methods: {
+    selectComparison(image) { if (Number(image.id) !== Number(this.image.id)) { this.compareImage = image; this.comparePicker = false; } },
+    updateNestedView() { if (this.comparePicker || this.compareImage || this.toolsOpen) clearTimeout(this._viewTimer); else this.scheduleViewRecord(Number(this.image.id)); },
+    clearPreloads() { for (const item of this._preloads || []) item.removeAttribute('src'); this._preloads = []; },
+    preloadNeighbors() {
+      this.clearPreloads();
+      const index = this.neighbors.findIndex(item => Number(item.id) === Number(this.image.id));
+      if (index < 0) return;
+      this._preloads = [this.neighbors[index - 1], this.neighbors[index + 1]].filter(Boolean).map(item => {
+        const preload = new Image(); preload.src = photoOriginalURL(item.id); return preload;
+      });
+    },
+    handleKeyup(event) { if (event.code === 'Space' || event.key === ' ') this.$refs.viewport?.restoreTemporary(); },
     async loadDetail(id) {
       const token = this._detailToken = (this._detailToken || 0) + 1;
       this.detail = { loading: true, error: '', people: [] };
@@ -306,6 +355,9 @@ export default {
       } else if (event.key === 'f' || event.key === 'F') {
         event.preventDefault();
         this.toggleFavorite();
+      } else if (event.code === 'Space' || event.key === ' ') {
+        if (event.target?.closest?.('button, a')) return;
+        event.preventDefault(); this.$refs.viewport?.temporaryZoom();
       }
     }
   }
@@ -337,7 +389,13 @@ export default {
   padding: var(--space-5) 64px;
   background: var(--overlay-strong);
 }
-.photo-lightbox__img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); }
+.photo-lightbox__layout--focused { grid-template-columns: minmax(0, 1fr); }
+.photo-lightbox__tools { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 96px); }
+.photo-lightbox__stage:has(.photo-lightbox__filmstrip) .photo-lightbox__tools { bottom: 82px; }
+.photo-lightbox__filmstrip { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; justify-content: center; gap: 6px; overflow: auto; }
+.photo-lightbox__filmstrip button { border: 2px solid transparent; border-radius: var(--radius-sm); background: var(--panel-bg); padding: 0; flex: 0 0 64px; height: 56px; cursor: pointer; }
+.photo-lightbox__filmstrip button[aria-current] { border-color: var(--accent-color); }
+.photo-lightbox__filmstrip img { width: 100%; height: 100%; object-fit: contain; }
 .photo-lightbox__fallback {
   display: grid;
   justify-items: center;

@@ -29,13 +29,14 @@
       data-test="library-wall-tile"
       @click="$emit('preview', video)"
     >
-      <img v-if="!thumbnailFailed" :src="thumbnailURL" alt="" loading="lazy" @error="thumbnailFailed = true" />
+      <VideoThumbnail v-if="!thumbnailFailed" :video="video" :src="thumbnailURL" alt="" @error="thumbnailFailed = true" />
       <AppIcon v-else name="play" :size="24" />
       <span v-if="video.is_stale" class="video-badge video-badge--danger video-wall-tile__stale" aria-hidden="true" data-test="wall-stale-reason">失效</span>
     </button>
     <div v-else class="video-thumbnail" :class="{ 'video-thumbnail--failed': thumbnailFailed }">
-      <img
+      <VideoThumbnail
         v-if="!thumbnailFailed"
+        :video="video"
         :src="thumbnailURL"
         :alt="`${video.name} 缩略图`"
         loading="lazy"
@@ -53,6 +54,7 @@
 
     <div v-if="layoutMode !== 'wall'" class="video-info">
       <div class="video-title-row">
+        <button type="button" class="btn btn--ghost btn--sm" title="展开时间点画面" @click="openVideoOverview(video)">画面概览</button>
         <h3 :title="video.display_title || video.name">{{ video.display_title || video.name }}</h3>
         <span v-if="video.is_watched" class="video-badge video-badge--accent">已看</span>
         <span
@@ -172,6 +174,8 @@ import { tagBackgroundColor } from '../utils/tagColor.js';
 import { resumePosition } from '../utils/watchState.js';
 import VersionGroupBadge from './video-list/VersionGroupBadge.vue';
 import AppIcon from './ui/AppIcon.vue';
+import VideoThumbnail from './VideoThumbnail.vue';
+import { openVideoOverview } from '../utils/videoThumbnail.js';
 
 // 失效原因（videos.stale_reason，D-PC06）的中文名。片库页的「路径失效」分组复用同一份。
 // unknown 是后端 ListStaleReasonCounts 对空原因（历史失效行）的归类。
@@ -204,7 +208,7 @@ export function staleReasonLabel(reason) {
 
 export default {
   name: 'VideoListRow',
-  components: { AppIcon, VersionGroupBadge },
+  components: { AppIcon, VersionGroupBadge, VideoThumbnail },
   props: {
     video: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
@@ -270,6 +274,7 @@ export default {
     }
   },
   methods: {
+    openVideoOverview,
     isManualOverride(tag) {
       const kind = String(tag?.automatic_kind || '');
       return !!kind && (this.overrideKinds || []).includes(kind);

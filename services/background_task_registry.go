@@ -57,6 +57,7 @@ const (
 	BackgroundTaskMetadataBatchEdit BackgroundTaskKey = "metadata_batch_edit"
 	BackgroundTaskAutomationRules   BackgroundTaskKey = "automation_rules"
 	BackgroundTaskDataHealth        BackgroundTaskKey = "data_health"
+	BackgroundTaskMediaProcessing   BackgroundTaskKey = "media_processing"
 )
 
 // backgroundTaskKeyOrder 既是合法 key 的全集，也是 Snapshot 的稳定顺序。
@@ -94,6 +95,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskMetadataBatchEdit,
 	BackgroundTaskAutomationRules,
 	BackgroundTaskDataHealth,
+	BackgroundTaskMediaProcessing,
 }
 
 // IsBackgroundTaskKey 报告字符串是否属于固定 key 集合，供前端传入的 key 校验。

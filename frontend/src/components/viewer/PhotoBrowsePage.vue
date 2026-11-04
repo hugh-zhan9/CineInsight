@@ -70,8 +70,8 @@
       </template>
     </PageHeader>
 
-    <PhotoMapPanel v-if="mapMounted" v-show="mapMode" ref="photoMap" :page-active="pageActive && mapMode" :people="people" @select-people="applyMapPeople" @open-in-manage="$emit('open-in-manage',$event)" @open-person="$emit('open-person',$event)" @delete-image="$emit('delete-image',$event)" @image-changed="$emit('image-changed',$event)" />
-    <PhotoAnniversaries v-if="anniversaries && !mapMode" :page-active="pageActive" :person-ids="people.map(person => person.id)" @navigate="$emit('navigate', $event)" @open-in-manage="$emit('open-in-manage', $event)" @open-person="$emit('open-person', $event)" />
+    <PhotoMapPanel v-if="mapMounted" v-show="mapMode" ref="photoMap" :page-active="pageActive && mapMode" :people="people" @select-people="applyMapPeople" @open-in-manage="$emit('open-in-manage',$event)" @open-cleanup="$emit('open-cleanup')" @open-person="$emit('open-person',$event)" @delete-image="$emit('delete-image',$event)" @image-changed="$emit('image-changed',$event)" />
+    <PhotoAnniversaries v-if="anniversaries && !mapMode" :page-active="pageActive" :person-ids="people.map(person => person.id)" @navigate="$emit('navigate', $event)" @open-in-manage="$emit('open-in-manage', $event)" @open-cleanup="$emit('open-cleanup')" @open-person="$emit('open-person', $event)" />
     <section v-show="!anniversaries && !mapMode" class="photo-browse__stream" :aria-busy="list.loading ? 'true' : 'false'" aria-label="照片流">
       <AppBanner v-if="list.error && !list.items.length" tone="danger" title="读取图片失败" :message="list.error" data-test="photo-browse-error">
         <template #actions><button type="button" class="btn btn--secondary btn--sm" data-test="photo-browse-retry" @click="reloadNow">重试</button></template>
@@ -203,6 +203,7 @@
     <PhotoLightbox
       v-if="lightboxImage"
       :image="lightboxImage"
+      :neighbors="list.items.slice(Math.max(0, lightboxIndex - 4), lightboxIndex + 5)"
       :has-prev="lightboxIndex > 0"
       :has-next="lightboxIndex < list.items.length - 1 || list.hasMore"
       :loading-next="list.loadingMore && lightboxIndex === list.items.length - 1"
@@ -210,10 +211,12 @@
       @close="handleLightboxClose"
       @prev="lightboxPrev"
       @next="lightboxNext"
+      @select-neighbor="lightboxIndex = list.items.findIndex(item => Number(item.id) === $event)"
       @patch="patchImage"
       @changed="$emit('image-changed', $event)"
       @open-person="openPersonFromLightbox"
       @open-in-manage="openInManage"
+      @open-cleanup="$emit('open-cleanup')"
       @delete-image="$emit('delete-image', $event)"
     />
   </section>
@@ -336,7 +339,7 @@ export default {
     navigationRequest: { type: Object, default: null },
     imagesVersion: { type: Number, default: 0 }
   },
-  emits: ['delete-image', 'navigate', 'open-person', 'open-in-manage', 'image-changed'],
+  emits: ['delete-image', 'navigate', 'open-person', 'open-in-manage', 'image-changed', 'open-cleanup'],
   data() {
     return {
       keyword: '',

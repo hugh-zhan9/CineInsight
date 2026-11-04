@@ -31,6 +31,9 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
+	processingMu                   sync.Mutex
+	processingPaused               bool
+	mediaProcessing                *services.MediaProcessingService
 	mediaExploration               *services.MediaExplorationService
 	explorationQuit                explorationQuitState
 	bt                             *appBTState
@@ -675,6 +678,9 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if err := a.stopMediaProcessing(context.Background()); err != nil {
+		log.Printf("临时处理退出未完成")
+	}
 	a.stopExplorationQuit()
 	if err := a.stopBT(context.Background()); err != nil {
 		log.Printf("下载管理本地任务退出未完成")

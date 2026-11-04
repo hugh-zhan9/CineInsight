@@ -15,7 +15,7 @@
       </button>
     </div>
     <button v-if="cursor" type="button" class="btn btn--secondary" :disabled="loading" @click="load(false)">加载更多</button>
-    <PhotoLightbox v-if="pageActive && opened >= 0 && items[opened]" :image="items[opened]" :has-prev="opened > 0" :has-next="opened + 1 < items.length || Boolean(cursor)" :loading-next="loading" @close="opened = -1" @prev="opened--" @next="next" @patch="patch" @open-in-manage="$emit('open-in-manage', $event)" @open-person="$emit('open-person', $event)" />
+    <PhotoLightbox v-if="pageActive && opened >= 0 && items[opened]" :image="items[opened]" :neighbors="items.slice(Math.max(0, opened-4), opened+5)" :has-prev="opened > 0" :has-next="opened + 1 < items.length || Boolean(cursor)" :loading-next="loading" @close="opened = -1" @prev="opened--" @next="next" @select-neighbor="opened = items.findIndex(item => Number(item.id) === $event)" @patch="patch" @open-in-manage="$emit('open-in-manage', $event)" @open-cleanup="$emit('open-cleanup')" @open-person="$emit('open-person', $event)" />
   </section>
 </template>
 <script setup>
@@ -25,7 +25,7 @@ import PhotoLightbox from './PhotoLightbox.vue';
 import AppBanner from '../ui/AppBanner.vue';
 import { functionalPolishError } from '../../utils/functionalPolishErrors.js';
 const props = defineProps({ personIds: { type: Array, default: () => [] }, pageActive: { type: Boolean, default: true } });
-defineEmits(['navigate', 'open-in-manage', 'open-person']);
+defineEmits(['navigate', 'open-in-manage', 'open-person', 'open-cleanup']);
 const now = new Date();
 const date = ref(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`);
 const items = ref([]), cursor = ref(null), total = ref(0), error = ref(''), loading = ref(false), opened = ref(-1);

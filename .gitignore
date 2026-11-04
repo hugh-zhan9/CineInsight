@@ -3,8 +3,10 @@
 
 # Build artifacts
 build/bin/
-# 超分运行时是按需下载的二进制（约 6 MB），不入库
+# 超分运行时由独立脚本构建，模型按需准备，不入库
 build/enhance-runtime/
+# 严格无损JPEG工具由源码构建，不入库
+build/image-tools/
 # 原生系统字幕组件由构建脚本生成
 build/apple-ai/
 

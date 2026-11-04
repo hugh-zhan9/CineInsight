@@ -438,6 +438,8 @@ export function GetMapTileStatus():Promise<services.MapTileStatusResult>;
 
 export function GetMediaExplorationItems(arg1:services.ExplorationItemsRequest):Promise<services.ExplorationCardsResult>;
 
+export function GetMediaProcessing(arg1:string):Promise<services.MediaProcessingView>;
+
 export function GetMetadataCompleteness():Promise<services.MetadataCompleteness>;
 
 export function GetMetadataCompletenessByDirectory(arg1:string,arg2:string,arg3:number):Promise<Array<services.MetadataCompletenessDirectory>>;
@@ -487,6 +489,10 @@ export function GetShortFeedServerStatus():Promise<services.ShortFeedServerStatu
 export function GetStartupBackendGuard():Promise<database.StartupBackendGuard>;
 
 export function GetStartupError():Promise<string>;
+
+export function GetStorageGoalPlan(arg1:services.StorageGoalRequest):Promise<services.StorageGoalPlan>;
+
+export function GetStorageGoalVolumes():Promise<services.StorageGoalVolumes>;
 
 export function GetStorageReport(arg1:services.StorageReportRequest):Promise<services.StorageReport>;
 
@@ -806,6 +812,8 @@ export function RejectSameSourceRelation(arg1:number):Promise<void>;
 
 export function RelaunchApp():Promise<services.RelaunchResult>;
 
+export function ReleaseMediaProcessing(arg1:string):Promise<void>;
+
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
 export function RememberDeleteFileChoice(arg1:boolean):Promise<void>;
@@ -906,6 +914,8 @@ export function SaveClipTopic(arg1:services.ClipTopicInput):Promise<services.Cli
 
 export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
 
+export function SaveMediaProcessing(arg1:string):Promise<string>;
+
 export function SavePhotoRecap(arg1:services.PhotoRecapInput):Promise<services.PhotoRecapResult>;
 
 export function SaveQuoteCard(arg1:string,arg2:string):Promise<string>;
@@ -974,6 +984,8 @@ export function SetImageRating(arg1:number,arg2:any):Promise<models.Image>;
 
 export function SetMapTilesEnabled(arg1:services.MapTilePolicyRequest):Promise<services.MapTileStatusResult>;
 
+export function SetMediaProcessingDirty(arg1:string,arg2:number,arg3:boolean):Promise<void>;
+
 export function SetPersonAvatar(arg1:number,arg2:string):Promise<models.Person>;
 
 export function SetRecommendationFeedback(arg1:services.RecommendationFeedbackRequest):Promise<models.RecommendationFeedback>;
@@ -1025,6 +1037,8 @@ export function StartImageSemanticIndex():Promise<services.ImageSemanticIndexSta
 export function StartLocalMetadataBackfill():Promise<services.LocalMetadataBackfillStatus>;
 
 export function StartLocalMetadataExport(arg1:services.LocalMetadataExportRequest):Promise<services.LocalMetadataExportStatus>;
+
+export function StartMediaProcessing(arg1:services.MediaProcessingRequest):Promise<services.MediaProcessingView>;
 
 export function StartPerceptualHashBackfill():Promise<services.PerceptualHashStatus>;
 

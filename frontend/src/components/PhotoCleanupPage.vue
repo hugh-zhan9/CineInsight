@@ -542,6 +542,8 @@ import {
   resetPhotoCleanupReview,
   refreshPhotoCleanupStatus
 } from '../utils/photoCleanupStore.js';
+import { photoCleanupEntries, photoCleanupGroups, photoCleanupSelectionFilter } from '../utils/photoCleanupEntries.js';
+import { registerCleanupReview, readCleanupReview } from '../utils/cleanupReviewAccess.js';
 import { confirmAction, notify, notifySuccess, notifyUndoable } from '../utils/feedback.js';
 import { isTextEntryTarget } from '../utils/keyboardShortcuts.js';
 import { hasOpenModalLayer } from './ui/modalSignals.js';
@@ -654,49 +656,11 @@ export default {
       return String(this.status?.started_at || '') || 'unkeyed-analysis';
     },
     // 两类候选拉平成统一条目，key 带类别：同一张图可能既是精确组也是近似组的推荐保留项。
-    entries() {
-      if (!this.analysis) return [];
-      const dismissed = new Set(this.review.dismissedKeys || []);
-      const flatten = (groups, kind) => (groups || []).flatMap(group => {
-        const key = `${kind}-${group.original?.id ?? 'nogroup'}`;
-        if (dismissed.has(key)) return [];
-        const removed = new Set((this.removedMembers[key] || []).map(Number));
-        const members = [group.original, ...(group.candidates || [])]
-          .filter(Boolean)
-          .filter(member => !removed.has(Number(member.id)));
-        if (members.length < 2) return [];
-        const directories = new Set(members.map(member => this.directoryOf(member)));
-        // 推荐保留项被移出本组时，由剩下成员里排第一的接替（后端按整理成果、画质排序）；
-        // 已经移到废纸篓的跳过，由 cleanupGroups 按 deletedIDs 选（P-032 复审 I-a）。
-        const suggestedKeeperID = members.some(member => Number(member.id) === Number(group.original?.id))
-          ? Number(group.original.id)
-          : Number(members[0].id);
-        return [{
-          kind,
-          group,
-          members,
-          key,
-          suggestedKeeperID,
-          directoryCount: directories.size,
-          spansDirectories: directories.size > 1
-        }];
-      });
-      return [
-        ...flatten(this.analysis.duplicate_groups, 'exact'),
-        ...flatten(this.analysis.near_duplicate_groups, 'near')
-      ];
-    },
+    entries() { return photoCleanupEntries(this.analysis, this.review, member => this.directoryOf(member)); },
     // 勾选规则用的统一组（utils/cleanupSelection.js）。建议保留项已删除时接替者取第一个仍在库的成员；
     // 一个在库的都没有时这一组不参与合并与删除（P-032 复审 I-a）。
     cleanupGroups() {
-      return this.entries.map(entry => cleanupGroup({
-        key: entry.key,
-        kind: entry.kind,
-        keeperId: entry.suggestedKeeperID,
-        memberIds: entry.members.map(member => member.id),
-        switchable: true,
-        unavailable: entry.members.filter(member => this.deletedIDSet.has(Number(member.id))).map(member => member.id)
-      }));
+      return photoCleanupGroups(this.entries, this.deletedIDs);
     },
     groupByKey() {
       return new Map(this.cleanupGroups.map(group => [group.key, group]));
@@ -903,6 +867,7 @@ export default {
     this.subscribePerceptualHash();
     await refreshPhotoCleanupStatus();
     this.statusLoaded = true;
+    this._unregisterGoalReview = registerCleanupReview('image', null, draft => this.applyStorageGoalDraft(draft));
     // 与视频侧的清理审阅同构：进来时后端既没在跑、也没有可用结果，就直接发起一次分析，
     // 不用再多点一次"开始分析"。已有结果（哪怕已标记过期）保留下来，要不要重跑由用户决定；
     // 上一轮是用户自己取消的，也不替他重跑。
@@ -912,6 +877,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this._unregisterGoalReview?.();
     this.disposed = true;
     window.removeEventListener('keydown', this.handleKeydown);
     if (this.unsubscribePerceptualHash) {
@@ -921,6 +887,13 @@ export default {
     if (this._resolveDeleteConfirm) this._resolveDeleteConfirm(null);
   },
   methods: {
+    async applyStorageGoalDraft(draft) {
+      await refreshPhotoCleanupStatus();
+      if (this.disposed) return;
+      const current = readCleanupReview('image');
+      if (!current || current.revision !== draft.revision || this.editLocked) { this.localError = '分析或保留条件已变化，请重新生成空间方案。原勾选保持不变。'; return; }
+      this.review.selection = pruneSelection(draft.ids, this.cleanupGroups, this.selectionOptions());
+    },
     formatBytes,
     async subscribePerceptualHash() {
       // 先挂监听再取状态：取状态要等一个来回，这期间用户可能已经离开本页，
@@ -1027,21 +1000,7 @@ export default {
       };
     },
     suggestionFilter() {
-      // 每次操作独立缓存，setKeeper 比较旧/新保留项时分别算一次；不能逐成员扫描整组找保留项。
-      const directories = new WeakMap();
-      return (id, group, overrides = this.keepOverrides) => {
-        if (this.skippedGroups[group.key]) return false;
-        if (!this.sameDirOnly) return true;
-        const entry = this.entryByKey.get(group.key);
-        if (!entry) return false;
-        if (!directories.has(overrides)) directories.set(overrides, new Map());
-        const byGroup = directories.get(overrides);
-        if (!byGroup.has(group.key)) {
-          const keeper = this.membersByID.get(keeperOf(group, overrides)) || entry.group.original;
-          byGroup.set(group.key, this.directoryOf(keeper));
-        }
-        return this.directoryOf(this.membersByID.get(Number(id))) === byGroup.get(group.key);
-      };
+      return photoCleanupSelectionFilter({ entryByKey: this.entryByKey, membersByID: this.membersByID, sameDirOnly: this.sameDirOnly, skippedGroups: this.skippedGroups, overrides: this.keepOverrides, directoryOf: member => this.directoryOf(member) });
     },
     groupOf(entry) {
       return this.groupByKey.get(entry.key) || null;

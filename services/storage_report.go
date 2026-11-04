@@ -2,8 +2,11 @@ package services
 
 import (
 	"fmt"
+	"gorm.io/gorm"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -14,7 +17,13 @@ import (
 // 视频与图片清理分析的缓存结果，这里不重复计算。口径与片库、图片库默认视图一致（visibleVideoQuery /
 // applyImageVisibility），拔掉移动硬盘后不计。
 type StorageReportService struct {
-	now func() time.Time
+	now          func() time.Time
+	planMu       sync.Mutex
+	planDatabase *gorm.DB
+	planEpoch    string
+	volumeID     func(string) (string, error)
+	fileStat     func(string) (os.FileInfo, error)
+	freeSpace    func(string) (uint64, error)
 }
 
 func NewStorageReportService() *StorageReportService {

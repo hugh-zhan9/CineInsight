@@ -101,6 +101,14 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 	}
 	tasks := a.quitBlockingTasks()
 	if len(tasks) == 0 {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := a.stopMediaProcessing(stopCtx); err != nil {
+			if ctx != nil {
+				emitRuntimeEvent(ctx, "media-processing-stop-failed", err.Error())
+			}
+			return true
+		}
 		return false
 	}
 	keys := make([]string, 0, len(tasks))
@@ -128,6 +136,16 @@ func (a *App) quitBlockingTasks() []QuitBlockingTask {
 		running[key] = true
 	}
 	tasks := make([]QuitBlockingTask, 0, 5)
+	if service := a.currentMediaProcessing(); service != nil {
+		views := service.ActiveViews(true)
+		if len(views) > 0 {
+			task := QuitBlockingTask{Key: string(services.BackgroundTaskMediaProcessing), Running: len(views), Names: []string{}}
+			for _, view := range views {
+				task.Names = appendQuitName(task.Names, view.Name)
+			}
+			tasks = append(tasks, task)
+		}
+	}
 
 	if a.subtitleService != nil {
 		queue := a.subtitleService.GetSubtitleQueueState()
@@ -211,6 +229,11 @@ func appendQuitName(names []string, name string) []string {
 func (a *App) ConfirmQuit() error {
 	if a.ctx == nil {
 		return errors.New("应用尚未就绪，无法退出")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.stopMediaProcessing(ctx); err != nil {
+		return err
 	}
 	appQuitGuard.confirmed.Store(true)
 	log.Printf("API ConfirmQuit")

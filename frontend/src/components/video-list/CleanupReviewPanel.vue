@@ -626,6 +626,7 @@ import {
   describeMergeFailure, describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, pruneSelection,
   SELECTION_CHANGED_MESSAGE, selectionSummary, setKeeper, similarityCount, suggestedIDs
 } from '../../utils/cleanupSelection.js';
+import { cleanupReviewSnapshot, registerCleanupReview } from '../../utils/cleanupReviewAccess.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { formatElapsedDuration } from './format.js';
 
@@ -728,6 +729,7 @@ export default {
     };
   },
   mounted() {
+    this._unregisterGoalReview = registerCleanupReview('video', () => this.storageGoalSnapshot(), draft => this.applyStorageGoalDraft(draft));
     // 挂上时先取一次清理分析状态（只读，不触发分析）。
     this.refreshCleanupStatus();
     // 集中整理在后台移动了文件（这一轮有移动成功的、且已经结束）：本次结果可能已过期，标出来。
@@ -764,6 +766,7 @@ export default {
     });
   },
   beforeUnmount() {
+    this._unregisterGoalReview?.();
     this._disposed = true;
     this.cleanupModeGeneration++;
     this.cleanupStatusRequestID++;
@@ -1134,6 +1137,14 @@ export default {
     }
   },
   methods: {
+    storageGoalSnapshot() { if (!this.cleanupDialog.analysis || this.cleanupDialog.loading || this.cleanupDialog.stale || this.cleanupDialog.error || this.cleanupCloseLocked || this.consolidationReviewTaskID) return null; return cleanupReviewSnapshot(this.analysisStartedAt, this.cleanupGroups, this.cleanupKeepOverrides, this.cleanupSkippedGroups, this.cleanupTrashedIDs, this.consolidationExternalLocks, null, this.cleanupSelection); },
+    async applyStorageGoalDraft(draft) {
+      await this.refreshCleanupStatus(); if (this._disposed) return;
+      const current = this.storageGoalSnapshot();
+      if (!current || current.revision !== draft.revision || this.cleanupCloseLocked) { this.cleanupFocusNotice = '分析或保留条件已变化，请重新生成空间方案。原勾选保持不变。'; return; }
+      this.cleanupSelection = pruneSelection(draft.ids, this.cleanupGroups, this.selectionOptions());
+      this.cleanupFocusNotice = `已按空间方案选择 ${this.cleanupSelection.length} 项，请核对保留项后再处理。`;
+    },
     consolidationEligible(entry) { return CONSOLIDATION_KINDS.includes(entry.kind); },
     toggleConsolidationScope(entry) {
       if (this.cleanupDialog.processing || this.cleanupSkippedGroups.includes(entry.key) || !this.consolidationEligible(entry)) return;

@@ -1,11 +1,11 @@
 <template>
   <Teleport to="body">
-    <DialogShell class="image-library-picker" size="lg" title="从图片库选择头像" :busy="busy" @close="close">
+    <DialogShell class="image-library-picker" size="lg" :title="title" :busy="busy" @close="close">
       <form class="picker-search" @submit.prevent="search(true)">
         <input v-model="keyword" class="search-input" aria-label="搜索图片" placeholder="搜索图片名称" :disabled="busy" />
         <button type="submit" class="btn btn--secondary" :disabled="busy">搜索</button>
       </form>
-      <p class="picker-hint">点击图片设为头像，原图片保持不变。</p>
+      <p class="picker-hint">{{ hint }}</p>
       <p v-if="error || actionError" class="picker-error" role="alert">{{ error || actionError }}</p>
       <p v-if="loading" class="picker-hint" role="status">正在加载图片…</p>
       <div v-if="loading && !images.length" class="picker-grid" aria-hidden="true">
@@ -13,7 +13,7 @@
       </div>
       <EmptyState v-else-if="!loading && !images.length && !error" icon="image" title="没有符合条件的图片。" message="换个关键词再搜，或清空关键词查看全部图片。" />
       <div v-if="images.length" class="picker-grid">
-        <button v-for="image in images" :key="image.id" type="button" class="btn btn--secondary picker-tile" :disabled="busy || loading" :aria-label="`使用 ${image.name} 作为头像`" @click="$emit('select', image)">
+        <button v-for="image in images" :key="image.id" type="button" class="btn btn--secondary picker-tile" :disabled="busy || loading || excludeIds.includes(Number(image.id))" :aria-label="selectionLabel ? `${selectionLabel} ${image.name}` : `使用 ${image.name} 作为头像`" @click="$emit('select', image)">
           <img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /><span>{{ image.name }}</span>
         </button>
       </div>
@@ -31,7 +31,12 @@ import { SearchImagePage } from '../../wailsjs/go/main/App';
 // 从图片库挑一张作人物头像。保存进行中（busy）时 ×、Esc 与选择都不响应，DialogShell 在标题旁转圈。
 export default {
   components: { DialogShell, EmptyState, SkeletonBlock },
-  props: { busy: Boolean, actionError: { type: String, default: '' } },
+  props: {
+    busy: Boolean, actionError: { type: String, default: '' },
+    title: { type: String, default: '从图片库选择头像' },
+    hint: { type: String, default: '点击图片设为头像，原图片保持不变。' },
+    selectionLabel: { type: String, default: '' }, excludeIds: { type: Array, default: () => [] }
+  },
   emits: ['close', 'select'],
   data: () => ({ keyword: '', appliedKeyword: '', images: [], cursor: null, loading: false, error: '', requestID: 0 }),
   mounted() { this.search(true); },

@@ -358,6 +358,9 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if err := a.stopMediaProcessing(ctx); err != nil {
+		return err
+	}
 	if err := a.quiesceBT(ctx); err != nil {
 		return err
 	}
@@ -473,6 +476,7 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	if err := a.initializeFunctionalPolish(); err != nil {
 		log.Printf("失败诊断恢复未完成，批量重试暂不可用: %v", err)
 	}
+	a.resumeMediaProcessing()
 	a.releasePlaybackMaintenance()
 	a.resumeCleanupConsolidation()
 	if a.videoEdit != nil {

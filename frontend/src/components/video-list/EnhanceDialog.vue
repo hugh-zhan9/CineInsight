@@ -58,6 +58,7 @@
     </template>
 
     <template v-if="enhanceCapability?.available && enhanceDialog.video" #footer>
+      <button type="button" class="btn btn--secondary" :disabled="enhanceDialog.creating" data-test="enhance-preview-open" @click="previewOpen = true">先试一段…</button>
       <button type="button" class="btn btn--secondary" @click="enhanceDialog.show = false">取消</button>
       <button type="button" class="btn btn--primary" :disabled="enhanceDialog.creating" data-test="enhance-create" @click="createEnhancementTask">
         {{ enhanceDialog.creating ? '创建中…' : '创建超分任务' }}
@@ -67,12 +68,14 @@
       <button type="button" class="btn btn--secondary" data-test="enhance-close" @click="enhanceDialog.show = false">关闭</button>
     </template>
   </DialogShell>
+  <VideoEnhancementPreview v-if="previewOpen && enhanceDialog.show && enhanceDialog.video" :video="enhanceDialog.video" :profile="enhanceDialog.profile" @close="previewOpen = false" @create-full="createEnhancementTask" />
 </template>
 
 <script>
 import { GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, DiscardEnhancementProgress, OpenDirectory } from '../../../wailsjs/go/main/App';
 import DialogShell from '../ui/DialogShell.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
+import VideoEnhancementPreview from '../VideoEnhancementPreview.vue';
 import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.js';
 import { formatMediaMeta } from '../../utils/mediaDetails.js';
 import {
@@ -84,11 +87,12 @@ import { runtimeEventsMixin } from './runtimeEvents.js';
 // 打开（行菜单的「视频超分…」与详情抽屉的 @enhance 两个入口）。
 export default {
   name: 'EnhanceDialog',
-  components: { DialogShell, SegmentedControl },
+  components: { DialogShell, SegmentedControl, VideoEnhancementPreview },
   mixins: [runtimeEventsMixin],
   data() {
     return {
       enhanceCapability: null,
+      previewOpen: false,
       enhanceDialog: { show: false, video: null, profile: 'general', copyMetadata: true, creating: false, error: '', preflight: null },
       enhanceTasks: [],
       profileOptions: [{ value: 'general', label: '普通真人' }, { value: 'anime', label: '动漫' }]

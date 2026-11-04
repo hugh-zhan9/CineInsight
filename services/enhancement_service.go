@@ -30,6 +30,7 @@ type EnhancementService struct {
 	sameSource   *AISameSourceService
 	// 模型按需下载后的安装目录；重新探测能力时要带上它。
 	modelInstallDir string
+	inferenceSlot   *MediaWorkSlot
 	// 应用数据目录：复制外挂字幕时字幕写入器在这里放备份（D-PC13）。
 	dataDir string
 

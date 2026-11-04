@@ -15,6 +15,8 @@ vi.mock('../../../wailsjs/go/main/App', async importOriginal => ({ ...(await imp
 import PhotoLightbox, { photoFolderName, photoLightboxFacts, photoOriginalURL } from './PhotoLightbox.vue';
 import { VIEW_RECORD_DELAY_MS } from '../PhotoLibraryPage.vue';
 import DialogShell from '../ui/DialogShell.vue';
+import ImageViewport from '../ImageViewport.vue';
+import ImageCompareDialog from '../ImageCompareDialog.vue';
 
 enableAutoUnmount(afterEach);
 
@@ -87,6 +89,45 @@ describe('PhotoLightbox 纯函数', () => {
 });
 
 describe('PhotoLightbox 看图', () => {
+  it('hides the information panel, zooms temporarily and restores on key release or blur', async () => {
+    const wrapper = await mountLightbox({}, { attachTo: document.body });
+    const viewport = wrapper.getComponent(ImageViewport);
+    viewport.element.getBoundingClientRect = () => ({ width: 800, height: 600, left: 0, top: 0 }); viewport.vm.measure();
+    await wrapper.get('[data-test="photo-lightbox-toggle-info"]').trigger('click');
+    expect(wrapper.get('[data-test="photo-lightbox-info"]').isVisible()).toBe(false);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+    expect(viewport.vm.geometry.scale).toBeGreaterThanOrEqual(1);
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
+    expect(viewport.vm.view.zoom).toBe(1);
+    viewport.vm.temporaryZoom(); window.dispatchEvent(new Event('blur'));
+    expect(viewport.vm.view.zoom).toBe(1);
+  });
+
+  it('shows a bounded filmstrip and preloads only adjacent originals without recording them', async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await mountLightbox({ image: image(2), neighbors: [image(1), image(2), image(3), image(4)] });
+      expect(wrapper.vm._preloads.map(item => item.getAttribute('src'))).toEqual(['/preview/image/1', '/preview/image/3']);
+      await wrapper.get('[aria-label="查看 p4.jpg"]').trigger('click');
+      expect(wrapper.emitted('select-neighbor')).toEqual([[4]]);
+      await vi.advanceTimersByTimeAsync(VIEW_RECORD_DELAY_MS + 1);
+      expect(api.RecordImageView).toHaveBeenCalledTimes(1);
+      expect(api.RecordImageView).toHaveBeenCalledWith(2);
+      const preloads = [...wrapper.vm._preloads]; wrapper.unmount();
+      expect(preloads.every(item => !item.hasAttribute('src'))).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('opens comparison without recording a view of either comparison pane', async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await mountLightbox();
+      wrapper.vm.selectComparison(image(2)); await flushPromises();
+      expect(wrapper.findComponent(ImageCompareDialog).exists()).toBe(true);
+      await vi.advanceTimersByTimeAsync(VIEW_RECORD_DELAY_MS + 1);
+      expect(api.RecordImageView).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
   it('全屏、标题是文件名；原图、信息、人物、设为壁纸、「在图片管理中打开」都在；读到的详情并回宿主', async () => {
     const wrapper = await mountLightbox();
     const shell = wrapper.findComponent(DialogShell);

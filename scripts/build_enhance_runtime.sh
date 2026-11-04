@@ -14,7 +14,7 @@
 # 应用打包流程中对整个 Resources 目录统一进行。
 set -euo pipefail
 
-RUNTIME_VERSION="realesrgan-ncnn-vulkan-v0.2.0-cineinsight1"
+RUNTIME_VERSION="realesrgan-ncnn-vulkan-v0.2.0-cineinsight2"
 UPSTREAM_TAG="v0.2.0"
 OUT_DIR="${1:-build/enhance-runtime}"
 WORK_DIR="$(mktemp -d)"
@@ -26,21 +26,22 @@ if [[ "$(uname -sm)" != "Darwin arm64" ]]; then
 fi
 
 echo "==> 拉取 realesrgan-ncnn-vulkan ${UPSTREAM_TAG}（含 ncnn 子模块）"
-git clone --depth 1 --branch "$UPSTREAM_TAG" --recurse-submodules \
+git -c 'url.https://github.com/.insteadOf=git@github.com:' clone --depth 1 --branch "$UPSTREAM_TAG" --recurse-submodules --shallow-submodules \
   https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan.git "$WORK_DIR/src"
 
 echo "==> 构建 darwin/arm64 二进制"
 # 上游 CMakeLists 声明的最低版本早于 3.5，cmake 4 已移除该兼容；
 # CMAKE_POLICY_VERSION_MINIMUM 让它按 3.5 的策略配置（cmake 自身给出的对策）。
 cmake -S "$WORK_DIR/src/src" -B "$WORK_DIR/build" \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake --build "$WORK_DIR/build" -j "$(sysctl -n hw.ncpu)"
+cmake --build "$WORK_DIR/build" -j "${CINEINSIGHT_BUILD_JOBS:-$(sysctl -n hw.ncpu)}"
 
 echo "==> 组装运行时目录"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/bin" "$OUT_DIR/models" "$OUT_DIR/licenses"
 cp "$WORK_DIR/build/realesrgan-ncnn-vulkan" "$OUT_DIR/bin/"
+python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bundle_enhancement_driver.py" "$OUT_DIR"
 # 注意：模型文件不在源码仓库中，需从上游 release 包获取：
 #   https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip
 # 其中 realesr-animevideov3-x2.{param,bin} 须重命名为 <model>-x<scale> 形式

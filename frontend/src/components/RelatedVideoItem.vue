@@ -16,8 +16,9 @@
     />
     <button type="button" class="btn-link related-video-card__main" @click="$emit('open')">
       <span :class="['related-video-card__thumbnail', { 'related-video-card__thumbnail--failed': thumbnailFailed }]">
-        <img
+        <VideoThumbnail
           v-if="!thumbnailFailed"
+          :video="video"
           :src="thumbnailURL"
           :alt="`${video.name} 缩略图`"
           loading="lazy"
@@ -40,16 +41,19 @@
       {{ actionLabel }}
     </button>
     <slot name="actions" />
+    <button type="button" class="btn btn--ghost btn--sm" title="展开时间点画面" @click="openVideoOverview(video)">画面概览</button>
   </div>
 </template>
 
 <script>
 import AppIcon from './ui/AppIcon.vue';
+import VideoThumbnail from './VideoThumbnail.vue';
+import { openVideoOverview } from '../utils/videoThumbnail.js';
 import { formatMediaMeta } from '../utils/mediaDetails.js';
 
 export default {
   name: 'RelatedVideoItem',
-  components: { AppIcon },
+  components: { AppIcon, VideoThumbnail },
   props: {
     video: { type: Object, required: true },
     positionLabel: { type: String, default: '' },
@@ -62,6 +66,7 @@ export default {
   },
   emits: ['open', 'action', 'select', 'dragstart', 'drop'],
   data() { return { thumbnailFailed: false }; },
+  methods: { openVideoOverview },
   computed: {
     thumbnailURL() { return `/preview/thumbnail/${this.video.id}`; },
     metaText() { return formatMediaMeta(this.video).join(' · '); }

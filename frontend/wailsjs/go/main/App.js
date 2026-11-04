@@ -866,6 +866,10 @@ export function GetMediaExplorationItems(arg1) {
   return window['go']['main']['App']['GetMediaExplorationItems'](arg1);
 }
 
+export function GetMediaProcessing(arg1) {
+  return window['go']['main']['App']['GetMediaProcessing'](arg1);
+}
+
 export function GetMetadataCompleteness() {
   return window['go']['main']['App']['GetMetadataCompleteness']();
 }
@@ -964,6 +968,14 @@ export function GetStartupBackendGuard() {
 
 export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
+}
+
+export function GetStorageGoalPlan(arg1) {
+  return window['go']['main']['App']['GetStorageGoalPlan'](arg1);
+}
+
+export function GetStorageGoalVolumes() {
+  return window['go']['main']['App']['GetStorageGoalVolumes']();
 }
 
 export function GetStorageReport(arg1) {
@@ -1602,6 +1614,10 @@ export function RelaunchApp() {
   return window['go']['main']['App']['RelaunchApp']();
 }
 
+export function ReleaseMediaProcessing(arg1) {
+  return window['go']['main']['App']['ReleaseMediaProcessing'](arg1);
+}
+
 export function RelocateVideo(arg1, arg2) {
   return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
 }
@@ -1802,6 +1818,10 @@ export function SaveLibraryView(arg1) {
   return window['go']['main']['App']['SaveLibraryView'](arg1);
 }
 
+export function SaveMediaProcessing(arg1) {
+  return window['go']['main']['App']['SaveMediaProcessing'](arg1);
+}
+
 export function SavePhotoRecap(arg1) {
   return window['go']['main']['App']['SavePhotoRecap'](arg1);
 }
@@ -1938,6 +1958,10 @@ export function SetMapTilesEnabled(arg1) {
   return window['go']['main']['App']['SetMapTilesEnabled'](arg1);
 }
 
+export function SetMediaProcessingDirty(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetMediaProcessingDirty'](arg1, arg2, arg3);
+}
+
 export function SetPersonAvatar(arg1, arg2) {
   return window['go']['main']['App']['SetPersonAvatar'](arg1, arg2);
 }
@@ -2040,6 +2064,10 @@ export function StartLocalMetadataBackfill() {
 
 export function StartLocalMetadataExport(arg1) {
   return window['go']['main']['App']['StartLocalMetadataExport'](arg1);
+}
+
+export function StartMediaProcessing(arg1) {
+  return window['go']['main']['App']['StartMediaProcessing'](arg1);
 }
 
 export function StartPerceptualHashBackfill() {

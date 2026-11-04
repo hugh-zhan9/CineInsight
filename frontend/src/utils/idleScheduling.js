@@ -35,7 +35,8 @@ export const BACKGROUND_TASK_LABELS = {
   lost_media: '失联数据',
   metadata_batch_edit: '批量编辑',
   automation_rules: '自动规则',
-  data_health: '数据体检'
+  data_health: '数据体检',
+  media_processing: '图片编辑与试处理'
 };
 
 // 后端新加了 key 而前端还没同步文案时的兜底说法。守卫测试保证正常情况下用不到它；

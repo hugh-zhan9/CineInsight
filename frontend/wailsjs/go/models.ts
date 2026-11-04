@@ -13470,6 +13470,74 @@ export namespace services {
 	        this.warnings = source["warnings"];
 	    }
 	}
+	export class MediaProcessingRequest {
+	    kind: string;
+	    media_id: number;
+	    operation: string;
+	    parent_id: string;
+	    png_base64: string;
+	    profile: string;
+	    x: number;
+	    y: number;
+	    width: number;
+	    height: number;
+	    start_seconds: number;
+	    duration_seconds: number;
+
+	    static createFrom(source: any = {}) {
+	        return new MediaProcessingRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.media_id = source["media_id"];
+	        this.operation = source["operation"];
+	        this.parent_id = source["parent_id"];
+	        this.png_base64 = source["png_base64"];
+	        this.profile = source["profile"];
+	        this.x = source["x"];
+	        this.y = source["y"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.start_seconds = source["start_seconds"];
+	        this.duration_seconds = source["duration_seconds"];
+	    }
+	}
+	export class MediaProcessingView {
+	    id: string;
+	    state: string;
+	    error: string;
+	    name: string;
+	    width: number;
+	    height: number;
+	    source_bytes: number;
+	    output_bytes: number;
+	    source_url: string;
+	    result_url: string;
+	    comparison_url: string;
+	    format: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MediaProcessingView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.state = source["state"];
+	        this.error = source["error"];
+	        this.name = source["name"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.source_bytes = source["source_bytes"];
+	        this.output_bytes = source["output_bytes"];
+	        this.source_url = source["source_url"];
+	        this.result_url = source["result_url"];
+	        this.comparison_url = source["comparison_url"];
+	        this.format = source["format"];
+	    }
+	}
 	export class MergePeopleResult {
 	    target: PersonListItem;
 	    merged_count: number;
@@ -18062,6 +18130,230 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class StorageGoalItem {
+	    kind: string;
+	    id: number;
+	    title: string;
+	    bytes: number;
+	    reason: string;
+	    reason_kind: string;
+	    keeper_id: number;
+	    keeper_title: string;
+	    suggested: boolean;
+	    is_favorite: boolean;
+	    personal_rating?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new StorageGoalItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.bytes = source["bytes"];
+	        this.reason = source["reason"];
+	        this.reason_kind = source["reason_kind"];
+	        this.keeper_id = source["keeper_id"];
+	        this.keeper_title = source["keeper_title"];
+	        this.suggested = source["suggested"];
+	        this.is_favorite = source["is_favorite"];
+	        this.personal_rating = source["personal_rating"];
+	    }
+	}
+	export class StorageGoalPlan {
+	    epoch: string;
+	    volume_id: string;
+	    target_bytes: number;
+	    available_bytes: number;
+	    potential_bytes: number;
+	    shortfall_bytes: number;
+	    count: number;
+	    items: StorageGoalItem[];
+	    notices: string[];
+	    truncated: boolean;
+	    generated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StorageGoalPlan(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.epoch = source["epoch"];
+	        this.volume_id = source["volume_id"];
+	        this.target_bytes = source["target_bytes"];
+	        this.available_bytes = source["available_bytes"];
+	        this.potential_bytes = source["potential_bytes"];
+	        this.shortfall_bytes = source["shortfall_bytes"];
+	        this.count = source["count"];
+	        this.items = this.convertValues(source["items"], StorageGoalItem);
+	        this.notices = source["notices"];
+	        this.truncated = source["truncated"];
+	        this.generated_at = source["generated_at"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StorageReviewCandidate {
+	    id: number;
+	    kind: string;
+	    keeper_id: number;
+
+	    static createFrom(source: any = {}) {
+	        return new StorageReviewCandidate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.keeper_id = source["keeper_id"];
+	    }
+	}
+	export class StorageReviewSnapshot {
+	    analysis_key: string;
+	    locked_ids: number[];
+	    candidates: StorageReviewCandidate[];
+
+	    static createFrom(source: any = {}) {
+	        return new StorageReviewSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.analysis_key = source["analysis_key"];
+	        this.locked_ids = source["locked_ids"];
+	        this.candidates = this.convertValues(source["candidates"], StorageReviewCandidate);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StorageGoalRequest {
+	    epoch: string;
+	    volume_id: string;
+	    target_bytes: number;
+	    video_review?: StorageReviewSnapshot;
+	    image_review?: StorageReviewSnapshot;
+
+	    static createFrom(source: any = {}) {
+	        return new StorageGoalRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.epoch = source["epoch"];
+	        this.volume_id = source["volume_id"];
+	        this.target_bytes = source["target_bytes"];
+	        this.video_review = this.convertValues(source["video_review"], StorageReviewSnapshot);
+	        this.image_review = this.convertValues(source["image_review"], StorageReviewSnapshot);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StorageGoalVolume {
+	    id: string;
+	    label: string;
+	    available_bytes: number;
+	    media_bytes: number;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new StorageGoalVolume(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.available_bytes = source["available_bytes"];
+	        this.media_bytes = source["media_bytes"];
+	        this.count = source["count"];
+	    }
+	}
+	export class StorageGoalVolumes {
+	    epoch: string;
+	    items: StorageGoalVolume[];
+	    sampled_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StorageGoalVolumes(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.epoch = source["epoch"];
+	        this.items = this.convertValues(source["items"], StorageGoalVolume);
+	        this.sampled_at = source["sampled_at"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class StorageProbeCoverage {
 	    probed: number;
 	    total: number;
@@ -18256,6 +18548,8 @@ export namespace services {
 	
 	
 	
+
+
 	export class SubtitleBackup {
 	    id: string;
 	    created_at: string;
