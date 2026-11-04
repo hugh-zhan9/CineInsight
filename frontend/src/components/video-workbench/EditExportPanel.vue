@@ -1,15 +1,16 @@
 <template>
   <section class="edit-section edit-export" data-test="edit-export">
     <h3>导出</h3>
-    <div class="edit-inline" role="radiogroup" aria-label="导出模式">
+    <p v-if="project.kind === 'crop'" class="help-text">按裁剪尺寸重新编码，另存为新视频。点击导出会自动检查参数、轨道和可用空间。</p>
+    <div v-if="project.kind !== 'crop' || project.mode === 'fast'" class="edit-inline" role="radiogroup" aria-label="导出模式">
       <label class="edit-radio"><input type="radio" value="precise" :checked="project.mode !== 'fast'" :disabled="!editable" data-test="edit-mode-precise" @change="$emit('set-mode', 'precise')" /> 精确（重新编码，切点到帧）</label>
       <label class="edit-radio"><input type="radio" value="fast" :checked="project.mode === 'fast'" :disabled="!editable || fastUnavailable" data-test="edit-mode-fast" @change="$emit('set-mode', 'fast')" /> 快速（不重编码，按关键帧切）</label>
     </div>
-    <p v-if="fastReasons.length" class="help-text" data-test="edit-fast-reasons">快速模式不可用：{{ fastReasons.join('；') }}</p>
+    <p v-if="project.kind !== 'crop' && fastReasons.length" class="help-text" data-test="edit-fast-reasons">快速模式不可用：{{ fastReasons.join('；') }}</p>
 
     <div class="edit-inline">
       <button type="button" class="btn btn--secondary btn--sm" :disabled="loading" data-test="edit-run-preflight" @click="$emit('run-preflight')">{{ loading ? '正在预检…' : (preflight ? '重新预检' : '预检') }}</button>
-      <span v-if="preflight && !fresh" class="edit-flag" data-test="edit-preflight-stale">配方或模式改过了，预检结果已过期，请重新预检。</span>
+      <span v-if="preflight && !fresh" class="edit-flag" data-test="edit-preflight-stale">{{ project.kind === 'crop' ? '裁剪已修改，导出时会重新检查。' : '配方或模式改过了，预检结果已过期，请重新预检。' }}</span>
       <span v-if="error" class="edit-error" role="alert" data-test="edit-preflight-error">{{ error }}</span>
     </div>
 
@@ -66,7 +67,7 @@
     </template>
 
     <div class="edit-inline">
-      <button type="button" class="btn btn--primary" :disabled="!canQueue" data-test="edit-queue" @click="$emit('queue', acknowledged.filter(key => warningKeys.includes(key)))">{{ requeue ? '继续未完成项' : '排队导出' }}</button>
+      <button type="button" class="btn btn--primary" :disabled="!canQueue" data-test="edit-queue" @click="$emit('queue', acknowledged.filter(key => warningKeys.includes(key)))">{{ busy ? '处理中…' : (requeue ? '继续未完成项' : (project.kind === 'crop' ? '导出' : '排队导出')) }}</button>
       <span v-if="queueHint" class="help-text" data-test="edit-queue-hint">{{ queueHint }}</span>
     </div>
   </section>
@@ -81,7 +82,7 @@ const SIDECAR_TEXT = { copy: '复制长版 .srt', retime: '按新时间线重写
 
 // 导出面板：模式切换（快速不可用时给原因）、预检结果（规格、轨道映射、空间、警告与错误）、
 // 轨道冲突的明确选择（Q9），以及「排队导出 / 继续未完成项」。警告必须逐条勾选才放行（后端同样校验）；
-// 预检过期（配方或模式改过）时不放行。
+// 裁剪允许直接发起导出，复用后端排队前预检；其他类型仍要求有效预检。
 export default {
   name: 'EditExportPanel',
   mixins: [workbenchVideoMixin],
@@ -136,9 +137,11 @@ export default {
       return this.warningKeys.every(key => this.acknowledged.includes(key));
     },
     canQueue() {
+      if (this.project.kind === 'crop') return !this.busy && !this.loading && (!this.fresh || (this.preflight.ready && this.allAcknowledged));
       return Boolean(this.fresh && this.preflight.ready && this.allAcknowledged && !this.busy && !this.loading);
     },
     queueHint() {
+      if (this.project.kind === 'crop' && !this.fresh) return '导出时自动检查，无需先点预检。';
       if (!this.preflight) return '先预检，确认规格、轨道与空间后再导出。';
       if (!this.fresh) return '';
       if (!this.preflight.ready) return '还有阻止导出的问题，见上方红字。';

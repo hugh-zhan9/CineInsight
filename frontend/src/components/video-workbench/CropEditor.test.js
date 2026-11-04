@@ -1,5 +1,5 @@
 import { nextTick } from 'vue';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import CropEditor from './CropEditor.vue';
 import { dragCrop, fitCropRatio, validCrop } from '../../utils/videoCrop.js';
@@ -40,7 +40,7 @@ describe('固定黑边裁剪', () => {
     expect(w.get('[data-test="crop-stage"] img').attributes('src')).toContain('ms=1000');
     w.unmount();
   });
-  it.each(['detected', 'no_borders', 'undetected'])('预检超时而检测完成（%s）时仍能手动设置并确认', async status => {
+  it.each(['detected', 'no_borders', 'undetected'])('预检超时而检测完成（%s）时仍能手动设置', async status => {
     const wrapper = mount(CropEditor, { props: {
       ...props(),
       recipe: { v: 1, crop: { items: [{ video_id: 1, rect: null, source_version: '', confirmed: false }] } },
@@ -54,8 +54,7 @@ describe('固定黑边裁剪', () => {
     await wrapper.setProps({ recipe: next });
     expect(wrapper.get('[data-test="crop-stage"] img').attributes('src')).toContain('v=12%3A34');
     expect(wrapper.get('[data-test="crop-seek"]').attributes('max')).toBe('1999');
-    await wrapper.get('[data-test="crop-confirm"]').setValue(true);
-    expect(wrapper.emitted('change').at(-1)[0].crop.items[0].confirmed).toBe(true);
+    expect(wrapper.find('[data-test="crop-confirm"]').exists()).toBe(false);
     wrapper.unmount();
   });
   it('像素调整使确认失效，输出采用裁剪尺寸；时间选择更新两个预览', async () => {
@@ -70,39 +69,35 @@ describe('固定黑边裁剪', () => {
     expect(wrapper.get('[data-test="crop-result"] img').attributes('src')).toContain('ms=1000');
     wrapper.unmount();
   });
-  it('固定比例保留中心，重置和逐项确认可用；过期来源和预览失败不能确认', async () => {
+  it('固定比例保留中心，重置可用；过期来源和预览失败不能导出', async () => {
     const wrapper = mount(CropEditor, { props: props() });
+    await wrapper.get('[data-test="crop-stage"] img').trigger('load');
+    expect(wrapper.emitted('ready').at(-1)).toEqual([true]);
     await wrapper.get('[data-test="crop-ratio"]').setValue('1:1');
     expect(wrapper.emitted('change')[0][0].crop.items[0]).toMatchObject({ rect: { x: 112, y: 42, width: 96, height: 96 }, confirmed: false });
     await wrapper.get('[data-test="crop-reset"]').trigger('click');
     expect(wrapper.emitted('change')[1][0].crop.items[0].rect).toEqual({ x: 0, y: 0, width: 320, height: 180 });
-    await wrapper.get('[data-test="crop-confirm"]').setValue(false);
-    expect(wrapper.emitted('change')[2][0].crop.items[0].confirmed).toBe(false);
-    await wrapper.setProps({ recipe: wrapper.emitted('change')[2][0] });
+    expect(wrapper.find('[data-test="crop-confirm"]').exists()).toBe(false);
     await wrapper.get('[data-test="crop-stage"] img').trigger('error');
-    expect(wrapper.get('[data-test="crop-confirm"]').element.disabled).toBe(true);
+    expect(wrapper.emitted('ready').at(-1)).toEqual([false]);
     await wrapper.get('[data-test="crop-stage"] img').trigger('load');
+    expect(wrapper.emitted('ready').at(-1)).toEqual([true]);
     await wrapper.setProps({ preflight: { sources: [{ ...preflight.sources[0], source_version: 'changed' }] } });
-    expect(wrapper.get('[data-test="crop-confirm"]').element.disabled).toBe(true);
-    await wrapper.setProps({ recipe: recipe() });
-    expect(wrapper.get('[data-test="crop-confirm"]').element.disabled).toBe(false);
-    await wrapper.get('[data-test="crop-confirm"]').setValue(false);
-    const cleared = wrapper.emitted('change').at(-1)[0];
-    expect(cleared.crop.items[0].confirmed).toBe(false);
-    await wrapper.setProps({ recipe: cleared });
-    expect(wrapper.get('[data-test="crop-confirm"]').element.disabled).toBe(true);
+    await wrapper.get('[data-test="crop-stage"] img').trigger('load');
+    expect(wrapper.emitted('ready').at(-1)).toEqual([false]);
     wrapper.unmount();
   });
   it('拖动只在松开时提交，取消不保存；只读不可拖动', async () => {
     const wrapper = mount(CropEditor, { props: props() });
     const stage = wrapper.get('[data-test="crop-stage"]');
-    stage.element.getBoundingClientRect = () => ({ width: 320, height: 180 });
-    await pointer(wrapper.get('[data-test="crop-box"]'), 'pointerdown', { pointerId: 1, clientX: 120, clientY: 20, button: 0 });
-    await pointer(stage, 'pointermove', { pointerId: 1, clientX: 130, clientY: 22 });
+    stage.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 180 });
+    wrapper.get('[data-test="crop-box"]').element.getBoundingClientRect = () => ({ left: 112, top: 10, width: 96, height: 160 });
+    await pointer(wrapper.get('[data-test="crop-box"]'), 'pointerdown', { pointerId: 1, clientX: 160, clientY: 80, button: 0 });
+    await pointer(stage, 'pointermove', { pointerId: 1, clientX: 170, clientY: 82 });
     expect(wrapper.emitted('change')).toBeUndefined();
     await pointer(stage, 'pointerup', { pointerId: 1 });
     expect(wrapper.emitted('change')[0][0].crop.items[0]).toMatchObject({ rect: { x: 122, y: 12 }, confirmed: false });
-    await pointer(wrapper.get('[data-test="crop-box"]'), 'pointerdown', { pointerId: 2, clientX: 120, clientY: 20 });
+    await pointer(wrapper.get('[data-test="crop-box"]'), 'pointerdown', { pointerId: 2, clientX: 160, clientY: 80 });
     await pointer(stage, 'pointercancel', { pointerId: 2 });
     expect(wrapper.emitted('change')).toHaveLength(1);
     await wrapper.setProps({ editable: false });
@@ -135,10 +130,108 @@ describe('固定黑边裁剪', () => {
     expect(wrapper.get('[data-test="crop-ratio"]').element.value).toBe('free');
     wrapper.unmount();
   });
-  it('无可靠检测结果明确提示并可手动编辑；确认项在批次选择中可见', () => {
+  it('无可靠检测结果明确提示并可手动编辑；已设置项在批次选择中可见', () => {
     const wrapper = mount(CropEditor, { props: { ...props(), analysis: { kind: 'crop', status: 'completed', crops: [{ video_id: 1, status: 'undetected' }] } } });
     expect(wrapper.text()).toContain('未能可靠识别');
-    expect(wrapper.get('[data-test="crop-select"]').text()).toContain('已确认');
+    expect(wrapper.get('[data-test="crop-select"]').text()).toContain('已设置');
     wrapper.unmount();
   });
+  it('打开自动读取当前素材并初始化整幅框，不启动检测或完整预检', async () => {
+    const loadSource = vi.fn().mockResolvedValue(preflight.sources[0]);
+    const w = mount(CropEditor, { props: { ...props(), preflight: null, recipe: { v: 1, crop: { items: [{ video_id: 1, rect: null }] } }, loadSource } });
+    await flushPromises();
+    expect(loadSource).toHaveBeenCalledExactlyOnceWith(1);
+    expect(w.emitted('analyze')).toBeUndefined();
+    expect(w.emitted('run-preflight')).toBeUndefined();
+    const next = w.emitted('change')[0][0];
+    expect(next.crop.items[0]).toMatchObject({ rect: { x: 0, y: 0, width: 320, height: 180 }, source_version: '12:34', confirmed: false });
+    await w.setProps({ recipe: next });
+    await w.get('[data-test="crop-stage"] img').trigger('load');
+    expect(w.emitted('ready').at(-1)).toEqual([true]);
+    w.unmount();
+  });
+  it('读取失败明确报错可重读，旧项目的框和指纹不被自动重绑', async () => {
+    const loadSource = vi.fn().mockRejectedValueOnce(new Error('读取超时')).mockResolvedValue({ ...preflight.sources[0], source_version: 'new' });
+    const w = mount(CropEditor, { props: { ...props(), preflight: null, loadSource } });
+    await flushPromises();
+    expect(w.get('[data-test="crop-source-error"]').text()).toContain('读取超时');
+    expect(w.emitted('change')).toBeUndefined();
+    await w.get('[data-test="crop-read-source"]').trigger('click'); await flushPromises();
+    expect(w.text()).toContain('来源已经变化');
+    expect(w.emitted('change')).toBeUndefined();
+    w.unmount();
+  });
+  it('切换素材丢弃晚到的尺寸读取，空素材列表不会初始化', async () => {
+    let resolve;
+    const loadSource = vi.fn().mockImplementationOnce(() => new Promise(done => { resolve = done; })).mockResolvedValue({ ...preflight.sources[0], video_id: 2, display_width: 640 });
+    const r = recipe(); r.crop.items.push({ video_id: 2, rect: null });
+    const w = mount(CropEditor, { props: { ...props(), recipe: r, preflight: null, loadSource } });
+    await w.get('[data-test="crop-select"]').setValue(1); await flushPromises();
+    resolve(preflight.sources[0]); await flushPromises();
+    expect(w.emitted('change')).toHaveLength(1);
+    expect(w.emitted('change')[0][0].crop.items[1]).toMatchObject({ rect: { width: 640 }, video_id: 2 });
+    expect(w.get('[data-test="crop-output-size"]').text()).toContain('640×180');
+    w.unmount();
+    const empty = mount(CropEditor, { props: { recipe: { crop: { items: [] } }, loadSource } });
+    expect(loadSource).toHaveBeenCalledTimes(2);
+    empty.unmount();
+  });
+  it('边线悬停放大，拖动同步结果小窗与裁剪线，取消还原且不保存', async () => {
+    const w = mount(CropEditor, { props: props() });
+    const stage = w.get('[data-test="crop-stage"]');
+    stage.element.getBoundingClientRect = () => ({ left: 50, top: 20, width: 640, height: 360 });
+    const edge = w.get('[data-test="crop-handle-e"]');
+    await pointer(edge, 'pointerenter', { pointerId: 7, clientX: 466, clientY: 180 });
+    expect(w.get('[data-test="crop-loupe"]').text()).toContain('右边');
+    expect(w.get('.crop-loupe-box').attributes('style')).toContain('width: 384px');
+    expect(w.get('.crop-loupe-box').attributes('style')).toContain('left: calc(50% - 384px)');
+    expect(w.emitted('change')).toBeUndefined();
+    const before = w.get('[data-test="crop-live-result"] img').attributes('style');
+    await pointer(edge, 'pointerdown', { pointerId: 7, clientX: 466, clientY: 180, button: 0 });
+    await pointer(stage, 'pointermove', { pointerId: 7, clientX: 426, clientY: 180 });
+    expect(w.get('[data-test="crop-live-result"] img').attributes('style')).not.toBe(before);
+    expect(w.get('.crop-loupe-box').attributes('style')).toContain('width: 304px');
+    expect(w.emitted('change')).toBeUndefined();
+    await pointer(stage, 'pointercancel', { pointerId: 7 });
+    expect(w.find('[data-test="crop-loupe"]').exists()).toBe(false);
+    expect(w.get('[data-test="crop-live-result"] img').attributes('style')).toBe(before);
+    expect(w.emitted('change')).toBeUndefined();
+    w.unmount();
+  });
+
+  it('导出预检发现来源变化后更新画布；重设框绑定新指纹，旧读取不能覆盖它', async () => {
+    const loadSource = vi.fn().mockResolvedValue(preflight.sources[0]);
+    const w = mount(CropEditor, { props: { ...props(), loadSource, preflight: null } });
+    await flushPromises();
+    await w.setProps({ preflight: { sources: [{ ...preflight.sources[0], display_width: 480, display_height: 270, source_version: 'intermediate' }] } });
+    expect(w.get('[data-test="crop-output-size"]').text()).toContain('480×270');
+    let resolve;
+    loadSource.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const pending = w.vm.readSource();
+    await w.setProps({ preflight: { sources: [{ ...preflight.sources[0], display_width: 640, display_height: 360, source_version: 'new' }] } });
+    resolve(preflight.sources[0]); await pending;
+    expect(w.get('[data-test="crop-output-size"]').text()).toContain('640×360');
+    expect(w.text()).toContain('来源已经变化');
+    expect(w.emitted('change')).toBeUndefined();
+    await w.get('[data-test="crop-reset"]').trigger('click');
+    expect(w.emitted('change').at(-1)[0].crop.items[0]).toMatchObject({ source_version: 'new', rect: { width: 640, height: 360 } });
+    w.unmount();
+  });
+
+  it('同来源的预检返回不打断拖动，来源变化时才取消', async () => {
+    const w = mount(CropEditor, { props: props() });
+    const stage = w.get('[data-test="crop-stage"]');
+    stage.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 180 });
+    await pointer(w.get('[data-test="crop-handle-e"]'), 'pointerdown', { pointerId: 1, clientX: 208, clientY: 90 });
+    await pointer(stage, 'pointermove', { pointerId: 1, clientX: 198, clientY: 90 });
+    await w.setProps({ preflight: { sources: [{ ...preflight.sources[0] }] } });
+    expect(w.get('[data-test="crop-output-size"]').text()).toContain('86×160');
+    expect(w.find('[data-test="crop-loupe"]').exists()).toBe(true);
+    await w.setProps({ preflight: { sources: [{ ...preflight.sources[0], source_version: 'new' }] } });
+    expect(w.get('[data-test="crop-output-size"]').text()).toContain('96×160');
+    expect(w.find('[data-test="crop-loupe"]').exists()).toBe(false);
+    expect(w.emitted('change')).toBeUndefined();
+    w.unmount();
+  });
+
 });

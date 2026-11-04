@@ -368,6 +368,8 @@ export function GetDatabaseBackendStatus():Promise<services.DatabaseBackendStatu
 
 export function GetDatabaseSwitchStatus():Promise<services.DatabaseSwitchStatus>;
 
+export function GetEditCropSource(arg1:number,arg2:number):Promise<services.EditPreflightSource>;
+
 export function GetEditProject(arg1:number):Promise<services.EditProjectView>;
 
 export function GetEnhancementCapability():Promise<services.EnhancementRuntimeCapability>;

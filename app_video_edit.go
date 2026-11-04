@@ -103,6 +103,17 @@ func (a *App) GetEditProject(projectID uint) (*services.EditProjectView, error) 
 	return videoEditResult("GetEditProject", view, err)
 }
 
+// GetEditCropSource 读取裁剪项目中单个素材的尺寸、时长和来源指纹。
+func (a *App) GetEditCropSource(projectID, videoID uint) (*services.EditPreflightSource, error) {
+	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	source, err := service.CropSource(ctx, projectID, videoID)
+	return videoEditResult("GetEditCropSource", source, err)
+}
+
 // NavigateEditFrame 在裁剪项目中按真实帧时间定位相邻画面，不写观看事实。
 func (a *App) NavigateEditFrame(request services.EditFrameRequest) (*services.EditFramePosition, error) {
 	service, ctx, cancel, err := a.videoEditCall(videoEditCallTimeout)

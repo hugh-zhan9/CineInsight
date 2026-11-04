@@ -36,6 +36,8 @@ window.fixture = { async run() {
  [...document.querySelectorAll('button')].find(button => button.textContent === '结果预览').click(); await nextTick();
  const result = document.querySelector('.crop-result').getBoundingClientRect();
  assert(Math.abs(result.width / result.height - .6) < .01, 'portrait result ratio');
+ const live = document.querySelector('[data-test="crop-live-result"]').getBoundingClientRect();
+ assert(Math.abs(live.width / live.height - .6) < .01, 'live portrait result ratio');
  [...document.querySelectorAll('button')].find(button => button.textContent === '裁剪').click(); await nextTick();
  const inspector = document.querySelector('.crop-inspector').getBoundingClientRect();
  assert(inspector.left >= bounds.right, 'settings beside the monitor');
@@ -48,9 +50,7 @@ window.fixture = { async run() {
  ratio.value = '1:1'; ratio.dispatchEvent(new Event('change', { bubbles: true })); await nextTick();
  const r = root.recipe.crop.items[0].rect;
  assert(r.width === r.height, 'square ratio');
- const confirm = document.querySelector('[data-test="crop-confirm"]');
- confirm.click(); await nextTick();
- assert(root.recipe.crop.items[0].confirmed, 'confirm saved');
+ assert(!document.querySelector('[data-test="crop-confirm"]'), 'no routine confirmation checkbox');
  document.querySelector('[data-test="crop-reset"]').click(); await nextTick();
  assert(!root.recipe.crop.items[0].confirmed && root.recipe.crop.items[0].rect.width === 320, 'reset clears confirmation');
  root.recipe.crop.items[0].rect = { x: 112, y: 10, width: 96, height: 160 }; await nextTick();
@@ -78,7 +78,15 @@ window.fixture = { async run() {
  assert(trusted && root.recipe.crop.items[0].range?.start_ms > 0, 'trusted native trim drag saves selection');
  document.querySelector('[data-test="crop-range-reset"]').click(); await nextTick();
  const before = root.recipe.crop.items[0].rect.width;
+ let loupeDuringDrag = false, liveChanged = false;
+ const originalLive = document.querySelector('[data-test="crop-live-result"] img').getAttribute('style');
+ const sample = setInterval(() => {
+  if (document.querySelector('[data-test="crop-loupe"]')) loupeDuringDrag = true;
+  if (document.querySelector('[data-test="crop-live-result"] img').getAttribute('style') !== originalLive) liveChanged = true;
+ }, 10);
  await dragHandle(document.querySelector('[data-test="crop-handle-e"]'), -20, 0);
+ clearInterval(sample);
+ assert(loupeDuringDrag && liveChanged, 'native drag shows loupe and live result');
  assert(root.recipe.crop.items[0].rect.width < before, 'trusted native edge drag resizes crop');
  const iframe = document.createElement('iframe');
  iframe.style.cssText = 'position:absolute;left:-10000px;width:600px;height:1000px;border:0';
@@ -90,8 +98,17 @@ window.fixture = { async run() {
  const doc = iframe.contentDocument;
  assert(doc.documentElement.scrollWidth <= 600, '600px editor has no horizontal overflow');
  assert(doc.querySelector('.crop-inspector').getBoundingClientRect().top >= doc.querySelector('.crop-workspace').getBoundingClientRect().bottom, 'narrow settings stack below monitor and timeline');
+ const narrowEdge = doc.querySelector('[data-test="crop-handle-e"]');
+ const edgeBounds = narrowEdge.getBoundingClientRect();
+ narrowEdge.dispatchEvent(new PointerEvent('pointerenter', { clientX: edgeBounds.left + 5, clientY: edgeBounds.top + 5, pointerId: 9 })); await nextTick();
+ const loupeBounds = doc.querySelector('[data-test="crop-loupe"]').getBoundingClientRect();
+ assert(loupeBounds.left >= 0 && loupeBounds.right <= 600 && loupeBounds.top >= 0 && loupeBounds.bottom <= 1000, 'narrow loupe stays in viewport beside the crop');
  narrow.unmount(); iframe.remove();
  document.documentElement.scrollTop = 0;
- window.results = { passed: true, checks: ['image load', 'overlay pixel geometry', 'portrait preview', 'no overflow', 'pixel edit', 'fixed ratio', 'confirmation', 'reset'], stage: { width: bounds.width, height: bounds.height } };
+ const finalEdge = document.querySelector('[data-test="crop-handle-e"]'), finalBounds = finalEdge.getBoundingClientRect();
+ finalEdge.dispatchEvent(new PointerEvent('pointerenter', { clientX: finalBounds.left + 5, clientY: finalBounds.top + 5, pointerId: 10 })); await nextTick();
+ const lens = document.querySelector('[data-test="crop-loupe"]');
+ assert(lens && lens.getBoundingClientRect().bottom <= innerHeight, 'hover loupe visible without opening result preview');
+ window.results = { passed: true, checks: ['image load', 'overlay pixel geometry', 'portrait preview', 'no overflow', 'pixel edit', 'fixed ratio', 'no confirmation gate', 'live preview', 'edge loupe', 'reset'], stage: { width: bounds.width, height: bounds.height } };
 } };
 window.ready = true;

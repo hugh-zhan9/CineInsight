@@ -64,6 +64,7 @@ beforeEach(() => {
   resetFeedback();
   handlers = {};
   window.runtime = { EventsOn: (event, handler) => { handlers[event] = handler; return () => { delete handlers[event]; }; } };
+  api.GetEditCropSource.mockResolvedValue(null);
   api.ListEditProjects.mockResolvedValue([]);
   api.GetVideoEditStatus.mockResolvedValue({ analyzing_project_id: 0, analysis_progress: 0 });
   api.GetVideosByIDs.mockImplementation(async ids => ids.map(id => ({ id, name: `v${id}.mp4`, duration: 60 })));
@@ -96,6 +97,8 @@ describe('视频工作台页（视频编辑合同「界面」）', () => {
     await wrapper.get('[data-test="crop-open-export"]').trigger('click');
     expect(wrapper.vm.exportOpen).toBe(true);
     expect(wrapper.get('[aria-label="导出设置"]').element.style.display).toBe('');
+    await wrapper.vm.runPreflight();
+    await flushPromises();
     expect(wrapper.get('[data-test="edit-errors"]').text()).toContain('探测超时');
     expect(wrapper.get('[data-test="edit-queue"]').element.disabled).toBe(true);
   });
@@ -124,7 +127,7 @@ describe('视频工作台页（视频编辑合同「界面」）', () => {
     await flushPromises();
     expect(wrapper.vm.preflight).toBeNull();
     expect(wrapper.get('[data-test="crop-output-size"]').text()).toContain('640×360');
-    expect(wrapper.get('[data-test="crop-confirm"]').element.disabled).toBe(false);
+    expect(wrapper.find('[data-test="crop-confirm"]').exists()).toBe(false);
     oldPreflight.resolve(preflightFor(project, { sources: [{ video_id: 21, display_width: 320, display_height: 180, source_version: 'old' }] }));
     await pending;
     expect(wrapper.vm.preflight).toBeNull();
@@ -203,6 +206,94 @@ describe('视频工作台页（视频编辑合同「界面」）', () => {
     await flushPromises();
     expect(api.CancelEditAnalysis).toHaveBeenCalledWith(2);
     expect(wrapper.find('[data-test="trim-analysis-progress"]').exists()).toBe(false);
+  });
+});
+
+describe('裁剪直接导出', () => {
+  const cropProject = () => mergeProject({ kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21, rect: null, source_version: '', confirmed: false }] }, tracks: tracks() } });
+  async function openCrop() {
+    let project = cropProject();
+    api.GetEditCropSource.mockResolvedValue({ video_id: 21, display_width: 320, display_height: 180, duration_ms: 2000, source_version: '12:34' });
+    api.UpdateEditRecipe.mockImplementation(async request => { project = { ...project, recipe: request.recipe, revision: project.revision + 1 }; return project; });
+    const wrapper = await mountPage(project);
+    await wrapper.get('[data-test="crop-stage"] img').trigger('load');
+    return wrapper;
+  }
+  it('新项目自动读尺寸、保存手动框，直接导出无需分析/预检/勾选', async () => {
+    const w = await openCrop();
+    expect(api.GetEditCropSource).toHaveBeenCalledWith(1, 21);
+    expect(api.PreflightEditProject).not.toHaveBeenCalled();
+    expect(api.AnalyzeEditProject).not.toHaveBeenCalled();
+    await w.get('[data-test="crop-margin-left"]').setValue(100); await flushPromises();
+    expect(w.vm.recipe.crop.items[0]).toMatchObject({ rect: { x: 100, width: 220 }, confirmed: false });
+    const queued = deferred(); api.QueueEditProject.mockReturnValueOnce(queued.promise);
+    expect(w.get('[data-test="crop-export"]').element.disabled).toBe(false);
+    await w.get('[data-test="crop-export"]').trigger('click'); await flushPromises();
+    expect(api.QueueEditProject).toHaveBeenCalledExactlyOnceWith({ project_id: 1, expected_revision: 5, acknowledged_warnings: [] });
+    expect(w.get('[data-test="crop-margin-left"]').element.disabled).toBe(true);
+    expect(w.get('[data-test="crop-export"]').element.disabled).toBe(true);
+    queued.resolve({ queued: true, project: { ...w.vm.project, status: 'queued' } }); await flushPromises();
+    expect(w.vm.project.status).toBe('queued');
+  });
+  it.each(['success', 'failure'])('A自动保存延迟时切到B，B仍初始化并保存（A %s）', async outcome => {
+    const a = cropProject(), b = { ...cropProject(), id: 2 };
+    const slow = deferred();
+    api.GetEditProject.mockImplementation(async id => id === 1 ? a : b);
+    api.GetEditCropSource.mockResolvedValue({ video_id: 21, display_width: 320, display_height: 180, duration_ms: 2000, source_version: '12:34' });
+    api.UpdateEditRecipe.mockImplementation(request => request.project_id === 1 ? slow.promise : Promise.resolve({ ...b, revision: 4, recipe: request.recipe }));
+    const w = mount(VideoWorkbenchPage, { props: { openRequest: { projectID: 1 } } }); wrappers.push(w);
+    await flushPromises();
+    await w.vm.selectProject(2); await flushPromises();
+    expect(w.find('[data-test="crop-stage"]').exists()).toBe(true);
+    if (outcome === 'success') slow.resolve({ ...a, revision: 4, recipe: api.UpdateEditRecipe.mock.calls[0][0].recipe });
+    else slow.reject(new Error('保存A失败'));
+    await flushPromises();
+    expect(api.UpdateEditRecipe.mock.calls.map(([request]) => request.project_id)).toEqual([1, 2]);
+    expect(w.vm.project.id).toBe(2);
+    expect(w.vm.recipe.crop.items[0].rect.width).toBe(320);
+    expect(w.vm.saving).toBe(false);
+    await w.get('[data-test="crop-stage"] img').trigger('load');
+    expect(w.get('[data-test="crop-export"]').element.disabled).toBe(false);
+  });
+  it('旧快速模式裁剪草稿仍可切回精确模式', async () => {
+    const project = { ...cropProject(), mode: 'fast' };
+    const w = await mountPage(project);
+    await w.get('[data-test="crop-open-export"]').trigger('click');
+    api.UpdateEditRecipe.mockImplementation(async request => ({ ...project, mode: request.mode, revision: 4 }));
+    await w.get('[data-test="edit-mode-precise"]').setValue(); await flushPromises();
+    expect(api.UpdateEditRecipe.mock.calls.at(-1)[0].mode).toBe('precise');
+    expect(w.find('[data-test="edit-mode-fast"]').exists()).toBe(false);
+  });
+  it('实质警告展开导出设置，不自动勾选；用户确认后才排队', async () => {
+    const w = await openCrop();
+    const warnings = [{ key: 'crop_subtitle_position:1', message: '内嵌字幕位置可能受影响' }];
+    api.QueueEditProject.mockResolvedValueOnce({ queued: false, preflight: preflightFor(w.vm.project, { warnings }), unacknowledged: [warnings[0].key] });
+    await w.get('[data-test="crop-export"]').trigger('click'); await flushPromises();
+    expect(w.vm.exportOpen).toBe(true);
+    const checkbox = w.get('[data-test="edit-ack-crop_subtitle_position:1"]');
+    expect(checkbox.element.checked).toBe(false);
+    expect(w.get('[data-test="edit-queue"]').element.disabled).toBe(true);
+    await checkbox.setValue(true);
+    api.QueueEditProject.mockResolvedValueOnce({ queued: true, project: { ...w.vm.project, status: 'queued' } });
+    await w.get('[data-test="edit-queue"]').trigger('click'); await flushPromises();
+    expect(api.QueueEditProject.mock.calls[1][0].acknowledged_warnings).toEqual([warnings[0].key]);
+    expect(w.vm.project.status).toBe('queued');
+  });
+  it('保存中不导出；最新保存完成后用最新版本，预检错误仍阻止入队', async () => {
+    const w = await openCrop();
+    const save = deferred(); api.UpdateEditRecipe.mockReturnValueOnce(save.promise);
+    await w.get('[data-test="crop-margin-left"]').setValue(100);
+    expect(w.get('[data-test="crop-export"]').element.disabled).toBe(true);
+    await w.vm.queue([]);
+    expect(api.QueueEditProject).not.toHaveBeenCalled();
+    const recipe = api.UpdateEditRecipe.mock.calls.at(-1)[0].recipe;
+    save.resolve({ ...w.vm.project, revision: 5, recipe }); await flushPromises();
+    api.QueueEditProject.mockResolvedValueOnce({ queued: false, preflight: preflightFor(w.vm.project, { ready: false, errors: [{ key: 'source_changed', message: '来源已变化' }] }) });
+    await w.get('[data-test="crop-export"]').trigger('click'); await flushPromises();
+    expect(api.QueueEditProject.mock.calls[0][0].expected_revision).toBe(5);
+    expect(w.get('[data-test="edit-errors"]').text()).toContain('来源已变化');
+    expect(w.get('[data-test="edit-queue"]').element.disabled).toBe(true);
+    expect(w.vm.project.status).toBe('draft');
   });
 });
 

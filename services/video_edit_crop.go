@@ -51,6 +51,52 @@ type EditCropResult struct {
 	SourceVersion string        `json:"source_version"`
 }
 
+// CropSource 只读取当前裁剪素材的显示信息，不依赖黑边分析或导出预检。
+func (s *VideoEditService) CropSource(ctx context.Context, projectID, videoID uint) (*EditPreflightSource, error) {
+	project, err := loadEditProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	recipe, err := parseEditRecipe(project.RecipeJSON)
+	if err != nil {
+		return nil, err
+	}
+	member := false
+	if project.Kind == models.VideoEditKindCrop && recipe.Crop != nil {
+		for _, item := range recipe.Crop.Items {
+			if item.VideoID == videoID {
+				member = true
+				break
+			}
+		}
+	}
+	if !member {
+		return nil, editError("crop_invalid", "来源不属于当前裁剪项目")
+	}
+	if err := s.slot.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer s.slot.Release()
+	pre := &EditPreflight{}
+	sources, err := s.collectEditSources(ctx, pre, []uint{videoID})
+	if err != nil {
+		return nil, err
+	}
+	if len(pre.Errors) > 0 {
+		return nil, editError(pre.Errors[0].Code, "%s", pre.Errors[0].Message)
+	}
+	sc := sources[videoID]
+	size, modified, err := editFileFingerprint(sc.path)
+	if err != nil || size != sc.size || modified != sc.modTimeNS {
+		return nil, editError("source_changed", "读取期间来源发生变化，请重新读取画面")
+	}
+	info := pre.Sources[0]
+	if info.DisplayWidth < 2 || info.DisplayHeight < 2 {
+		return nil, editError("crop_invalid", "无法确定画面尺寸")
+	}
+	return &info, nil
+}
+
 func validateCropStructure(crop *EditCropRecipe) error {
 	if crop == nil || len(crop.Items) < 1 || len(crop.Items) > videoEditTrimMaxItems {
 		return editError("recipe_invalid", "画面裁剪需要 1–%d 项", videoEditTrimMaxItems)
@@ -139,9 +185,6 @@ func (s *VideoEditService) buildCropPlans(ctx context.Context, pre *EditPrefligh
 			}
 		}
 
-		if !item.Confirmed {
-			pre.addError("unconfirmed", "unconfirmed:"+key, item.VideoID, seq, "第 %d 项尚未确认裁剪区域", seq)
-		}
 		b := newEditPlanBuilder(seq, models.VideoEditKindCrop, mode)
 		b.plan.Video = s.planVideoSpec(sc, mode)
 		rect := *item.Rect
@@ -154,7 +197,9 @@ func (s *VideoEditService) buildCropPlans(ctx context.Context, pre *EditPrefligh
 			InMS: start, RequestedInMS: start, DurMS: end - start,
 			Audio: audio.segmentRefs(item.VideoID, source, start), Subtitles: subs.segmentRefs(item.VideoID, source, start), SidecarSource: source, SidecarInMS: start})
 		s.completeEditPlan(pre, b, []*editSourceCtx{sc}, sc, " (裁剪)", audio, subs)
-		pre.addWarning("crop_content", "crop_content:"+key, item.VideoID, seq, "《%s》框外画面（包括画面内字幕）将被裁掉；内嵌字幕定位可能受影响，请检查多个时间点", sc.video.Name)
+		if len(sc.probe.Subtitles) > 0 && (rect.X != 0 || rect.Y != 0 || rect.Width != width || rect.Height != height) {
+			pre.addWarning("crop_subtitle_position", "crop_subtitle_position:"+key, item.VideoID, seq, "《%s》含内嵌字幕，裁剪后字幕定位可能受影响，请检查成品", sc.video.Name)
+		}
 		plans = append(plans, b.plan)
 	}
 	return plans

@@ -726,6 +726,10 @@ export function GetDatabaseSwitchStatus() {
   return window['go']['main']['App']['GetDatabaseSwitchStatus']();
 }
 
+export function GetEditCropSource(arg1, arg2) {
+  return window['go']['main']['App']['GetEditCropSource'](arg1, arg2);
+}
+
 export function GetEditProject(arg1) {
   return window['go']['main']['App']['GetEditProject'](arg1);
 }

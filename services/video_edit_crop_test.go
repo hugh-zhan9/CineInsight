@@ -76,7 +76,7 @@ func TestVideoEditCropPreflight(t *testing.T) {
 		confirmed     bool
 		version, code string
 	}{
-		{"unconfirmed", &EditCropRect{X: 110, Width: 100, Height: 180}, false, version, "unconfirmed"},
+		{"unconfirmed", &EditCropRect{X: 110, Width: 100, Height: 180}, false, version, ""},
 		{"negative", &EditCropRect{X: -2, Width: 100, Height: 180}, true, version, "crop_invalid"},
 		{"odd", &EditCropRect{X: 111, Width: 100, Height: 180}, true, version, "crop_invalid"},
 		{"zero", &EditCropRect{Width: 0, Height: 180}, true, version, "crop_invalid"},
@@ -437,5 +437,97 @@ func TestVideoEditCropContinueSkipsCompletedSource(t *testing.T) {
 	p, plans, err := s.preflight(context.Background(), project, view.Recipe, map[int]bool{1: true})
 	if err != nil || !p.Ready || len(plans) != 1 || plans[0].Seq != 2 || len(p.Sources) != 1 || p.Sources[0].VideoID != b.ID {
 		t.Fatalf("continue completed source: %+v %+v %v", p, plans, err)
+	}
+}
+
+func TestVideoEditCropSourceReadOnly(t *testing.T) {
+	s, media := newFakeEditService(t)
+	a := media.addFakeSource(t, t.TempDir(), "a.mkv", 4000)
+	b := media.addFakeSource(t, t.TempDir(), "b.mkv", 4000)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, a.ID)
+	calls := 0
+	s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
+		calls++
+		if args[len(args)-1] != a.Path {
+			t.Fatalf("unexpected media command: %v", args)
+		}
+		return media.output(ctx, name, args)
+	}
+	s.listEncoders = func(context.Context, string) (map[string]bool, error) {
+		t.Fatal("source read checked encoders")
+		return nil, nil
+	}
+	s.diskFree = func(string) (uint64, error) { t.Fatal("source read checked disk space"); return 0, nil }
+	info, err := s.CropSource(context.Background(), view.ID, a.ID)
+	if err != nil || info.DisplayWidth != 320 || info.DisplayHeight != 180 || info.DurationMS != 4000 || info.SourceVersion == "" || calls != 1 {
+		t.Fatalf("source: %+v, calls=%d, err=%v", info, calls, err)
+	}
+	current, _ := s.GetProject(context.Background(), view.ID)
+	if current.Revision != view.Revision || current.Recipe.Crop.Items[0].Rect != nil || current.Analysis != nil {
+		t.Fatalf("read mutated project: %+v", current)
+	}
+	if _, err := s.CropSource(context.Background(), view.ID, b.ID); VideoEditErrorCode(err) != "crop_invalid" {
+		t.Fatalf("nonmember: %v", err)
+	}
+	merge := mustEditProject(t, s, models.VideoEditKindMerge, a.ID, b.ID)
+	if _, err := s.CropSource(context.Background(), merge.ID, a.ID); VideoEditErrorCode(err) != "crop_invalid" {
+		t.Fatalf("wrong kind: %v", err)
+	}
+	s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
+		out, tail, err := media.output(ctx, name, args)
+		writeEditTestFile(t, a.Path, "changed source contents")
+		return out, tail, err
+	}
+	if _, err := s.CropSource(context.Background(), view.ID, a.ID); VideoEditErrorCode(err) != "source_changed" {
+		t.Fatalf("changed during read: %v", err)
+	}
+	s.runOutput = func(context.Context, string, []string) (string, string, error) {
+		return "", "", context.DeadlineExceeded
+	}
+	if _, err := s.CropSource(context.Background(), view.ID, a.ID); VideoEditErrorCode(err) != "probe_failed" {
+		t.Fatalf("probe failed: %v", err)
+	}
+}
+
+func TestVideoEditCropDirectQueueAndSubtitleWarning(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		subtitles int
+		full      bool
+		warning   bool
+	}{
+		{"plain", 0, false, false}, {"subtitles", 1, false, true}, {"full_frame_subtitles", 1, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, media := newFakeEditService(t)
+			v := media.addFakeSource(t, t.TempDir(), "manual.mkv", 4000)
+			media.setProbe(v.Path, fakeEditProbeJSON(320, 180, 4000, []string{"jpn"}, tc.subtitles))
+			view := mustEditProject(t, s, models.VideoEditKindCrop, v.ID)
+			source, err := s.CropSource(context.Background(), view.ID, v.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view = mustUpdateRecipe(t, s, view, func(r *EditRecipe) {
+				rect := &EditCropRect{X: 110, Width: 100, Height: 180}
+				if tc.full {
+					rect = &EditCropRect{Width: 320, Height: 180}
+				}
+				r.Crop.Items[0].Rect, r.Crop.Items[0].SourceVersion = rect, source.SourceVersion
+			})
+			pauseEditWorker(s)
+			result, err := s.QueueProject(context.Background(), EditQueueRequest{ProjectID: view.ID, ExpectedRevision: view.Revision})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.warning {
+				if result.Queued || len(result.Unacknowledged) != 1 || result.Unacknowledged[0] != "crop_subtitle_position:1" {
+					t.Fatalf("missing subtitle warning: %+v", result)
+				}
+				result = queueAllAcknowledged(t, s, view.ID)
+			}
+			if !result.Queued {
+				t.Fatalf("manual crop without analysis/confirmation did not queue: %+v", result)
+			}
+		})
 	}
 }

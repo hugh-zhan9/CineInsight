@@ -31,7 +31,8 @@
             <span v-if="saving" class="help-text" data-test="workbench-saving">正在保存…</span>
             <button v-if="cancellable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
             <button v-if="duplicable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
-            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :aria-expanded="exportOpen" data-test="crop-open-export" @click="exportOpen = !exportOpen">导出…</button>
+            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--secondary btn--sm" :aria-expanded="exportOpen" data-test="crop-open-export" @click="exportOpen = !exportOpen">导出设置</button>
+            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :disabled="queueBusy || saving || cropInteracting || (editable && !cropReady)" data-test="crop-export" @click="queue([])">{{ queueBusy ? '正在检查并导出…' : (requeueable ? '继续未完成项' : '导出') }}</button>
           </header>
           <p v-if="project.error_message && project.status !== 'completed'" class="edit-error" data-test="workbench-project-error">{{ project.error_message }}</p>
           <p v-if="!editable && project.status !== 'analyzing'" class="help-text" data-test="workbench-readonly">项目已排队或已导出，配方只读。</p>
@@ -40,7 +41,7 @@
             :is="editorComponent"
             :key="`editor-${project.id}`"
             :recipe="recipe"
-            :editable="editable"
+            :editable="editable && !queueBusy"
             :preflight="preflight"
             :preflight-loading="preflightLoading"
             :fast-preflight="fastPreflight"
@@ -48,11 +49,14 @@
             :analyzing="analyzing"
             :analysis-progress="analysisProgress"
             :navigate-frame="navigateFrame"
+            :load-source="loadCropSource"
             :videos="videos"
             @change="onRecipeChange"
             @analyze="analyze"
             @cancel-analysis="cancelAnalysis"
             @run-preflight="runPreflight"
+            @ready="cropReady = $event"
+            @interacting="cropInteracting = $event"
           />
 
           <aside v-if="showExport" v-show="project.kind !== 'crop' || exportOpen" :class="{ 'workbench-export-drawer': project.kind === 'crop' }" aria-label="导出设置" @keydown.esc.stop="exportOpen = false">
@@ -64,9 +68,9 @@
             :preflight="preflight"
             :loading="preflightLoading"
             :error="preflightError"
-            :editable="editable"
+            :editable="editable && !queueBusy"
             :requeue="requeueable"
-            :busy="queueBusy || saving"
+            :busy="queueBusy || saving || (project.kind === 'crop' && (cropInteracting || (editable && !cropReady)))"
             :missing-keys="missingKeys"
             :videos="videos"
             @run-preflight="runPreflight"
@@ -91,7 +95,7 @@
 
 <script>
 import {
-  NavigateEditFrame, AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
+  GetEditCropSource, NavigateEditFrame, AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
   ListEditProjects, ListEditProjectsBefore, PreflightEditProject, QueueEditProject, RequeueEditProject, UpdateEditRecipe
 } from '../../wailsjs/go/main/App';
 import EditExportPanel from './video-workbench/EditExportPanel.vue';
@@ -148,6 +152,7 @@ export default {
       baseRevision: 0,
       videos: {},
       saving: false,
+      savingProjectID: 0,
       pendingRecipe: null,
       pendingMode: '',
       preflight: null,
@@ -157,6 +162,8 @@ export default {
       preflightError: '',
       missingKeys: [],
       queueBusy: false,
+      cropReady: false,
+      cropInteracting: false,
       analysisProgress: 0,
       busy: {}
     };
@@ -291,6 +298,8 @@ export default {
       const projectID = Number(id);
       if (projectID !== this.selectedId) {
         this.exportOpen = false;
+        this.cropReady = false;
+        this.cropInteracting = false;
         this.selectedId = projectID;
         this.project = null;
         this.recipe = null;
@@ -303,7 +312,7 @@ export default {
         this.analysisProgress = 0;
       }
       const view = await this.loadProject(projectID);
-      if (view && (view.status === 'draft' || EDIT_REQUEUEABLE.includes(view.status))) this.runPreflight();
+      if (view && view.kind !== 'crop' && (view.status === 'draft' || EDIT_REQUEUEABLE.includes(view.status))) this.runPreflight();
       if (view?.status === 'analyzing') this.loadAnalysisStatus();
       return view;
     },
@@ -343,7 +352,7 @@ export default {
         this.preflightError = '';
       }
       this.project = view;
-      if (!this.saving && !this.pendingRecipe) {
+      if ((!this.saving || this.savingProjectID !== view.id || !this.recipe) && !this.pendingRecipe) {
         this.recipe = cloneRecipe(view.recipe);
         this.baseRevision = view.revision;
       }
@@ -370,7 +379,7 @@ export default {
       }
     },
     onRecipeChange(next) {
-      if (!this.editable) return;
+      if (!this.editable || this.queueBusy) return;
       this.recipe = next;
       this.pendingRecipe = next;
       this.flushSaves();
@@ -387,6 +396,7 @@ export default {
       if (this.saving) return;
       this.saving = true;
       const projectID = this.selectedId;
+      this.savingProjectID = projectID;
       let failure = null;
       try {
         while (this.pendingRecipe && projectID === this.selectedId) {
@@ -395,18 +405,25 @@ export default {
           this.pendingRecipe = null;
           this.pendingMode = '';
           const view = await UpdateEditRecipe({ project_id: projectID, expected_revision: this.baseRevision, recipe, mode, title: '' });
-          if (projectID !== this.selectedId) return;
+          if (projectID !== this.selectedId) break;
           this.baseRevision = view.revision;
           this.acceptProject(view);
         }
       } catch (err) {
         failure = err;
-        this.pendingRecipe = null;
-        this.pendingMode = '';
+        if (projectID === this.selectedId) {
+          this.pendingRecipe = null;
+          this.pendingMode = '';
+        }
       } finally {
         this.saving = false;
+        this.savingProjectID = 0;
       }
-      if (projectID !== this.selectedId) return;
+      if (projectID !== this.selectedId) {
+        if (failure) notifyError(`项目 #${projectID} 的修改未保存：${editErrorText(failure)}`);
+        if (this.pendingRecipe) this.flushSaves();
+        return;
+      }
       if (failure) {
         if (isEditConflict(failure)) notify('项目已在别处被修改（例如自动识别刚写回结果），已刷新；刚才的修改没有保存。');
         else notifyError(`保存失败：${editErrorText(failure)}`);
@@ -416,6 +433,7 @@ export default {
         this.baseRevision = this.project.revision;
       }
     },
+    loadCropSource(videoID) { return GetEditCropSource(this.selectedId, videoID); },
     navigateFrame(request) { return NavigateEditFrame({ ...request, project_id: this.selectedId }); },
     async analyze(windowMs) {
       if (!this.editable) return;
@@ -462,7 +480,7 @@ export default {
     // 不排队，把新的预检结果与缺的警告标出来。
     async queue(acknowledged) {
       const project = this.project;
-      if (!project || this.queueBusy) return;
+      if (!project || this.queueBusy || this.saving || this.pendingRecipe || (project.kind === 'crop' && (this.cropInteracting || (this.editable && !this.cropReady)))) return;
       const requeue = EDIT_REQUEUEABLE.includes(project.status);
       const request = { project_id: project.id, expected_revision: project.revision, acknowledged_warnings: [...(acknowledged || [])] };
       this.queueBusy = true;
@@ -476,12 +494,14 @@ export default {
           this.loadList();
           return;
         }
+        this.exportOpen = true;
         this.preflightGeneration.next();
         this.preflightLoading = false;
         if (result?.preflight) this.preflight = result.preflight;
         this.missingKeys = result?.unacknowledged || [];
         notify(this.missingKeys.length ? '还有警告没有确认，请逐条勾选后再导出。' : '预检有阻止导出的问题，请先处理。');
       } catch (err) {
+        if (project.id === this.selectedId && project.kind === 'crop') { this.exportOpen = true; this.preflightError = editErrorText(err); }
         notifyError(`${requeue ? '继续' : '排队'}失败：${editErrorText(err)}`);
         if (isEditConflict(err)) await this.loadProject(project.id);
       } finally {
