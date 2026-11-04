@@ -310,6 +310,8 @@ export function FilterActiveTagIDs(arg1:Array<number>):Promise<services.ActiveTa
 
 export function FindSimilarVideos(arg1:services.SemanticSimilarRequest):Promise<services.SemanticSearchPage>;
 
+export function FinishMediaExplorationClose(arg1:string,arg2:string):Promise<void>;
+
 export function ForceGenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
 
 export function ForceRemoveTrashRecords(arg1:string,arg2:Array<number>,arg3:string):Promise<services.BatchResult>;
@@ -433,6 +435,8 @@ export function GetLocalMetadataExportStatus():Promise<services.LocalMetadataExp
 export function GetLostMediaReport(arg1:string):Promise<services.LostMediaReport>;
 
 export function GetMapTileStatus():Promise<services.MapTileStatusResult>;
+
+export function GetMediaExplorationItems(arg1:services.ExplorationItemsRequest):Promise<services.ExplorationCardsResult>;
 
 export function GetMetadataCompleteness():Promise<services.MetadataCompleteness>;
 
@@ -691,6 +695,8 @@ export function NextPlaybackQueue(arg1:string,arg2:number):Promise<void>;
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function OpenImageDirectory(arg1:string):Promise<void>;
+
+export function OpenMediaExploration(arg1:string):Promise<services.ExplorationResult>;
 
 export function OpenMovieChartYear(arg1:number):Promise<boolean>;
 
@@ -1085,6 +1091,8 @@ export function UpdateDirectoryWithMode(arg1:number,arg2:string,arg3:string,arg4
 export function UpdateEditRecipe(arg1:services.EditRecipeUpdateRequest):Promise<services.EditProjectView>;
 
 export function UpdateImageDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function UpdateMediaExploration(arg1:services.ExplorationRequest):Promise<services.ExplorationResult>;
 
 export function UpdatePerson(arg1:number,arg2:string,arg3:string):Promise<models.Person>;
 

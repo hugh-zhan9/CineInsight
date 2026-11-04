@@ -96,6 +96,9 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 		log.Printf("App beforeClose relaunch pending, quit allowed")
 		return false
 	}
+	if a.beforeExplorationClose(ctx) {
+		return true
+	}
 	tasks := a.quitBlockingTasks()
 	if len(tasks) == 0 {
 		return false

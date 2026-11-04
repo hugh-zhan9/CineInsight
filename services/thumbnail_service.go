@@ -65,6 +65,8 @@ type ThumbnailService struct {
 	spriteJobs              sync.Map
 	spriteSem               chan struct{}
 	cacheMu                 sync.Mutex
+	explorationOnce         sync.Once
+	explorationCache        *explorationThumbnailCache
 }
 
 // NewThumbnailService 创建缩略图服务。

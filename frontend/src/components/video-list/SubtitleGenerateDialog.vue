@@ -264,7 +264,7 @@ export default {
     }
   },
   computed: {
-    languageOptions() { return [{ label: '自动检测', value: 'auto' }, ...(this.selectedSubtitleEngineStatus?.languages || []).map(language => ({ label: `${language.name}${language.installed ? '（已准备）' : ''}`, value: language.code }))]; },
+    languageOptions() { return [{ label: '自动检测', value: 'auto' }, ...(this.selectedSubtitleEngineStatus?.languages || []).map(language => ({ label: `${language.name}${language.installed ? '（本机可用）' : ''}`, value: language.code }))]; },
     installedLanguageNames() { return [...new Set((this.selectedSubtitleEngineStatus?.languages || []).filter(language => language.installed).map(language => language.name))].join('、'); },
     selectedSubtitleEngineStatus() {
       return this.subtitleEngineStatuses.find(status => status.engine === this.selectedSubtitleEngine) || null;
@@ -373,7 +373,7 @@ export default {
       try {
         await PrepareAppleSubtitleLanguage(source, '', false);
         if (sequence !== this.languageRequest) return;
-        this.languageMessage = '所选语言已准备好。';
+        this.languageMessage = '所选语言可用于本机识别。';
         await this.loadSubtitleEngineStatuses();
       } catch (err) { if (sequence === this.languageRequest) this.languageMessage = subtitleExceptionText(err); }
       finally { if (sequence === this.languageRequest) { this.preparingLanguage = false; this.prepareState.cancelling = false; } }

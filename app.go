@@ -31,6 +31,8 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
+	mediaExploration               *services.MediaExplorationService
+	explorationQuit                explorationQuitState
 	bt                             *appBTState
 	functionalTransitionMu         sync.Mutex
 	functionalMu                   sync.Mutex
@@ -245,6 +247,7 @@ func NewApp() *App {
 		return data, err
 	})
 	app.textAI = services.NewTextAIService()
+	app.mediaExploration = services.NewMediaExplorationService()
 	app.mapTiles = services.NewMapTileService(dataDir, app.settingsService)
 	app.chapters = services.NewChapterService(app.textAI)
 	app.chapters.SetBackgroundTaskRegistry(app.backgroundTasks)
@@ -672,6 +675,7 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.stopExplorationQuit()
 	if err := a.stopBT(context.Background()); err != nil {
 		log.Printf("下载管理本地任务退出未完成")
 	}

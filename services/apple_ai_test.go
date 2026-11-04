@@ -229,7 +229,7 @@ func TestAppleErrorMessagesForMacOS15Paths(t *testing.T) {
 	for code, want := range map[string]string{
 		"apple_platform_unsupported":     "需要 macOS 15 或更新版本",
 		"apple_speech_permission_denied": "「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策",
-		"apple_speech_dictation_missing": "「系统设置 › 键盘 › 听写」中添加该语言",
+		"apple_speech_dictation_missing": "所选语言当前不能进行本机识别",
 		"apple_face_unsupported":         "人脸识别不可用",
 		"apple_face_version_changed":     "人脸识别不可用",
 	} {
@@ -240,6 +240,18 @@ func TestAppleErrorMessagesForMacOS15Paths(t *testing.T) {
 		if reason := appleAIReason(err); strings.Contains(reason, code) || !strings.Contains(reason, want) {
 			t.Fatalf("user-facing reason keeps the code: %q", reason)
 		}
+	}
+}
+
+func TestAppleLegacyOfflineUnavailableDoesNotClaimMissingDownload(t *testing.T) {
+	reason := appleAIReason(appleAIError("apple_speech_dictation_missing"))
+	for _, required := range []string{"「系统设置 › 键盘 › 听写」", "不保证本机识别可用", "保持本地识别"} {
+		if !strings.Contains(reason, required) {
+			t.Fatalf("missing capability guidance %q: %s", required, reason)
+		}
+	}
+	if strings.Contains(reason, "尚未下载") || strings.Contains(reason, "改用在线") {
+		t.Fatalf("misleading legacy capability guidance: %s", reason)
 	}
 }
 

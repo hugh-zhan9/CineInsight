@@ -75,6 +75,36 @@ afterEach(() => {
 });
 
 describe('InlineVideoPlayer 会话（D-UI-11）', () => {
+  it('探索用途不生成代理，也不创建正式观看会话', async () => {
+    const preparing = await mountPlayer({ usage: 'browse-preview', session: preparingSession(1) });
+    expect(api.RequestPreviewProxy).not.toHaveBeenCalled();
+    expect(preparing.text()).toContain('在详情中准备播放');
+    const player = await mountPlayer({ usage: 'browse-preview', session: inlineSession(1, { source_version: 'v1' }), bookmarkRange: { startMS: 10000, endMS: 18000, sourceToken: 'v1' } });
+    expect(player.vm.viewSession).toBeNull();
+    const video = player.get('video');
+    const state = fakePlayer(video.element, { duration: 100 });
+    state.currentTime = 10;
+    await video.trigger('play'); await video.trigger('playing');
+    state.currentTime = 18.3;
+    await video.trigger('timeupdate');
+    expect(state.paused).toBe(true);
+    expect(state.currentTime).toBe(18);
+    state.currentTime = 1; await video.trigger('seeking');
+    expect(state.currentTime).toBe(10);
+    await video.trigger('pause'); await video.trigger('ended'); await flushPromises();
+    expect(player.emitted('watch-progress')).toBeUndefined();
+    expect(api.RecordViewEvent).not.toHaveBeenCalled();
+  });
+
+  it('探索用途切换时销毁原观看会话，回到正式用途重新创建', async () => {
+    const wrapper = await mountPlayer();
+    const original = wrapper.vm.viewSession.id;
+    await wrapper.setProps({ usage: 'browse-preview' }); await flushPromises();
+    expect(wrapper.vm.viewSession).toBeNull();
+    await wrapper.setProps({ usage: 'playback' }); await flushPromises();
+    expect(wrapper.vm.viewSession.id).not.toBe(original);
+  });
+
   it('受控：用宿主给的会话，不自己取；null 时显示准备中', async () => {
     const waiting = await mountPlayer({ session: null });
     expect(waiting.text()).toContain('正在准备预览…');

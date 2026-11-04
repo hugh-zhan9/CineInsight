@@ -46,6 +46,7 @@
   <!-- 播放器区域不论主题都是深色（--player-bg）：用影院表面让里面的提示文字与按钮按深色配色，浅色主题下也看得清。 -->
   <div class="inline-player surface-cinema">
     <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
+    <div v-else-if="browsePreview && (activeSession.mode !== 'inline' || inlinePlaybackFailed)" class="preview-drawer__placeholder" role="status" data-test="exploration-preview-unavailable">在详情中准备播放</div>
     <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
       <dialog open ref="playerShell" class="preview-drawer__player-shell playback-shell" aria-label="视频播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
         <component :is="'media-controller'" ref="playerSurface" :id="`detail-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand">
@@ -70,7 +71,7 @@
           <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
         </video>
         <PlaybackControls :key="`controls-${previewMediaGeneration}`" ref="controls" :video-element="() => $refs.videoElement" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" @seek-hover="handleSeekPointerMove" @seek-leave="seekPreview = null">
-          <template #settings><PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" :playback-range="bookmarkRangeActive ? readyBookmark : null" @menu-change="$refs.controls?.holdControls($event)" /></template>
+          <template v-if="!browsePreview" #settings><PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" :playback-range="bookmarkRangeActive ? readyBookmark : null" @menu-change="$refs.controls?.holdControls($event)" /></template>
           <template v-if="activeSeekSprite" #seek-preview>
           <div
             v-if="seekPreview"
@@ -144,6 +145,7 @@ export default {
   components: { PlaybackControls, PlaybackSubtitleControls },
   props: {
     videoId: { type: Number, required: true },
+    usage: { type: String, default: 'playback', validator: value => ['playback', 'browse-preview'].includes(value) },
     // 不传（undefined）表示由组件自己取会话；传 null 表示宿主还在取。
     session: { type: Object, default: undefined },
     startTimeMs: { type: Number, default: null },
@@ -160,7 +162,7 @@ export default {
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false, autoplayPending: false,
       // 本次观看会话（D-PC43）：整个对象换掉时可被宿主读到，里面的累计量高频变化，不做响应式。
       viewSession: null,
-      bookmarkRangeActive: false,
+      bookmarkRangeActive: false, previewRangeEnded: false,
       seekPreview: null, seekSpriteUnavailable: false, seekSpriteRetryCount: 0, seekSpriteRetryTimer: null,
       inlinePlaybackFailed: false,
       playbackProxy: null, proxyBusy: false, proxyError: '', proxyNotice: '',
@@ -172,6 +174,7 @@ export default {
     };
   },
   computed: {
+    browsePreview() { return this.usage === 'browse-preview'; },
     controlled() { return this.session !== undefined; },
     activeSession() { return this.controlled ? this.session : this.ownSession; },
     // 会话里带 proxy 就说明这次内嵌播放走的是代理（后端 D-004 标注）。
@@ -192,6 +195,7 @@ export default {
       return !!(range && this.activeSession && 'sourceToken' in range && this.activeSession.source_version !== range.sourceToken);
     },
     activeSeekSprite() {
+      if (this.browsePreview) return null;
       const sprite = this.activeSession?.seek_sprite;
       if (this.seekSpriteUnavailable || !sprite?.locator_value) return null;
       const numericFields = ['frame_width', 'frame_height', 'columns', 'rows', 'frame_count', 'interval_seconds'];
@@ -232,11 +236,13 @@ export default {
     showsProxyState() { return ['proxy-preparing', 'proxy-manual'].includes(this.activeSession?.mode) || this.inlinePlaybackFailed; }
   },
   watch: {
+    usage() { this.pause(); this.resetVideoElement(); this.cancelAutoProxy(); this.startViewSession(this.activeSession); this.previewMediaGeneration++; this.resetForVideo(); this.$nextTick(() => this.configureVideoElement()); },
     // 书签先于会话处理：创建时还没有观看会话，不会提前把起播来源定成 jump（与抽屉原先的顺序一致）。
     bookmarkRange: {
       immediate: true,
       handler(range) {
         this.bookmarkRangeActive = range?.endMS != null;
+        this.previewRangeEnded = false;
         this.appliedSeekKey = '';
         if (range && this.viewSession) this.viewSession.origin = 'jump';
         this.$nextTick(() => this.configureVideoElement());
@@ -312,6 +318,7 @@ export default {
       this._loadToken = token;
       this.playbackProxy = null; this.proxyError = ''; this.proxyNotice = ''; this.proxyBlocked = ''; this.proxyBusy = false; this.proxyTracking = null;
       if (!videoID) return;
+      if (this.browsePreview) return;
       this.loadPlaybackProxy(videoID, token);
       this.loadProxyQueueState(videoID, token);
       if (!this.controlled) { this.ownSession = null; this.loadOwnSession(videoID, token, false); }
@@ -368,6 +375,7 @@ export default {
     // 每次请求带一个新的 owner 令牌（实例 id + 序号）。别的宿主已经排进去的一部，这里也照样登记自己的令牌（后端去重）：
     // 不登记的话别人一关就把它取消了。撤销只撤自己这一次的令牌，快速 A→B→A 时迟到的撤销碰不到新的登记。
     requestAutoProxy() {
+      if (this.browsePreview) return;
       const videoID = Number(this.videoId);
       // 用户刚在这次预览里删掉了这一部的代理：不当场又生成一份（换片或重新打开后照常自动）。
       if (!videoID || this._autoProxySuppressedFor === videoID || this._autoProxy?.videoID === videoID) return;
@@ -404,6 +412,7 @@ export default {
     },
     // 入队（手动 CreatePlaybackProxy 或自动 RequestPreviewProxy）只负责排进队列、立即返回，进度跟着事件走。
     async submitPlaybackProxy(request) {
+      if (this.browsePreview) return;
       if (this.proxyBusy || this.proxyPending || !Number(this.videoId)) return;
       const videoID = Number(this.videoId); const token = this._loadToken;
       this.proxyBusy = true; this.proxyError = ''; this.proxyNotice = '';
@@ -430,6 +439,7 @@ export default {
     // 只有正在等的那一项（proxyTracking）有了结果、或整轮结束时，才收尾一次。
     // 入队请求还没返回时，事件里的空白或旧结果都不算数（那一刻队列里还没有这一项）。
     applyProxyStatus(status, { fromEvent = true } = {}) {
+      if (this.browsePreview) return;
       const videoID = Number(this.videoId);
       if (!status || !videoID) return;
       const tracking = this.proxyTracking?.videoID === videoID ? this.proxyTracking : null;
@@ -502,7 +512,7 @@ export default {
     startViewSession(session) {
       const inline = session?.mode === 'inline' && session?.inline_source;
       const videoID = Number(session?.video_id || this.videoId || 0);
-      this.viewSession = inline && videoID
+      this.viewSession = !this.browsePreview && inline && videoID
         ? markRaw({ id: newViewSessionID(), videoID, origin: '', accumulator: createPlaybackAccumulator(), recorded: false })
         : null;
     },
@@ -515,6 +525,12 @@ export default {
       if (this.viewSession) this.viewSession.ended = true;
     },
     handlePlay() {
+      if (this.browsePreview) {
+        const video = this.$refs.videoElement, range = this.readyBookmark;
+        if (!video || !range) { video?.pause(); return; }
+        if (video.currentTime * 1000 >= range.endMS || video.currentTime * 1000 < range.startMS) video.currentTime = range.startMS / 1000;
+        this.bookmarkRangeActive = true; this.previewRangeEnded = false;
+      }
       claimActivePlayer(this._activeHandle);
       if (this.viewSession?.ended) this.startViewSession(this.activeSession);
       this.hasPlaybackStarted = true;
@@ -534,19 +550,29 @@ export default {
       this.viewSession?.accumulator.breakSegment();
       this.emitWatchProgress(true, false);
     },
-    handleSeeking() { this.viewSession?.accumulator.breakSegment(); },
+    handleSeeking() {
+      this.viewSession?.accumulator.breakSegment();
+      if (this.browsePreview && this.readyBookmark && this.$refs.videoElement) {
+        const video = this.$refs.videoElement;
+        const position = Math.max(this.readyBookmark.startMS / 1000, Math.min(this.readyBookmark.endMS / 1000, video.currentTime));
+        if (position !== video.currentTime) video.currentTime = position;
+      }
+    },
     handleTimeUpdate() {
       const video = this.$refs.videoElement;
       if (video && !video.paused && !video.seeking) this.viewSession?.accumulator.sample(video.currentTime, Date.now(), video.playbackRate);
       if (video && this.readyBookmark && this.bookmarkRangeActive && Number(video.currentTime) * 1000 >= this.readyBookmark.endMS) {
-        this.bookmarkRangeActive = false;
-        this.$emit('bookmark-range-end', this.readyBookmark);
+        this.bookmarkRangeActive = this.browsePreview;
+        if (this.browsePreview && Math.abs(video.currentTime * 1000 - this.readyBookmark.endMS) > 1) video.currentTime = this.readyBookmark.endMS / 1000;
+        if (!this.browsePreview || !this.previewRangeEnded) this.$emit('bookmark-range-end', this.readyBookmark);
+        this.previewRangeEnded = true;
         video.pause();
       }
       this.maybeRecordView(false);
       this.emitWatchProgress(false, false);
     },
     maybeRecordView(completedHint) {
+      if (this.browsePreview) return;
       const session = this.viewSession;
       if (!session || session.recorded || (!this.hasPlaybackStarted && !completedHint)) return;
       const video = this.$refs.videoElement;
@@ -561,6 +587,7 @@ export default {
         .catch(err => console.error('记录有效观看失败:', err));
     },
     emitWatchProgress(force, completed, videoID = null) {
+      if (this.browsePreview) return;
       if (this.resettingVideo) return;
       this.maybeRecordView(completed);
       if (!this.hasPlaybackStarted && !completed) return; const video = this.$refs.videoElement; const positionSeconds = Number(video?.currentTime || 0);

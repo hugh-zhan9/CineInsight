@@ -7,6 +7,8 @@ func AllModels() []interface{} {
 	// models.TestAllModelsIsTopologicallyOrdered 保持通过。
 	// （隐式多对多的关联表由迁移器在全部模型之后单独复制，不受此约束。）
 	return []interface{}{
+		&MediaExplorationState{},
+		&MediaExplorationEntry{},
 		&Video{},
 		// Image 紧跟 Video：short_feed_image_interactions、image_people、
 		// image_trash_entries 等一大批表都有外键指向 images，它排在后面的话

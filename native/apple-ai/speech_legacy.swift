@@ -9,8 +9,8 @@ final class Once: @unchecked Sendable {
     func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done=true; return true }
 }
 
-/// macOS 15: on-device SFSpeechRecognizer. Its languages are the dictation languages the user downloads in
-/// System Settings › Keyboard › Dictation; this helper cannot download them programmatically.
+/// macOS 15: on-device SFSpeechRecognizer. supportsOnDeviceRecognition describes current offline capability,
+/// not an asset inventory. prepare checks capability and permission; it does not download speech assets.
 struct LegacySpeech: SpeechEngine {
     /// Bounded wait for the user to answer the speech recognition permission prompt.
     static let authorizationTimeout=60.0

@@ -102,9 +102,11 @@ func (a *App) initializeFunctionalPolish() error {
 	a.functionalContext, a.functionalCancel = context.WithCancel(context.Background())
 	a.functionalPaused = false
 	a.functionalMu.Unlock()
+	a.notifyExplorationLifecycle("exploration-resumed")
 	return err
 }
 func (a *App) stopFunctionalPolish(shutdown bool) {
+	a.notifyExplorationLifecycle("exploration-quiesced")
 	a.functionalTransitionMu.Lock()
 	defer a.functionalTransitionMu.Unlock()
 	a.functionalMu.Lock()

@@ -610,6 +610,10 @@ export function FindSimilarVideos(arg1) {
   return window['go']['main']['App']['FindSimilarVideos'](arg1);
 }
 
+export function FinishMediaExplorationClose(arg1, arg2) {
+  return window['go']['main']['App']['FinishMediaExplorationClose'](arg1, arg2);
+}
+
 export function ForceGenerateSubtitle(arg1) {
   return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
 }
@@ -856,6 +860,10 @@ export function GetLostMediaReport(arg1) {
 
 export function GetMapTileStatus() {
   return window['go']['main']['App']['GetMapTileStatus']();
+}
+
+export function GetMediaExplorationItems(arg1) {
+  return window['go']['main']['App']['GetMediaExplorationItems'](arg1);
 }
 
 export function GetMetadataCompleteness() {
@@ -1372,6 +1380,10 @@ export function OpenDirectory(arg1) {
 
 export function OpenImageDirectory(arg1) {
   return window['go']['main']['App']['OpenImageDirectory'](arg1);
+}
+
+export function OpenMediaExploration(arg1) {
+  return window['go']['main']['App']['OpenMediaExploration'](arg1);
 }
 
 export function OpenMovieChartYear(arg1) {
@@ -2160,6 +2172,10 @@ export function UpdateEditRecipe(arg1) {
 
 export function UpdateImageDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateImageDirectory'](arg1, arg2, arg3);
+}
+
+export function UpdateMediaExploration(arg1) {
+  return window['go']['main']['App']['UpdateMediaExploration'](arg1);
 }
 
 export function UpdatePerson(arg1, arg2, arg3) {

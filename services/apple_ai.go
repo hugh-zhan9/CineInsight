@@ -79,7 +79,7 @@ func appleAIError(code string) error {
 		"apple_helper_missing":               "苹果系统组件未随应用打包，请重新构建或安装完整应用",
 		"apple_speech_language_missing":      "该识别语言尚未准备，请先准备系统语音资源",
 		"apple_speech_permission_denied":     "请在「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策后重试",
-		"apple_speech_dictation_missing":     "该语言的离线识别尚未下载：请在「系统设置 › 键盘 › 听写」中添加该语言并等它下载完成后重试",
+		"apple_speech_dictation_missing":     "所选语言当前不能进行本机识别。请在「系统设置 › 键盘 › 听写」检查语言及系统提示，再返回重试；添加听写语言不保证本机识别可用。应用保持本地识别。",
 		"apple_face_unsupported":             "当前 macOS 没有已验证的系统人脸特征接口，人脸识别不可用",
 		"apple_face_version_changed":         "当前 macOS 的系统人脸特征版本与已验证版本不同，人脸识别不可用",
 		"apple_translation_language_missing": "翻译语言尚未准备，请在字幕设置中准备对应语言",

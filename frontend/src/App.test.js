@@ -17,6 +17,20 @@ vi.mock('../wailsjs/go/main/App', () => api);
 
 import App from './App.vue';
 
+it('keeps the exploration host mounted across viewer detail navigation', async () => {
+  const wrapper = await mountApp();
+  await wrapper.vm.navigateTo('explore'); await flushPromises();
+  const host = wrapper.findComponent({ name: 'ExplorePage' });
+  expect(host.exists()).toBe(true); expect(host.props('pageActive')).toBe(true);
+  api.GetVideosByIDs.mockResolvedValue([{ id: 91, name: 'exploration fixture.mp4' }]);
+  host.vm.$emit('open-video', 91); await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('video-detail');
+  expect(wrapper.findComponent({ name: 'ExplorePage' }).vm).toBe(host.vm);
+  expect(host.props('pageActive')).toBe(false);
+  await wrapper.vm.goBackFromDetail(); await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('explore'); expect(host.props('pageActive')).toBe(true);
+});
+
 it('routes subtitle edits to the persistent library and rejects a superseded player request', async () => {
   const video = { id: 17, name: 'fixture.mp4' };
   api.GetVideosByIDs.mockResolvedValue([video]);
@@ -654,7 +668,7 @@ describe('顶栏信息架构（APP-14）', () => {
 
     expect(wrapper.find('[data-test="nav-area-viewer"]').exists()).toBe(true);
     expect(groupLabels(wrapper)).toEqual([
-      { key: 'browse', label: '浏览', pages: ['首页', '视频', '人物', '作品集', '图片'] },
+      { key: 'browse', label: '浏览', pages: ['首页', '探索', '视频', '人物', '作品集', '图片'] },
       { key: 'lists', label: '片单', pages: ['片单'] },
       { key: 'review', label: '回顾与检索', pages: ['回顾', '搜索汇总', '场景检索'] }
     ]);
@@ -1723,7 +1737,7 @@ describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
   });
 
   it.each([
-    ['home', 'viewer'], ['videos', 'viewer'], ['people', 'viewer'], ['collections', 'viewer'], ['photos', 'viewer'],
+    ['home', 'viewer'], ['explore', 'viewer'], ['videos', 'viewer'], ['people', 'viewer'], ['collections', 'viewer'], ['photos', 'viewer'],
     ['lists', 'viewer'],
     ['recap', 'viewer'], ['scenes', 'viewer'], ['video-detail', 'viewer'],
     ['manage-home', 'manage'], ['library-manage', 'manage'], ['photos-manage', 'manage'], ['entities-manage', 'manage'], ['downloads', 'manage'],

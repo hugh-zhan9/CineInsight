@@ -14,7 +14,7 @@
 - **前端 (Vue 3 + Vite):**
   - **UI 框架:** 原生 CSS + Vue 3 组合式 API (Composition API)。
   - **通信:** 通过 `wailsjs/go` 自动生成的绑定调用后端方法，使用 `wailsjs/runtime` 进行事件监听。
-  - **绑定守卫（2026-09-30，P-040）:** `frontend/scripts/bindings-usage.test.mjs`（`npm test` 最后一环）双向检查：前端从 `wailsjs/go/main/App` 导入的每个名字都在 `App.d.ts` 里，`App.d.ts` 的每个导出都至少被前端非测试代码引用一次。新增 App 方法必须同时接上前端调用方；只给 Go 测试用的能力放在服务层，不要做成 App 方法。绑定用 `GOTOOLCHAIN=go1.24.9 wails generate module` 生成，不手改 `frontend/wailsjs/**`。
+  - **绑定守卫（2026-09-30，P-040）:** `frontend/scripts/bindings-usage.test.mjs`（`npm test` 最后一环）双向检查：前端从 `wailsjs/go/main/App` 导入的每个名字都在 `App.d.ts` 里，`App.d.ts` 的每个导出都至少被前端非测试代码引用一次。新增 App 方法必须同时接上前端调用方；只给 Go 测试用的能力放在服务层，不要做成 App 方法。绑定用 `GOTOOLCHAIN=go1.24.9 wails generate module` 生成，不手改 `frontend/wailsjs/**` 的声明。生成后运行 `python3 scripts/normalize_generated_bindings.py`，只规范新增空白行并恢复运行时源文件权限，不改绑定语义。
 - **外部依赖 (Sidecars):**
   - **FFmpeg:** 用于提取视频音频流（16kHz, mono, WAV）。
   - **Apple 系统字幕（2026-10-12；2026-10-13 支持 macOS 15）:** Swift 辅助程序调用 Speech/Translation/NaturalLanguage，macOS 15+ 可用（macOS 26+ 用新接口，macOS 15 用 SFSpeechRecognizer 本机识别与隐藏窗口 translationTask）；资源由苹果系统管理，不安装字幕 Python/第三方模型。
@@ -66,6 +66,12 @@
 - **体验扩展已实现（2026-11-04）:** [片库体验完善与内容探索](docs/loopx/design/2026-11-03-library-experience/概要设计.md)的九项功能及搜索性能评估已完成，具体行为见上列领域文档。照片/坐标本地管理，联网底图、自然语言解析与章节摘要各自显式启用并说明外发范围；不接在线地名查询。性能评估保留现有生产索引。全量Go、双库专项/实际备份迁移、race/vet、122项真实WebView和build-only签名通过；前端3244测试中3243通过，唯一既有RecapPage月份断言仍失败。真实外部模型/OSM网络和完整已安装应用TCC未实测，未安装或提交；详见[实施记录](docs/loopx/plans/2026-11-03-library-experience.md)与[性能报告](docs/loopx/design/2026-11-03-library-experience/性能评估.md)。「那年今天」沿用2026-10-22已实现合同。
 
 
+
+## 2026-11-04 视觉探索与字幕提示
+
+- 观看侧“探索”提供随机画廊与可缩放媒体墙，共用按范围持久化的无放回展示进度；不新增AI调用。固定场景、真实可见曝光、只预览播放、来源核验及有界资源规则见[界面合同](docs/context/ui.md)和[播放合同](docs/context/playback.md)。新增探索两表进入AllModels及双库备份迁移，版本组变化保留本轮已展示成员历史。
+- 用户追加要求仅核实并修正字幕提示，继续本机识别。`apple_speech_dictation_missing`表示当前本机能力不可用，不能断定模型未下载；macOS15准备按钮只检查，不承诺添加听写语言即可获得离线能力。错误码、执行路径与`requiresOnDeviceRecognition=true`保持，见[字幕合同](docs/context/ai-subtitles.md)。
+- 设计与实际验证状态以[执行记录](docs/loopx/plans/2026-11-04-media-exploration.md)为准；不把本机构建等同于安装或部署。
 
 ## 2026-10-30 优化与本机签名
 

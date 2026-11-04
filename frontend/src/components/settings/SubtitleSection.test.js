@@ -71,11 +71,14 @@ describe('字幕引擎状态与准备（D-PC22）', () => {
     expect(api.PrepareAppleSubtitleLanguage).toHaveBeenCalledWith('en', 'zh', true);
   });
 
-  it('D-004 说明 macOS 15 起可用，以及 macOS 15 上的较早识别引擎与听写语言下载', async () => {
+  it('D-004 说明 macOS 15 仅检查本机能力，不把不可用等同于资源未下载', async () => {
     const wrapper = await mountSection();
     const text = wrapper.text();
     expect(text).toContain('需要 macOS 15 或更新版本');
     expect(text).toContain('「系统设置 › 键盘 › 听写」');
+    expect(text).toContain('准备按钮只检查本机识别能力');
+    expect(text).toContain('添加听写语言不保证本机识别可用');
+    expect(text).toContain('手动选择也需要该语言具备本机识别能力');
     expect(text).not.toContain('macOS 26');
   });
 
@@ -135,6 +138,17 @@ describe('字幕引擎状态与准备（D-PC22）', () => {
 });
 
 describe('苹果系统语言准备', () => {
+  it('识别准备成功报告本机可用，不声称下载了资源', async () => {
+    api.GetSubtitleEngineStatuses.mockResolvedValue([apple({ available: true, needs_prepare: false, languages: [{ code: 'en_US', name: '英语', installed: true }] })]);
+    api.PrepareAppleSubtitleLanguage.mockResolvedValue(undefined);
+    const wrapper = await mountSection();
+    expect(wrapper.get('[data-test="apple-speech-language"]').text()).toContain('本机可用');
+    await wrapper.get('[data-test="apple-speech-language"]').setValue('en_US');
+    await wrapper.get('[data-test="apple-speech-prepare"]').trigger('click'); await flushPromises();
+    expect(api.PrepareAppleSubtitleLanguage).toHaveBeenCalledWith('en_US', '', false);
+    expect(wrapper.text()).toContain('所选语言可用于本机识别');
+  });
+
   it('通过系统接口准备翻译语言，不保存API配置', async () => {
     api.GetSubtitleEngineStatuses.mockResolvedValue([apple({ available: true, needs_prepare: false, translation_languages: [{ code: 'en', name: '英语' }, { code: 'zh', name: '中文' }] })]);
     api.PrepareAppleSubtitleLanguage.mockResolvedValue(undefined);

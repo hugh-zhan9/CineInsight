@@ -334,6 +334,7 @@
 	    @navigate="navigateTo"
 	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
+      <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" />
 	  <SearchResultsPage v-if="searchResultsMounted" v-show="currentPage === 'search-results'" :page-active="currentPage === 'search-results'" :initial-request="searchResultsRequest" :watch-whole-video="watchQueueWholeVideo" @open-video="openVideo($event, { from: 'search-results' })" @open-entity="openRecapEntity" />
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" :watch-whole-video="watchQueueWholeVideo" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
 	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->
@@ -398,7 +399,8 @@
       @open-video-edit="openVideoEditProject"
       @open-library-missing="openMissingFilter"
     />
-    <QuitConfirmDialog />
+    <QuitConfirmDialog @cancelled="$refs.explorePage?.resumeClose()" />
+    <ExplorationQuitDialog :flush="() => $refs.explorePage?.prepareClose()" :resume="() => $refs.explorePage?.resumeClose()" />
     <!-- 版本对比播放器：任何地方调 openVersionCompare(左, 右) 就在这里打开；每次打开是一次新会话（key）。 -->
     <VersionCompareDialog
       v-if="appReady && versionCompare.open"
@@ -443,6 +445,8 @@
 
 <script>
 import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary, GetStartupBackendGuard, AcceptSQLiteAfterFallbackBlock } from '../wailsjs/go/main/App';
+import ExplorePage from './components/viewer/ExplorePage.vue';
+import ExplorationQuitDialog from './components/ExplorationQuitDialog.vue';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -528,7 +532,7 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
-    AppFeedback, CommandPalette, SearchResultsPage, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
+    ExplorePage, ExplorationQuitDialog, AppFeedback, CommandPalette, SearchResultsPage, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, CapabilitySetup, LibraryQueryDialog, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, PersonMediaDeleteDialog, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
@@ -563,6 +567,7 @@ export default {
       // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
       versionCompare: versionCompareState,
       // 图片管理首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"；观看侧照片流同理（D-P2-08）。
+      exploreMounted: false,
       photosMounted: false,
       photoBrowseMounted: false,
       // 别处改了图片（离开图片管理、清理中心删除或撤销、数据维护撤销、标签转人物）就递增，照片流据此原地重取。
@@ -745,6 +750,7 @@ export default {
           this.collectionsMounted = false;
           this.entityBrowseEpoch += 1;
         }
+        if (page === 'explore') this.exploreMounted = true;
         if (page === 'home') this.homeMounted = true;
         if (page === 'videos') this.videosMounted = true;
         // 图片管理里可能删了、收藏了、扫描进来或打了人物：离开时让照片流下次显示时原地重取（D-P2-08）。

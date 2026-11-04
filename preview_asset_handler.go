@@ -21,6 +21,12 @@ import (
 
 func newAssetHandler(app *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for key := range r.URL.Query() {
+			if strings.HasPrefix(key, "exploration_") {
+				app.serveExplorationAsset(w, r)
+				return
+			}
+		}
 		if strings.HasPrefix(r.URL.Path, "/preview/map-tile/") {
 			app.serveMapTile(w, r)
 			return

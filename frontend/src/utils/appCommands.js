@@ -37,6 +37,7 @@ export const VIEWER_NAV_GROUPS = [
     label: '浏览',
     pages: [
       { key: 'home', label: '首页', keywords: ['home', 'shouye', '继续观看', '今晚看什么', '最近添加'] },
+      { key: 'explore', label: '探索', keywords: ['explore', '探索', '媒体墙', '随机画廊', '缩放'] },
       { key: 'videos', label: '视频', keywords: ['video', 'library', 'shipin'] },
       { key: 'people', label: '人物', keywords: ['person', 'people', 'renwu'] },
       { key: 'collections', label: '作品集', keywords: ['collection', 'zuopinji'] },

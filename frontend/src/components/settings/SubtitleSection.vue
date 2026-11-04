@@ -74,9 +74,14 @@
     </div>
     <div class="setting-item">
       <label>系统识别语言</label>
-      <select v-model="speechLanguage" class="select-input" data-test="apple-speech-language"><option v-for="language in speechLanguages" :key="language.code" :value="language.code">{{ language.name }}{{ language.installed ? '（已准备）' : '' }}</option></select>
+      <select v-model="speechLanguage" class="select-input" data-test="apple-speech-language"><option v-for="language in speechLanguages" :key="language.code" :value="language.code">{{ language.name }}{{ language.installed ? '（本机可用）' : '' }}</option></select>
       <button type="button" class="btn btn--secondary btn--sm" data-test="apple-speech-prepare" :disabled="preparing || !speechLanguage" @click="prepareLanguage(false)">准备系统识别语言</button>
-      <p class="help-text">需要 macOS 15 或更新版本。macOS 15 使用较早的系统识别引擎，识别质量较低，识别语言需先在「系统设置 › 键盘 › 听写」中下载。自动检测只覆盖已安装的系统识别语种，结果可手动修改。首次准备可能需要下载苹果语言资源。</p>
+      <p class="help-text">需要 macOS 15 或更新版本。macOS 15 的准备按钮只检查本机识别能力，不会在应用内下载识别资源。</p>
+      <ol class="help-text" data-test="apple-speech-local-guidance">
+        <li>在「系统设置 › 键盘 › 听写」核对所选语言；如有系统资源提示，按提示完成。</li>
+        <li>回到这里点击“准备系统识别语言”再次检查。仍不可用时，该语言暂时无法进行本机识别。</li>
+      </ol>
+      <p class="help-text">添加听写语言不保证本机识别可用。自动检测只覆盖当前本机可用的语种，手动选择也需要该语言具备本机识别能力。</p>
     </div>
   </div>
 </template>
@@ -146,7 +151,7 @@ export default {
       this.preparing = true; this.prepareMessage = ''; this.prepareMessageIsError = false;
       try {
         await PrepareAppleSubtitleLanguage(translation ? this.prepareSource : this.speechLanguage, translation ? this.prepareTarget : '', translation);
-        this.prepareMessage = '系统语言资源已准备好。';
+        this.prepareMessage = translation ? '系统语言资源已准备好。' : '所选语言可用于本机识别。';
       } catch (err) {
         this.prepareMessage = subtitlePrepareError(err); this.prepareMessageIsError = true;
       } finally { this.preparing = false; await this.loadEngineStatuses(); }

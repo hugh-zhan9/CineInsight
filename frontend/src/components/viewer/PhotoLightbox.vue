@@ -28,8 +28,8 @@
           <button
             type="button"
             class="btn-icon photo-lightbox__nav photo-lightbox__nav--prev"
-            aria-label="上一张"
-            title="上一张（←）"
+            :aria-label="mixedMedia ? '上一项' : '上一张'"
+            :title="mixedMedia ? '上一项（←）' : '上一张（←）'"
             :disabled="!hasPrev"
             data-test="photo-lightbox-prev"
             @click="$emit('prev')"
@@ -37,8 +37,8 @@
           <button
             type="button"
             class="btn-icon photo-lightbox__nav photo-lightbox__nav--next"
-            :aria-label="loadingNext ? '正在加载下一批' : '下一张'"
-            title="下一张（→）"
+            :aria-label="loadingNext ? '正在加载下一批' : (mixedMedia ? '下一项' : '下一张')"
+            :title="mixedMedia ? '下一项（→）' : '下一张（→）'"
             :disabled="!hasNext || loadingNext"
             data-test="photo-lightbox-next"
             @click="$emit('next')"
@@ -90,7 +90,7 @@
           <section class="photo-lightbox__block">
             <WallpaperButton kind="image" :media-id="Number(image.id)" />
             <button type="button" class="btn btn--secondary btn--sm photo-lightbox__manage" data-test="photo-lightbox-open-manage" @click="$emit('open-in-manage', image)">在图片管理中打开</button>
-            <button type="button" class="btn btn--danger btn--sm" data-test="photo-lightbox-delete" @click="$emit('delete-image', image)">从图片库移除…</button>
+            <button v-if="allowRemove" type="button" class="btn btn--danger btn--sm" data-test="photo-lightbox-delete" @click="$emit('delete-image', image)">从图片库移除…</button>
           </section>
         </aside>
       </div>
@@ -166,6 +166,9 @@ export default {
   components: { AppBanner, AppIcon, AppSpinner, DialogShell, RatingStars, TagPill, WallpaperButton },
   props: {
     image: { type: Object, required: true },
+    assetUrl: { type: String, default: '' },
+    allowRemove: { type: Boolean, default: true },
+    mixedMedia: { type: Boolean, default: false },
     hasPrev: { type: Boolean, default: false },
     hasNext: { type: Boolean, default: false },
     // 正在为「下一张」续载下一批；续载失败的原因（宿主的翻页错误）。
@@ -183,7 +186,7 @@ export default {
     };
   },
   computed: {
-    originalURL() { return photoOriginalURL(this.image.id); },
+    originalURL() { return this.assetUrl || photoOriginalURL(this.image.id); },
     facts() { return photoLightboxFacts(this.image); },
     rating() {
       const value = this.image?.personal_rating;

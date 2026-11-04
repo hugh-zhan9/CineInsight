@@ -1,0 +1,102 @@
+import { createApp, h, nextTick } from 'vue';
+import ExplorePage from '../../src/components/viewer/ExplorePage.vue';
+import AppFeedback from '../../src/components/AppFeedback.vue';
+import '../../src/styles/tokens.css';
+import '../../src/styles/components.css';
+
+const clone = value => JSON.parse(JSON.stringify(value)), calls = [], handlers = new Map();
+let page, detail = false, revision = 1, scene = 'scene-1', view = { mode: 'wall', scale: .35, x: 0, y: 0, selected_id: 0, gallery_id: 0, gallery_entry_ids: [] }, receipt = {};
+let entries = Array.from({ length: 1024 }, (_, i) => ({ entry_id: i + 1, media_id: i + 1, kind: i % 3 === 0 ? 'video' : 'image', slot: i, presented: false, samples: [] }));
+const snapshot = () => ({ database_epoch: 'fixture-db', scope: 'all', scene_id: scene, round_id: 'round-1', revision, view_state: view, status: 'ready', available_count: 2000, presented_count: entries.filter(e => e.presented).length, remaining_count: 2000 - entries.filter(e => e.presented).length, entries, last_receipt: receipt });
+window.runtime = { EventsOn(name, callback) { handlers.set(name, callback); return () => handlers.delete(name); } };
+window.go = { main: { App: new Proxy({}, { get: (_, method) => async (...args) => {
+  calls.push({ method, args: clone(args) });
+  if (method === 'OpenMediaExploration') return { status: 'ok', data: clone(snapshot()) };
+  if (method === 'GetMediaExplorationItems') return { status: 'ok', data: { items: args[0].entry_ids.map(id => { const entry = entries.find(e => e.entry_id === id); return { entry_id: id, media_id: entry.media_id, kind: entry.kind, title: `${entry.kind === 'image' ? '照片' : '视频'} ${id}`, duration_ms: entry.kind === 'video' ? 6000 : null, thumbnail_url: `/preview/thumbnail/${id}?exploration_scope=all`, unavailable_reason: '' }; }) } };
+  if (method === 'UpdateMediaExploration') {
+    const request = clone(args[0]);
+    if (request.expected_revision !== revision) return { status: 'error', error: { code: 'exploration_conflict', message: 'fixture revision conflict' } };
+    revision++; receipt = { request_id: request.request_id, revision, scene_id: scene };
+    if (request.action === 'present') for (const id of request.entry_ids) entries.find(e => e.entry_id === id).presented = true;
+    if (request.action === 'save_view') view = request.view;
+    if (request.action === 'sample') entries.find(e => e.entry_id === request.entry_id).samples = [{ start_ms: 500, end_ms: 1300, source_version: 'synthetic-source' }];
+    if (request.action === 'next') { scene = 'scene-2'; entries = Array.from({ length: 976 }, (_, i) => ({ entry_id: i + 1025, media_id: i + 1025, kind: 'image', slot: i, presented: false, samples: [] })); }
+    return { status: 'ok', data: clone(snapshot()) };
+  }
+  if (method === 'GetPreviewSession') return { video_id: args[0], mode: 'inline', source_version: 'synthetic-source', inline_source: { locator_value: '/clip.mp4', mime: 'video/mp4' } };
+  if (method === 'GetImageDetail') return { image: { id: args[0], name: `照片 ${args[0]}` }, people: [] };
+  if (method === 'RecordImageView') return { recorded: true, view_count: 1 };
+  if (method === 'GetPlaybackProxyStatus') return { running: false, queued: 0, results: [] };
+  return null;
+} }) } };
+const app = createApp({ data: () => ({ active: true }), render() { return h('div', { class: 'surface-cinema', style: 'min-height:100vh;padding:16px;box-sizing:border-box;background:var(--bg-color)' }, [h(ExplorePage, { ref: value => { page = value; }, pageActive: this.active, style: this.active ? '' : 'display:none', onOpenVideo: () => { detail = true; this.active = false; } }), !this.active ? h('button', { id: 'back', onClick: () => { this.active = true; } }, '返回探索') : null, h(AppFeedback)]); } }).mount('#app');
+const assert = (value, label) => { if (!value) throw new Error(label); };
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const until = async (test, label) => { window.progress = label; const end = Date.now() + 12000; while (!test() && Date.now() < end) { await pause(20); await nextTick(); } assert(test(), label); };
+const native = (element, phase) => { const rect = element.getBoundingClientRect(); window.webkit.messageHandlers.nativeClick.postMessage({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, ...(phase ? { phase } : {}) }); };
+window.fixture = { async run() {
+  const started = performance.now();
+  await until(() => document.querySelectorAll('.media-tile img').length >= 20, 'cold visible thumbnails');
+  const coldFirstFramesMS = performance.now() - started;
+  assert(page.snapshot.entries.length === 1024, '1024 lightweight scene entries');
+  const initialTiles = document.querySelectorAll('.media-tile').length;
+  assert(initialTiles <= 1024 && !document.querySelector('video'), 'bounded static wall');
+  await until(() => calls.some(c => c.method === 'UpdateMediaExploration' && c.args[0].action === 'present'), 'real visible exposure acknowledgement');
+  const firstPresentedSavedMS = performance.now() - started;
+  const viewport = document.querySelector('.media-wall__viewport'), beforeIDs = page.snapshot.entries.map(e => e.entry_id).join(',');
+  page.$refs.wall.setCamera({ scale: 1, x: -900, y: -700 }); await pause(40); await nextTick();
+  const camera = { ...page.$refs.wall.camera }, point = { x: 300, y: 200 };
+  page.$refs.wall.zoom(1.4, point); await pause(40); await nextTick();
+  const after = page.$refs.wall.camera;
+  assert(Math.abs((point.x - camera.x) / camera.scale - (point.x - after.x) / after.scale) < 1, 'zoom anchor x');
+  assert(Math.abs((point.y - camera.y) / camera.scale - (point.y - after.y) / after.scale) < 1, 'zoom anchor y');
+  assert(beforeIDs === page.snapshot.entries.map(e => e.entry_id).join(','), 'zoom never reshuffles');
+  const bounds = viewport.getBoundingClientRect(), wheelScale = page.$refs.wall.camera.scale;
+  const wheel = new WheelEvent('wheel', { ctrlKey: true, deltaY: -10, clientX: bounds.left + point.x, clientY: bounds.top + point.y, bubbles: true, cancelable: true });
+  viewport.dispatchEvent(wheel); await pause(40);
+  assert(wheel.defaultPrevented && page.$refs.wall.camera.scale > wheelScale, 'WebKit control-wheel zoom');
+  const gestureScale = page.$refs.wall.camera.scale;
+  viewport.dispatchEvent(new Event('gesturestart', { bubbles: true, cancelable: true }));
+  const gesture = Object.assign(new Event('gesturechange', { bubbles: true, cancelable: true }), { scale: .95, clientX: bounds.left + point.x, clientY: bounds.top + point.y });
+  viewport.dispatchEvent(gesture); await pause(40);
+  assert(gesture.defaultPrevented && Math.abs(page.$refs.wall.camera.scale - gestureScale * .95) < .001, 'WebKit gesture event zoom');
+
+  await page.flush();
+  const beforeOffscreen = calls.filter(c => c.method === 'UpdateMediaExploration' && c.args[0].action === 'present').length;
+  const beforeOffscreenCamera = { ...page.$refs.wall.camera };
+  page.$el.style.transform = 'translateY(2000px)';
+  page.$refs.wall.setCamera({ scale: .6, x: -1000, y: -2800 }); await pause(800); await page.flush();
+  assert(calls.filter(c => c.method === 'UpdateMediaExploration' && c.args[0].action === 'present').length === beforeOffscreen, 'outer viewport clips presentation');
+  page.$el.style.transform = ''; page.$refs.wall.setCamera(beforeOffscreenCamera); await pause(50);
+  const frameTimes = [];
+  for (let i = 0; i < 20; i++) { const t = performance.now(); page.$refs.wall.setCamera({ ...page.$refs.wall.camera, x: -1200 + i * 8 }); await new Promise(requestAnimationFrame); frameTimes.push(performance.now() - t); }
+  const r = viewport.getBoundingClientRect();
+  for (const [phase, dx] of [['down', 0], ['drag', 55], ['up', 55]]) { window.webkit.messageHandlers.nativeClick.postMessage({ x: r.left + 100 + dx, y: r.top + 100, phase }); await pause(35); }
+  assert(!page.preview, 'native drag does not click media');
+  const videoEntry = page.$refs.wall.visibleEntries.find(e => { const tile = document.querySelector(`[data-entry-id="${e.entry_id}"]`); if (!tile || e.kind !== 'video') return false; const b = tile.getBoundingClientRect(); return b.left >= r.left && b.right <= r.right && b.top >= r.top && b.bottom <= Math.min(r.bottom, innerHeight); });
+  assert(videoEntry, 'visible video candidate');
+  await until(() => document.querySelector(`[data-entry-id="${videoEntry.entry_id}"] img`), 'selected video tile');
+  native(document.querySelector(`[data-entry-id="${videoEntry.entry_id}"]`));
+  await until(() => document.querySelector('video')?.readyState >= 2, 'native click and real decode');
+  const video = document.querySelector('video');
+  assert(video.videoWidth > 0 && document.querySelectorAll('video').length === 1, 'single real decoder');
+  if (video.paused && video.currentTime < 1.29) native(video);
+  await until(() => video.paused && video.currentTime >= 1.29, 'short preview stops at range end');
+  assert(video.currentTime < 1.4, 'preview cannot run beyond range');
+  video.currentTime = 4; await until(() => !video.seeking && video.currentTime <= 1.301, 'seek clamps to preview range');
+  const formal = ['RecordViewEvent', 'UpdateVideoWatchProgress', 'PlayVideo', 'RequestPreviewProxy', 'CreatePlaybackProxy'];
+  assert(!calls.some(c => formal.includes(c.method)), 'no formal facts or automatic proxy');
+  const saved = { ...page.view }, savedScene = page.snapshot.scene_id;
+  document.querySelector('[data-test=explore-detail]').click(); await until(() => detail && document.querySelector('#back'), 'open detail callback');
+  assert(!document.querySelector('video'), 'detail transition retires preview');
+  document.querySelector('#back').click(); await until(() => document.querySelector('.media-wall__viewport'), 'return to exploration');
+  assert(page.snapshot.scene_id === savedScene && Math.abs(page.view.scale - saved.scale) < .001 && Math.abs(page.view.x - saved.x) < 1, 'return preserves scene and camera');
+  document.querySelector('[data-test=explore-gallery]').click(); await nextTick();
+  assert(document.querySelectorAll('.random-gallery .media-tile').length === 24, 'gallery bounded to 24');
+  await page.prepareClose(); assert(!document.querySelector('video') && !page._controller.pending, 'close flush settles view and presentation'); page.resumeClose();
+  page.changeMode('wall'); await nextTick(); page.$refs.wall.fit(); await pause(50);
+  await until(() => { const tiles = [...document.querySelectorAll('.media-wall .media-tile')]; return tiles.length > 0 && tiles.every(tile => tile.querySelector('img')?.complete && tile.querySelector('img').naturalWidth > 0); }, 'settled wall after resume');
+  frameTimes.sort((a, b) => a - b);
+  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'gallery-24', 'close-flush'] };
+} };
+window.ready = true;

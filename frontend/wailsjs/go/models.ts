@@ -8941,6 +8941,350 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class ExplorationCard {
+	    entry_id: number;
+	    kind: string;
+	    media_id: number;
+	    title: string;
+	    thumbnail_url: string;
+	    aspect_ratio?: number;
+	    duration_ms?: number;
+	    unavailable_reason: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationCard(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entry_id = source["entry_id"];
+	        this.kind = source["kind"];
+	        this.media_id = source["media_id"];
+	        this.title = source["title"];
+	        this.thumbnail_url = source["thumbnail_url"];
+	        this.aspect_ratio = source["aspect_ratio"];
+	        this.duration_ms = source["duration_ms"];
+	        this.unavailable_reason = source["unavailable_reason"];
+	    }
+	}
+	export class ExplorationCards {
+	    items: ExplorationCard[];
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationCards(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], ExplorationCard);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ExplorationCardsResult {
+	    status: string;
+	    data?: ExplorationCards;
+	    error?: ExperienceError;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationCardsResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.data = this.convertValues(source["data"], ExplorationCards);
+	        this.error = this.convertValues(source["error"], ExperienceError);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ExplorationItemsRequest {
+	    database_epoch: string;
+	    scope: string;
+	    scene_id: string;
+	    entry_ids: number[];
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationItemsRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.database_epoch = source["database_epoch"];
+	        this.scope = source["scope"];
+	        this.scene_id = source["scene_id"];
+	        this.entry_ids = source["entry_ids"];
+	    }
+	}
+	export class ExplorationReceipt {
+	    request_id: string;
+	    revision: number;
+	    scene_id: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationReceipt(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.request_id = source["request_id"];
+	        this.revision = source["revision"];
+	        this.scene_id = source["scene_id"];
+	    }
+	}
+	export class ExplorationView {
+	    mode: string;
+	    scale: number;
+	    x: number;
+	    y: number;
+	    selected_id: number;
+	    gallery_id: number;
+	    gallery_entry_ids: number[];
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.scale = source["scale"];
+	        this.x = source["x"];
+	        this.y = source["y"];
+	        this.selected_id = source["selected_id"];
+	        this.gallery_id = source["gallery_id"];
+	        this.gallery_entry_ids = source["gallery_entry_ids"];
+	    }
+	}
+	export class ExplorationRequest {
+	    database_epoch: string;
+	    scope: string;
+	    scene_id: string;
+	    round_id: string;
+	    expected_revision: number;
+	    request_id: string;
+	    action: string;
+	    entry_ids?: number[];
+	    view?: ExplorationView;
+	    entry_id?: number;
+	    source_version?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.database_epoch = source["database_epoch"];
+	        this.scope = source["scope"];
+	        this.scene_id = source["scene_id"];
+	        this.round_id = source["round_id"];
+	        this.expected_revision = source["expected_revision"];
+	        this.request_id = source["request_id"];
+	        this.action = source["action"];
+	        this.entry_ids = source["entry_ids"];
+	        this.view = this.convertValues(source["view"], ExplorationView);
+	        this.entry_id = source["entry_id"];
+	        this.source_version = source["source_version"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ExplorationSample {
+	    start_ms: number;
+	    end_ms: number;
+	    source_version: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationSample(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.source_version = source["source_version"];
+	    }
+	}
+	export class ExplorationSceneEntry {
+	    entry_id: number;
+	    slot: number;
+	    kind: string;
+	    media_id: number;
+	    presented: boolean;
+	    samples: ExplorationSample[];
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationSceneEntry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entry_id = source["entry_id"];
+	        this.slot = source["slot"];
+	        this.kind = source["kind"];
+	        this.media_id = source["media_id"];
+	        this.presented = source["presented"];
+	        this.samples = this.convertValues(source["samples"], ExplorationSample);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ExplorationSnapshot {
+	    database_epoch: string;
+	    scope: string;
+	    scene_id: string;
+	    round_id: string;
+	    revision: number;
+	    view_state: ExplorationView;
+	    status: string;
+	    available_count: number;
+	    presented_count: number;
+	    remaining_count: number;
+	    entries: ExplorationSceneEntry[];
+	    last_receipt: ExplorationReceipt;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.database_epoch = source["database_epoch"];
+	        this.scope = source["scope"];
+	        this.scene_id = source["scene_id"];
+	        this.round_id = source["round_id"];
+	        this.revision = source["revision"];
+	        this.view_state = this.convertValues(source["view_state"], ExplorationView);
+	        this.status = source["status"];
+	        this.available_count = source["available_count"];
+	        this.presented_count = source["presented_count"];
+	        this.remaining_count = source["remaining_count"];
+	        this.entries = this.convertValues(source["entries"], ExplorationSceneEntry);
+	        this.last_receipt = this.convertValues(source["last_receipt"], ExplorationReceipt);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ExplorationResult {
+	    status: string;
+	    data?: ExplorationSnapshot;
+	    error?: ExperienceError;
+
+	    static createFrom(source: any = {}) {
+	        return new ExplorationResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.data = this.convertValues(source["data"], ExplorationSnapshot);
+	        this.error = this.convertValues(source["error"], ExperienceError);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+
+
 	export class ExternalSubtitleDetails {
 	    path: string;
 	    language: string;

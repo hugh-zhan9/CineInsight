@@ -36,6 +36,7 @@ import { notifyError } from '../utils/feedback.js';
 // teleport 到 body 末尾，排在它们后面，同在 --z-modal 也压得住（层级规则见 tokens.css「层级」）。
 export default {
   name: 'QuitConfirmDialog',
+  emits: ['cancelled'],
   components: { DialogShell },
   mixins: [runtimeEventsMixin],
   data() {
@@ -86,6 +87,7 @@ export default {
     cancel() {
       if (this.quitting) return;
       this.request = null;
+      this.$emit('cancelled');
     },
     async confirmQuit() {
       if (this.quitting) return;
