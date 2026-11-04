@@ -143,7 +143,7 @@ func copyFileNoReplace(source, destination string) (returnErr error) {
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("目标文件已存在: %s", destination)
+			return fmt.Errorf("目标文件已存在: %s: %w", destination, err)
 		}
 		return err
 	}

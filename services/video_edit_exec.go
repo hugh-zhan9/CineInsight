@@ -400,6 +400,10 @@ func (s *VideoEditService) publishEditOutput(ctx context.Context, item models.Vi
 		return err
 	}
 	_ = syncSubtitleParentDirectory(plan.OutputDir)
+	// 不支持排他改名的卷可能完整复制大视频；文件落位耗时不占后续入库事务的预算。
+	cancel()
+	bg, cancel = context.WithTimeout(context.WithoutCancel(ctx), s.publishTimeout)
+	defer cancel()
 	output, err := s.ingestEditOutput(bg, item.ID, target, name, info.Size())
 	if err != nil {
 		if moveErr := os.Rename(target, staging); moveErr != nil {
@@ -566,7 +570,7 @@ func (s *VideoEditService) editWorkdirInUse(ctx context.Context, itemID uint) bo
 const editPublishRenameAttempts = 5
 
 // renameEditOutputExclusive 选一个空闲的成品名、先把 publish_target/staged_size 写入项行，再用排他 rename
-// （editRenameNoReplace：darwin/linux 用与集中整理相同的排他 rename，其他平台在路径写锁内 Lstat 后 rename）落位：
+// （darwin/linux 不支持排他 rename 时排他复制，其他平台在路径写锁内 Lstat 后 rename）落位：
 // 选名与 rename 之间目标被别人占用时返回 EEXIST，绝不覆盖，换下一个空闲名字重试。
 func (s *VideoEditService) renameEditOutputExclusive(ctx context.Context, itemID uint, plan editPlan, staging string, size int64) (string, string, error) {
 	for attempt := 1; ; attempt++ {
@@ -585,7 +589,7 @@ func (s *VideoEditService) renameEditOutputExclusive(ctx context.Context, itemID
 		if s.beforePublishRename != nil {
 			s.beforePublishRename(target)
 		}
-		err = editRenameNoReplace(staging, target)
+		err = s.renamePublishFile(staging, target)
 		if err == nil {
 			return name, target, nil
 		}
