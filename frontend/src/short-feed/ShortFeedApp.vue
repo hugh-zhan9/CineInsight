@@ -31,6 +31,9 @@
       <FeedStage
         ref="stage"
         :item="currentVideo"
+        :auto-browse="autoBrowse" :paused="autoBrowse && autoPaused"
+        @active-ready="onActiveReady" @prepared="onAutoPrepared" @ended="onVideoEnded"
+        @buffering="prefetchPreload = 'metadata'"
         :prefetched="stagePrefetched"
         :muted="muted"
         :zoomed="photoZoomed"
@@ -51,6 +54,15 @@
         @native-fullscreen="isFullscreen = $event"
       />
 
+      <div class="feed-auto-controls" data-test="feed-auto-controls">
+        <button type="button" class="btn btn--secondary btn--sm" :aria-pressed="autoBrowse" data-test="feed-auto-toggle" @click="toggleAutoBrowse">自动浏览：{{ autoBrowse ? '开' : '关' }}</button>
+        <template v-if="autoBrowse">
+          <button v-if="autoError" type="button" class="btn btn--secondary btn--sm" data-test="feed-auto-retry" @click="retryAuto">重试</button>
+          <button v-else type="button" class="btn btn--secondary btn--sm" data-test="feed-auto-pause" @click="toggleAutoPause">{{ autoPaused ? '继续' : '暂停' }}</button>
+          <span role="status" data-test="feed-auto-status">{{ autoStatus }}</span>
+          <progress v-if="isImageItem" :value="5000 - autoRemaining" max="5000" aria-label="图片停留进度" />
+        </template>
+      </div>
       <FeedTopBar
         :visible="chromeVisible"
         :muted="muted"
@@ -239,6 +251,7 @@
 </template>
 
 <script>
+import autoBrowse from './autoBrowse.js';
 import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, setAuthRequiredHandler, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
 import { emptyScopeText, feedErrorText, unplayableHintText } from './errors.js';
 import { formatClock, formatCount } from './format.js';
@@ -295,6 +308,7 @@ const TOAST_MS = 5000;
 
 export default {
   name: 'ShortFeedApp',
+  mixins: [autoBrowse],
   components: { AppBanner, AppIcon, EmptyState, SegmentedControl, FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, FeedSheet, MoreSheet, RatingPicker, PinGate },
   watch: {
     // 标签搜索实时查服务端：每次输入变化都重新拉一次（100ms 内的连续按键合并成一次）。
@@ -396,7 +410,7 @@ export default {
     // 舞台预取的下一条：推荐流是后台抽好的那一条，收藏流就是列表里的下一张。
     stagePrefetched() {
       if (this.inFavoriteStream) return this.favoriteStream.items[this.favoriteStream.index + 1] || null;
-      return this.prefetchedVideo;
+      return this.items[this.index + 1] || this.prefetchedVideo;
     },
     favoritePositionText() {
       const { items, index } = this.favoriteStream;
@@ -468,6 +482,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.cancelTimelineRequests();
     setAuthRequiredHandler(null);
     this.clearControlsHideTimer();
     this.clearLongPressTimer();
@@ -496,6 +511,7 @@ export default {
       if (this.loading || direction === 0 || this.sheet || this.authRequired) return;
       // 收藏墙上没有「下一条」；在收藏里看只在那份列表里走。
       if (this.view === 'favorites') return;
+      this.autoPaused = false; this.autoError = '';
       if (this.inFavoriteStream) {
         this.moveFavoriteStream(direction);
         return;
@@ -518,11 +534,16 @@ export default {
     // 取一条新的接到历史末尾并切过去。失败时原地不动：浏览历史与当前条目都保留。
     async loadNextItem() {
       if (this.loading || this.authRequired) return;
+      const generation = this._timelineGeneration || 0;
       this.loading = true;
       this.loadError = '';
       if (this.items.length === 0) this.statusText = '加载中';
       try {
-        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope, this.mediaKind);
+        if (this._prefetchRequest) await this._prefetchRequest;
+        if (generation !== (this._timelineGeneration || 0)) return;
+        this._loadAbort = new AbortController();
+        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope, this.mediaKind, { signal: this._loadAbort.signal });
+        if (generation !== (this._timelineGeneration || 0)) return;
         // 范围里一条能播的都没有（服务端回一条放不了的视频当说明）：历史为空时整屏说明并给「换个范围」（D-MW-07）。
         if (this.items.length === 0 && isScopeExhaustedHint(video)) {
           this.enterEmptyScope();
@@ -531,6 +552,7 @@ export default {
         this.emptyScope = false;
         this.appendItem(video);
       } catch (err) {
+        if (generation !== (this._timelineGeneration || 0)) return;
         // PIN 页接管，不在底下再叠一条失败提示。
         if (this.authRequired) return;
         // 404 no_eligible_videos 是「这个范围里没有」，不是取失败：历史为空时同样给空态（D-MW-07）。
@@ -543,7 +565,7 @@ export default {
         this.loadError = message;
         if (this.items.length === 0) this.statusText = message;
       } finally {
-        this.loading = false;
+        if (generation === (this._timelineGeneration || 0)) this.loading = false;
       }
     },
     // 「重试」总是去取新的一条：用户中途往回划过，也不必先划回末尾。
@@ -586,6 +608,7 @@ export default {
       this.activateCurrent();
     },
     activateCurrent() {
+      this.resetAutoItem();
       const video = this.currentVideo;
       if (!video) return;
       // 更多、评分、标签面板操作的是当前这一条：当前条目换了（删除完成后前进、历史裁掉了正看着的那条…）就收起，
@@ -621,7 +644,7 @@ export default {
       this.$nextTick(() => {
         const player = this.player();
         this.applyPlaybackRate();
-        if (player?.play) player.play().catch(() => {});
+        if (player?.play && (!this.autoBrowse || !this.autoPaused)) player.play().catch(() => { if (this.autoBrowse) this.failAuto('播放未开始，点继续重试'); });
       });
       // 图片没有缓冲过程，也不占带宽，预取可以直接整只下载。
       this.prefetchPreload = this.isImageItem ? 'auto' : 'metadata';
@@ -653,19 +676,21 @@ export default {
       this.prefetchedVideo = null;
       return video;
     },
-    async prefetchNextVideo() {
-      if (this.prefetching || this.prefetchedVideo || !this.currentVideo) return;
+    prefetchNextVideo() {
+      if (this.prefetchedVideo || !this.currentVideo) return Promise.resolve();
+      if (this._prefetchRequest) return this._prefetchRequest;
+      const generation = this._timelineGeneration || 0;
+      const currentKey = itemKey(this.currentVideo);
+      const excludeKeys = [...new Set([...this.recentKeys.slice(-12), currentKey])];
       this.prefetching = true;
-      try {
-        const excludeKeys = [...new Set([...this.recentKeys.slice(-12), itemKey(this.currentVideo)])];
-        const video = await getNextItem(excludeKeys, this.scope, this.mediaKind);
-        if (video?.id && video.id !== this.currentVideo?.id) {
-          this.prefetchedVideo = video;
-        }
-      } catch (err) {
-      } finally {
-        this.prefetching = false;
-      }
+      this._prefetchAbort = new AbortController();
+      const request = getNextItem(excludeKeys, this.scope, this.mediaKind, { signal: this._prefetchAbort.signal }).then(video => {
+        if (generation === (this._timelineGeneration || 0) && video?.id && itemKey(video) !== currentKey && itemKey(video) !== itemKey(this.currentVideo)) this.prefetchedVideo = video;
+      }).catch(() => {}).finally(() => {
+        if (this._prefetchRequest === request) { this._prefetchRequest = null; this.prefetching = false; }
+      });
+      this._prefetchRequest = request;
+      return request;
     },
     handleStageTap(event) {
       if (!this.currentVideo?.media_url) return;
@@ -731,8 +756,10 @@ export default {
       const player = this.player();
       if (!player) return;
       if (player.paused) {
+        if (this.autoBrowse) this.autoPaused = false;
         player.play().catch(() => {});
       } else {
+        if (this.autoBrowse) this.autoPaused = true;
         player.pause();
       }
       this.showControls();
@@ -750,6 +777,7 @@ export default {
       return wakeLock.release();
     },
     handleVisibilityChange() {
+      if (document.hidden && this.autoBrowse) { this.autoPaused = true; this.player()?.pause(); this.stopAutoClock(); }
       if (!document.hidden && this.isPlaying) {
         this.requestWakeLock();
       }
@@ -889,6 +917,7 @@ export default {
     },
     onMediaError() {
       if (!this.currentVideo) return;
+      if (this.autoBrowse) { this.failAuto('当前内容加载失败，请重试或手动切换'); return; }
       if (this.isImageItem) {
         // 图片没有自动前进的节奏；停在原地把原因说清楚，由用户自己划走。
         this.statusText = '当前图片无法在浏览器中显示';
@@ -1187,7 +1216,14 @@ export default {
       await this.restartTimeline();
     },
     // 换了范围或资源类型就重开一条时间线：旧历史属于旧筛选，留着会前后矛盾。
+    cancelTimelineRequests() {
+      this._timelineGeneration = (this._timelineGeneration || 0) + 1;
+      this._prefetchAbort?.abort(); this._loadAbort?.abort();
+      this._prefetchRequest = null; this.prefetching = false;
+    },
     async restartTimeline() {
+      this.cancelTimelineRequests();
+      this.resetAutoItem(); this.loading = false;
       this.items = [];
       this.index = -1;
       this.prefetchedVideo = null;
@@ -1264,6 +1300,7 @@ export default {
     },
     // 舞台要卸下（去收藏墙）：<video> 直接拿掉不会发 pause，播放态、唤醒锁与定时器在这里收拾。
     leaveStage() {
+      this.autoPaused = true; this.stopAutoClock(); this._autoGeneration = (this._autoGeneration || 0) + 1;
       this.isPlaying = false;
       this.clearControlsHideTimer();
       this.cancelLongPress();

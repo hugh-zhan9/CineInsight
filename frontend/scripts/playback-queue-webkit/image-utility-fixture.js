@@ -22,6 +22,7 @@ function synthetic(width, height) {
 }
 const images = [{ id: 1, name: '合成原图.png', width: 2048, height: 1024, asset_url: synthetic(2048, 1024) }, { id: 2, name: '合成小图.png', width: 1024, height: 512, asset_url: synthetic(1024, 512) }];
 const smallPair = [{ name: '原图局部', width: 100, height: 50, asset_url: synthetic(100, 50) }, { name: '2× 增强局部', width: 200, height: 100, asset_url: synthetic(200, 100) }];
+let closes = 0;
 let views = 0, requestNumber = 0, saved = 0, lastEdited = null;
 const requests = new Map();
 const originalFetch = window.fetch.bind(window);
@@ -51,7 +52,7 @@ const root = createApp({ data: () => ({ mode: 'lightbox' }), render() {
   if (this.mode === 'thumbnail') return h('div', { style: 'width:480px;height:270px;margin:60px' }, h(VideoThumbnail, { video: { id: 1, name: '合成视频', duration: 120 }, src: images[0].asset_url }));
   if (this.mode === 'small-compare') return h(ImageCompareDialog, { ref: 'compare', left: smallPair[0], right: smallPair[1], sameDisplaySize: true });
   if (this.mode === 'sample') return h(VideoEnhancementPreview, { ref: 'sample', video: { id: 1, name: '合成视频', duration: 2 }, profile: 'anime' });
-  return this.mode === 'compare' ? h(ImageCompareDialog, { ref: 'compare', left: images[0], right: images[1] }) : h(PhotoLightbox, { ref: 'lightbox', image: images[0], assetUrl: images[0].asset_url });
+  return this.mode === 'compare' ? h(ImageCompareDialog, { ref: 'compare', left: images[0], right: images[1] }) : h(PhotoLightbox, { ref: 'lightbox', image: images[0], assetUrl: images[0].asset_url, onClose: () => { closes++; } });
 } }).mount('#app');
 const assert = (value, label) => { if (!value) throw new Error(label); };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -65,6 +66,13 @@ window.fixture = { async run() {
   await until(() => viewport.width > 400, 'measured viewport');
   assert(viewport.geometry.width <= viewport.width + 1, 'fit image without overflow');
   const rect = viewport.$el.getBoundingClientRect(); const point = { x: rect.width * 0.65, y: rect.height / 2 };
+  native('down', rect.left + rect.width / 2, rect.top + rect.height / 2); await wait(100);
+  native('up', rect.left + rect.width / 2, rect.top + rect.height / 2); await wait(100);
+  assert(closes === 0, 'native image click keeps preview open');
+  assert(viewport.geometry.top > 8, 'fixture has a visible top margin');
+  native('down', rect.left + rect.width / 2, rect.top + 4); await wait(100);
+  native('up', rect.left + rect.width / 2, rect.top + 4);
+  await until(() => closes === 1, 'native background click requests close exactly once');
   const before = viewport.geometry; const pixel = (point.x - before.left) / before.width;
   await wheel(viewport);
   assert(Math.abs((point.x - viewport.geometry.left) / viewport.geometry.width - pixel) < 0.001, 'pointer pixel stays anchored');
@@ -76,6 +84,7 @@ window.fixture = { async run() {
   native('up', rect.left + rect.width / 2 + 70, rect.top + rect.height / 2);
   await until(() => viewport.view.x !== oldX && !viewport.drag, 'native drag pans and releases capture ' + JSON.stringify({ oldX, x: viewport.view.x, drag: viewport.drag, events: pointerEvents }));
   for (const name of ['pointerdown', 'pointermove', 'pointerup', 'lostpointercapture']) document.removeEventListener(name, collectPointer);
+  assert(closes === 1, 'native image drag does not close preview');
   document.querySelector('[data-test=photo-lightbox-natural]').click(); await nextTick();
   assert(Math.abs(viewport.geometry.scale - 1) < 0.001, 'original CSS pixel size');
   const previous = { ...viewport.view };

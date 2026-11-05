@@ -140,14 +140,14 @@ assert.match(source, /this\.items = \[\];[\s\S]{0,120}this\.recentKeys = \[\];/,
 
 assert.match(sheet, /Escape/, 'bottom sheets should close on Escape');
 // 预取不能与正在播的视频抢带宽：预取的 <video> 先只拿元数据，当前条 canplaythrough 后才整只下载。
-assert.match(stage, /:preload="prefetchPreload"/, 'prefetched video must not hardcode preload=auto');
+assert.match(stage, /:preload="isCurrent\(entry\) \? 'auto' : prefetchPreload"/, 'prefetched video must not hardcode preload=auto');
 assert.doesNotMatch(stage, /class="preload-video"[^>]*\spreload="auto"/s, 'prefetched video must not download in full up front');
-assert.match(stage, /@canplaythrough="\$emit\('buffered'\)"/, 'stage must report when the current video has buffered enough');
+assert.match(stage, /@canplaythrough="ready\(entry\); forward\(entry, 'buffered'\)"/, 'stage must report when the current video has buffered enough');
 assert.match(source, /onVideoBuffered\(\) \{\s*this\.prefetchPreload = 'auto';/s, 'host upgrades prefetch to auto only after buffering');
 // 资源类型筛选：全部 / 仅视频 / 仅图片，随下一条请求一起发给后端，换类型重开时间线。
 assert.match(source, /short-feed-media-kind/, 'scope sheet should offer a media kind switch');
-assert.match(source, /getNextItem\(this\.recentKeys\.slice\(-12\), this\.scope, this\.mediaKind\)/, 'the main next-item request should carry the media kind');
-assert.match(source, /getNextItem\(excludeKeys, this\.scope, this\.mediaKind\)/, 'the prefetch request should carry the media kind');
+assert.match(source, /getNextItem\(this\.recentKeys\.slice\(-12\), this\.scope, this\.mediaKind, \{ signal: this\._loadAbort\.signal \}\)/, 'the main next-item request should carry the media kind');
+assert.match(source, /getNextItem\(excludeKeys, this\.scope, this\.mediaKind, \{ signal: this\._prefetchAbort\.signal \}\)/, 'the prefetch request should carry the media kind');
 assert.match(source, /getScopes\(this\.mediaKind\)/, 'scope counts should follow the media kind');
 assert.match(source, /touchBeganZoomed/, 'a touch that began while zoomed must not be re-interpreted as a swipe or tap on touchend');
 assert.match(api, /if \(media && media !== 'all'\) params\.set\('media', media\)/, 'api client should send the media filter');
@@ -177,7 +177,7 @@ assert.match(api, /if \(scope && scope !== 'all'\) params\.set\('scope', scope\)
 
 // ---- 2026-09-09 横屏素材 / 全屏 / 主屏幕启动 ----
 // 横屏素材完整显示：竖屏 feed 的 cover 裁切只会剩中间三分之一；方向以解码后的实际尺寸为准（含旋转元数据）。
-assert.match(stage, /'feed-video--landscape': landscape/, 'landscape videos need their own class');
+assert.match(stage, /'feed-video--landscape': isCurrent\(entry\) \? landscape : entry.width > entry.height/, 'landscape videos need their own class');
 assert.match(stage, /el\.videoWidth > el\.videoHeight/, 'orientation should come from the decoded frame size, which honours rotation metadata');
 assert.match(css, /\.feed-video--landscape\s*{[^}]*object-fit:\s*contain;/s, 'landscape videos must be letterboxed, not cropped');
 assert.match(css, /@media \(orientation: landscape\) and \(pointer: coarse\)\s*{\s*\.feed-video\s*{[^}]*object-fit:\s*contain;/s, 'a rotated phone must not crop portrait videos either, while desktop keeps its rule');

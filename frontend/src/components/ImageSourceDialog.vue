@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <DialogShell class="image-source-dialog" size="xl" :title="image.name || '图片详情'" @close="$emit('close')">
-      <div class="image-source-dialog__stage">
+      <div class="image-source-dialog__stage" @click.self="$emit('close')">
         <img v-if="!failed" :key="image.id" :src="`/preview/image/${image.id}`" :alt="image.name" @error="failed = true" />
         <p v-else role="status">无法加载原图，文件可能离线、已移动或格式不受支持。</p>
       </div>

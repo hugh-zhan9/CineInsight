@@ -11,16 +11,19 @@
       @close="$emit('close')"
     >
       <div :class="['photo-lightbox__layout', { 'photo-lightbox__layout--focused': !showInfo }]">
-        <div class="photo-lightbox__stage">
+        <div class="photo-lightbox__stage" @click.self="$emit('close')">
           <ImageViewport
             v-if="!imageFailed"
             ref="viewport"
             :src="originalURL"
+            :thumbnail-src="`/preview/image-thumbnail/${Number(image.id)}`"
+            @load="imageLoaded = true; scheduleViewRecord(Number(image.id))"
             :name="image.name"
             :image-width="Number(image.width) || 1"
             :image-height="Number(image.height) || 1"
             image-data-test="photo-lightbox-img"
             @error="imageFailed = true"
+            @background-click="$emit('close')"
           />
           <div v-else class="photo-lightbox__fallback" role="status" data-test="photo-lightbox-fallback">
             <AppIcon name="image" :size="24" />
@@ -202,6 +205,7 @@ export default {
   data() {
     return {
       imageFailed: false,
+      imageLoaded: false,
       showInfo: true,
       comparePicker: false,
       compareImage: null,
@@ -228,6 +232,7 @@ export default {
       immediate: true,
       handler(id) {
         this.imageFailed = false;
+        this.imageLoaded = false;
         this.comparePicker = false; this.compareImage = null; this.toolsOpen = false;
         this.actionError = '';
         this.loadDetail(Number(id));
@@ -280,7 +285,7 @@ export default {
     scheduleViewRecord(id) {
       clearTimeout(this._viewTimer);
       this._viewTimer = null;
-      if (!id) return;
+      if (!id || !this.imageLoaded || this.comparePicker || this.compareImage || this.toolsOpen) return;
       this._viewTimer = setTimeout(() => {
         this._viewTimer = null;
         if (Number(this.image?.id) !== id || this.imageFailed) return;

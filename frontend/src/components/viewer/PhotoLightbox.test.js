@@ -89,6 +89,17 @@ describe('PhotoLightbox 纯函数', () => {
 });
 
 describe('PhotoLightbox 看图', () => {
+  it('closes from image margins and stage padding, but keeps controls and information interactive', async () => {
+    const w = await mountLightbox();
+    await w.get('[data-test="photo-lightbox-toggle-info"]').trigger('click');
+    await w.get('.photo-lightbox__info').trigger('click');
+    expect(w.emitted('close')).toBeUndefined();
+    w.getComponent(ImageViewport).vm.$emit('background-click');
+    expect(w.emitted('close')).toHaveLength(1);
+    await w.get('.photo-lightbox__stage').trigger('click');
+    expect(w.emitted('close')).toHaveLength(2);
+  });
+
   it('hides the information panel, zooms temporarily and restores on key release or blur', async () => {
     const wrapper = await mountLightbox({}, { attachTo: document.body });
     const viewport = wrapper.getComponent(ImageViewport);
@@ -107,6 +118,7 @@ describe('PhotoLightbox 看图', () => {
     vi.useFakeTimers();
     try {
       const wrapper = await mountLightbox({ image: image(2), neighbors: [image(1), image(2), image(3), image(4)] });
+      await wrapper.get('[data-test=photo-lightbox-img]').trigger('load');
       expect(wrapper.vm._preloads.map(item => item.getAttribute('src'))).toEqual(['/preview/image/1', '/preview/image/3']);
       await wrapper.get('[aria-label="查看 p4.jpg"]').trigger('click');
       expect(wrapper.emitted('select-neighbor')).toEqual([[4]]);
@@ -306,8 +318,12 @@ describe('PhotoLightbox 查看记录（与图片管理同口径）', () => {
     vi.useFakeTimers();
     try {
       const wrapper = await mountLightbox();
+      vi.advanceTimersByTime(VIEW_RECORD_DELAY_MS * 2);
+      expect(api.RecordImageView).not.toHaveBeenCalled();
+      await wrapper.get('[data-test=photo-lightbox-img]').trigger('load');
       vi.advanceTimersByTime(VIEW_RECORD_DELAY_MS - 500);
       await wrapper.setProps({ image: image(2) });
+      await wrapper.get('[data-test=photo-lightbox-img]').trigger('load');
       vi.advanceTimersByTime(VIEW_RECORD_DELAY_MS - 1);
       expect(api.RecordImageView).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
@@ -331,6 +347,9 @@ describe('PhotoLightbox 查看记录（与图片管理同口径）', () => {
     vi.useFakeTimers();
     try {
       const wrapper = await mountLightbox();
+      vi.advanceTimersByTime(VIEW_RECORD_DELAY_MS * 2);
+      expect(api.RecordImageView).not.toHaveBeenCalled();
+      await wrapper.get('[data-test=photo-lightbox-img]').trigger('load');
       await wrapper.get('[data-test="photo-lightbox-img"]').trigger('error');
       vi.advanceTimersByTime(VIEW_RECORD_DELAY_MS * 2);
       await flushPromises();
@@ -338,6 +357,7 @@ describe('PhotoLightbox 查看记录（与图片管理同口径）', () => {
 
       api.RecordImageView.mockRejectedValueOnce(new Error('写不进去'));
       await wrapper.setProps({ image: image(2) });
+      await wrapper.get('[data-test=photo-lightbox-img]').trigger('load');
       vi.advanceTimersByTime(VIEW_RECORD_DELAY_MS);
       await flushPromises();
       expect(api.RecordImageView).toHaveBeenCalledWith(2);

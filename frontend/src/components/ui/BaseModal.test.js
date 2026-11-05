@@ -5,6 +5,19 @@ import BaseModal from './BaseModal.vue';
 import { closeModalLayer, hasOpenModalLayer, isTopModalLayer, openModalLayer } from './modalSignals.js';
 
 describe('BaseModal', () => {
+  it('cycles Tab and Shift+Tab within the top modal, excluding disabled and hidden controls', async () => {
+    const w = mount(BaseModal, { attachTo: document.body, slots: { default: '<button id="first">First</button><button disabled>Disabled</button><div style="display:none"><button>Hidden</button></div><button id="last">Last</button>' } });
+    const first = w.get('#first').element, last = w.get('#last').element;
+    last.focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', cancelable: true }));
+    expect(document.activeElement).toBe(first);
+    first.focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true }));
+    expect(document.activeElement).toBe(last);
+    const top = mount(BaseModal, { attachTo: document.body });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', cancelable: true }));
+    expect(document.activeElement).toBe(top.get('.modal').element);
+    top.unmount(); w.unmount();
+  });
+
   it('renders overlay, modal and slot content with pass-through attrs on the modal node', () => {
     const wrapper = mount(BaseModal, {
       attrs: { class: 'cleanup-modal', role: 'dialog', style: 'max-width: 480px;' },

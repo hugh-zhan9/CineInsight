@@ -1,8 +1,8 @@
 vi.mock('./utils/btAPI.js', () => ({ btAPI: { GetBTConnection: async () => ({ enabled: false, credential_status: 'unconfigured' }), ListBTIndexers: async () => [], ListBTTasks: async () => ({ tasks: [], next_cursor: '' }) }, btConnectionError: () => '连接失败' }));
-import { flushPromises, shallowMount } from '@vue/test-utils';
+import { config, flushPromises, shallowMount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'GetSettings', 'GetAllTags', 'GetAllDirectories', 'GetStartupError',
@@ -16,6 +16,20 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../wailsjs/go/main/App', () => api);
 
 import App from './App.vue';
+
+// Async wrappers have no own props. Shallow page contracts use the actual resolved props,
+// while preserving the existing parent-only navigation assertions.
+const originalGlobalStubs = config.global.stubs;
+beforeAll(async () => {
+  const stubs = { ...originalGlobalStubs };
+  for (const [name, component] of Object.entries(App.components)) {
+    if (!component.__asyncLoader) continue;
+    const page = await component.__asyncLoader();
+    stubs[name] = { name, props: page.props, emits: page.emits, template: '<div />' };
+  }
+  config.global.stubs = stubs;
+});
+afterAll(() => { config.global.stubs = originalGlobalStubs; });
 
 it('keeps the exploration host mounted across viewer detail navigation', async () => {
   const wrapper = await mountApp();

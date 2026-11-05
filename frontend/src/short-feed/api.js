@@ -65,13 +65,13 @@ export function thumbnailURL(item) {
   return `/short-thumb/${item.media_kind}/${item.id}`;
 }
 
-export function getNextItem(excludeKeys = [], scope = 'all', media = 'all') {
+export function getNextItem(excludeKeys = [], scope = 'all', media = 'all', { signal } = {}) {
   const params = new URLSearchParams();
   if (excludeKeys.length > 0) params.set('exclude', excludeKeys.join(','));
   if (scope && scope !== 'all') params.set('scope', scope);
   if (media && media !== 'all') params.set('media', media);
   const query = params.toString();
-  return requestJSON(`/short-api/feed/next${query ? `?${query}` : ''}`);
+  return requestJSON(`/short-api/feed/next${query ? `?${query}` : ''}`, { signal });
 }
 
 export function recordPlay(item, viewSessionID = '') {

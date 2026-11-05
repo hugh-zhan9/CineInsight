@@ -446,20 +446,21 @@
 </template>
 
 <script>
+import { defineAsyncComponent } from 'vue';
 import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary, GetStartupBackendGuard, AcceptSQLiteAfterFallbackBlock } from '../wailsjs/go/main/App';
-import ExplorePage from './components/viewer/ExplorePage.vue';
+const ExplorePage = defineAsyncComponent(() => import('./components/viewer/ExplorePage.vue'));
 import ExplorationQuitDialog from './components/ExplorationQuitDialog.vue';
 import VideoListPage from './components/VideoListPage.vue';
-import SettingsPage from './components/SettingsPage.vue';
-import EntityLibraryPage from './components/EntityLibraryPage.vue';
+const SettingsPage = defineAsyncComponent(() => import('./components/SettingsPage.vue'));
+const EntityLibraryPage = defineAsyncComponent(() => import('./components/EntityLibraryPage.vue'));
 import EntityBrowsePage from './components/viewer/EntityBrowsePage.vue';
-import InsightsPage from './components/InsightsPage.vue';
-import DataCarePage from './components/DataCarePage.vue';
+const InsightsPage = defineAsyncComponent(() => import('./components/InsightsPage.vue'));
+const DataCarePage = defineAsyncComponent(() => import('./components/DataCarePage.vue'));
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
-import DownloadsPage from './components/DownloadsPage.vue';
+const DownloadsPage = defineAsyncComponent(() => import('./components/DownloadsPage.vue'));
 import RecapPage from './components/RecapPage.vue';
-import ScenesPage from './components/ScenesPage.vue';
-import VideoWorkbenchPage from './components/VideoWorkbenchPage.vue';
+const ScenesPage = defineAsyncComponent(() => import('./components/ScenesPage.vue'));
+const VideoWorkbenchPage = defineAsyncComponent(() => import('./components/VideoWorkbenchPage.vue'));
 import HomePage from './components/viewer/HomePage.vue';
 import VideoBrowsePage from './components/viewer/VideoBrowsePage.vue';
 import PhotoBrowsePage from './components/viewer/PhotoBrowsePage.vue';
@@ -467,10 +468,10 @@ import VideoDetailPage from './components/viewer/VideoDetailPage.vue';
 import PersonMediaDeleteDialog from './components/PersonMediaDeleteDialog.vue';
 import ListsPage from './components/viewer/ListsPage.vue';
 import ManageHomePage from './components/manage/ManageHomePage.vue';
-import PendingWorkPage from './components/manage/PendingWorkPage.vue';
-import CleanupCenterPage from './components/manage/CleanupCenterPage.vue';
+const PendingWorkPage = defineAsyncComponent(() => import('./components/manage/PendingWorkPage.vue'));
+const CleanupCenterPage = defineAsyncComponent(() => import('./components/manage/CleanupCenterPage.vue'));
 import AppFeedback from './components/AppFeedback.vue';
-import SearchResultsPage from './components/SearchResultsPage.vue';
+const SearchResultsPage = defineAsyncComponent(() => import('./components/SearchResultsPage.vue'));
 import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';

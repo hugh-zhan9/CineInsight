@@ -1,6 +1,6 @@
 <template>
   <div :class="['modal-overlay', overlayClass]" @click.self="handleOverlayClick">
-    <div class="modal" role="dialog" aria-modal="true" v-bind="$attrs" @click="handleModalClick">
+    <div class="modal" tabindex="-1" role="dialog" aria-modal="true" v-bind="$attrs" @click="handleModalClick">
       <slot />
     </div>
   </div>
@@ -40,6 +40,23 @@ export default {
   },
   methods: {
     handleDocumentKeydown(event) {
+      if (event.key === 'Tab' && !event.defaultPrevented && isTopModalLayer(this)) {
+        const dialog = this.$el.querySelector('.modal');
+        const controls = [...dialog.querySelectorAll('button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]')].filter(el => {
+          if (el.tabIndex < 0 || el.matches(':disabled') || el.closest('[hidden], [inert]')) return false;
+          for (let node = el; node && node !== dialog.parentElement; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+          }
+          return true;
+        });
+        const first = controls[0], last = controls.at(-1), current = document.activeElement;
+        if (!first || !controls.includes(current) || (event.shiftKey ? current === first : current === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last || dialog : first || dialog).focus();
+        }
+        return;
+      }
       if (event.key !== 'Escape') return;
       // 下面几层什么也不做；最上面那层接手：标记已处理（preventDefault），并拦下事件，
       // window 上的页面级 Esc（例如列表取消选择）收不到。

@@ -528,11 +528,14 @@
           v-if="!viewerImageError"
           ref="imageViewport"
           :src="`/preview/image/${viewerImage.id}`"
+          :thumbnail-src="`/preview/image-thumbnail/${viewerImage.id}`"
+          @load="viewerImageLoaded = true; scheduleViewRecord(viewerImage.id)"
           :name="viewerImage.name"
           :image-width="Number(viewerImage.width) || 1"
           :image-height="Number(viewerImage.height) || 1"
           class="photo-viewer__img"
           @error="viewerImageError = true"
+          @background-click="closeViewer"
         />
         <div v-else class="photo-viewer__fallback" data-test="photo-viewer-fallback">
           <strong>{{ viewerImage.name }}</strong>
@@ -542,9 +545,11 @@
           <small>{{ formatBytes(viewerImage.size) }}<template v-if="viewerImage.width && viewerImage.height"> · {{ viewerImage.width }}×{{ viewerImage.height }}</template></small>
         </div>
       </div>
-      <button type="button" class="btn-icon photo-viewer__nav photo-viewer__nav--next" aria-label="下一张" :disabled="viewerIndex >= images.length - 1" title="下一张 (→)" @click="viewerNext"><AppIcon name="chevron-right" :size="24" /></button>
+      <button type="button" class="btn-icon photo-viewer__nav photo-viewer__nav--next" aria-label="下一张" :disabled="viewerLoadingNext || (viewerIndex >= images.length - 1 && !hasMore)" title="下一张 (→)" @click="viewerNext"><AppIcon name="chevron-right" :size="24" /></button>
 
       <aside class="photo-viewer__sidebar glass-surface">
+        <p v-if="viewerLoadingNext" role="status">正在加载下一批…</p>
+        <p v-if="error" role="alert">{{ error }}</p>
         <h3 :title="viewerImage.name">{{ viewerImage.name }}</h3>
         <button type="button" class="btn btn--secondary btn--sm photo-viewer__reveal" data-test="photo-viewer-directory" @click="revealViewerImage">在访达中显示</button>
         <WallpaperButton kind="image" :media-id="Number(viewerImage.id)" />
@@ -944,6 +949,8 @@ export default {
       missingOptions: IMAGE_MISSING_OPTIONS,
       viewerIndex: -1,
       viewerImageError: false,
+      viewerImageLoaded: false,
+      viewerLoadingNext: false,
       viewerDetail: null,
       viewerDetailError: '',
       viewerCandidates: [],
@@ -1230,7 +1237,10 @@ export default {
     }
   },
   watch: {
+    comparisonImages() { this.scheduleViewRecord(this.viewerImage?.id); },
+    toolsImage() { this.scheduleViewRecord(this.viewerImage?.id); },
     'viewerImage.id'(id) {
+      this.viewerImageLoaded = false;
       this.viewerDirectoryError = '';
       this.scheduleViewRecord(id);
     },
@@ -2221,6 +2231,7 @@ export default {
       this.openViewer(index);
     },
     openViewer(index) {
+      this._viewerEpoch = (this._viewerEpoch || 0) + 1;
       if (index < 0 || index >= this.images.length) return;
       this.viewerIndex = index;
       this.viewerImageError = false;
@@ -2283,6 +2294,7 @@ export default {
       return true;
     },
     closeViewer() {
+      this._viewerEpoch = (this._viewerEpoch || 0) + 1;
       this.viewerIndex = -1;
       this.viewerImageError = false;
       this.viewerDetail = null;
@@ -2303,8 +2315,16 @@ export default {
       this.viewerPersonMenuOpen = false;
       this.viewerPersonActiveIndex = 0;
     },
-    viewerNext() {
-      if (this.viewerIndex < this.images.length - 1) this.openViewer(this.viewerIndex + 1);
+    async viewerNext() {
+      if (!this.viewerImage || this.viewerLoadingNext) return;
+      const id = this.viewerImage.id, token = this._queryToken, index = this.viewerIndex, epoch = this._viewerEpoch;
+      if (index < this.images.length - 1) { this.openViewer(index + 1); return; }
+      if (!this.hasMore || this.loading) return;
+      this.viewerLoadingNext = true;
+      try {
+        await this.loadMore();
+        if (epoch === this._viewerEpoch && token === this._queryToken && this.viewerImage?.id === id && this.viewerIndex === index && index < this.images.length - 1) this.openViewer(index + 1);
+      } finally { this.viewerLoadingNext = false; }
     },
     // 同一张图连续显示满 VIEW_RECORD_DELAY_MS 才上报一次；切到别的图、关闭查看器或离开本页都会取消。
     // 原图加载失败时不算看过。后端另按 30 分钟去重，这里只负责「真的停留过」。
@@ -2312,7 +2332,7 @@ export default {
       clearTimeout(this._viewRecordTimer);
       this._viewRecordTimer = null;
       const imageID = Number(id || 0);
-      if (!imageID || !this.pageActive) return;
+      if (!imageID || !this.pageActive || !this.viewerImageLoaded || this.comparisonImages || this.toolsImage) return;
       this._viewRecordTimer = setTimeout(() => {
         this._viewRecordTimer = null;
         if (Number(this.viewerImage?.id) !== imageID || this.viewerImageError || !this.pageActive) return;

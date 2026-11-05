@@ -1880,6 +1880,22 @@ describe('PhotoLibraryPage folder view windowing', () => {
 });
 
 describe('PhotoLibraryPage view recording (D-RECAP-SOURCES)', () => {
+  it('continues across a page boundary and ignores a late next-page result after closing', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1)], { id: 1 }));
+    const w = await mountPage();
+    w.vm.openViewer(0); await flushPromises();
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(2)], { id: 2 }));
+    await w.get('.photo-viewer__nav--next').trigger('click'); await flushPromises();
+    expect(w.vm.viewerImage.id).toBe(2);
+    let resolve;
+    api.SearchImagePage.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    await w.get('.photo-viewer__nav--next').trigger('click');
+    w.vm.closeViewer(); w.vm.openViewer(1); await flushPromises();
+    resolve(makePage([makeImage(3)])); await flushPromises();
+    expect(w.vm.viewerImage.id).toBe(2);
+    w.unmount();
+  });
+
   it('records one view only after the same image stays displayed for 1.5 s; switching or closing cancels', async () => {
     vi.useFakeTimers();
     try {
@@ -1888,9 +1904,13 @@ describe('PhotoLibraryPage view recording (D-RECAP-SOURCES)', () => {
       const wrapper = await mountPage();
       await wrapper.findAll('.photo-card__media')[0].trigger('click');
       await flushPromises();
+      vi.advanceTimersByTime(5000);
+      expect(api.RecordImageView).not.toHaveBeenCalled();
+      await wrapper.get('.photo-viewer__img > img:last-of-type').trigger('load');
       vi.advanceTimersByTime(1000);
       await wrapper.get('.photo-viewer__nav--next').trigger('click');
       await flushPromises();
+      await wrapper.get('.photo-viewer__img > img:last-of-type').trigger('load');
       vi.advanceTimersByTime(1499);
       expect(api.RecordImageView).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
@@ -2212,6 +2232,18 @@ describe('PhotoLibraryPage 统一设计（D-UD-06 / D-UD-08 / D-UD-13 / D-UD-14�
     expect(wrapper.get('[data-test="photo-folder-system-open"]').text()).toBe('在访达中显示');
     expect(wrapper.text()).not.toContain('打开目录');
     wrapper.unmount();
+  });
+
+  it('closes the viewer from an image margin without clearing list selection', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const w = await mountPage();
+    w.vm.selectedImageIDs = [1];
+    w.vm.openViewer(0); await flushPromises();
+    w.getComponent({ name: 'ImageViewport' }).vm.$emit('background-click');
+    await flushPromises();
+    expect(w.find('[data-test="photo-viewer"]').exists()).toBe(false);
+    expect(w.vm.selectedImageIDs).toEqual([1]);
+    w.unmount();
   });
 
   it('查看器的关闭按钮带「关闭」读屏名，上一张 / 下一张是图标按钮', async () => {

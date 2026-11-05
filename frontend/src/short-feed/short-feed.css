@@ -928,3 +928,10 @@ button {
 @media (orientation: landscape) and (pointer: coarse) {
   .feed-video { object-fit: contain; }
 }
+
+/* 预取保留真实媒体节点，切为当前时不重新设置src。 */
+.feed-media-slot { position: absolute; inset: 0; }
+.feed-media-slot--pending { visibility: hidden; pointer-events: none; }
+.feed-auto-controls { position: absolute; z-index: var(--z-sticky); top: calc(env(safe-area-inset-top, 0px) + 62px); left: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.feed-auto-controls button, .feed-auto-controls span { background: var(--overlay-strong); color: var(--text-primary); border-radius: var(--radius-pill); padding: 6px 12px; font-size: var(--fs-caption); }
+.feed-auto-controls progress { width: 64px; height: 4px; }

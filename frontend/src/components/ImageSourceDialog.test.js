@@ -39,6 +39,14 @@ describe('ImageSourceDialog', () => {
   await w.setProps({ image: { id: 6, name: 'b.jpg' } }); expect(w.get('img').attributes('src')).toBe('/preview/image/6'); w.unmount();
  });
 
+ it('closes from the empty image stage but not the image itself', async () => {
+  const w = mount(ImageSourceDialog, { props: { image: { id: 7 } }, global: { stubs: { teleport: true } } });
+  await w.get('img').trigger('click');
+  expect(w.emitted('close')).toBeUndefined();
+  await w.get('.image-source-dialog__stage').trigger('click');
+  expect(w.emitted('close')).toHaveLength(1); w.unmount();
+ });
+
  it('closes from the top-right close button', async () => {
   const w = mount(ImageSourceDialog, { props: { image: { id: 7, name: 'c.jpg' } }, global: { stubs: { teleport: true } } });
   await w.get('[data-test="dialog-shell-close"]').trigger('click');
