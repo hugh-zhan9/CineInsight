@@ -4,9 +4,11 @@
 
 正常使用 `bash scripts/build_and_install_app.sh`，只出包用 `--build-only`。脚本在所有资源和辅助组件装配完毕后，从内向外签名，保持原 Bundle ID；逐项校验辅助程序和最终应用，任何失败阻止安装。超分运行时先核对原始清单，重签后只更新打包副本对应的 files 摘要，models 和 build/enhance-runtime 原产物保持不变。直接 `wails build` 不走这套最终签名。
 
+正常安装在最终签名之后、替换旧应用之前，显式使用本次构建的识别组件检查 `ja,ko,en,zh` 本机语音资源；资源齐全直接继续，缺少时调用 `install_speech_assets.sh` 补装，再确认四种语言均已安装。补装超时、状态读取失败或仍有缺失会停止，不关闭或替换旧应用；可修复后用 `--skip-build` 重试，或用 `--skip-speech-assets` 明确跳过检查及补装。现有脚本仅能自动添加日/韩语输入源，英/中文若缺失仍需按提示在系统设置处理。构建未包含苹果识别组件时提示跳过。`--build-only` 不触发系统资源检查或下载。
+
 旧应用采用二进制 cdhash 身份，重编译会改变；新的 designated requirement 绑定 Bundle ID 和证书。第一次从旧包切换到新身份，macOS 可能再要求授权一次；系统权限是否保留须真实升级验证，自签不等于 Developer ID、公证或自动获得权限。不应使用 tccutil reset 处理本问题。
 
-验证：`python3 scripts/test_build_signing_setup.py` 用隔离的命令替身验证首次初始化、配置复用、初始化失败提前退出、跳过构建仍准备签名，以及帮助/参数错误不初始化；不编译、不操作真实钥匙串或安装应用。`python3 scripts/test_macos_signing.py` 用两个不同可执行文件的合成应用检查主包和辅助 app 身份一致、资源篡改被拒绝、超分清单损坏被拒绝。真实产物另执行 `codesign --verify --deep --strict 'build/bin/析微影策.app'`。
+验证：`python3 scripts/test_build_signing_setup.py` 用隔离的命令替身验证首次初始化、配置复用、初始化失败提前退出、跳过构建仍准备签名，以及帮助/参数错误不初始化；还覆盖语音资源齐全、补装后复查、读取/补装失败保护旧应用、显式跳过和仅构建。`python3 scripts/test_install_speech_assets.py` 使用真实脚本和隔离的系统命令替身核对已安装不改偏好、补装及超时还原；不下载系统资源。这些入口测试不编译、不操作真实钥匙串或安装应用。`python3 scripts/test_macos_signing.py` 用两个不同可执行文件的合成应用检查主包和辅助 app 身份一致、资源篡改被拒绝、超分清单损坏被拒绝。真实产物另执行 `codesign --verify --deep --strict 'build/bin/析微影策.app'`。
 
 证书丢失时脚本失败，不自动换证书。同名证书存在但配置丢失时，先核对钥匙串的证书 SHA-1，再恢复上述配置，避免悄悄改变身份。
 

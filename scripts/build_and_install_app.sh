@@ -10,6 +10,7 @@ INSTALL_APP_PATH="/Applications/${APP_NAME}.app"
 TMP_DIR_ROOT="${TMPDIR:-/tmp}"
 SKIP_BUILD=0
 BUILD_ONLY=0
+SKIP_SPEECH_ASSETS=0
 WAILS_ARGS=()
 
 log() {
@@ -24,20 +25,24 @@ fail() {
 usage() {
   cat <<EOF
 用法:
-  $(basename "$0") [--skip-build | --build-only] [wails build 参数...]
+  $(basename "$0") [--skip-build | --build-only] [--skip-speech-assets] [wails build 参数...]
 
 说明:
   1. 自动初始化或复用本机签名配置，再执行 wails build（默认使用 Go 1.24.9）
   2. 产出 ${BUILD_APP_PATH}、打包已构建的超分/JPEG运行时并完成签名验证
      JPEG 前置构建：bash scripts/build_image_tools.sh
-  3. 默认关闭正在运行的 ${APP_NAME}，将新包替换到 ${INSTALL_APP_PATH}
-  4. --build-only 在第 2 步结束，不替换已安装应用
+  3. 检查日/韩/英/中文本机语音资源，已安装的跳过，缺少的调用 install_speech_assets.sh 补装
+     使用本次构建的识别组件；准备失败时停止，保留已安装应用
+  4. 关闭正在运行的 ${APP_NAME}，将新包替换到 ${INSTALL_APP_PATH}
+  5. --build-only 在第 2 步结束，不检查语音资源、不替换已安装应用
+     --skip-speech-assets 跳过语音资源检查与补装，仍正常安装应用
 
 示例:
   $(basename "$0")
   $(basename "$0") -clean
   $(basename "$0") --build-only
   $(basename "$0") --skip-build
+  $(basename "$0") --skip-speech-assets
 EOF
 }
 
@@ -157,6 +162,37 @@ wait_for_app_exit() {
   done
 }
 
+prepare_speech_assets() {
+  local helper="${BUILD_APP_PATH}/Contents/Resources/apple-ai/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai"
+  local languages="ja,ko,en,zh"
+  local missing
+
+  if (( SKIP_SPEECH_ASSETS == 1 )); then
+    log "跳过语音资源检查与补装（--skip-speech-assets）"
+    return
+  fi
+  if [[ ! -x "${helper}" ]]; then
+    log "跳过语音资源检查：本次构建不含苹果系统识别组件"
+    return
+  fi
+
+  log "检查本机语音资源（日/韩/英/中文）"
+  missing="$(python3 "${SCRIPT_DIR}/speech_assets.py" missing --helper "${helper}" --languages "${languages}")" ||
+    fail "无法读取本机语音资源状态，尚未替换已安装应用；可修复后重试，或用 --skip-speech-assets 跳过。"
+  if [[ -z "${missing}" ]]; then
+    log "语音资源已安装，无需补装"
+    return
+  fi
+
+  log "补装缺少的语音资源：${missing}（可能需要等待系统下载）"
+  bash "${SCRIPT_DIR}/install_speech_assets.sh" --helper "${helper}" --languages "${languages}" ||
+    fail "语音资源准备未完成，尚未替换已安装应用；可重试，或用 --skip-speech-assets 跳过。"
+  missing="$(python3 "${SCRIPT_DIR}/speech_assets.py" missing --helper "${helper}" --languages "${languages}")" ||
+    fail "无法确认语音资源安装结果，尚未替换已安装应用。"
+  [[ -z "${missing}" ]] || fail "仍缺少语音资源：${missing}，尚未替换已安装应用。请按补装脚本提示处理，或用 --skip-speech-assets 跳过。"
+  log "语音资源准备完成"
+}
+
 replace_installed_app() {
   local temp_dir temp_app backup_app
 
@@ -215,6 +251,10 @@ main() {
         BUILD_ONLY=1
         shift
         ;;
+      --skip-speech-assets)
+        SKIP_SPEECH_ASSETS=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -248,6 +288,7 @@ main() {
     return
   fi
 
+  prepare_speech_assets
   replace_installed_app
   launch_installed_app
   log "完成，已替换 ${INSTALL_APP_PATH}"
