@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'GetSettings', 'GetAllTags', 'GetAllDirectories', 'GetStartupError',
+  'ResolveVisibleVideoForPlayback', 'GetSettings', 'GetAllTags', 'GetAllDirectories', 'GetStartupError',
   'SyncScanDirectories', 'SyncImageDirectories', 'GetLibraryCounts', 'LogFrontend',
   'SetWindowForeground', 'GetVideosByIDs',
   'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople',
@@ -682,7 +682,7 @@ describe('顶栏信息架构（APP-14）', () => {
 
     expect(wrapper.find('[data-test="nav-area-viewer"]').exists()).toBe(true);
     expect(groupLabels(wrapper)).toEqual([
-      { key: 'browse', label: '浏览', pages: ['首页', '探索', '视频', '人物', '作品集', '图片'] },
+      { key: 'browse', label: '浏览', pages: ['首页', '发现', '探索', '视频', '人物', '作品集', '图片'] },
       { key: 'lists', label: '片单', pages: ['片单'] },
       { key: 'review', label: '回顾与检索', pages: ['回顾', '搜索汇总', '场景检索'] }
     ]);
@@ -3269,4 +3269,25 @@ it('chapter task review opens retained notes and source-aware chapter seeks use 
  const open=vi.spyOn(wrapper.vm,'openVideoDetail').mockResolvedValue(true);
  await wrapper.vm.openChapterPosition({video_id:7,start_ms:1200,source_version:'captured'});
  expect(open).toHaveBeenCalledWith(7,{startAtMs:1200,bookmark:{start_ms:1200,end_ms:null,source_token:'captured'}});
+});
+
+it('opens discovery from home and videos with a persistent batch host', async () => {
+  const w = await mountApp();
+  await w.vm.navigateTo('discover', { filter: { person_ids: [7] } }); await flushPromises();
+  const host = w.findComponent({ name: 'DiscoverPage' });
+  expect(host.props('initialRequest').filter).toEqual({ person_ids: [7] });
+  await w.vm.navigateTo('home'); await flushPromises(); expect(host.props('pageActive')).toBe(false);
+  await w.vm.navigateTo('discover'); await flushPromises(); expect(w.findComponent({ name: 'DiscoverPage' }).vm).toBe(host.vm);
+});
+
+it('validates an ending choice, retires its player, then enters detail; rejects superseded work', async () => {
+  const w=await mountApp();api.ResolveVisibleVideoForPlayback.mockResolvedValue({video_id:17,source_version:'v1'});
+  const retire=vi.fn().mockResolvedValue(true),selected=vi.fn();
+  expect(await w.vm.openEndedVideo(17,{retire,onNavigated:selected})).toBe(true);
+  expect(retire).toHaveBeenCalledOnce();expect(selected).toHaveBeenCalledOnce();expect(w.vm.detailRoute.videoId).toBe(17);
+  let finish;api.ResolveVisibleVideoForPlayback.mockReturnValueOnce(new Promise(resolve=>{finish=resolve}));
+  const stale=w.vm.openEndedVideo(18,{retire});await w.vm.navigateTo('home');finish({video_id:18,source_version:'v2'});
+  expect(await stale).toBe(false);expect(w.vm.currentPage).toBe('home');expect(retire).toHaveBeenCalledTimes(1);
+  api.ResolveVisibleVideoForPlayback.mockRejectedValueOnce(new Error('source unavailable'));
+  await expect(w.vm.openEndedVideo(99,{retire})).rejects.toThrow('source unavailable');expect(retire).toHaveBeenCalledTimes(1);
 });

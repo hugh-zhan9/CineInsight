@@ -46,12 +46,12 @@ it('serializes bridge reports and ignores retired-player cleanup', async () => {
 it('reacts to explicit pause and resume requests', async () => {
   await player(); await wrapper.setProps({ session: { ...session(), desired_paused: true, control_sequence: 1 } });
   expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
-  await wrapper.setProps({ session: { ...session(), control_sequence: 2 } }); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
+  await wrapper.setProps({ session: { ...session(), control_sequence: 2 } }); await flushPromises(); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
 });
 
 it('observes repeated external intents after native controls without requiring a boolean change', async () => {
   const video = await player(); await video.trigger('pause');
-  await wrapper.setProps({ session: { ...session(), control_sequence: 1 } });
+  await wrapper.setProps({ session: { ...session(), control_sequence: 1 } }); await flushPromises();
   expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
   await wrapper.setProps({ session: { ...session(), desired_paused: true, control_sequence: 2 } });
   await video.trigger('playing');

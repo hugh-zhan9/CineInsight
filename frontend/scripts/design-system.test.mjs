@@ -132,6 +132,7 @@ const ASCII_ELLIPSIS = /\.\.\.(?![\w$[({])/g;
 
 // 顶栏导航列出的页面 key → 页面组件（同一个常挂载实例的两个 key 指向同一文件）。新增导航页必须在这里登记。
 const PAGE_FILES = {
+  discover: 'components/viewer/DiscoverPage.vue',
   explore: 'components/viewer/ExplorePage.vue',
   home: 'components/viewer/HomePage.vue',
   videos: 'components/viewer/VideoBrowsePage.vue',

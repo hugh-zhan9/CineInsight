@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   RecordViewEvent: vi.fn(),
   RequestPreviewProxy: vi.fn()
 }));
-vi.mock('../../../wailsjs/go/main/App', () => api);
+vi.mock('../../../wailsjs/go/main/App', () => ({...api,GetPlaybackSession:api.GetPreviewSession}));
 vi.mock('../../utils/feedback.js', () => ({ confirmAction: vi.fn(() => Promise.resolve(true)) }));
 
 import InlineVideoPlayer from './InlineVideoPlayer.vue';
@@ -805,4 +805,14 @@ it('ordinary resume uses actual duration and restarts at zero for a tail or out-
   const state = fakePlayer(explicit.get('video').element, { duration: 600 });
   await explicit.get('video').trigger('loadedmetadata');
   expect(state.currentTime).toBe(585);
+});
+
+it('offers an ending once per actual whole-video cycle, never for seeking or a bookmark stop', async () => {
+  const wrapper=await mountPlayer();const video=wrapper.get('video');const state=fakePlayer(video.element,{duration:120});
+  state.paused=false;await video.trigger('play');await video.trigger('playing');state.currentTime=120;
+  await video.trigger('ended');await video.trigger('ended');expect(wrapper.emitted('playback-ended')).toHaveLength(1);
+  state.currentTime=0;await video.trigger('play');await video.trigger('playing');state.paused=true;
+  await video.trigger('seeking');await video.trigger('seeked');await video.trigger('ended');expect(wrapper.emitted('playback-ended')).toHaveLength(1);
+  await video.trigger('play');await video.trigger('playing');wrapper.vm.bookmarkRangeActive=true;
+  await video.trigger('ended');expect(wrapper.emitted('playback-ended')).toHaveLength(1);
 });

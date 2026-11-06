@@ -24,7 +24,7 @@ func TestQueueMediaPinsDescriptorAndIndependentReaders(t *testing.T) {
 	}
 	proxy, _ := newProxyTestService(t)
 	svc := newProxyBackedVideoService(proxy)
-	lease, err := svc.prepareQueueMedia(context.Background(), video.ID, true)
+	lease, err := svc.prepareQueueMedia(context.Background(), video.ID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestQueueMediaProxyReplacementDoesNotReopenPath(t *testing.T) {
 	video := createProxyTestVideo(t, "movie.mkv", 120)
 	proxy, _ := newProxyTestService(t)
 	path := seedReadyProxy(t, proxy, video, 10, time.Now().Add(-time.Hour))
-	lease, err := newProxyBackedVideoService(proxy).prepareQueueMedia(context.Background(), video.ID, true)
+	lease, err := newProxyBackedVideoService(proxy).prepareQueueMedia(context.Background(), video.ID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestQueueMediaDetectsInPlaceProxyMutation(t *testing.T) {
 	video := createProxyTestVideo(t, "movie.mp4", 120)
 	proxy, _ := newProxyTestService(t)
 	path := seedReadyProxy(t, proxy, video, 10, time.Now())
-	lease, err := newProxyBackedVideoService(proxy).prepareQueueMedia(context.Background(), video.ID, true)
+	lease, err := newProxyBackedVideoService(proxy).prepareQueueMedia(context.Background(), video.ID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,10 +133,10 @@ func TestQueueMediaSourceAndResumeModes(t *testing.T) {
 	video := createProxyTestVideo(t, "movie.mkv", 120)
 	proxy, _ := newProxyTestService(t)
 	svc := newProxyBackedVideoService(proxy)
-	if _, err := svc.prepareQueueMedia(context.Background(), video.ID, true); !errors.Is(err, ErrQueueInlineUnsupported) {
+	if _, err := svc.prepareQueueMedia(context.Background(), video.ID, true, false); !errors.Is(err, ErrQueueInlineUnsupported) {
 		t.Fatal(err)
 	}
-	lease, err := svc.prepareQueueMedia(context.Background(), video.ID, false)
+	lease, err := svc.prepareQueueMedia(context.Background(), video.ID, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestQueueMediaContextReachesProxyReadTouchAndDiscard(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			_, err := newProxyBackedVideoService(proxy).prepareQueueMedia(ctx, video.ID, true)
+			_, err := newProxyBackedVideoService(proxy).prepareQueueMedia(ctx, video.ID, true, false)
 			if held != nil {
 				held.Close()
 			}
@@ -225,7 +225,7 @@ func TestQueueMediaReadErrorDoesNotFallBackToOriginal(t *testing.T) {
 	})
 	defer database.DB.Callback().Query().Remove(name)
 	svc := newProxyBackedVideoService(proxy)
-	if _, err := svc.prepareQueueMedia(context.Background(), video.ID, true); !errors.Is(err, sentinel) {
+	if _, err := svc.prepareQueueMedia(context.Background(), video.ID, true, false); !errors.Is(err, sentinel) {
 		t.Fatalf("queue hid database error: %v", err)
 	}
 	// Ordinary preview's existing best-effort proxy policy stays unchanged.
@@ -239,7 +239,7 @@ func TestQueueMediaActiveReadFollowsContext(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video := createProxyTestVideo(t, "movie.mp4", 120)
 	proxy, _ := newProxyTestService(t)
-	lease, err := newProxyBackedVideoService(proxy).prepareQueueMedia(context.Background(), video.ID, true)
+	lease, err := newProxyBackedVideoService(proxy).prepareQueueMedia(context.Background(), video.ID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,5 +255,29 @@ func TestQueueMediaActiveReadFollowsContext(t *testing.T) {
 	defer cancel()
 	if _, _, _, err := lease.reader(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("active reader ignored context: %v", err)
+	}
+}
+
+func TestNativeQueueEligibilityKeepsClipsAndHTTPOutsideNative(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := createProxyTestVideo(t, "legacy.avi", 120)
+	if err := os.WriteFile(video.Path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewVideoService(nil)
+	svc.SetNativePlaybackCapabilityProvider(func() NativePlaybackCapability { return NativePlaybackCapability{Available: true} })
+	lease, err := svc.prepareQueueMedia(context.Background(), video.ID, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	if !lease.native || lease.file != nil {
+		t.Fatal("native queue retained an HTTP descriptor")
+	}
+	if _, _, _, err = lease.reader(context.Background()); !errors.Is(err, ErrQueueInlineUnsupported) {
+		t.Fatal("native queue exposed HTTP media", err)
+	}
+	if _, err = svc.prepareQueueMedia(context.Background(), video.ID, true, false); !errors.Is(err, ErrQueueInlineUnsupported) {
+		t.Fatal("clip/tool path silently used native", err)
 	}
 }

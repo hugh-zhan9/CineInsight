@@ -6,6 +6,10 @@ export function AcceptSQLiteAfterFallbackBlock() {
   return window['go']['main']['App']['AcceptSQLiteAfterFallbackBlock']();
 }
 
+export function AcquireNativePlaybackOwner(arg1) {
+  return window['go']['main']['App']['AcquireNativePlaybackOwner'](arg1);
+}
+
 export function AddCollectionVideo(arg1, arg2) {
   return window['go']['main']['App']['AddCollectionVideo'](arg1, arg2);
 }
@@ -310,12 +314,24 @@ export function ClearVideoAutomaticTagOverride(arg1, arg2) {
   return window['go']['main']['App']['ClearVideoAutomaticTagOverride'](arg1, arg2);
 }
 
+export function CloseNativePlayback(arg1) {
+  return window['go']['main']['App']['CloseNativePlayback'](arg1);
+}
+
+export function CommandNativePlayback(arg1) {
+  return window['go']['main']['App']['CommandNativePlayback'](arg1);
+}
+
 export function ConfigureBTConnection(arg1) {
   return window['go']['main']['App']['ConfigureBTConnection'](arg1);
 }
 
 export function ConfigureJellyfin(arg1) {
   return window['go']['main']['App']['ConfigureJellyfin'](arg1);
+}
+
+export function ConfigureNativePlaybackSubtitles(arg1) {
+  return window['go']['main']['App']['ConfigureNativePlaybackSubtitles'](arg1);
 }
 
 export function ConfirmCollectionSuggestion(arg1, arg2, arg3) {
@@ -878,6 +894,14 @@ export function GetMetadataCompletenessByDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetMetadataCompletenessByDirectory'](arg1, arg2, arg3);
 }
 
+export function GetNativePlaybackCapability() {
+  return window['go']['main']['App']['GetNativePlaybackCapability']();
+}
+
+export function GetNativePlaybackSnapshot(arg1) {
+  return window['go']['main']['App']['GetNativePlaybackSnapshot'](arg1);
+}
+
 export function GetOrphanFileReport() {
   return window['go']['main']['App']['GetOrphanFileReport']();
 }
@@ -916,6 +940,10 @@ export function GetPlaybackProxyUsage() {
 
 export function GetPlaybackQueue(arg1) {
   return window['go']['main']['App']['GetPlaybackQueue'](arg1);
+}
+
+export function GetPlaybackSession(arg1) {
+  return window['go']['main']['App']['GetPlaybackSession'](arg1);
 }
 
 export function GetPlaybackSubtitle(arg1) {
@@ -1034,6 +1062,10 @@ export function GetTrashUsage() {
   return window['go']['main']['App']['GetTrashUsage']();
 }
 
+export function GetVerifiedPreviewSession(arg1, arg2) {
+  return window['go']['main']['App']['GetVerifiedPreviewSession'](arg1, arg2);
+}
+
 export function GetVersionGroup(arg1) {
   return window['go']['main']['App']['GetVersionGroup'](arg1);
 }
@@ -1056,6 +1088,14 @@ export function GetVideoEditStatus() {
 
 export function GetVideoRecommendations(arg1) {
   return window['go']['main']['App']['GetVideoRecommendations'](arg1);
+}
+
+export function GetVideoStructure(arg1) {
+  return window['go']['main']['App']['GetVideoStructure'](arg1);
+}
+
+export function GetVideoStructureStatus() {
+  return window['go']['main']['App']['GetVideoStructureStatus']();
 }
 
 export function GetVideosByIDs(arg1) {
@@ -1386,6 +1426,10 @@ export function NextPlaybackQueue(arg1, arg2) {
   return window['go']['main']['App']['NextPlaybackQueue'](arg1, arg2);
 }
 
+export function NotifyPlaybackActivity(arg1, arg2) {
+  return window['go']['main']['App']['NotifyPlaybackActivity'](arg1, arg2);
+}
+
 export function OpenDirectory(arg1) {
   return window['go']['main']['App']['OpenDirectory'](arg1);
 }
@@ -1400,6 +1444,10 @@ export function OpenMediaExploration(arg1) {
 
 export function OpenMovieChartYear(arg1) {
   return window['go']['main']['App']['OpenMovieChartYear'](arg1);
+}
+
+export function OpenNativePlayback(arg1) {
+  return window['go']['main']['App']['OpenNativePlayback'](arg1);
 }
 
 export function ParseLibraryQuery(arg1) {
@@ -1618,6 +1666,10 @@ export function ReleaseMediaProcessing(arg1) {
   return window['go']['main']['App']['ReleaseMediaProcessing'](arg1);
 }
 
+export function ReleaseNativePlaybackOwner(arg1) {
+  return window['go']['main']['App']['ReleaseNativePlaybackOwner'](arg1);
+}
+
 export function RelocateVideo(arg1, arg2) {
   return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
 }
@@ -1726,6 +1778,14 @@ export function ResolveVideoBookmark(arg1) {
   return window['go']['main']['App']['ResolveVideoBookmark'](arg1);
 }
 
+export function ResolveVideoStructure(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ResolveVideoStructure'](arg1, arg2, arg3, arg4);
+}
+
+export function ResolveVisibleVideoForPlayback(arg1) {
+  return window['go']['main']['App']['ResolveVisibleVideoForPlayback'](arg1);
+}
+
 export function RestoreDatabaseBackup(arg1) {
   return window['go']['main']['App']['RestoreDatabaseBackup'](arg1);
 }
@@ -1768,6 +1828,10 @@ export function RetryImageAITagging(arg1) {
 
 export function RetryLibraryWatcherRoot(arg1) {
   return window['go']['main']['App']['RetryLibraryWatcherRoot'](arg1);
+}
+
+export function RetryVideoStructure(arg1, arg2) {
+  return window['go']['main']['App']['RetryVideoStructure'](arg1, arg2);
 }
 
 export function RetryWatchlistEnrichment(arg1) {
@@ -1960,6 +2024,10 @@ export function SetMapTilesEnabled(arg1) {
 
 export function SetMediaProcessingDirty(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetMediaProcessingDirty'](arg1, arg2, arg3);
+}
+
+export function SetNativePlaybackViewport(arg1) {
+  return window['go']['main']['App']['SetNativePlaybackViewport'](arg1);
 }
 
 export function SetPersonAvatar(arg1, arg2) {

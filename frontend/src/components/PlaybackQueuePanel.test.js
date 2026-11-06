@@ -1,9 +1,10 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-const api = vi.hoisted(() => Object.fromEntries(['GetPlaybackQueue', 'EditPlaybackQueue', 'PlayPlaybackQueue', 'NextPlaybackQueue', 'StopPlaybackQueue', 'ControlPlaybackQueue'].map(name => [name, vi.fn()])));
+const api = vi.hoisted(() => Object.fromEntries(['SuggestTonightVideos', 'GetPlaybackQueue', 'EditPlaybackQueue', 'PlayPlaybackQueue', 'NextPlaybackQueue', 'StopPlaybackQueue', 'ControlPlaybackQueue'].map(name => [name, vi.fn()])));
 const confirm = vi.hoisted(() => vi.fn());
 vi.mock('../../wailsjs/go/main/App', () => api);
-vi.mock('../utils/feedback.js', () => ({ confirmAction: confirm }));
+vi.mock('../utils/feedback.js', () => ({ confirmAction: confirm, translateBackendError: value => String(value) }));
+import { selectPlaybackEnding } from '../utils/playbackEndingNavigation.js';
 import Panel from './PlaybackQueuePanel.vue';
 let wrapper;
 function snapshot(overrides = {}) { return { state: { revision: 1, player: 'inline', autoplay: false, status: 'paused', active_token: 'token' }, items: [{ id: 1, title: '第一集', video_id: 1, source_available: true }], total: 51, current: { id: 1, title: '第一集', video_id: 1 }, has_more: true, cursor_id: 1, cursor_position: 1, sequence: 1, capabilities: [{ player: 'inline', available: true }, { player: 'system', available: true }], session: { token: 'token', video_id: 1 }, ...overrides }; }
@@ -117,4 +118,17 @@ it('retires the queue before handing a clip to whole-video playback', async () =
   const watchWholeVideo=vi.fn(async(id,stop)=>{expect(id).toBe(9);expect(await stop()).toBe(true);expect(api.StopPlaybackQueue).toHaveBeenCalledWith('token');return true;});
   wrapper=mount(Panel,{props:{open:true,watchWholeVideo},global:{stubs:{QueueInlinePlayer:true}}});await flushPromises();await wrapper.get('[data-test="queue-watch-whole"]').trigger('click');await flushPromises();
   expect(watchWholeVideo).toHaveBeenCalledTimes(1);expect(wrapper.emitted('close')).toHaveLength(1);
+});
+
+it('keeps the ending component alive while queue retirement clears the backend session', async () => {
+ const ending={token:'token',view_cycle:1,video_id:1,source_version:'source',reason:'exhausted'};
+ let current=snapshot({ending,state:{revision:1,player:'inline',status:'ended',active_token:'token'}});
+ api.GetPlaybackQueue.mockImplementation(async()=>current);api.SuggestTonightVideos.mockResolvedValue([{video:{id:2,name:'next'},reasons:[]}]);
+ api.StopPlaybackQueue.mockImplementation(async()=>{current={...current,session:null,ending:null,state:{...current.state,active_token:'',status:'stopped'}}});
+ const navigate=vi.fn().mockResolvedValue(true);
+ wrapper=mount(Panel,{props:{open:false},global:{stubs:{teleport:true,QueueInlinePlayer:{name:'QueueInlinePlayer',props:['session'],template:'<div><slot name="ending" :replay="replay" :retire="retire" /></div>',methods:{replay:async()=>{},retire:async()=>{}}}},provide:{openEndedVideo:(id,context)=>selectPlaybackEnding(id,{resolveSource:async()=>({video_id:id,source_version:'next-source'}),retire:context.retire,isCurrent:context.isCurrent,navigate})}}});
+ await flushPromises();const screen=wrapper.findComponent({name:'PlaybackEndScreen'});expect(screen.exists()).toBe(true);
+ await wrapper.get('[data-test=ending-choice]').trigger('click');await flushPromises();
+ expect(api.StopPlaybackQueue).toHaveBeenCalledWith('token');expect(navigate).toHaveBeenCalledWith(2,'next-source');
+ expect(wrapper.findComponent({name:'PlaybackEndScreen'}).vm).toBe(screen.vm);
 });

@@ -8,6 +8,8 @@ import {subtitleparser} from '../models';
 
 export function AcceptSQLiteAfterFallbackBlock():Promise<services.RelaunchResult>;
 
+export function AcquireNativePlaybackOwner(arg1:services.NativeOwnerRequest):Promise<services.NativeOwner>;
+
 export function AddCollectionVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
@@ -160,9 +162,15 @@ export function ClearStaleSceneIndex():Promise<services.SceneIndexCleanupResult>
 
 export function ClearVideoAutomaticTagOverride(arg1:number,arg2:string):Promise<void>;
 
+export function CloseNativePlayback(arg1:services.NativePlaybackCloseRequest):Promise<void>;
+
+export function CommandNativePlayback(arg1:services.NativePlaybackCommand):Promise<services.NativePlaybackCommandResult>;
+
 export function ConfigureBTConnection(arg1:services.BTConnectionRequest):Promise<services.BTConnectionView>;
 
 export function ConfigureJellyfin(arg1:services.JellyfinConfigInput):Promise<services.JellyfinStatus>;
+
+export function ConfigureNativePlaybackSubtitles(arg1:services.NativePlaybackSubtitles):Promise<services.NativePlaybackSubtitleResult>;
 
 export function ConfirmCollectionSuggestion(arg1:number,arg2:string,arg3:Array<number>):Promise<services.CollectionDetail>;
 
@@ -444,6 +452,10 @@ export function GetMetadataCompleteness():Promise<services.MetadataCompleteness>
 
 export function GetMetadataCompletenessByDirectory(arg1:string,arg2:string,arg3:number):Promise<Array<services.MetadataCompletenessDirectory>>;
 
+export function GetNativePlaybackCapability():Promise<services.NativePlaybackCapability>;
+
+export function GetNativePlaybackSnapshot(arg1:services.NativePlaybackRef):Promise<services.NativePlaybackState>;
+
 export function GetOrphanFileReport():Promise<services.OrphanFileReport>;
 
 export function GetPendingWorkSummary():Promise<main.PendingWorkSummary>;
@@ -463,6 +475,8 @@ export function GetPlaybackProxyStatus():Promise<services.PlaybackProxyStatus>;
 export function GetPlaybackProxyUsage():Promise<services.PlaybackProxyUsage>;
 
 export function GetPlaybackQueue(arg1:services.QueueQuery):Promise<services.QueueSnapshot>;
+
+export function GetPlaybackSession(arg1:number):Promise<services.PreviewSession>;
 
 export function GetPlaybackSubtitle(arg1:services.PlaybackSubtitleRequest):Promise<services.PlaybackSubtitle>;
 
@@ -522,6 +536,8 @@ export function GetTextAIStatus():Promise<services.TextAIStatusResult>;
 
 export function GetTrashUsage():Promise<services.TrashUsage>;
 
+export function GetVerifiedPreviewSession(arg1:number,arg2:string):Promise<services.PreviewSession>;
+
 export function GetVersionGroup(arg1:number):Promise<services.VersionGroupDetail>;
 
 export function GetVideoAutomaticTagOverrides(arg1:number):Promise<Array<models.VideoAutomaticTagOverride>>;
@@ -533,6 +549,10 @@ export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 export function GetVideoEditStatus():Promise<services.VideoEditStatus>;
 
 export function GetVideoRecommendations(arg1:number):Promise<services.VideoRecommendations>;
+
+export function GetVideoStructure(arg1:number):Promise<services.VideoStructureView>;
+
+export function GetVideoStructureStatus():Promise<services.VideoStructureStatus>;
 
 export function GetVideosByIDs(arg1:Array<number>):Promise<Array<models.Video>>;
 
@@ -698,6 +718,8 @@ export function NavigateEditFrame(arg1:services.EditFrameRequest):Promise<servic
 
 export function NextPlaybackQueue(arg1:string,arg2:number):Promise<void>;
 
+export function NotifyPlaybackActivity(arg1:string,arg2:boolean):Promise<void>;
+
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function OpenImageDirectory(arg1:string):Promise<void>;
@@ -705,6 +727,8 @@ export function OpenImageDirectory(arg1:string):Promise<void>;
 export function OpenMediaExploration(arg1:string):Promise<services.ExplorationResult>;
 
 export function OpenMovieChartYear(arg1:number):Promise<boolean>;
+
+export function OpenNativePlayback(arg1:services.NativePlaybackOpenRequest):Promise<services.NativePlaybackState>;
 
 export function ParseLibraryQuery(arg1:services.ParseLibraryQueryRequest):Promise<services.LibraryQueryDraftResult>;
 
@@ -814,6 +838,8 @@ export function RelaunchApp():Promise<services.RelaunchResult>;
 
 export function ReleaseMediaProcessing(arg1:string):Promise<void>;
 
+export function ReleaseNativePlaybackOwner(arg1:services.NativeOwnerRequestRef):Promise<void>;
+
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
 export function RememberDeleteFileChoice(arg1:boolean):Promise<void>;
@@ -868,6 +894,10 @@ export function ResolveSubtitleJob(arg1:number,arg2:string):Promise<services.Sub
 
 export function ResolveVideoBookmark(arg1:number):Promise<services.BookmarkResolution>;
 
+export function ResolveVideoStructure(arg1:number,arg2:number,arg3:number,arg4:string):Promise<services.ChapterResolution>;
+
+export function ResolveVisibleVideoForPlayback(arg1:number):Promise<services.VisiblePlaybackSource>;
+
 export function RestoreDatabaseBackup(arg1:services.BackupRestoreRequest):Promise<void>;
 
 export function RestoreFaceCluster(arg1:number):Promise<void>;
@@ -889,6 +919,8 @@ export function RetryEnhancementTask(arg1:number):Promise<services.EnhancementTa
 export function RetryImageAITagging(arg1:number):Promise<Array<models.ImageAITagCandidate>>;
 
 export function RetryLibraryWatcherRoot(arg1:number):Promise<services.LibraryWatchRootStatus>;
+
+export function RetryVideoStructure(arg1:number,arg2:number):Promise<void>;
 
 export function RetryWatchlistEnrichment(arg1:number):Promise<void>;
 
@@ -985,6 +1017,8 @@ export function SetImageRating(arg1:number,arg2:any):Promise<models.Image>;
 export function SetMapTilesEnabled(arg1:services.MapTilePolicyRequest):Promise<services.MapTileStatusResult>;
 
 export function SetMediaProcessingDirty(arg1:string,arg2:number,arg3:boolean):Promise<void>;
+
+export function SetNativePlaybackViewport(arg1:services.NativePlaybackViewport):Promise<services.NativePlaybackRevision>;
 
 export function SetPersonAvatar(arg1:number,arg2:string):Promise<models.Person>;
 

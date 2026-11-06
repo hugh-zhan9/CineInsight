@@ -3,7 +3,7 @@
     <CapabilitySetupPrompt :active="pageActive" @open="$emit('open-setup')" />
     <!-- 观看首页（D-UI-04）：各区块并行取数、各自加载与失败；没有数据的区块不显示。
          大图区的文字层就是本页的页头（D-UD-06 HeroHeader）；标题沿用 h2。 -->
-    <RecapBackdrop v-if="hero.state === 'ready'" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="home-hero">
+    <RecapBackdrop v-if="hero.state === 'ready'" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="home-hero" @mouseleave="updateTonightHero" @focusout="$nextTick(updateTonightHero)">
       <div class="recap-hero__body">
         <HeroHeader :title="hero.title" :meta="hero.meta" :heading-level="2" title-data-test="home-hero-title" meta-data-test="home-hero-meta">
           <template #eyebrow><RecapIcon :name="hero.icon" /> {{ hero.eyebrow }}</template>
@@ -78,6 +78,7 @@
     <section v-if="blockVisible(tonightBlock)" class="recap-section" data-test="home-tonight">
       <header class="recap-section__head">
         <h3><RecapIcon name="spark" /> 今晚看什么</h3>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="home-discover" @click="$emit('navigate', 'discover')">发现更多</button>
         <small>和随机播放同一套均衡抽取，播放越少越容易被抽到</small>
         <button type="button" class="btn btn--secondary btn--sm viewer-home__reroll" :disabled="tonightBlock.loading" data-test="home-tonight-reroll" @click="rerollTonight"><AppIcon name="refresh" /> {{ tonightBlock.loading ? '正在抽…' : '换一批' }}</button>
       </header>
@@ -94,6 +95,7 @@
           :title="videoTitle(item.video)"
           :subtitle="(item.reasons || []).join(' · ')"
           data-test="home-tonight-item"
+          :data-discovery-id="item.video.id"
           @open="openTonightVideo(item.video)"
         />
       </div>
@@ -199,9 +201,10 @@
 </template>
 
 <script>
+import { createDiscoverySession, fetchDiscoveryBatch, observeDiscoveryExposure } from '../../utils/discoverySession.js';
 import MediaRail from '../ui/MediaRail.vue';
 // 观看首页（D-UI-04，详细设计「观看首页」）：一期只用现有接口——
-//   继续观看 ListContinueWatchingWithFilter({}, '', 0, 10)；今晚看什么 SuggestTonightVideos(默认条件, 3)；
+//   继续观看 ListContinueWatchingWithFilter({}, '', 0, 10)；今晚看什么 SuggestTonightVideos(默认条件, 9)；
 //   最近添加 SearchLibraryVideoPage 的 recently_added 智能视图（14 部，海报走 /preview/video-artwork）；
 //   （有「查看全部」的几块都多取一条判断有没有放全，见 homeTake。）
 //   本月常看的人物与本月回顾亮点共用一次 GetRecap（本月）。
@@ -229,7 +232,7 @@ import { collectionProgressCard } from './VideoBrowsePage.vue';
 import ViewAllDialog from './ViewAllDialog.vue';
 
 export const HOME_CONTINUE_LIMIT = 10;
-export const HOME_TONIGHT_LIMIT = 3;
+export const HOME_TONIGHT_LIMIT = 9;
 export const HOME_RECENT_LIMIT = 14;
 export const HOME_PEOPLE_LIMIT = 8;
 // 二期两栏（D-P2-07）：追到哪了 ListCollectionProgress({ continue_only, limit })；想看已在库 ListWatchlistInLibrary(limit)。
@@ -289,9 +292,10 @@ export function homeProgressText(video) {
 
 export default {
   name: 'HomePage',
+  inject: { discoverySession: { default: createDiscoverySession } },
   components: { CapabilitySetupPrompt, MediaRail, AppBanner, AppIcon, HeroHeader, RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, SkeletonBlock, StatTile, ViewAllDialog },
   // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、追到哪了、最近添加、想看已在库、本月回顾；期间可能看过片），
-  // 取回之前保留现有内容。今晚看什么整批只在「换一批」时重抽，播放后单项补位；大图仅对应推荐被补位时更新。
+  // 取回之前保留现有内容。今晚看什么返回时轮换部分，播放后单项补位；推荐大图随明确批次变化更新。
   props: { pageActive: { type: Boolean, default: true } },
   // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey, params?)：回顾页、片库、设置，
   // 「查看全部」带 { watch } 去「视频」页。
@@ -309,8 +313,9 @@ export default {
       viewAll: '',
       recapBlock: { loading: true, loaded: false, error: '', result: null },
       heroArtwork: { id: 0, hasFanart: null },
-      // 第一次挑出来的大图（ready 的那一份）：返回与换批不换它，播放后的对应推荐补位时更新。
-      heroLock: null
+      // 大图优先继续观看，推荐大图只在批次成功提交且未交互时更新。
+      heroLock: null,
+      tonightCursor: 0
     };
   },
   computed: {
@@ -380,17 +385,21 @@ export default {
     }
   },
   watch: {
+    'tonightBlock.items': { flush: 'post', handler() { this.observeTonight(); } },
     livePick(pick) { if (!this.heroLock && pick.state === 'ready') this.heroLock = pick; },
     heroVideoID(id) { this.loadHeroArtwork(id); },
     // 离开时记下视口顶部那一块（此刻首页还显示着），隐藏期间不跟滚动；回来时接着跟、重取会变的几块。
     pageActive(active) {
       if (!active) {
         this.captureViewAnchor();
+        this._tokens.tonightBlock = (this._tokens.tonightBlock || 0) + 1;
+        this._exposure?.disconnect();
         this.detachScrollWatch();
         return;
       }
       this.attachScrollWatch();
       this.clearPendingTonight();
+      this.observeTonight();
       this.refresh();
     },
     // 任一块的数据变了（重取开始、结果到了）或大图换了状态：DOM 更新完看视口顶部那一块挪没挪，挪了就放回原处。
@@ -410,9 +419,32 @@ export default {
   beforeUnmount() {
     this._disposed = true;
     this.detachScrollWatch();
+    this._exposure?.disconnect();
     for (const key of Object.keys(this._tokens)) this._tokens[key]++;
   },
   methods: {
+    removeDiscoveryVideos(ids) {
+      if (!ids.length) return;
+      const removed = new Set(ids.map(Number));
+      this._tokens.tonightBlock = (this._tokens.tonightBlock || 0) + 1;
+      this._tokens.continueBlock = (this._tokens.continueBlock || 0) + 1;
+      const items = this.tonightBlock.items.filter(item => !removed.has(Number(item.video.id)));
+      this.continueBlock = { ...this.continueBlock, loading: false, items: this.continueBlock.items.filter(item => !removed.has(Number(item.id))) };
+      this.tonightBlock = { ...this.tonightBlock, items, first: items[0] || null, loading: false };
+      if (removed.has(Number(this.heroLock?.video?.id))) this.heroLock = null;
+      if (this.pageActive) this.rotateTonight();
+    },
+    observeTonight() {
+      this._exposure?.disconnect();
+      this._exposure = observeDiscoveryExposure(this.$el, this.discoverySession, () => this.pageActive && !this._disposed);
+    },
+    updateTonightHero() {
+      const first = this.tonightBlock.items[0];
+      if (!first || !this.heroLock || this.heroLock.from === 'continue') return;
+      const hero = this.$el?.querySelector('[data-test="home-hero"]');
+      if (hero?.matches(':hover, :focus-within')) return;
+      this.heroLock = { state: 'ready', from: 'tonight', video: first.video, reasons: first.reasons || [] };
+    },
     videoTitle: homeVideoTitle,
     progressText: homeProgressText,
     posterURL(id) { return videoArtwork(id, 'poster'); },
@@ -427,9 +459,9 @@ export default {
     load() {
       return Promise.all([this.loadContinue(), this.loadProgress(), this.loadTonight(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
     },
-    // 回到首页：只重取会变的几块，今晚看什么这一批留着（换一批才重抽）。
+    // 回到首页保留锚点，重取动态区块并轮换少量推荐。
     refresh() {
-      return Promise.all([this.loadContinue(), this.loadProgress(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
+      return Promise.all([this.loadContinue(), this.loadProgress(), this.rotateTonight(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
     },
     loadContinue() {
       return this.runBlock('continueBlock', '继续观看', async () =>
@@ -521,16 +553,38 @@ export default {
     },
     // 默认条件（不限观看状态、不限收藏与时长、不带片库筛选）。换一批在原条件上排除当前这一批，
     // 抽不出新的就留着这一批并说明（与「今晚看什么」弹窗同一口径）。大图只认首次取到的第一条，换一批不换大图。
-    loadTonight({ reroll = false } = {}) {
+    async loadTonight({ reroll = false } = {}) {
       const previous = this.tonightBlock.items;
-      const exclude = reroll ? previous.map(item => Number(item.video.id)) : [];
-      return this.runBlock('tonightBlock', '今晚看什么', async () => {
-        const request = { filter: {}, ...randomConditionFields(DEFAULT_RANDOM_CONDITIONS), exclude_ids: exclude };
-        const items = (await SuggestTonightVideos(request, HOME_TONIGHT_LIMIT)) || [];
-        if (!reroll) return { items, first: items[0] || null, notice: '' };
-        if (!items.length) return { items: previous, notice: '符合条件的候选都在这里了，没有更多可换的。' };
-        return { items, notice: '' };
+      const token = (this._tokens.tonightBlock || 0) + 1;
+      const applied = await this.runBlock('tonightBlock', '今晚看什么', async () => {
+        const result = await fetchDiscoveryBatch(SuggestTonightVideos, this.discoverySession,
+          { filter: {}, ...randomConditionFields(DEFAULT_RANDOM_CONDITIONS) }, HOME_TONIGHT_LIMIT,
+          reroll ? previous.map(item => item.video.id) : [], () => !this._disposed && token === this._tokens.tonightBlock);
+        if (!result) return {};
+        if (!result.items.length && reroll) return { notice: '符合条件的内容都在这里了，暂时没有新的候选。' };
+        return { items: result.items, first: result.items[0] || null, notice: result.newRound ? '开始新一轮发现' : '' };
       });
+      if (applied) this.updateTonightHero();
+    },
+    async rotateTonight() {
+      await this._tonightReplacement;
+      if (this._disposed || !this.pageActive) return;
+      if (!this.tonightBlock.loaded) return this.loadTonight();
+      const previous = [...this.tonightBlock.items], token = (this._tokens.tonightBlock || 0) + 1;
+      const applied = await this.runBlock('tonightBlock', '今晚看什么', async () => {
+        const result = await fetchDiscoveryBatch(SuggestTonightVideos, this.discoverySession,
+          { filter: {}, ...randomConditionFields(DEFAULT_RANDOM_CONDITIONS) }, 3,
+          previous.map(item => item.video.id), () => !this._disposed && token === this._tokens.tonightBlock);
+        if (!result) return {};
+        if (!result.items.length) return { notice: '符合条件的内容都在这里了，暂时没有新的候选。' };
+        const items = [...previous];
+        for (const item of result.items) {
+          if (items.length < HOME_TONIGHT_LIMIT) items.push(item);
+          else { items[this.tonightCursor % HOME_TONIGHT_LIMIT] = item; this.tonightCursor = (this.tonightCursor + 1) % HOME_TONIGHT_LIMIT; }
+        }
+        return { items, first: items[0] || null, notice: result.newRound ? '开始新一轮发现' : '' };
+      });
+      if (applied) this.updateTonightHero();
     },
     rerollTonight() {
       if (this.tonightBlock.loading) return null;
@@ -554,8 +608,12 @@ export default {
         let replacement = null;
         const applied = await this.runBlock('tonightBlock', '今晚看什么', async () => {
           const request = { filter: {}, ...randomConditionFields(DEFAULT_RANDOM_CONDITIONS), exclude_ids: previous.map(item => Number(item.video.id)) };
-          replacement = (await SuggestTonightVideos(request, 1))?.[0];
-          if (!replacement) return { notice: '符合条件的候选都在这里了，没有更多可换的。' };
+          const token = this._tokens.tonightBlock;
+          const result = await fetchDiscoveryBatch(SuggestTonightVideos, this.discoverySession, request, 1, request.exclude_ids,
+            () => !this._disposed && token === this._tokens.tonightBlock);
+          if (!result) return {};
+          replacement = result.items[0];
+          if (!replacement) { const items = previous.filter(item => Number(item.video.id) !== id); return { items, first: items[0] || null, notice: '符合条件的候选都在这里了，没有更多可换的。' }; }
           return {
             items: previous.map(item => Number(item.video.id) === id ? replacement : item),
             first: Number(this.tonightBlock.first?.video.id) === id ? replacement : this.tonightBlock.first,

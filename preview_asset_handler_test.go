@@ -686,3 +686,44 @@ func TestStartupStateMiddlewareOnlyRewritesIndexPage(t *testing.T) {
 		t.Fatalf("首页不是 200 时应原样转交，实际 %d:\n%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestVerifiedPreviewRejectsChangedSourceRangeRequest(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "source.mp4")
+	if err := os.WriteFile(path, []byte("original-fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatal(err)
+	}
+	video := models.Video{Name: "source.mp4", Path: path, Directory: root, Duration: 4}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	source, err := app.videoService.ResolveVisibleVideoForPlayback(context.Background(), video.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := app.videoService.GetVerifiedPreviewSession(context.Background(), video.ID, source.SourceVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newAssetHandler(app)
+	request := httptest.NewRequest(http.MethodGet, session.InlineSource.LocatorValue, nil)
+	request.Header.Set("Range", "bytes=0-2")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusPartialContent || response.Body.String() != "ori" {
+		t.Fatalf("initial range: %d %s", response.Code, response.Body.String())
+	}
+	if err := os.WriteFile(path, []byte("replacement-source-content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || strings.Contains(response.Body.String(), "replacement-source-content") {
+		t.Fatalf("stale range: %d %s", response.Code, response.Body.String())
+	}
+}

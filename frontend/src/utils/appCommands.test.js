@@ -146,7 +146,7 @@ describe('应用级命令注册', () => {
   it('D-UI-09 每个页面 key 只属于一个区域；视频与片库管理、图片与图片管理是两个 key', () => {
     const viewer = VIEWER_NAV_GROUPS.flatMap(group => group.pages).map(page => page.key);
     const manage = MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => !page.command).map(page => page.key);
-    expect(viewer).toEqual(['home', 'explore', 'videos', 'people', 'collections', 'photos', 'lists', 'recap', 'search-results', 'scenes']);
+    expect(viewer).toEqual(['home', 'discover', 'explore', 'videos', 'people', 'collections', 'photos', 'lists', 'recap', 'search-results', 'scenes']);
     // 待处理（D-P3-01）与清理中心（D-P3-02）三期起是页面。
     expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'entities-manage', 'pending-work', 'cleanup', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
     expect(viewer.filter(key => manage.includes(key))).toEqual([]);

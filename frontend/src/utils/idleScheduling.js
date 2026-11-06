@@ -31,6 +31,7 @@ export const BACKGROUND_TASK_LABELS = {
   movie_chart: '榜单抓取',
   scene_index: '场景画面索引',
  chapter_summary:'字幕章节摘要',
+ video_structure:'本机自动分段',
   video_edit: '视频工作台',
   lost_media: '失联数据',
   metadata_batch_edit: '批量编辑',
@@ -51,7 +52,10 @@ const IDLE_WAIT_REASON_LABELS = {
   user_active: '你正在用电脑',
   on_battery: '当前使用电池',
   outside_window: '不在允许的时间段内',
-  probe_failed: '空闲状态探测失败'
+  probe_failed: '空闲状态探测失败',
+  probe_unavailable: '当前平台尚无可靠空闲探测',
+  active_playback: '正在播放',
+  disabled: '自动分段已暂停'
 };
 
 // IDLE_GATE_TASK_NOT_WAITING 与后端 services.IdleGateTaskNotWaitingCode 是同一个标识：

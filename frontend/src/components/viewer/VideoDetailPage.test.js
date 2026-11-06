@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   GetPlaybackProxy: vi.fn(), GetPlaybackProxyStatus: vi.fn(), CreatePlaybackProxy: vi.fn(), DeletePlaybackProxy: vi.fn(), RecordViewEvent: vi.fn(),
   RequestPreviewProxy: vi.fn(), CancelPreviewProxy: vi.fn()
 }));
-vi.mock('../../../wailsjs/go/main/App', () => api);
+vi.mock('../../../wailsjs/go/main/App', () => ({...api,GetPlaybackSession:api.GetPreviewSession}));
 
 import VideoDetailPage from './VideoDetailPage.vue';
 import BookmarkPanel from '../BookmarkPanel.vue';

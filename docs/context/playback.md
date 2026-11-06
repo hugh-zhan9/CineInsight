@@ -128,3 +128,13 @@ clip 行保存范围与独立 batch/position/count。后端只前进到同批下
 ### 探索短预览用途（2026-11-04）
 
 `InlineVideoPlayer`新增显式`usage=browse-preview`，默认playback保持原调用方行为。探索用途不创建正式观看tracker，不写自身的播放次数、断点、已看或日记，不自动生成代理，不向全局队列追加项目；单实例、静音起步，在所选最多8秒区间内播放/重播并限制seek。进入正式详情前退休局部预览，正式播放继续走原owner。图片点击进入PhotoLightbox后仍按原阈值记录查看，微缩墙本身不记正式查看。不能直接内嵌的会话显示有来源绑定的取样帧和详情入口；未知时长只显示原缩略图及说明。具体合同与验证见[探索设计](../loopx/design/2026-11-04-media-exploration/需求设计文档.md#D-ME-08)。
+
+## 2026-11-06 原生应用内播放与结束推荐
+
+正式详情/抽屉使用`GetPlaybackSession`选路：有效代理优先，其次原WebKit直放；其余格式在macOS 15+/arm64随包组件可用时返回`native`。工具用的`GetPreviewSession`保持原语义，探索、手机HTTP与区间队列不切原生。原生不可用或解码失败给出明确状态，外部播放/手动生成代理仍由用户选择。
+
+`NativePlaybackService`只持当前进程的owner、会话、已核验FD与解码/render资源，不记观看事实。owner含随机token并绑定登记主WebView的epoch，Acquire须携带当前已就绪epoch；重载、维护和退出撤销旧能力并排空pending Open。命令与字幕/viewport各自单调序号，客户端按session+state seq过滤旧事实。字幕由受控SRT读取，opaque subtitle_token可精确往返JS，native文字层与网页VTT renderer复用显示偏好和时间偏移。控件栏在原生画面之外；浮层遮挡时隐藏画面并用小型离屏帧缓冲消费帧。
+
+正式整片队列加性返回`media_mode/native_source`，NativeOpen/字幕仍核对当前queue token、video/source身份，HTTP队列媒体接口不提供native源字节。原统计/断点仍由InlineVideoPlayer、PlaybackQueueService写入。正常单片结束及authoritative队列耗尽显示最多3个推荐和重播；选择后核验来源、退役旧会话，再进入详情自动播放。区间、拖动和探索守原合同。
+
+受控原片操作经native source mutation port：短FD登记gate与匹配路径屏障覆盖变更期间，先关闭匹配来源，再rename/remove/系统废纸篓或记录删除；非匹配已有FD不等待全局目录复制锁。打包验证固定运行时hash、arm64、依赖闭包与最低系统；最终签名只更新打包副本manifest。发布包缺组件不查cwd/开发目录。实际验收范围以[执行记录](../loopx/plans/2026-11-05-discovery-playback.md)为准，本轮实现验收已完成，既有失败按执行记录单列。

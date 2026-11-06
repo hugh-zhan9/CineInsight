@@ -320,7 +320,7 @@ func buildTaskCenterItem(key string, state taskCenterKeyState, src *taskCenterSo
 	if running && state.canCancel {
 		item.Actions = append(item.Actions, TaskCenterActionCancel)
 	}
-	if waiting {
+	if waiting && !state.strictIdle {
 		item.Actions = append(item.Actions, TaskCenterActionRunNow)
 	}
 	if !running && !waiting && state.canStart {

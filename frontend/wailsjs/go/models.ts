@@ -995,6 +995,7 @@ export namespace models {
 	    }
 	}
 	export class Settings {
+	    auto_structure_enabled: boolean;
 	    map_tiles_enabled: boolean;
 	    desktop_player: string;
 	    jellyfin_enabled: boolean;
@@ -1075,6 +1076,7 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.auto_structure_enabled = source["auto_structure_enabled"];
 	        this.map_tiles_enabled = source["map_tiles_enabled"];
 	        this.desktop_player = source["desktop_player"];
 	        this.jellyfin_enabled = source["jellyfin_enabled"];
@@ -3976,7 +3978,80 @@ export namespace services {
 		}
 	}
 	
+	export class VideoStructureSegmentView {
+	    position: number;
+	    start_ms: number;
+	    end_ms: number;
+	    representative_ms: number;
+	    title: string;
+	    basis: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStructureSegmentView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.position = source["position"];
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.representative_ms = source["representative_ms"];
+	        this.title = source["title"];
+	        this.basis = source["basis"];
+	    }
+	}
+	export class VideoStructureView {
+	    video_id: number;
+	    revision: number;
+	    status: string;
+	    source_status: string;
+	    source_version: string;
+	    algorithm_version: string;
+	    generation: number;
+	    checkpoint_ms: number;
+	    duration_ms: number;
+	    error_code: string;
+	    segments: VideoStructureSegmentView[];
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStructureView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.revision = source["revision"];
+	        this.status = source["status"];
+	        this.source_status = source["source_status"];
+	        this.source_version = source["source_version"];
+	        this.algorithm_version = source["algorithm_version"];
+	        this.generation = source["generation"];
+	        this.checkpoint_ms = source["checkpoint_ms"];
+	        this.duration_ms = source["duration_ms"];
+	        this.error_code = source["error_code"];
+	        this.segments = this.convertValues(source["segments"], VideoStructureSegmentView);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class VideoChapterSets {
+	    automatic?: VideoStructureView;
 	    video_id: number;
 	    title: string;
 	    duration_ms: number;
@@ -3990,6 +4065,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.automatic = this.convertValues(source["automatic"], VideoStructureView);
 	        this.video_id = source["video_id"];
 	        this.title = source["title"];
 	        this.duration_ms = source["duration_ms"];
@@ -14091,6 +14167,345 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class NativeOwner {
+	    owner_id: string;
+	    owner_token: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativeOwner(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	    }
+	}
+	export class NativeOwnerRequest {
+	    window_epoch: number;
+	    component_nonce: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativeOwnerRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.window_epoch = source["window_epoch"];
+	        this.component_nonce = source["component_nonce"];
+	    }
+	}
+	export class NativeOwnerRequestRef {
+	    owner_id: string;
+	    owner_token: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativeOwnerRequestRef(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	    }
+	}
+	export class NativePlaybackCapability {
+	    window_epoch: number;
+	    window_ready: boolean;
+	    available: boolean;
+	    runtime_version: string;
+	    platform: string;
+	    reason_code: string;
+	    reason_message: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackCapability(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.window_epoch = source["window_epoch"];
+	        this.window_ready = source["window_ready"];
+	        this.available = source["available"];
+	        this.runtime_version = source["runtime_version"];
+	        this.platform = source["platform"];
+	        this.reason_code = source["reason_code"];
+	        this.reason_message = source["reason_message"];
+	    }
+	}
+	export class NativePlaybackCloseRequest {
+	    owner_id: string;
+	    owner_token: string;
+	    session_id: string;
+	    reason: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackCloseRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	        this.session_id = source["session_id"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class NativePlaybackCommand {
+	    owner_id: string;
+	    owner_token: string;
+	    session_id: string;
+	    seq: number;
+	    kind: string;
+	    value?: any;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackCommand(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	        this.session_id = source["session_id"];
+	        this.seq = source["seq"];
+	        this.kind = source["kind"];
+	        this.value = source["value"];
+	    }
+	}
+	export class NativePlaybackCommandResult {
+	    accepted_seq: number;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackCommandResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accepted_seq = source["accepted_seq"];
+	    }
+	}
+	export class NativePlaybackOpenRequest {
+	    request_id: string;
+	    owner_id: string;
+	    owner_token: string;
+	    video_id: number;
+	    source_version: string;
+	    queue_token: string;
+	    start_ms: number;
+	    paused: boolean;
+	    muted?: boolean;
+	    volume?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackOpenRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.request_id = source["request_id"];
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.queue_token = source["queue_token"];
+	        this.start_ms = source["start_ms"];
+	        this.paused = source["paused"];
+	        this.muted = source["muted"];
+	        this.volume = source["volume"];
+	    }
+	}
+	export class NativePlaybackRef {
+	    owner_id: string;
+	    owner_token: string;
+	    session_id: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackRef(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	        this.session_id = source["session_id"];
+	    }
+	}
+	export class NativePlaybackRevision {
+	    applied_revision: number;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackRevision(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.applied_revision = source["applied_revision"];
+	    }
+	}
+	export class NativePlaybackSource {
+	    video_id: number;
+	    source_version: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackSource(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	    }
+	}
+	export class NativePlaybackState {
+	    session_id: string;
+	    seq: number;
+	    video_id: number;
+	    source_version: string;
+	    state: string;
+	    position_ms: number;
+	    duration_ms: number;
+	    video_width: number;
+	    video_height: number;
+	    paused: boolean;
+	    muted: boolean;
+	    volume: number;
+	    rate: number;
+	    seekable: boolean;
+	    error_code?: string;
+	    error_message?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackState(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_id = source["session_id"];
+	        this.seq = source["seq"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.state = source["state"];
+	        this.position_ms = source["position_ms"];
+	        this.duration_ms = source["duration_ms"];
+	        this.video_width = source["video_width"];
+	        this.video_height = source["video_height"];
+	        this.paused = source["paused"];
+	        this.muted = source["muted"];
+	        this.volume = source["volume"];
+	        this.rate = source["rate"];
+	        this.seekable = source["seekable"];
+	        this.error_code = source["error_code"];
+	        this.error_message = source["error_message"];
+	    }
+	}
+	export class NativePlaybackSubtitleResult {
+	    applied_revision: number;
+	    status: string;
+	    subtitle_fingerprint: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackSubtitleResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.applied_revision = source["applied_revision"];
+	        this.status = source["status"];
+	        this.subtitle_fingerprint = source["subtitle_fingerprint"];
+	    }
+	}
+	export class NativeSubtitlePreferences {
+	    size: string;
+	    background: string;
+	    position: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativeSubtitlePreferences(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.size = source["size"];
+	        this.background = source["background"];
+	        this.position = source["position"];
+	    }
+	}
+	export class NativePlaybackSubtitles {
+	    owner_id: string;
+	    owner_token: string;
+	    session_id: string;
+	    revision: number;
+	    subtitle_fingerprint: string;
+	    enabled: boolean;
+	    offset_ms: number;
+	    preferences: NativeSubtitlePreferences;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackSubtitles(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	        this.session_id = source["session_id"];
+	        this.revision = source["revision"];
+	        this.subtitle_fingerprint = source["subtitle_fingerprint"];
+	        this.enabled = source["enabled"];
+	        this.offset_ms = source["offset_ms"];
+	        this.preferences = this.convertValues(source["preferences"], NativeSubtitlePreferences);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class NativePlaybackViewport {
+	    owner_id: string;
+	    owner_token: string;
+	    session_id: string;
+	    revision: number;
+	    x: number;
+	    y: number;
+	    width: number;
+	    height: number;
+	    visible: boolean;
+	    occluded: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new NativePlaybackViewport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner_id = source["owner_id"];
+	        this.owner_token = source["owner_token"];
+	        this.session_id = source["session_id"];
+	        this.revision = source["revision"];
+	        this.x = source["x"];
+	        this.y = source["y"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.visible = source["visible"];
+	        this.occluded = source["occluded"];
+	    }
+	}
+
 	export class OrphanFileLocation {
 	    key: string;
 	    label: string;
@@ -15323,6 +15738,7 @@ export namespace services {
 	    }
 	}
 	export class PlaybackSubtitle {
+	    subtitle_token?: string;
 	    status: string;
 	    subtitle_fingerprint: SubtitleFingerprint;
 	    cues: PlaybackSubtitleCue[];
@@ -15333,6 +15749,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.subtitle_token = source["subtitle_token"];
 	        this.status = source["status"];
 	        this.subtitle_fingerprint = this.convertValues(source["subtitle_fingerprint"], SubtitleFingerprint);
 	        this.cues = this.convertValues(source["cues"], PlaybackSubtitleCue);
@@ -15476,6 +15893,7 @@ export namespace services {
 	    }
 	}
 	export class PreviewSession {
+	    native_source?: NativePlaybackSource;
 	    video_id: number;
 	    mode: string;
 	    display_name: string;
@@ -15493,6 +15911,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.native_source = this.convertValues(source["native_source"], NativePlaybackSource);
 	        this.video_id = source["video_id"];
 	        this.mode = source["mode"];
 	        this.display_name = source["display_name"];
@@ -15572,6 +15991,26 @@ export namespace services {
 	        this.autoplay = source["autoplay"];
 	    }
 	}
+	export class QueueEnding {
+	    token: string;
+	    view_cycle: number;
+	    video_id: number;
+	    source_version: string;
+	    reason: string;
+
+	    static createFrom(source: any = {}) {
+	        return new QueueEnding(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.view_cycle = source["view_cycle"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.reason = source["reason"];
+	    }
+	}
 	export class QueueEntryDTO {
 	    entry_kind: string;
 	    clip_start_ms?: number;
@@ -15627,6 +16066,8 @@ export namespace services {
 	    }
 	}
 	export class QueueSession {
+	    media_mode: string;
+	    native_source?: NativePlaybackSource;
 	    entry_kind: string;
 	    clip_start_ms?: number;
 	    clip_end_ms?: number;
@@ -15647,6 +16088,8 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.media_mode = source["media_mode"];
+	        this.native_source = this.convertValues(source["native_source"], NativePlaybackSource);
 	        this.entry_kind = source["entry_kind"];
 	        this.clip_start_ms = source["clip_start_ms"];
 	        this.clip_end_ms = source["clip_end_ms"];
@@ -15661,8 +16104,27 @@ export namespace services {
 	        this.desired_paused = source["desired_paused"];
 	        this.control_sequence = source["control_sequence"];
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class QueueSnapshot {
+	    ending?: QueueEnding;
 	    has_clips: boolean;
 	    state: models.PlaybackQueueState;
 	    items: QueueEntryDTO[];
@@ -15682,6 +16144,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ending = this.convertValues(source["ending"], QueueEnding);
 	        this.has_clips = source["has_clips"];
 	        this.state = this.convertValues(source["state"], models.PlaybackQueueState);
 	        this.items = this.convertValues(source["items"], QueueEntryDTO);
@@ -20334,6 +20797,36 @@ export namespace services {
 		    return a;
 		}
 	}
+
+	export class VideoStructureStatus {
+	    running: boolean;
+	    waiting_idle: boolean;
+	    reason: string;
+	    current_video_id: number;
+	    pending: number;
+	    ready: number;
+	    failed: number;
+	    unavailable: number;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStructureStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.waiting_idle = source["waiting_idle"];
+	        this.reason = source["reason"];
+	        this.current_video_id = source["current_video_id"];
+	        this.pending = source["pending"];
+	        this.ready = source["ready"];
+	        this.failed = source["failed"];
+	        this.unavailable = source["unavailable"];
+	        this.error = source["error"];
+	    }
+	}
+
 	export class ViewingYearReview {
 	    year: number;
 	    total: number;
@@ -20381,6 +20874,20 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class VisiblePlaybackSource {
+	    video_id: number;
+	    source_version: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VisiblePlaybackSource(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	    }
 	}
 	export class WallpaperPreflight {
 	    eligible: boolean;

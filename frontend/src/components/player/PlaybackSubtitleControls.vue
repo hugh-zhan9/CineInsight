@@ -31,12 +31,13 @@ import AppIcon from '../ui/AppIcon.vue';
 import BasePopover from '../ui/BasePopover.vue';
 import PlaybackTranscript from './PlaybackTranscript.vue';
 import { requestSubtitleTool } from '../../utils/subtitleNavigation.js';
-import { subtitleVTT, projectTranscript, readSubtitlePreferences, writeSubtitlePreferences, SUBTITLE_PREFERENCES_KEY } from '../../utils/playbackSubtitles.js';
+import { projectTranscript, subtitleOffsetMS, readSubtitlePreferences, writeSubtitlePreferences, SUBTITLE_PREFERENCES_KEY } from '../../utils/playbackSubtitles.js';
+import { WebSubtitleRenderer, NativeSubtitleRenderer } from '../../utils/subtitleRenderers.js';
 export default {
   name: 'PlaybackSubtitleControls', components: { AppIcon, BasePopover, PlaybackTranscript },
   emits: ['menu-change'],
   props: { videoId: Number, sourceVersion: String, queueToken: { type: String, default: '' }, videoElement: { type: Function, required: true }, leaveFullscreen: { type: Function, default: null }, playbackRange: { type: Object, default: null } },
-  data: () => ({ menuOpen: false, enabled: true, offset: 0, status: '', cues: [], error: '', request: 0, preferences: readSubtitlePreferences(), preferenceNotice: '', transcriptOpen: false, surface: null, timeMS: 0, toolBusy: false }),
+  data: () => ({ menuOpen: false, enabled: true, offset: 0, status: '', cues: [], fingerprint: '', error: '', request: 0, preferences: readSubtitlePreferences(), preferenceNotice: '', transcriptOpen: false, surface: null, timeMS: 0, toolBusy: false }),
   watch: {
     controlsHeld(value) { this.$emit('menu-change', value); },
     preferences: { deep: true, handler(value) { this.preferenceNotice = writeSubtitlePreferences(value) ? '' : '偏好暂时无法保存，本次播放仍可使用'; this.positionCues(); } },
@@ -67,10 +68,8 @@ export default {
       finally { this.toolBusy = false; }
     },
     release() {
-      this._resize?.disconnect(); this._visibility?.disconnect(); this._surface?.removeEventListener('playback-controls-resize', this.positionCues); this._surface = null;
-      this._media?.removeEventListener('timeupdate', this.updateTime); this._media?.removeEventListener('seeked', this.updateTime);
-      this._media?.style.removeProperty('--fs-subtitle-active'); this._media?.style.removeProperty('--subtitle-background'); this._media = null;
-      this._track?.remove(); this._track = null; if (this._blob) URL.revokeObjectURL(this._blob); this._blob = null;
+      this._renderer?.dispose();this._renderer=null;
+      this._media?.removeEventListener('timeupdate',this.updateTime);this._media?.removeEventListener('seeked',this.updateTime);this._media=null;
     },
     updateTime() { this.timeMS = Math.round((this._media?.currentTime || 0) * 1000); },
     seekTranscript(seconds) { if (seconds !== null && this._media && this.status === 'ready') { this._media.currentTime = seconds; this.updateTime(); } },
@@ -81,7 +80,7 @@ export default {
       try {
         const result = await GetPlaybackSubtitle({ video_id: this.videoId, source_version: this.sourceVersion, queue_token: this.queueToken });
         if (request !== this.request) return;
-        this.status = result.status; this.cues = result.cues || []; await this.project();
+        this.status = result.status; this.cues = result.cues || [];this.fingerprint=result.subtitle_token||''; await this.project();
       } catch (error) { if (request === this.request) this.error = String(error); }
     },
     async project() {
@@ -94,41 +93,14 @@ export default {
       if (this.status !== 'ready' || !video) return;
       this._media = video; this.surface = video.parentElement;
       video.addEventListener('timeupdate', this.updateTime); video.addEventListener('seeked', this.updateTime); this.updateTime();
-      this._blob = URL.createObjectURL(new Blob([subtitleVTT(this.cues, this.offset)], { type: 'text/vtt' }));
-      const track = document.createElement('track');
-      track.kind = 'subtitles'; track.label = '外置字幕'; track.srclang = 'und'; track.src = this._blob;
-      track.default = true; track.addEventListener('load', () => { if (this._track === track) this.updateMode(); });
-      track.addEventListener('error', () => { if (this._track === track) this.error = '播放器无法加载字幕，请刷新字幕'; });
-      this._track = track; video.appendChild(track); this.updateMode();
-      this._surface = video.parentElement;
-      if (typeof ResizeObserver !== 'undefined') { this._resize = new ResizeObserver(this.positionCues); this._resize.observe(video); }
-      if (this._surface) {
-        this._surface.addEventListener('playback-controls-resize', this.positionCues);
-        this._visibility = new MutationObserver(this.positionCues);
-        this._visibility.observe(this._surface, { attributes: true, attributeFilter: ['userinactive', 'mediapaused'] });
-      }
+      const Renderer=video.nativePlayback?NativeSubtitleRenderer:WebSubtitleRenderer;
+      this._renderer=new Renderer(video,message=>{if(request===this.request)this.error=message;});
+      this._renderer.setDocument({cues:this.cues,fingerprint:this.fingerprint});
+      this.updateMode();
     },
-    updateMode() { if (this._track?.track) { this._track.track.mode = this.enabled ? 'showing' : 'disabled'; this.positionCues(); } },
-    positionCues() {
-      const video = this.videoElement(); const surface = video?.parentElement;
-      const height = video?.getBoundingClientRect().height;
-      if (!height || !surface) return;
-      const width = video.getBoundingClientRect().width || 0;
-      const tokens = getComputedStyle(video);
-      const limits = { small: ['--fs-caption', '--fs-title', .025], medium: ['--fs-body', '--fs-display', .03], large: ['--fs-section', '--fs-hero', .04], xlarge: ['--fs-title', '--fs-hero', .05] };
-      const [minToken, maxToken, ratio] = limits[this.preferences.size];
-      const minimum = parseFloat(tokens.getPropertyValue(minToken)) || 14;
-      const maximum = parseFloat(tokens.getPropertyValue(maxToken)) || 40;
-      video.style.setProperty('--fs-subtitle-active', `${Math.max(minimum, Math.min(maximum, width * ratio))}px`);
-      video.style.setProperty('--subtitle-background', { none: 'transparent', translucent: 'var(--media-badge-bg)', solid: 'var(--player-bg)' }[this.preferences.background]);
-      const hidden = surface.hasAttribute('userinactive') && !video.paused;
-      const barHeight = hidden ? 0 : (surface.querySelector('[data-test="playback-controls"]')?.getBoundingClientRect().height || 0);
-      for (const cue of this._track?.track?.cues || []) {
-        cue.snapToLines = false;
-        cue.lineAlign = { bottom: 'end', middle: 'center', top: 'start' }[this.preferences.position];
-        cue.line = this.preferences.position === 'bottom' ? Math.max(10, Math.min(95, (height - barHeight - 12) / height * 100)) : this.preferences.position === 'middle' ? 50 : 5;
-      }
-    }
+    updateMode(){this._renderer?.configure({enabled:this.enabled,offset_ms:subtitleOffsetMS(this.offset),preferences:this.preferences});},
+    positionCues(){this.updateMode();}
+
   }
 };
 </script>

@@ -40,12 +40,13 @@ type ChapterSetView struct {
 	Chapters      []ChapterInput `json:"chapters"`
 }
 type VideoChapterSets struct {
-	VideoID       uint            `json:"video_id"`
-	Title         string          `json:"title"`
-	DurationMS    int64           `json:"duration_ms"`
-	SourceVersion string          `json:"source_version"`
-	Embedded      *ChapterSetView `json:"embedded"`
-	Manual        *ChapterSetView `json:"manual"`
+	Automatic     *VideoStructureView `json:"automatic,omitempty"`
+	VideoID       uint                `json:"video_id"`
+	Title         string              `json:"title"`
+	DurationMS    int64               `json:"duration_ms"`
+	SourceVersion string              `json:"source_version"`
+	Embedded      *ChapterSetView     `json:"embedded"`
+	Manual        *ChapterSetView     `json:"manual"`
 }
 type SaveChaptersRequest struct {
 	VideoID          uint           `json:"video_id"`
@@ -183,6 +184,13 @@ func (s *ChapterService) GetVideoChapterSets(ctx context.Context, id uint) (*Vid
 				return err
 			}
 			result.Embedded = embedded
+			if video.ID != 0 {
+				automatic, err := readVideoStructureView(db, id, info, sourceErr)
+				if err != nil {
+					return err
+				}
+				result.Automatic = automatic
+			}
 			return nil
 		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	})

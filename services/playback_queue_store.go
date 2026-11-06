@@ -46,6 +46,7 @@ type QueueEntryDTO struct {
 }
 
 type QueuePage struct {
+	HasFollowing   bool                      `json:"-"`
 	HasClips       bool                      `json:"has_clips"`
 	State          models.PlaybackQueueState `json:"state"`
 	Items          []QueueEntryDTO           `json:"items"`
@@ -144,6 +145,11 @@ func loadQueuePage(ctx context.Context, q QueueQuery) (*QueuePage, error) {
 				return err
 			}
 			page.Current = &QueueEntryDTO{PlaybackQueueEntry: current}
+			var following []models.PlaybackQueueEntry
+			if err := db.Select("id").Where("position > ? OR (position = ? AND id > ?)", current.Position, current.Position, current.ID).Limit(1).Find(&following).Error; err != nil {
+				return err
+			}
+			page.HasFollowing = len(following) > 0
 			ids = append(ids, current.VideoID)
 		}
 		available, err := noteAvailableVideos(db, ids)

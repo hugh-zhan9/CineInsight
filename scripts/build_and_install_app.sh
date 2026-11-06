@@ -237,6 +237,7 @@ main() {
 
   [[ -d "${BUILD_APP_PATH}" ]] || fail "未找到构建产物: ${BUILD_APP_PATH}"
 
+  python3 "${SCRIPT_DIR}/bundle_native_playback.py" "${BUILD_APP_PATH}"
   bundle_enhance_runtime
   bundle_apple_ai
   python3 "${SCRIPT_DIR}/bundle_image_tools.py" "${BUILD_APP_PATH}"

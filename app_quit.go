@@ -89,6 +89,21 @@ type QuitConfirmRequest struct {
 // 判定只读内存里的状态（登记表、字幕队列、代理与下载队列），不读库：维护期间照样判得出来，
 // 也不会因为一次慢查询把关窗口卡住。
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
+	defer func() {
+		if !prevent && a.nativePlayback != nil {
+			stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := a.nativePlayback.Stop(stop); err != nil {
+				prevent = true
+				if ctx != nil {
+					emitRuntimeEvent(ctx, "native-playback-stop-failed", "本机播放尚未停止，请稍后重试")
+				}
+			} else {
+				a.releaseNativeMutationHook()
+			}
+		}
+	}()
+
 	if internalQuitAllowed() || appQuitGuard.confirmed.Load() {
 		return false
 	}

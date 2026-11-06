@@ -84,3 +84,7 @@
 - 本轮八项范围、严格图片无损与先另存后审阅裁定见[需求与设计](docs/loopx/design/2026-11-04-media-utility/概要设计.md)，实际进度/验证以[实施记录](docs/loopx/plans/2026-11-04-media-utility.md)为准。包含看图视口、轻量修图、PNG/JPEG无损优化、双图联动、视频时间缩略图、今晚候选数量、按卷目标方案，以及局部/短样片试增强。
 - 临时处理由`MediaProcessingService`唯一持有，会话不进数据库，维护前先自身关门、取消并排空，再取原全局围栏；原片库、模型、清理保留策略及实际删除仍各归原owner。副本发布不覆盖原图或任何现有目标，清理由用户另行审阅。图片审阅投影共用`photoCleanupEntries.js`，空间方案读取原审阅快照，不另算保留策略。
 - GPU运行时升级为`realesrgan-ncnn-vulkan-v0.2.0-cineinsight2`，直接加载随包MoltenVK；普通/动漫模型及2×输出不变。新构建目标macOS15，原进度沿既有运行时不匹配规则处理；JPEG无损工具先用`bash scripts/build_image_tools.sh`从固定源码构建到`build/image-tools`（macOS15/arm64），再由打包脚本装配，最低系统超出15的组件拒绝打包，最终统一签名。不要依赖开发机Vulkan环境变量、Homebrew动态库或诊断ICD配置。
+
+## 2026-11-06 动态发现、结束推荐与本机基础整理
+
+本轮按用户认可的[详细设计](docs/loopx/design/2026-11-05-discovery-playback/需求设计文档.md)实施：首页9/发现12/结束3选项、全库空闲基础分段、macOS15+/arm64固定libmpv原生播放接入。新正式GetPlaybackSession与原工具预览入口分开；来源/owner/窗口epoch、FD及文件变更清理边界见[播放合同](docs/context/playback.md)，曝光和自动分段入口见[界面合同](docs/context/ui.md)。不新增AI Token依赖、云调用或模型下载。原生运行时由`scripts/build_native_playback_runtime.py --collect-sources`准备，发布包仅使用自身Resources；开发显式设置CINEINSIGHT_NATIVE_RUNTIME_DIR。当前实际通过范围、既有失败和未实测平台以[执行记录](docs/loopx/plans/2026-11-05-discovery-playback.md)为准；用户已授权提交并推送，本轮不安装或部署。

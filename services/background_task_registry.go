@@ -46,6 +46,7 @@ const (
 	// 不进空闲门；它也不阻止退出（派生数据，已完成项已落库）。
 	BackgroundTaskSceneIndex     BackgroundTaskKey = "scene_index"
 	BackgroundTaskChapterSummary BackgroundTaskKey = "chapter_summary"
+	BackgroundTaskVideoStructure BackgroundTaskKey = "video_structure"
 	// BackgroundTaskVideoEdit 是视频工作台的导出队列（视频编辑合同）。用户显式排队，不进空闲门；
 	// 有排队或运行项时退出走既有退出确认。
 	BackgroundTaskVideoEdit BackgroundTaskKey = "video_edit"
@@ -90,6 +91,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskMovieChart,
 	BackgroundTaskSceneIndex,
 	BackgroundTaskChapterSummary,
+	BackgroundTaskVideoStructure,
 	BackgroundTaskVideoEdit,
 	BackgroundTaskLostMedia,
 	BackgroundTaskMetadataBatchEdit,

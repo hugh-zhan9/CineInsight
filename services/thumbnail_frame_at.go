@@ -150,6 +150,13 @@ func (s *ThumbnailService) RenderFrameAt(ctx context.Context, videoID uint, ms i
 	if len(data) == 0 {
 		return nil, time.Time{}, ErrFrameAtOutOfRange
 	}
+	after, err := os.Stat(video.Path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if !os.SameFile(info, after) || info.Size() != after.Size() || !info.ModTime().Equal(after.ModTime()) {
+		return nil, time.Time{}, ErrBookmarkSourceChanged
+	}
 	image := frameAtImage{key: key, data: data, modTime: info.ModTime()}
 	s.frameCache.put(image)
 	return image.data, image.modTime, nil

@@ -1,0 +1,133 @@
+[
+  {
+    "file": "rv30.rm",
+    "url": "https://fate-suite.ffmpeg.org/real/rv30.rm",
+    "sha256": "e448c7720cff6a2eec9c20ce12d577c5d5c2d6748ecd4acc09102e3e08c67106",
+    "size": 201000,
+    "sample_kind": "truncated",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "cook",
+          "sample_rate": "44100"
+        },
+        {
+          "codec_name": "rv30",
+          "width": 352,
+          "height": 240
+        }
+      ],
+      "format": {
+        "duration": "1350.471000"
+      }
+    },
+    "redistributed": false
+  },
+  {
+    "file": "spygames-fate.rmvb",
+    "url": "https://fate-suite.ffmpeg.org/real/spygames-2MB.rmvb",
+    "sha256": "e9904307a07c84be11b7e4f35693f9ae8f62867078160f89798599439433d3b7",
+    "size": 2097152,
+    "sample_kind": "truncated",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "cook",
+          "sample_rate": "44100"
+        },
+        {
+          "codec_name": "rv40",
+          "width": 576,
+          "height": 320
+        }
+      ],
+      "format": {
+        "duration": "7287.349000"
+      }
+    },
+    "redistributed": false
+  },
+  {
+    "file": "eiqu-56k.rm",
+    "url": "https://samples.ffmpeg.org/real/VC-RV30/eiqu-56k.rm",
+    "sha256": "d9151839e74019a08bb6614924d6e04cc00fecb164678f439768cebebe4eaa5b",
+    "size": 258415,
+    "sample_kind": "damaged-index",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "cook",
+          "sample_rate": "8000"
+        },
+        {
+          "codec_name": "rv30",
+          "width": 160,
+          "height": 120
+        }
+      ],
+      "format": {
+        "duration": "50.579000"
+      }
+    },
+    "redistributed": false,
+    "failure": "FFmpeg rm read_timestamp failed and seek failed at 37.93425s; kept as a failure fixture, not a passing timing sample."
+  },
+  {
+    "file": "sam-rv40.rm",
+    "url": "https://samples.mplayerhq.hu/real/VC-RV40/sam_640_750Kbps.rm",
+    "sha256": "53bfb13b330a4eff623d258cb4a446a42c4763a1e71f9fba168ae92034759520",
+    "size": 14083678,
+    "sample_kind": "complete-packet-span",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "cook",
+          "sample_rate": "44100"
+        },
+        {
+          "codec_name": "rv40",
+          "width": 640,
+          "height": 480
+        }
+      ],
+      "format": {
+        "duration": "145.216000"
+      }
+    },
+    "redistributed": false
+  },
+  {
+    "file": "hi1-rv30.rm",
+    "url": "https://samples.mplayerhq.hu/real/VC-RV30/hi1.rm",
+    "sha256": "89be4723c0d5b7f525e015dbd7782955d07e1703197fb50f061a94db87012ce3",
+    "size": 3572249,
+    "sample_kind": "complete",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "cook",
+          "sample_rate": "44100"
+        },
+        {
+          "codec_name": "rv30",
+          "width": 320,
+          "height": 240
+        }
+      ],
+      "format": {
+        "duration": "65.014000"
+      }
+    },
+    "redistributed": false
+  }
+]

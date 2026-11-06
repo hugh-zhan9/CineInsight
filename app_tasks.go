@@ -220,13 +220,14 @@ func (a *App) DiscardEnhancementProgress(taskID uint) (*services.EnhancementTask
 // 前端 taskCommands.test.js 读这里的源码比对零参绑定。
 
 type taskCenterKeyState struct {
-	running   bool
-	preparing bool
-	progress  *TaskProgress
-	runCounts *TaskRunCounts
-	lastRun   *TaskLastRun
-	canStart  bool
-	canCancel bool
+	strictIdle bool
+	running    bool
+	preparing  bool
+	progress   *TaskProgress
+	runCounts  *TaskRunCounts
+	lastRun    *TaskLastRun
+	canStart   bool
+	canCancel  bool
 }
 
 type taskCenterAdapter func(a *App, src *taskCenterSources) taskCenterKeyState
@@ -259,6 +260,7 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskMovieChart:           (*App).taskCenterMovieChart,
 	services.BackgroundTaskSceneIndex:           (*App).taskCenterSceneIndex,
 	services.BackgroundTaskChapterSummary:       (*App).taskCenterChapters,
+	services.BackgroundTaskVideoStructure:       (*App).taskCenterVideoStructure,
 	services.BackgroundTaskVideoEdit:            (*App).taskCenterVideoEdit,
 	services.BackgroundTaskLostMedia:            (*App).taskCenterLostMedia,
 	services.BackgroundTaskMetadataBatchEdit:    (*App).taskCenterMetadataEdit,

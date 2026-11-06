@@ -30,13 +30,20 @@ type ShortFeedHTTPServerConfig struct {
 }
 
 type ShortFeedHTTPServer struct {
-	feed     *ShortFeedService
-	assets   fs.FS
-	config   ShortFeedHTTPServerConfig
-	mu       sync.RWMutex
-	server   *http.Server
-	listener net.Listener
-	status   ShortFeedServerStatus
+	mediaActivity func(bool)
+	feed          *ShortFeedService
+	assets        fs.FS
+	config        ShortFeedHTTPServerConfig
+	mu            sync.RWMutex
+	server        *http.Server
+	listener      net.Listener
+	status        ShortFeedServerStatus
+}
+
+func (s *ShortFeedHTTPServer) SetMediaActivityObserver(observer func(bool)) {
+	s.mu.Lock()
+	s.mediaActivity = observer
+	s.mu.Unlock()
 }
 
 func NewShortFeedHTTPServer(feed *ShortFeedService, assets fs.FS, config ShortFeedHTTPServerConfig) *ShortFeedHTTPServer {
@@ -580,6 +587,13 @@ func (s *ShortFeedHTTPServer) handleMedia(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		s.writeMediaError(w, err)
 		return
+	}
+	s.mu.RLock()
+	observer := s.mediaActivity
+	s.mu.RUnlock()
+	if observer != nil {
+		observer(true)
+		defer observer(false)
 	}
 	s.serveMediaFile(w, r, media)
 }

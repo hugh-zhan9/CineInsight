@@ -43,7 +43,7 @@ assert.match(inlinePlayer, /detailPlaybackStartMs\(/, 'preview should resolve su
 assert.doesNotMatch(preview, /^\s+resumePositionSeconds\(\)/m, 'progress persistence must not seek the active player backwards');
 assert.doesNotMatch(inlinePlayer, /^\s+resumePositionSeconds\(\)/m, 'progress persistence must not seek the active player backwards');
 assert.match(inlinePlayer, /@ended="handleEnded"/, 'natural end has a dedicated playback handler');
-assert.match(inlinePlayer, /handleEnded\(\)\s*\{\s*this\.emitWatchProgress\(true, true\)/, 'natural end still reports watch completion');
+assert.match(inlinePlayer, /handleEnded\(\)\s*\{\s*releaseActivePlayer\(this\._activeHandle\);\s*this\.emitWatchProgress\(true, true\)/, 'natural end still reports watch completion');
 assert.match(cleanupPanel, /same_source_groups/, 'cleanup review should include same-source candidates');
 assert.match(cleanupPanel, /RejectSameSourceRelation/, 'cleanup review should reuse the existing rejection path');
 assert.match(cleanupPanel, /byID\.set\(group\.alternative\.id, group\.alternative\)/, 'only the alternative same-source version should be selectable for cleanup');

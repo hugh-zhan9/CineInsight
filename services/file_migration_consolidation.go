@@ -311,7 +311,7 @@ func (s *VideoService) executeConsolidationItem(ctx context.Context, e *consolid
 		if err := checkConsolidationArtifact(record.StagedSourcePath, file.Source, record.SourceIdentity); err != nil {
 			return err
 		}
-		if err := os.Remove(record.StagedSourcePath); err != nil {
+		if err := nativeRemovePath(record.StagedSourcePath); err != nil {
 			return err
 		}
 		record.StagedSourcePath = ""

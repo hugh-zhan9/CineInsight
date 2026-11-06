@@ -10,6 +10,7 @@
         <button v-if="kind==='embedded' && sets.embedded?.chapters.length" type="button" class="btn btn--secondary btn--sm" :disabled="busy || sets.embedded.source_status!=='ready' || !sets.duration_ms" @click="edit(true)">复制到人工编辑稿</button>
       </section>
     </div>
+    <AutomaticStructurePanel :video-id="videoId" :page-active="pageActive" @seek="$emit('seek',$event)" @copy="copyAutomatic" />
     <details class="chapter-generation"><summary>生成字幕章节摘要</summary><p class="help-text">需要有效的同名 SRT 和显式启用的外部文本 AI。不会自动生成字幕，也不发送视频、图片或文件路径。摘要仅依据字幕，可能遗漏无对白画面。</p>
       <label><input v-model="whole" type="checkbox" :disabled="busy" />全片字幕</label>
       <div v-if="!whole" class="chapter-toolbar"><label>开始（秒）<input v-model="scopeStart" type="number" class="number-input" min="0" step="0.001" :disabled="busy" /></label><label>结束（秒）<input v-model="scopeEnd" type="number" class="number-input" min="0" step="0.001" :disabled="busy" /></label></div>
@@ -28,13 +29,14 @@
   </section>
 </template>
 <script>
+import AutomaticStructurePanel from './AutomaticStructurePanel.vue';
 import DialogShell from './ui/DialogShell.vue';
 import ChapterEditorDialog from './ChapterEditorDialog.vue';
 import ChapterDraftDialog from './ChapterDraftDialog.vue';
 import {chapterAPI,chapterTime,chapterEditorInputs,CHAPTER_JOB_LABELS,CHAPTER_SOURCE_LABELS} from '../utils/chapters.js';
 import {newRequestID} from '../utils/requestID.js';
 export default {
-  name:'ChapterPanel',components:{DialogShell,ChapterEditorDialog,ChapterDraftDialog},props:{videoId:{type:Number,required:true},pageActive:{type:Boolean,default:true},initialJobId:{type:Number,default:0},api:{type:Object,default:()=>chapterAPI}},emits:['seek','subtitle-tools','settings'],
+  name:'ChapterPanel',components:{AutomaticStructurePanel,DialogShell,ChapterEditorDialog,ChapterDraftDialog},props:{videoId:{type:Number,required:true},pageActive:{type:Boolean,default:true},initialJobId:{type:Number,default:0},api:{type:Object,default:()=>chapterAPI}},emits:['seek','subtitle-tools','settings'],
   data:()=>({sets:null,error:'',notice:'',busy:false,generation:0,setsRequest:0,jobRequest:0,draftRequest:0,alive:true,editor:null,draft:null,jobs:[],jobCursor:0,jobsLoading:false,jobsDirty:false,jobError:'',labels:CHAPTER_JOB_LABELS,sourceLabels:CHAPTER_SOURCE_LABELS,whole:true,scopeStart:'0',scopeEnd:'',preparation:null,confirmed:false,startError:'',requestID:'',poll:null}),
   watch:{videoId:{immediate:true,handler(){this.generation++;this.jobRequest++;this.jobsLoading=false;this.jobsDirty=false;this.sets=null;this.editor=null;this.draft=null;this.preparation=null;this.jobs=[];this.jobCursor=0;this.load();this.loadJobs(false);if(this.initialJobId)this.openJob(this.initialJobId);}},initialJobId(id){if(id)this.openJob(id);},pageActive(active){if(!active){this.generation++;this.draftRequest++;this.preparation=null;}else{this.loadJobs(false);}}},
   mounted(){this._off=window.runtime?.EventsOn?.('chapter-draft-changed',()=>{if(this.pageActive){this.loadJobs(false);if(this.draft&&['queued','running'].includes(this.draft.job.status))this.openJob(this.draft.job.id,true);}});},
@@ -45,6 +47,7 @@ export default {
     async loadJobs(more){if(this.jobsLoading){if(!more)this.jobsDirty=true;return;}if(!this.videoId)return;const ticket=++this.jobRequest,id=this.videoId;this.jobsLoading=true;this.jobError='';try{const page=await this.api.jobs({video_id:id,cursor_id:more?this.jobCursor:0,limit:20});if(!this.alive||ticket!==this.jobRequest||id!==this.videoId)return;const byID=new Map(this.jobs.map(job=>[job.id,job]));for(const job of page.items)byID.set(job.id,job);this.jobs=[...byID.values()].sort((a,b)=>b.id-a.id);if(more||!this.jobCursor)this.jobCursor=page.next_cursor;}catch(error){if(this.alive&&ticket===this.jobRequest)this.jobError=error.message||String(error);}finally{if(this.alive&&ticket===this.jobRequest){this.jobsLoading=false;if(this.jobsDirty&&this.pageActive){this.jobsDirty=false;this.loadJobs(false);}}}},
     closeDraft(){this.draft=null;this.draftRequest++;},
     async openJob(id,refresh=false){const ticket=++this.draftRequest,generation=this.generation;if(!this.pageActive)return;try{const draft=await this.api.draft(id);if(this.alive&&ticket===this.draftRequest&&generation===this.generation&&(!refresh||this.draft?.job.id===id)){this.draft=draft;this.jobs=this.jobs.map(job=>job.id===id?draft.job:job);}}catch(error){if(this.alive&&ticket===this.draftRequest)this.jobError=error.message||String(error);}},
+    copyAutomatic(view){if(!this.pageActive||this.busy||!this.sets?.source_version||view.source_status!=='ready'||view.source_version!==this.sets.source_version)return;this.editor={videoID:this.videoId,revision:this.sets.manual?.revision||0,chapters:view.segments.map(row=>({id:0,start_ms:row.start_ms,end_ms:row.end_ms,title:row.title,summary:''})),sourceVersion:view.source_version,currentSource:this.sets.source_version,sourceStatus:'ready'};},
     edit(copy){if(!this.pageActive||this.busy||!this.sets?.source_version)return;const manual=this.sets.manual,source=copy?this.sets.embedded:manual;this.editor={videoID:this.videoId,revision:manual?.revision||0,chapters:(source?.chapters||[]).map(row=>({...row,id:copy?0:row.id})),sourceVersion:source?.source_version||this.sets.source_version,currentSource:this.sets.source_version,sourceStatus:source?.source_status||'ready'};},
     saved(){this.editor=null;this.notice='人工章节已保存';this.load();},changed(){this.load();this.loadJobs(false);},
     async resolve(set,chapter){const generation=this.generation;if(!this.pageActive||this.busy)return;this.busy=true;this.error='';try{const result=await this.api.resolve({set_id:set.set_id,chapter_id:chapter.id,revision:set.revision});if(this.alive&&generation===this.generation)this.$emit('seek',result);}catch(error){if(this.alive&&generation===this.generation)this.error=error.message||String(error);}finally{if(this.alive)this.busy=false;}},

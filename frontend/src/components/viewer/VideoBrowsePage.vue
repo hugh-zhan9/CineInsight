@@ -2,6 +2,7 @@
   <section class="page-content video-browse" data-test="video-browse">
     <PageHeader title="视频" :subtitle="countText">
       <template #actions>
+        <button type="button" class="btn btn--secondary" data-test="browse-discover" @click="$emit('navigate', 'discover', { filter: currentFilter() })">进入发现</button>
         <!-- 随机拆分按钮（D-P2-01）：主键按随机条件在当前筛选内立即播放一部；▾ 里是今晚看什么与条件开关，
              与片库管理的同一组（utils/randomPlayback.js 共用一套流程、条件与排除表）。 -->
         <div class="video-browse__random" role="group" aria-label="随机播放">

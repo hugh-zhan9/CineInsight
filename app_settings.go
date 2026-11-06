@@ -170,6 +170,9 @@ func (a *App) UpdateSettings(input models.Settings) error {
 
 	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
+		if a.videoStructure != nil && (bridgeErr != nil || bridgeBefore == nil || bridgeBefore.AutoStructureEnabled != input.AutoStructureEnabled || bridgeBefore.ScanExcludePaths != input.ScanExcludePaths || bridgeBefore.IdleThresholdMinutes != input.IdleThresholdMinutes || bridgeBefore.IdleRequireACPower != input.IdleRequireACPower || bridgeBefore.IdleWindowStart != input.IdleWindowStart || bridgeBefore.IdleWindowEnd != input.IdleWindowEnd) {
+			a.videoStructure.Wake()
+		}
 		sharedTextChanged := bridgeErr != nil || bridgeBefore == nil || bridgeBefore.AITaggingBaseURL != input.AITaggingBaseURL || bridgeBefore.AITaggingModel != input.AITaggingModel || bridgeBefore.AITaggingAPIKey != input.AITaggingAPIKey
 		queryChanged := sharedTextChanged || bridgeBefore.QueryParseEnabled != input.QueryParseEnabled
 		summaryChanged := sharedTextChanged || bridgeBefore.ChapterSummaryEnabled != input.ChapterSummaryEnabled
@@ -361,6 +364,14 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	if err := a.stopMediaProcessing(ctx); err != nil {
 		return err
 	}
+	if a.nativePlayback != nil {
+		if err := a.nativePlayback.Quiesce(ctx); err != nil {
+			return err
+		}
+	}
+	if err := a.stopVideoStructure(ctx); err != nil {
+		return err
+	}
 	if err := a.quiesceBT(ctx); err != nil {
 		return err
 	}
@@ -477,6 +488,10 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 		log.Printf("失败诊断恢复未完成，批量重试暂不可用: %v", err)
 	}
 	a.resumeMediaProcessing()
+	a.startVideoStructure(a.backgroundContext())
+	if a.nativePlayback != nil {
+		a.nativePlayback.Resume()
+	}
 	a.releasePlaybackMaintenance()
 	a.resumeCleanupConsolidation()
 	if a.videoEdit != nil {

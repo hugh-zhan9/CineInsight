@@ -35,7 +35,7 @@ func moveFileNoReplace(source, destination string) (retainedSource string, retur
 	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(source, staging); err != nil {
+	if err := nativeRenamePath(source, staging); err != nil {
 		return "", err
 	}
 	rollback := func(cause error) error {
@@ -44,7 +44,7 @@ func moveFileNoReplace(source, destination string) (retainedSource string, retur
 		} else if exists {
 			return errors.Join(cause, fmt.Errorf("源路径已被占用，原文件保留在: %s", staging))
 		}
-		if rollbackErr := os.Rename(staging, source); rollbackErr != nil {
+		if rollbackErr := nativeRenamePath(staging, source); rollbackErr != nil {
 			return errors.Join(cause, fmt.Errorf("回滚源文件失败，原文件保留在 %s: %w", staging, rollbackErr))
 		}
 		return cause
@@ -60,8 +60,8 @@ func moveFileNoReplace(source, destination string) (retainedSource string, retur
 
 	if sourceInfo.Mode().IsRegular() {
 		if err := linkFile(staging, destination); err == nil {
-			if err := os.Remove(staging); err != nil {
-				cleanupErr := os.Remove(destination)
+			if err := nativeRemovePath(staging); err != nil {
+				cleanupErr := nativeRemovePath(destination)
 				if cleanupErr != nil {
 					return "", errors.Join(rollback(err), fmt.Errorf("清理目标硬链接失败: %w", cleanupErr))
 				}
@@ -111,7 +111,7 @@ func rollbackMovedFile(original, destination, retainedSource string) error {
 		}
 		return nil
 	}
-	if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := nativeRemovePath(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("清理迁移目标失败: %w", err)
 	}
 	if exists, err := pathExists(original); err != nil {
@@ -119,7 +119,7 @@ func rollbackMovedFile(original, destination, retainedSource string) error {
 	} else if exists {
 		return fmt.Errorf("原路径已被占用，源文件保留在: %s", retainedSource)
 	}
-	if err := os.Rename(retainedSource, original); err != nil {
+	if err := nativeRenamePath(retainedSource, original); err != nil {
 		return fmt.Errorf("恢复源文件失败，源文件保留在 %s: %w", retainedSource, err)
 	}
 	return nil
@@ -153,7 +153,7 @@ func copyFileNoReplace(source, destination string) (returnErr error) {
 			_ = output.Close()
 		}
 		if returnErr != nil && created {
-			_ = os.Remove(destination)
+			_ = nativeRemovePath(destination)
 		}
 	}()
 
@@ -204,7 +204,7 @@ func copyDirectoryNoReplace(source, destination string) (returnErr error) {
 	}
 	defer func() {
 		if returnErr != nil {
-			_ = os.RemoveAll(destination)
+			_ = nativeRemoveAllPaths(destination)
 		}
 	}()
 
@@ -533,9 +533,9 @@ func (s *VideoService) DeleteStagedSources(ids []uint) (*StagedSourceDeleteResul
 		}
 		if err == nil {
 			if info.IsDir() {
-				err = os.RemoveAll(row.StagedPath)
+				err = nativeRemoveAllPaths(row.StagedPath)
 			} else {
-				err = os.Remove(row.StagedPath)
+				err = nativeRemovePath(row.StagedPath)
 			}
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -35,6 +35,7 @@
     <IINASyncSection />
 
     <IdleSchedulingSection :form="settingsForm" />
+    <AutomaticStructureSection :form="settingsForm" />
 
     <ProxySection :form="settingsForm" />
 
@@ -107,6 +108,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'automation', label: '自动化与扫描', saveMode: 'save' },
   { key: 'iina-sync', label: 'IINA 进度同步', saveMode: 'instant' },
   { key: 'idle-scheduling', label: '后台任务调度', saveMode: 'save' },
+  { key: 'automatic-structure', label: '自动分段', saveMode: 'save' },
   { key: 'playback-proxy', label: '播放兼容缓存', saveMode: 'save' },
   { key: 'enhance', label: '视频超分', saveMode: 'instant' },
   { key: 'face', label: '人脸识别', saveMode: 'save' },
@@ -176,6 +178,7 @@ export function normalizeSettingsForm(settings) {
   form.backup_interval_hours = Number.isFinite(form.backup_interval_hours) ? form.backup_interval_hours : 24;
   form.random_half_life_days = Number.isFinite(form.random_half_life_days) ? form.random_half_life_days : 90;
   // 空闲调度：老库/异常值也要落到合法区间，界面上显示的就是会生效的值。
+  if (form.auto_structure_enabled == null) form.auto_structure_enabled = true;
   if (form.idle_scheduling_enabled == null) form.idle_scheduling_enabled = true;
   form.idle_threshold_minutes = normalizeIdleThresholdMinutes(form.idle_threshold_minutes);
   form.idle_require_ac_power = Boolean(form.idle_require_ac_power);
@@ -217,6 +220,7 @@ export function buildSettingsPayload(form) {
     playback_resume_mode: form.playback_resume_mode || 'resume',
     desktop_player: form.desktop_player || 'system',
     auto_technical_backfill: form.auto_technical_backfill,
+    auto_structure_enabled: form.auto_structure_enabled !== false,
     auto_perceptual_hash: form.auto_perceptual_hash,
     auto_cleanup_analysis: form.auto_cleanup_analysis,
     auto_image_exif_backfill: form.auto_image_exif_backfill,
@@ -298,6 +302,7 @@ import EnhanceSection from './settings/EnhanceSection.vue';
 import FaceSection from './settings/FaceSection.vue';
 import PhotoMapSection from './settings/PhotoMapSection.vue';
 import SceneSection from './settings/SceneSection.vue';
+import AutomaticStructureSection from './settings/AutomaticStructureSection.vue';
 import IdleSchedulingSection from './settings/IdleSchedulingSection.vue';
 import IINASyncSection from './settings/IINASyncSection.vue';
 import BTConnectionSection from './settings/BTConnectionSection.vue';
@@ -312,7 +317,7 @@ import SubtitleSection from './settings/SubtitleSection.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { PhotoMapSection, BTConnectionSection, PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { AutomaticStructureSection, PhotoMapSection, BTConnectionSection, PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }

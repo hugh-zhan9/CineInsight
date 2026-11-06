@@ -16,7 +16,9 @@
     <button v-if="cleanupPending" type="button" class="btn btn--secondary btn--sm" data-test="queue-cleanup-retry" :disabled="busy" @click="stop">重试停止队列</button>
     <p v-if="snapshot?.warning" role="alert">{{ snapshot.warning }}</p>
     <p v-if="snapshot?.state.last_error_message" role="alert">{{ snapshot.state.last_error_message }}</p>
-    <QueueInlinePlayer v-if="snapshot?.session" :key="snapshot.session.token" :session="snapshot.session" @error="error = $event" />
+    <QueueInlinePlayer ref="inlinePlayer" v-if="renderSession" :key="renderSession.token" :session="renderSession" @error="error = $event">
+      <template #ending="{ replay, retire }"><PlaybackEndScreen v-if="displayEnding" :ending="displayEnding" :replay="() => replayEnding(replay)" :retire="() => retireEnding(retire)" @selected="clearEndingHold(); $emit('close')" /></template>
+    </QueueInlinePlayer>
   </section>
   <DialogShell v-if="open" :title="`待播队列（${snapshot?.total ?? '—'} 项）`" size="xl" @close="$emit('close')">
     <section class="queue-panel" data-test="queue-panel">
@@ -54,6 +56,7 @@
   </DialogShell>
 </template>
 <script>
+import PlaybackEndScreen from './player/PlaybackEndScreen.vue';
 import { GetPlaybackQueue, EditPlaybackQueue, PlayPlaybackQueue, NextPlaybackQueue, StopPlaybackQueue, ControlPlaybackQueue } from '../../wailsjs/go/main/App';
 import DialogShell from './ui/DialogShell.vue';
 import QueueInlinePlayer from './QueueInlinePlayer.vue';
@@ -65,13 +68,28 @@ import { videoThumbnail } from '../utils/recap.js';
 const firstCursor = () => ({ revision: 0, cursor_position: 0, cursor_id: 0 });
 export default {
   name: 'PlaybackQueuePanel',
-  components: { DialogShell, QueueInlinePlayer }, mixins: [runtimeEventsMixin],
+  components: { DialogShell, QueueInlinePlayer, PlaybackEndScreen }, mixins: [runtimeEventsMixin],
   props: { open: Boolean, watchWholeVideo: { type: Function, default: null } }, emits: ['open', 'close', 'open-video'],
-  data: () => ({ snapshot: null, error: '', unavailable: false, cleanupPending: false, cleanupToken: '', loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [], thumbFailed: {} }),
+  data: () => ({ heldEnding: null, heldSession: null, heldEntryID: null, snapshot: null, error: '', unavailable: false, cleanupPending: false, cleanupToken: '', loading: false, busy: false, generation: 0, cursor: firstCursor(), history: [], thumbFailed: {} }),
   mounted() { this.registerRuntimeEvent('playback-queue-state', () => this.load(this.cursor, this.history)); this.load(); },
   beforeUnmount() { this._disposed = true; this.generation++; },
   watch: { open(value) { if (value) this.load(this.cursor, this.history); } },
+  computed: { renderSession() { return this.snapshot?.session || this.heldSession; }, displayEnding() { return this.snapshot?.ending || this.heldEnding; } },
   methods: {
+    clearEndingHold() { this.heldEnding = null; this.heldSession = null; this.heldEntryID = null; },
+    async replayEnding(replay) {
+      if (this.snapshot?.session && !this.heldSession) return replay();
+      if (!this.heldEntryID) throw new Error('队列播放状态已变化');
+      await PlayPlaybackQueue(this.heldEntryID, this.snapshot.state.revision);
+      await this.load(); this.clearEndingHold();
+    },
+    async retireEnding(retire) {
+      if (this.heldEnding && !this.snapshot?.state?.active_token) return;
+      const token = this.snapshot?.ending?.token;
+      if (!token || token !== this.snapshot?.session?.token) throw new Error('队列播放状态已变化');
+      this.heldEnding = this.snapshot.ending; this.heldSession = this.snapshot.session; this.heldEntryID = this.snapshot.current.id;
+      await retire(); await StopPlaybackQueue(token); await this.load();
+    },
     clipTime, statusLabel: queueStatusLabel, playerLabel: queuePlayerLabel,
     // 缩略图按视频取（同一部片可以排进队列好几次）；取不到（还没生成、视频已删）就留一块底色占位。
     thumb(item) { return videoThumbnail(Number(item?.video_id || 0)); },
@@ -82,6 +100,7 @@ export default {
       try {
         const result = await GetPlaybackQueue({ ...cursor, limit: 50 });
         if (generation !== this.generation) return;
+        if (this.heldSession && result.session && result.session.token !== this.heldSession.token) this.clearEndingHold();
         this.snapshot = result; this.cursor = { ...cursor }; this.history = [...history]; this.error = ''; this.unavailable = false; this.cleanupPending = false; this.cleanupToken = '';
       } catch (error) {
         if (generation !== this.generation) return;
@@ -103,7 +122,7 @@ export default {
     edit(change) { const expected_revision = this.snapshot.state.revision; return this.perform(() => EditPlaybackQueue({ ...change, expected_revision })); },
     play(item) { const revision = this.snapshot.state.revision; return this.perform(() => PlayPlaybackQueue(item.id, revision)); },
     next() { const state = { ...this.snapshot.state }; return this.perform(() => NextPlaybackQueue(state.active_token, state.revision)); },
-    stop() { const token = this.cleanupPending ? this.cleanupToken : this.snapshot.state.active_token; return this.perform(() => StopPlaybackQueue(token)); },
+    stop() { const token = this.cleanupPending ? this.cleanupToken : this.snapshot.state.active_token; return this.perform(async () => { await StopPlaybackQueue(token); this.clearEndingHold(); }); },
     control() { const state = { ...this.snapshot.state }; return this.perform(() => ControlPlaybackQueue(state.active_token, state.status === 'paused' ? 'resume' : 'pause')); },
     async watchWhole(item) {
       if (this.busy || this.unavailable || !item?.video_id) return;

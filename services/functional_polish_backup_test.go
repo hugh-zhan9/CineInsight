@@ -92,6 +92,7 @@ func seedPolishBackup(t *testing.T, db *gorm.DB) polishBackupFixture {
 	fixture.Rows = append(fixture.Rows, seedClipBackupRows(t, db, video.ID, at)...)
 	fixture.Rows = append(fixture.Rows, seedChapterBackupRows(t, db, gone.ID, at)...)
 	fixture.Rows = append(fixture.Rows, seedExplorationBackupRows(t, db, video.ID, at)...)
+	fixture.Rows = append(fixture.Rows, seedStructureBackupRows(t, db, video.ID, at)...)
 	return fixture
 }
 func assertPolishBackup(t *testing.T, db *gorm.DB, fixture polishBackupFixture) {
@@ -99,6 +100,7 @@ func assertPolishBackup(t *testing.T, db *gorm.DB, fixture polishBackupFixture) 
 	assertClipBackupPrivateFields(t, db)
 	assertChapterBackupFields(t, db)
 	assertExplorationBackup(t, db)
+	assertStructureBackup(t, db)
 	var recap models.PhotoRecap
 	if err := db.First(&recap).Error; err != nil || recap.PersonIDsJSON != "[999999]" || recap.Revision != 7 {
 		t.Fatalf("photo recap conditions lost %+v %v", recap, err)
@@ -183,10 +185,13 @@ func polishBackupJSON(row any) ([]byte, error) {
 
 func mutatePolishBackup(t *testing.T, db *gorm.DB) {
 	t.Helper()
+	if err := db.Model(&models.Settings{}).Where("1=1").Updates(map[string]any{"auto_structure_enabled": true, "auto_structure_initial_cutoff_id": 999}).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Model(&models.VideoTechnicalMetadata{}).Where("video_id > 0").Updates(map[string]any{"chapters_json": nil, "chapters_error": "chapter_metadata_invalid"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"media_exploration_entries", "media_exploration_states", "photo_recaps", "video_chapters", "chapter_sets", "chapter_draft_jobs", "clip_topic_members", "clip_topics", "playback_queue_states", "playback_queue_entries", "video_bookmarks"} {
+	for _, table := range []string{"video_structure_segments", "video_structure_states", "media_exploration_entries", "media_exploration_states", "photo_recaps", "video_chapters", "chapter_sets", "chapter_draft_jobs", "clip_topic_members", "clip_topics", "playback_queue_states", "playback_queue_entries", "video_bookmarks"} {
 		if err := db.Exec("DELETE FROM " + table).Error; err != nil {
 			t.Fatal(err)
 		}

@@ -24,6 +24,7 @@ var (
 // requests. os.File supports concurrent ReadAt and Close; each body has its own
 // SectionReader, and no body holds a database/path lock.
 type queueMediaLease struct {
+	native   bool
 	mu       sync.Mutex
 	file     *os.File
 	video    models.Video
@@ -34,7 +35,7 @@ type queueMediaLease struct {
 	origin   string
 }
 
-func (s *VideoService) prepareQueueMedia(ctx context.Context, id uint, inline bool) (*queueMediaLease, error) {
+func (s *VideoService) prepareQueueMedia(ctx context.Context, id uint, inline bool, allowNative bool) (*queueMediaLease, error) {
 	unlock, err := rLockLibraryPathsContext(ctx)
 	if err != nil {
 		return nil, err
@@ -58,6 +59,7 @@ func (s *VideoService) prepareQueueMedia(ctx context.Context, id uint, inline bo
 		}
 		path := video.Path
 		mimeType, _ := inlinePreviewMIME(path)
+		native := false
 		if inline {
 			proxy, err := s.playbackProxies().resolveValidProxyFrom(db, video.ID, playbackProxyFingerprintOf(info), true)
 			if err != nil {
@@ -67,7 +69,11 @@ func (s *VideoService) prepareQueueMedia(ctx context.Context, id uint, inline bo
 				path = proxy.Path
 				mimeType = playbackProxyMIME
 			} else if mimeType == "" {
-				return ErrQueueInlineUnsupported
+				if allowNative && s.nativePlaybackAvailable() {
+					native = true
+				} else {
+					return ErrQueueInlineUnsupported
+				}
 			}
 		}
 		var settings models.Settings
@@ -84,6 +90,14 @@ func (s *VideoService) prepareQueueMedia(ctx context.Context, id uint, inline bo
 		}
 		if !observed.Mode().IsRegular() {
 			return ErrQueueMediaUnavailable
+		}
+		if native {
+			current, err := os.Stat(video.Path)
+			if err != nil || !os.SameFile(info, current) || !playbackProxyFingerprintOf(info).matches(playbackProxyFingerprintOf(current)) {
+				return ErrQueueSourceChanged
+			}
+			lease = &queueMediaLease{native: true, video: video, source: playbackProxyFingerprintOf(info), delivery: info, start: start, origin: origin}
+			return ctx.Err()
 		}
 		file, err := os.Open(path)
 		if err != nil {
@@ -146,6 +160,9 @@ func (m *queueMediaLease) reader(ctx context.Context) (*io.SectionReader, string
 	m.mu.Lock()
 	file := m.file
 	m.mu.Unlock()
+	if m.native {
+		return nil, "", time.Time{}, ErrQueueInlineUnsupported
+	}
 	if file == nil {
 		return nil, "", time.Time{}, ErrQueueLeaseExpired
 	}

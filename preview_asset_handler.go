@@ -501,6 +501,9 @@ func (a *App) serveFrameAt(w http.ResponseWriter, r *http.Request) {
 		}
 		width = parsed
 	}
+	if !a.verifyBoundPreviewSource(w, r, videoID) {
+		return
+	}
 	data, modTime, err := a.thumbnailService.RenderFrameAt(r.Context(), videoID, ms, width)
 	if err != nil {
 		switch {
@@ -511,6 +514,9 @@ func (a *App) serveFrameAt(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "frame unavailable", http.StatusInternalServerError)
 		}
+		return
+	}
+	if !a.verifyBoundPreviewSource(w, r, videoID) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
@@ -613,6 +619,10 @@ func (a *App) servePreviewMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !a.verifyBoundPreviewSource(w, r, videoID) {
+		return
+	}
+
 	media, err := a.videoService.ResolvePreviewMedia(videoID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -633,6 +643,9 @@ func (a *App) servePreviewMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	if !a.verifyBoundPreviewSource(w, r, videoID) {
+		return
+	}
 
 	if media.MIME != "" {
 		w.Header().Set("Content-Type", media.MIME)
@@ -657,4 +670,23 @@ func assetVideoIDFromPath(path, prefix string) (uint, error) {
 	}
 
 	return uint(videoID), nil
+}
+
+// Optional identity binding strengthens recommendation/automatic-structure assets
+// without changing existing unbound preview callers.
+func (a *App) verifyBoundPreviewSource(w http.ResponseWriter, r *http.Request, videoID uint) bool {
+	values, present := r.URL.Query()["source_version"]
+	if !present {
+		return true
+	}
+	if len(values) != 1 || values[0] == "" || len(values[0]) > 128 {
+		http.Error(w, "invalid source_version", http.StatusBadRequest)
+		return false
+	}
+	source, err := a.videoService.ResolveVisibleVideoForPlayback(r.Context(), videoID)
+	if err != nil || source.SourceVersion != values[0] {
+		http.Error(w, "source_changed: 原片已变化或不可访问", http.StatusConflict)
+		return false
+	}
+	return true
 }

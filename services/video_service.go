@@ -23,6 +23,7 @@ import (
 )
 
 type VideoService struct {
+	nativeCapability         atomic.Pointer[func() NativePlaybackCapability]
 	btPolicy                 atomic.Pointer[BTPathPolicy]
 	controlledMu             sync.Mutex
 	controlled               *controlledPlayback
@@ -754,6 +755,11 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 	if err := database.DB.First(&video, id).Error; err != nil {
 		return "", err
 	}
+	releaseNative, nativeErr := beginNativeSourceMutation(video.Path)
+	if nativeErr != nil {
+		return "", nativeErr
+	}
+	defer releaseNative()
 	var existingEntry models.VideoTrashEntry
 	existingResult := database.DB.Where("video_id = ?", video.ID).Limit(1).Find(&existingEntry)
 	if existingResult.Error != nil {
@@ -1295,7 +1301,7 @@ func (s *VideoService) cancelInterruptedDeletion(entry *models.VideoTrashEntry) 
 				_ = recordTrashEntryError(entry.ID, errLegacyResidueNotHardLink)
 				return nil, errLegacyResidueNotHardLink
 			}
-			if err := os.Remove(entry.TrashPath); err != nil {
+			if err := nativeRemovePath(entry.TrashPath); err != nil {
 				_ = recordTrashEntryError(entry.ID, err)
 				return nil, err
 			}
@@ -1476,7 +1482,7 @@ func (s *VideoService) reconcileLegacyPendingDelete(entry *models.VideoTrashEntr
 			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
 				return errLegacyResidueNotHardLink
 			}
-			if err := os.Remove(entry.OriginalPath); err != nil {
+			if err := nativeRemovePath(entry.OriginalPath); err != nil {
 				return fmt.Errorf("清理已移入回收站的原路径副本失败: %w", err)
 			}
 			originalExists = false
@@ -1537,7 +1543,7 @@ func reconcileTrashRollback(entry *models.VideoTrashEntry) error {
 			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
 				return errLegacyResidueNotHardLink
 			}
-			if err := os.Remove(entry.TrashPath); err != nil {
+			if err := nativeRemovePath(entry.TrashPath); err != nil {
 				return fmt.Errorf("清理回滚后的回收站副本失败: %w", err)
 			}
 			trashExists = false
@@ -1647,6 +1653,11 @@ func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
 		}
 		return "", err
 	}
+	releaseNative, nativeErr := beginNativeSourceMutation(video.Path)
+	if nativeErr != nil {
+		return "", nativeErr
+	}
+	defer releaseNative()
 	var existingEntry models.VideoTrashEntry
 	existingResult := database.DB.Where("video_id = ?", video.ID).Limit(1).Find(&existingEntry)
 	if existingResult.Error != nil {
@@ -1677,7 +1688,7 @@ func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
 		if video.Size != 0 && info.Size() != video.Size {
 			return "", ErrTrashIdentityMismatch
 		}
-		if err := os.Remove(video.Path); err != nil {
+		if err := nativeRemovePath(video.Path); err != nil {
 			if errors.Is(err, os.ErrPermission) {
 				return "", ErrTrashPermissionDenied
 			}

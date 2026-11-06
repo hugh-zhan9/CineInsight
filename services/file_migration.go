@@ -242,11 +242,11 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 	}
 	stagingDirectory, err := migrationStagingPath(sourceDirectory)
 	if err != nil {
-		_ = os.RemoveAll(destinationDirectory)
+		_ = nativeRemoveAllPaths(destinationDirectory)
 		return nil, fmt.Errorf("创建源文件夹暂存路径失败: %w", err)
 	}
-	if err := os.Rename(sourceDirectory, stagingDirectory); err != nil {
-		cleanupErr := os.RemoveAll(destinationDirectory)
+	if err := nativeRenamePath(sourceDirectory, stagingDirectory); err != nil {
+		cleanupErr := nativeRemoveAllPaths(destinationDirectory)
 		if cleanupErr != nil {
 			return nil, errors.Join(fmt.Errorf("暂存源文件夹失败: %w", err), fmt.Errorf("清理目标副本失败: %w", cleanupErr))
 		}
@@ -258,10 +258,10 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("检查源文件夹回滚目标失败: %w", checkErr))
 		} else if exists {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("源路径已被占用，原文件夹保留在: %s", stagingDirectory))
-		} else if rollbackErr := os.Rename(stagingDirectory, sourceDirectory); rollbackErr != nil {
+		} else if rollbackErr := nativeRenamePath(stagingDirectory, sourceDirectory); rollbackErr != nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚源文件夹失败，原文件夹保留在 %s: %w", stagingDirectory, rollbackErr))
 		}
-		if cleanupErr := os.RemoveAll(destinationDirectory); cleanupErr != nil {
+		if cleanupErr := nativeRemoveAllPaths(destinationDirectory); cleanupErr != nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("清理目标副本失败: %w", cleanupErr))
 		}
 		return errors.Join(rollbackErrors...)
@@ -304,7 +304,7 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 		log.Printf("文件夹迁移最终校验失败 staging=%s destination=%s err=%v", stagingDirectory, destinationDirectory, err)
 	} else if independentCopy {
 		result.Warning = fmt.Sprintf("跨文件系统复制已完成；为防止外部写入导致数据丢失，源文件夹保留在: %s", stagingDirectory)
-	} else if err := os.RemoveAll(stagingDirectory); err != nil {
+	} else if err := nativeRemoveAllPaths(stagingDirectory); err != nil {
 		result.Warning = fmt.Sprintf("目标副本和数据库已更新，但清理源文件夹失败；剩余数据位于 %s: %v", stagingDirectory, err)
 		log.Printf("文件夹迁移清理源目录失败 staging=%s destination=%s err=%v", stagingDirectory, destinationDirectory, err)
 	}
@@ -399,11 +399,11 @@ func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*Folder
 		return nil, fmt.Errorf("所选文件夹不包含已收录视频，也不是已配置的扫描目录")
 	}
 
-	if err := os.Rename(sourceDirectory, destinationDirectory); err != nil {
+	if err := nativeRenamePath(sourceDirectory, destinationDirectory); err != nil {
 		return nil, fmt.Errorf("重命名文件夹失败: %w", err)
 	}
 	rollbackFilesystem := func(cause error) error {
-		if rollbackErr := os.Rename(destinationDirectory, sourceDirectory); rollbackErr != nil {
+		if rollbackErr := nativeRenamePath(destinationDirectory, sourceDirectory); rollbackErr != nil {
 			return errors.Join(cause, fmt.Errorf("回滚文件夹名称失败，新路径保留在 %s: %w", destinationDirectory, rollbackErr))
 		}
 		return cause

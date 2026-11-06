@@ -145,6 +145,7 @@
         :key="detailRoute.token"
         :video-id="detailRoute.videoId"
         :start-at-ms="detailRoute.startAtMs"
+        :expected-source-version="detailRoute.expectedSourceVersion || ''"
         :bookmark="detailRoute.bookmark"
         @ready="handleDetailReady"
         @video-state-changed="handleDetailVideoStateChange"
@@ -334,6 +335,7 @@
 	    @navigate="navigateTo"
 	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
+      <DiscoverPage ref="discoverPage" v-if="discoverMounted" v-show="currentPage === 'discover'" :page-active="currentPage === 'discover' && appReady && !relaunchRequired" :initial-request="pageRequests.discover || null" @open-video="openVideoByID($event, { from: 'discover' })" />
       <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" @open-cleanup="openCleanupCenter({ tab: 'image', open: true })" />
 	  <SearchResultsPage v-if="searchResultsMounted" v-show="currentPage === 'search-results'" :page-active="currentPage === 'search-results'" :initial-request="searchResultsRequest" :watch-whole-video="watchQueueWholeVideo" @open-video="openVideo($event, { from: 'search-results' })" @open-entity="openRecapEntity" />
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" :watch-whole-video="watchQueueWholeVideo" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
@@ -447,7 +449,10 @@
 
 <script>
 import { defineAsyncComponent } from 'vue';
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary, GetStartupBackendGuard, AcceptSQLiteAfterFallbackBlock } from '../wailsjs/go/main/App';
+import { selectPlaybackEnding } from './utils/playbackEndingNavigation.js';
+import { createDiscoverySession, resetDiscoverySession } from './utils/discoverySession.js';
+const DiscoverPage = defineAsyncComponent(() => import('./components/viewer/DiscoverPage.vue'));
+import { ResolveVisibleVideoForPlayback, GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp, GetPendingWorkSummary, GetStartupBackendGuard, AcceptSQLiteAfterFallbackBlock } from '../wailsjs/go/main/App';
 const ExplorePage = defineAsyncComponent(() => import('./components/viewer/ExplorePage.vue'));
 import ExplorationQuitDialog from './components/ExplorationQuitDialog.vue';
 import VideoListPage from './components/VideoListPage.vue';
@@ -536,12 +541,13 @@ export default {
   name: 'App',
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
   mixins: [appCommandsMixin, runtimeEventsMixin],
-  components: {
+  components: { DiscoverPage,
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, ListsPage,
     ExplorePage, ExplorationQuitDialog, AppFeedback, CommandPalette, SearchResultsPage, TaskCenterDrawer, PendingWorkPage, QuitConfirmDialog, VersionCompareDialog, VideoFrameOverviewDialog, WallpaperStatusBar,
     DialogShell, AppBadge, AppBanner, AppSpinner, SystemHealthPanel, CapabilitySetup, LibraryQueryDialog, PlaybackQueuePanel, ControlledPlaybackStatus, ScenesPage, VideoWorkbenchPage, RecapPage,
     HomePage, VideoBrowsePage, PhotoBrowsePage, VideoDetailPage, PersonMediaDeleteDialog, ManageHomePage, EntityBrowsePage, CleanupCenterPage
   },
+  provide() { return { discoverySession: this.discoverySession, openEndedVideo: this.openEndedVideo }; },
   data() {
     return {
       capabilitySetupOpen: false,
@@ -575,6 +581,8 @@ export default {
       videoOverview: videoOverviewState,
       // 图片管理首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"；观看侧照片流同理（D-P2-08）。
       exploreMounted: false,
+      discoverMounted: false,
+      discoverySession: createDiscoverySession(),
       photosMounted: false,
       photoBrowseMounted: false,
       // 别处改了图片（离开图片管理、清理中心删除或撤销、数据维护撤销、标签转人物）就递增，照片流据此原地重取。
@@ -693,6 +701,7 @@ export default {
     this._pendingWorkTimer = setInterval(() => this.refreshPendingWorkTotal(), PENDING_WORK_REFRESH_MS);
     // 扫描完成事件（D-PC09）：库里真的多了、少了或恢复了视频时，顶栏的库规模计数跟着刷新。
     // 列表本身的刷新归片库页。
+    this.registerRuntimeEvent('native-playback-stop-failed', message => notifyError(message));
     this.registerRuntimeEvent('delete-file-choice-changed', value => { this.settings = { ...this.settings, delete_original_file: Boolean(value) }; });
     this.registerRuntimeEvent('library-scan-summary', event => this.handleLibraryScanSummary(event));
     // 迁移并切换在后台完成：用户可能已经离开设置页，遮罩由这里统一弹出（D-PC55）。
@@ -729,6 +738,7 @@ export default {
     document.body.classList.remove('surface-cinema');
   },
   watch: {
+    relaunchRequired(required) { if (required) resetDiscoverySession(this.discoverySession); },
     'videoOverview.previewRequest'(request) { if (!request) return; this.videoOverview.previewRequest = null; this.videoOverview.video = null; this.openVideoByID(request.videoID, { from: this.currentPage, startAtMs: request.atMs }); },
     'settings.theme'() {
       this.applyTheme();
@@ -759,6 +769,7 @@ export default {
           this.entityBrowseEpoch += 1;
         }
         if (page === 'explore') this.exploreMounted = true;
+        if (page === 'discover') this.discoverMounted = true;
         if (page === 'home') this.homeMounted = true;
         if (page === 'videos') this.videosMounted = true;
         // 图片管理里可能删了、收藏了、扫描进来或打了人物：离开时让照片流下次显示时原地重取（D-P2-08）。
@@ -997,7 +1008,7 @@ export default {
     // - 清理中心的 { tab }（认不出的忽略）与落在视频标签上的请求 { open | relationId | consolidationTaskID }；
     // - 人物与作品集的 { tab }（人物 · 作品集 · 人脸审阅，认不出的忽略）。
     applyPageParams(page, params) {
-      if (page === 'videos' || page === 'photos' || page === 'downloads') this.setPageRequest(page, params);
+      if (page === 'videos' || page === 'photos' || page === 'downloads' || page === 'discover') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && typeof params?.query === 'string') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       if (page === CLEANUP_PAGE) this.applyCleanupParams(params);
@@ -1119,6 +1130,8 @@ export default {
         this.markViewerImagesChanged();
         return this.$refs.photoLibrary?.markImagesChanged();
       }
+      this.$refs.homePage?.removeDiscoveryVideos?.(removedIDs);
+      this.$refs.discoverPage?.removeDiscoveryVideos?.(removedIDs);
       this.loadLibraryCounts();
       return this.$refs.videoListPage?.handleVideosChangedElsewhere(removedIDs);
     },
@@ -1215,6 +1228,17 @@ export default {
       return this.openEntityFromCommand(type, Number(id), name || '');
     },
     // 按 ID 打开一部片（任务中心产物、回顾、待播队列…）：取回视频后按调用方区域分流。
+    async openEndedVideo(videoID, { retire, isCurrent = () => true, onNavigated = () => {} } = {}) {
+      if (!Number.isSafeInteger(videoID) || videoID <= 0 || !isCurrent()) return false;
+      let generation = this.supersedeVideoOpen();
+      const current = () => this.appReady && this._videoOpenGeneration === generation && isCurrent();
+      const navigated = await selectPlaybackEnding(videoID, {
+        resolveSource: ResolveVisibleVideoForPlayback, retire, isCurrent: current,
+        navigate: (id, expectedSourceVersion) => this.openVideoDetail(id, { expectedSourceVersion, navigationGuard: { isCurrent: current, committed: () => { generation = this._videoOpenGeneration; } } })
+      });
+      if (navigated !== false) onNavigated();
+      return navigated;
+    },
     openVideoByID(videoID, { from, startAtMs = null, missingMessage = '产物视频不在片库中，可能不在扫描目录内或已被删除。' } = {}) {
       return this.openVideoResolved(videoID, missingMessage, { from, startAtMs });
     },
@@ -1259,30 +1283,32 @@ export default {
     // 进整页详情：先记下来源（页面 key、参数、共用滚动容器的位置）再切页，切成了才压栈（D-UI-10）。
     // 详情本身是来源时（相关推荐）参数就是它展示的那部片。新打开的详情从顶部看起。
     // bookmark：观看笔记的书签定位带上整段区间 { start_ms, end_ms, source_token }，详情页据此只播这一段。
-    openVideoDetail(videoID, { startAtMs = null, bookmark = null, fromHome = false } = {}) {
+    openVideoDetail(videoID, { startAtMs = null, bookmark = null, fromHome = false, navigationGuard = null, expectedSourceVersion = '' } = {}) {
       if (!fromHome) this.$refs.homePage?.clearPendingTonight();
       const id = Number(videoID);
       if (!Number.isInteger(id) || id <= 0) return false;
-      this.supersedeVideoOpen();
+      if (navigationGuard && !navigationGuard.isCurrent()) return false;
+      if (!navigationGuard) this.supersedeVideoOpen();
       const start = Number(startAtMs);
       const source = {
         page: this.currentPage,
         params: this.currentPageParams(),
         scrollTop: this.$refs.mainView?.scrollTop || 0
       };
-      return whenNavigated(this.navigateTo(VIDEO_DETAIL_PAGE), () => {
+      return whenNavigated(this.navigateTo(VIDEO_DETAIL_PAGE, null, navigationGuard), () => {
+        if (navigationGuard && !navigationGuard.isCurrent()) return false;
         this.detailReturnStack = pushDetailReturn(this.detailReturnStack, source, id);
         this.showVideoDetail(id, {
           startAtMs: startAtMs != null && Number.isFinite(start) && start >= 0 ? start : null,
-          bookmark
+          bookmark, expectedSourceVersion
         });
         return true;
       });
     },
     // 换一层详情（详情页按 token 重新挂载）。scrollTop > 0 是「返回」到之前那一层：详情要重新取数，
     // 先记下来、等它报 ready 再放回去（I-2）；新打开的从顶部看起。
-    showVideoDetail(videoId, { startAtMs = null, bookmark = null, scrollTop = 0 } = {}) {
-      this.detailRoute = { videoId, startAtMs, bookmark, token: this.detailRoute.token + 1 };
+    showVideoDetail(videoId, { startAtMs = null, bookmark = null, scrollTop = 0, expectedSourceVersion = '' } = {}) {
+      this.detailRoute = { videoId, startAtMs, bookmark, expectedSourceVersion, token: this.detailRoute.token + 1 };
       this._pendingDetailScrollTop = scrollTop > 0 ? scrollTop : null;
       if (this._pendingDetailScrollTop !== null) return Promise.resolve();
       return this.$nextTick(() => {
@@ -1335,6 +1361,7 @@ export default {
       this.handleLibraryTrashRestored({ videoIDs: ids });
     },
     handleDetailVideoStateChange(payload) {
+      if (payload?.changes?.is_stale) { this.$refs.homePage?.removeDiscoveryVideos?.([payload.id]); this.$refs.discoverPage?.removeDiscoveryVideos?.([payload.id]); }
       this.$refs.videoBrowsePage?.applyExternalVideoStateChange(payload);
       return this.$refs.videoListPage?.applyExternalVideoStateChange(payload);
     },

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"video-master/internal/appdata"
 	"video-master/models"
 	"video-master/services"
@@ -31,6 +32,10 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
+	nativeMutationMu               sync.Mutex
+	nativeMutationRelease          func()
+	nativePlayback                 *services.NativePlaybackService
+	videoStructure                 *services.VideoStructureService
 	processingMu                   sync.Mutex
 	processingPaused               bool
 	mediaProcessing                *services.MediaProcessingService
@@ -242,6 +247,17 @@ func NewApp() *App {
 	app.faceReview = services.NewFaceReviewService(dataDir, app.faceAnalysis)
 	// 场景检索：画面索引每项前取同一个重媒体槽（D-007）。
 	app.sceneRuntime = services.NewSceneRuntime(dataDir, services.SceneModelMirrorURL)
+	app.videoStructure = services.NewVideoStructureService(mediaProbeService, mediaWorkSlot)
+	app.wireVideoStructure()
+	app.nativePlayback = services.NewNativePlaybackService(app.readNativePlaybackSubtitle)
+	app.videoService.SetNativePlaybackCapabilityProvider(app.nativePlayback.Capability)
+	app.nativePlayback.SetQueueAuthorizer(func(ctx context.Context, r services.NativePlaybackOpenRequest) error {
+		queue, err := app.queueService()
+		if err != nil {
+			return err
+		}
+		return queue.AuthorizeNativeSource(ctx, r)
+	})
 	app.sceneIndex = services.NewSceneIndexService(app.sceneRuntime, mediaWorkSlot)
 	app.sceneSearch = services.NewSceneSearchService(app.sceneIndex)
 	// 以图搜片用某部片的画面找相似时，取帧走缩略图服务的单帧渲染（与命中缩略图同一实现与缓存）。
@@ -491,6 +507,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("App startup short-video tag sync tag=%d added=%d removed=%d", result.TagID, result.Added, result.Removed)
 	}
 	a.startDiagnosticOwner(ctx)
+	a.startVideoStructure(ctx)
 	// 想看片单的在线补全：先把进程重启后残留的 running 刷回 pending，再起 worker。
 	a.watchlistService.StartEnrichment(ctx)
 	// UI 二期：后台对账片名排序键（§2.3），再给全部未关联的想看条目跑一轮片库自动关联（D-P2-03）；
@@ -549,6 +566,9 @@ func (a *App) wireStartupHooks(emit func(event string, data any)) {
 		emit(event, data)
 		a.notifyTaskCenterChanged()
 	}
+	if a.videoStructure != nil {
+		a.videoStructure.SetEventEmitter(func(status services.VideoStructureStatus) { emitTaskState("video-structure-state", status) })
+	}
 	a.consolidationLifecycle.mu.Lock()
 	a.consolidationLifecycle.emit = emitTaskState
 	a.consolidationLifecycle.mu.Unlock()
@@ -599,6 +619,13 @@ func (a *App) wireStartupHooks(emit func(event string, data any)) {
 	a.libraryWatcher.SetEventEmitters(func(status services.LibraryWatcherStatus) {
 		emit("library-watcher-status", status)
 	}, func(event services.LibraryReconcileEvent) {
+		if a.videoStructure != nil {
+			if event.Result != nil && (event.Result.Stale > 0 || event.Result.Relocated > 0) {
+				a.videoStructure.Wake()
+			} else {
+				a.videoStructure.RequestDiscovery()
+			}
+		}
 		if event.Result != nil && (event.Result.Added > 0 || event.Result.Relocated > 0 || event.Result.Stale > 0 || event.Result.MetadataRefreshed > 0) {
 			a.cleanupService.InvalidateAnalysis()
 		}
@@ -678,6 +705,14 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.nativePlayback != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := a.nativePlayback.Stop(ctx); err != nil {
+			log.Printf("native playback stop pending: %v", err)
+		}
+		cancel()
+	}
+
 	if err := a.stopMediaProcessing(context.Background()); err != nil {
 		log.Printf("临时处理退出未完成")
 	}
@@ -728,6 +763,14 @@ func (a *App) shutdown(ctx context.Context) {
 		if err := a.libraryWatcher.Close(); err != nil {
 			log.Printf("Library watcher shutdown failed: %v", err)
 		}
+	}
+	if a.videoStructure != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := a.stopVideoStructure(ctx); err != nil {
+			log.Printf("自动分段停止未完成，等待资源释放: %v", err)
+			_ = a.stopVideoStructure(context.Background())
+		}
+		cancel()
 	}
 	if a.technicalBackfill != nil {
 		a.technicalBackfill.StopAndWait()
@@ -834,6 +877,9 @@ func (a *App) startShortFeedServer(ctx context.Context) {
 		return
 	}
 	a.shortFeedServer = services.NewShortFeedHTTPServer(a.shortFeedService, distFS, services.ShortFeedHTTPServerConfig{})
+	if a.videoStructure != nil {
+		a.shortFeedServer.SetMediaActivityObserver(a.videoStructure.MediaTransfer)
+	}
 	a.shortFeedServer.Start(ctx)
 	status := a.shortFeedServer.Status()
 	if status.StartupError != "" {

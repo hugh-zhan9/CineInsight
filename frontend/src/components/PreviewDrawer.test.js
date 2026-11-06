@@ -72,7 +72,7 @@ const api = vi.hoisted(() => ({
   GetSubtitleSegments: vi.fn()
 }));
 
-vi.mock('../../wailsjs/go/main/App', () => api);
+vi.mock('../../wailsjs/go/main/App', () => ({...api,GetPlaybackSession:api.GetPreviewSession}));
 
 import PreviewDrawer from './PreviewDrawer.vue';
 

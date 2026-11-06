@@ -96,6 +96,10 @@ func seedEveryTable(t *testing.T, db *gorm.DB) {
 		}
 		row := reflect.New(sch.ModelType)
 		fillMinimalRow(t, db, sch, row.Elem())
+		if segment, ok := row.Interface().(*models.VideoStructureSegment); ok {
+			segment.EndMS = segment.StartMS + 1
+			segment.RepresentativeMS = segment.StartMS
+		}
 		if chapter, ok := row.Interface().(*models.VideoChapter); ok {
 			chapter.EndMS = chapter.StartMS + 1
 		}

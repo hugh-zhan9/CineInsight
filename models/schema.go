@@ -137,5 +137,7 @@ func AllModels() []interface{} {
 		&BTTask{},
 		&BTFile{},
 		&EpisodeAcquisitionOrigin{},
+		&VideoStructureState{},
+		&VideoStructureSegment{},
 	}
 }

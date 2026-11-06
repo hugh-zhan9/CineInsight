@@ -9,6 +9,8 @@ build/enhance-runtime/
 build/image-tools/
 # 原生系统字幕组件由构建脚本生成
 build/apple-ai/
+build/native-playback/
+scripts/__pycache__/
 
 # Frontend dependencies
 node_modules/

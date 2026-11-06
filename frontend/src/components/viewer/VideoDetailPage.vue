@@ -35,7 +35,9 @@
               @preview-externally="previewExternally"
               @preview-session-stale="reloadSession(true)"
               @bookmark-range-end="bookmarkRangeFinished = true"
-            />
+            >
+              <template #ending="{ ending, replay, retire }"><PlaybackEndScreen :ending="ending" :replay="replay" :retire="retire" /></template>
+            </InlineVideoPlayer>
             <!-- 播放代理的提示与失败（抽屉放在技术信息区块，这里跟在播放器下面）；外部预览模式下可以直接生成代理。 -->
             <!-- 书签解析之后原片变了：播放器不套用任何起播位置，也不自动开始；与抽屉同一句提示。 -->
             <p v-if="bookmarkSourceMismatch" class="viewer-detail__error" role="alert" data-test="detail-bookmark-changed">原片在打开预览前已改变，请重新核对时间位置，未套用旧位置。</p>
@@ -195,6 +197,8 @@
 </template>
 
 <script>
+import { GetVerifiedPreviewSession } from '../../../wailsjs/go/main/App';
+import PlaybackEndScreen from '../player/PlaybackEndScreen.vue';
 import MediaRail from '../ui/MediaRail.vue';
 import DetailTagPicker from './DetailTagPicker.vue';
 import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVideoWatchProgress, waitForVideoWatchProgress } from '../../utils/watchProgress.js';
@@ -206,7 +210,7 @@ import { playVideoAfterProgress as PlayVideo, saveVideoWatchProgress as UpdateVi
 // 内嵌播放：InlineVideoPlayer 受控模式（会话归本页，BookmarkPanel 记位置也要它）；带 startAtMs 进来时自动在应用内起播。
 // 返回、推荐、标签、人物与作品集都只发事件，页面切换与返回栈归 App（D-UI-07、D-UI-10）。
 import {
-  GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetSubtitleSegments, GetVideoDetails, GetVideoRecommendations,
+  GetCollectionDetail, GetPersonDetail, GetPlaybackSession, GetSubtitleSegments, GetVideoDetails, GetVideoRecommendations,
   PreviewExternally, SearchLibraryVideoPage, SetVideoFavorite, SetVideoWatched, UpdateVideoRating, } from '../../../wailsjs/go/main/App';
 import ChapterPanel from '../ChapterPanel.vue';
 import BookmarkPanel from '../BookmarkPanel.vue';
@@ -247,11 +251,12 @@ function errorText(err) {
 
 export default {
   name: 'VideoDetailPage',
-  components: { DetailTagPicker, MediaRail,
+  components: { PlaybackEndScreen, DetailTagPicker, MediaRail,
     AppBanner, AppIcon, BookmarkPanel, ChapterPanel, HeroHeader, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon,
     RecapMediaCard, StatTile, TagPill
   },
   props: {
+    expectedSourceVersion: { type: String, default: '' },
     // 要展示的视频 ID 与可选的起播位置（毫秒，场景检索进来时有）。
     videoId: { type: Number, default: 0 },
     startAtMs: { type: Number, default: null },
@@ -344,7 +349,7 @@ export default {
     notesProxyNotice() { return this.player?.showsProxyState ? '' : this.proxyNotice; },
     notesProxyError() { return this.player?.showsProxyState ? '' : this.proxyError; },
     // 外部预览模式（容器内嵌不了）下给出「生成播放代理」；内嵌报错时播放器自己的报错框里已经有这个按钮。
-    canCreateProxy() { return Boolean(this.player) && this.session?.mode === 'external-preview'; },
+    canCreateProxy() { return Boolean(this.player) && ['external-preview','native-unavailable'].includes(this.session?.mode); },
     // 与抽屉的 bookmarkSourceMismatch 同一判断：书签带的源版本与本片当前会话的不一致。
     bookmarkSourceMismatch() {
       const range = this.bookmarkRange;
@@ -540,7 +545,7 @@ export default {
       if (!videoID) return;
       if (!refresh) this.session = null;
       try {
-        const session = await GetPreviewSession(videoID);
+        const session = await (this.expectedSourceVersion ? GetVerifiedPreviewSession(videoID, this.expectedSourceVersion) : GetPlaybackSession(videoID));
         if (token === this._sessionToken) this.session = session;
       } catch (err) {
         if (token !== this._sessionToken) return;

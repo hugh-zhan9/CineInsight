@@ -18,7 +18,12 @@ func (a *App) initAutomationRules(dataDir string) {
 	rules.SetBackgroundTaskRegistry(a.backgroundTasks)
 	// 入队方（D-RA-05）：新建的视频、新建的图片、补探测成功的视频、EXIF 补解析成功的图片。观察者只记 id，评估在规则队列里做。
 	if a.videoService != nil {
-		a.videoService.SetNewVideoObserver(rules.EnqueueVideo)
+		a.videoService.SetNewVideoObserver(func(id uint) {
+			rules.EnqueueVideo(id)
+			if a.videoStructure != nil {
+				a.videoStructure.RequestDiscovery()
+			}
+		})
 	}
 	if a.imageService != nil {
 		a.imageService.SetNewImageObserver(rules.EnqueueImage)

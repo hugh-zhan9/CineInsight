@@ -23,6 +23,7 @@ type PlaybackSubtitleCue struct {
 	Text    string `json:"text"`
 }
 type PlaybackSubtitle struct {
+	SubtitleToken       string                `json:"subtitle_token,omitempty"`
 	Status              string                `json:"status"`
 	SubtitleFingerprint SubtitleFingerprint   `json:"subtitle_fingerprint"`
 	Cues                []PlaybackSubtitleCue `json:"cues"`
@@ -75,7 +76,7 @@ func (s *SubtitleWorkbenchService) GetPlaybackSubtitle(ctx context.Context, requ
 			if fingerprint != doc.Fingerprint {
 				return fmt.Errorf("subtitle_conflict: 字幕已变化，请重新加载")
 			}
-			result = &PlaybackSubtitle{Status: "ready", SubtitleFingerprint: doc.Fingerprint, Cues: make([]PlaybackSubtitleCue, 0, len(doc.Entries))}
+			result = &PlaybackSubtitle{Status: "ready", SubtitleFingerprint: doc.Fingerprint, SubtitleToken: playbackSubtitleToken(doc.Fingerprint), Cues: make([]PlaybackSubtitleCue, 0, len(doc.Entries))}
 			for _, entry := range doc.Entries {
 				result.Cues = append(result.Cues, PlaybackSubtitleCue{StartMS: entry.StartTimeMs, EndMS: entry.EndTimeMs, Text: entry.Text})
 			}

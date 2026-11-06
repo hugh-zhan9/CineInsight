@@ -1,12 +1,13 @@
 <template>
   <dialog open ref="playerShell" class="queue-inline-player playback-shell surface-cinema" aria-label="队列播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
     <component :is="'media-controller'" ref="playerSurface" :id="`queue-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand" @mediaseekrequest.capture="seekRequest" @mediaplayrequest.capture="guardPlayRequest">
-    <video slot="media" ref="video" :src="identity.locator" playsinline preload="metadata" @click="togglePlayback" data-test="queue-inline-video"
+    <component :is="identity.media_mode==='native' ? 'cine-native-media' : 'video'" :playbackSource.prop="nativePlaybackSource" slot="media" ref="video" :src="identity.media_mode==='native'?undefined:identity.locator" playsinline preload="metadata" @click="togglePlayback" data-test="queue-inline-video"
       @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @ratechange="scheduleClipEnd" @timeupdate="progress" @ended="ended" @error="failed" />
-    <PlaybackControls v-if="!isClip || clipRange" ref="controls" :seek-range="clipRange" :seek-disabled="isClip && (!initialized || clipCompleting)" @seek="seekClip" :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface">
+    <PlaybackControls v-if="!retired && (!isClip || clipRange)" ref="controls" :seek-range="clipRange" :seek-disabled="isClip && (!initialized || clipCompleting)" @seek="seekClip" :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface">
       <template #settings><PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :playback-range="clipRange" :video-element="() => $refs.video" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" @menu-change="$refs.controls?.holdControls($event)" /></template>
     </PlaybackControls>
+    <div slot="centered-chrome" class="queue-inline-player__ending"><slot name="ending" :replay="replayEnded" :retire="retireEnded" /></div>
     </component>
     <p v-if="isClip && clipRange" class="help-text" data-test="queue-clip-range">区间预览：{{ (clipRange.startMS / 1000).toFixed(3) }} — {{ (clipRange.endMS / 1000).toFixed(3) }} 秒；本批结束后停止，不计入观看记录。</p>
     <p v-if="error" role="alert" data-test="queue-inline-error">{{ error }}</p>
@@ -19,7 +20,8 @@ import { handlePlaybackKey, isPlaybackKeyboardControl } from '../utils/playbackK
 import PlaybackSubtitleControls from './player/PlaybackSubtitleControls.vue';
 import PlaybackControls from './player/PlaybackControls.vue';
 import { GetPlaybackQueue, ReportInlineQueuePlayback } from '../../wailsjs/go/main/App';
-import { claimActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
+import '../utils/nativeMedia.js';
+import { installPlaybackBarrier, claimActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
 const DESYNC_MESSAGE = '播放状态与待播队列不同步，已暂停。请停止队列后重新播放此项。';
 const STALE_MESSAGE = '播放器已重新载入，已暂停。请在队列中重新播放此项。';
 export default {
@@ -32,7 +34,7 @@ export default {
   },
   // 同一时间只有一个内嵌播放器在播（D-UI-11，utils/activePlayer.js）：这里开始播放会暂停详情 / 抽屉里的播放器，
   // 反过来那边开始播放时暂停这里；被暂停照常按 paused 上报队列。
-  computed: { isClip() { return this.identity.entry_kind === 'clip'; }, clipRange() { return queueClipRange(this.identity); } },
+  computed: { nativePlaybackSource(){return this.identity.media_mode==='native'?{...this.identity.native_source,queue_token:this.identity.token,start_ms:Math.round(this.identity.start_seconds*1000)}:null;}, isClip() { return this.identity.entry_kind === 'clip'; }, clipRange() { return queueClipRange(this.identity); } },
   created() { this._reports = Promise.resolve(); this._activeHandle = { pause: () => this.$refs.video?.pause() }; },
   watch: {
     'session.control_sequence'() {
@@ -41,20 +43,26 @@ export default {
       if (this.session.desired_paused) video.pause(); else this.play();
     }
   },
+  mounted(){installPlaybackBarrier(this.$refs.video,this._activeHandle);},
+  updated(){installPlaybackBarrier(this.$refs.video,this._activeHandle);},
   beforeUnmount() {
     this.retired = true; this.clearClipTimer();
+if(this.$refs.video?.nativePlayback)this.$refs.video.close('navigate').catch(()=>{});
     releaseActivePlayer(this._activeHandle);
     const video = this.$refs.video;
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   },
   methods: {
+    async replayEnded() { const video = this.$refs.video; if (!video || this.retired) throw new Error('播放器已关闭'); video.currentTime = 0; await video.play(); },
+    async retireEnded() { await this.$refs.controls?.leaveFullscreen(); await this.$refs.video?.pause(); await this._reports; if(this.$refs.video?.nativePlayback)await this.$refs.video.retire();this.retired = true; },
     handlePlaybackKey(event) {
+      if (this.retired) return;
       if (isPlaybackKeyboardControl(event)) return;
       if (this.isClip && (!this.initialized || this.clipCompleting || !this.clipRange) && [' ', 'ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); return; }
       handlePlaybackKey(event, this.$refs.video, this.clipRange);
       if (this.isClip && ['ArrowLeft', 'ArrowRight'].includes(event.key)) this.checkClipBoundary();
     },
-    togglePlayback() { if (!this.isClip || (this.initialized && !this.clipCompleting)) this.$refs.controls?.togglePlayback(); },
+    togglePlayback() { if (this.retired) return; if (!this.isClip || (this.initialized && !this.clipCompleting)) this.$refs.controls?.togglePlayback(); },
     guardPlayRequest(event) { if (this.isClip && (!this.initialized || this.clipCompleting || !this.clipRange)) { event.preventDefault(); event.stopImmediatePropagation(); } },
     seekRequest(event) { if (!this.isClip) return; event.preventDefault(); event.stopImmediatePropagation(); this.seekClip(Number(event.detail)); },
     seekClip(seconds) {
@@ -137,6 +145,7 @@ export default {
       if (!this.session.desired_paused) this.play();
     },
     play() {
+      if (this.retired) return;
       if (this.isClip && (!this.initialized || this.clipCompleting || !this.clipRange)) return;
       Promise.resolve(this.$refs.video?.play()).catch(error => {
         // A pause or source change interrupting play() is not a media failure.
@@ -160,6 +169,7 @@ export default {
 .queue-inline-player .playback-surface { height: min(34vh, 300px); }
 .queue-inline-player:modal .playback-surface, .queue-inline-player .playback-surface:fullscreen { height: 100vh; }
 .queue-inline-player:modal { position: fixed; inset: 0; width: 100vw; height: 100vh; margin: 0; border-radius: 0; }
-.queue-inline-player video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.queue-inline-player video, .queue-inline-player cine-native-media { display: block; width: 100%; height: 100%; object-fit: contain; }
 .queue-inline-player p { color: var(--media-badge-fg); padding: var(--space-2); margin: 0; }
+.queue-inline-player__ending { width: min(900px, 100%); max-height: 100%; overflow-y: auto; pointer-events: auto; }
 </style>

@@ -34,10 +34,11 @@ type mediaProbeRunner func(ctx context.Context, path string) (stdout []byte, std
 
 // MediaProbeService owns local ffprobe execution and the last successful technical snapshot.
 type MediaProbeService struct {
-	runner  mediaProbeRunner
-	now     func() time.Time
-	gatesMu sync.Mutex
-	gates   map[uint]*mediaProbeGate
+	sourceObserver func(*gorm.DB, uint, int64, int64)
+	runner         mediaProbeRunner
+	now            func() time.Time
+	gatesMu        sync.Mutex
+	gates          map[uint]*mediaProbeGate
 }
 
 type mediaProbeGate struct {
@@ -46,6 +47,12 @@ type mediaProbeGate struct {
 }
 
 // NewMediaProbeService creates a probe service that invokes the local ffprobe binary.
+func (s *MediaProbeService) SetSourceObserver(observer func(*gorm.DB, uint, int64, int64)) {
+	s.gatesMu.Lock()
+	s.sourceObserver = observer
+	s.gatesMu.Unlock()
+}
+
 func NewMediaProbeService() *MediaProbeService {
 	return newMediaProbeServiceWithRunner(runLocalFFProbe)
 }
@@ -395,7 +402,7 @@ func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, 
 		return err
 	}
 	defer release()
-	return database.WithOperationContext(ctx, func(db *gorm.DB) error {
+	err = database.WithOperationContext(ctx, func(db *gorm.DB) error {
 		// Preserve the existing cancelled-at-start attempt record. Its bounded
 		// cleanup context is for this known cancellation fact, never a probe retry.
 		if cancelled := ctx.Err(); cancelled != nil {
@@ -414,8 +421,21 @@ func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, 
 			}
 			return cancelled
 		}
-		return s.refreshFrom(ctx, db, videoID, expectedSourceVersion)
+		if err := s.refreshFrom(ctx, db, videoID, expectedSourceVersion); err != nil {
+			return err
+		}
+		var metadata models.VideoTechnicalMetadata
+		if err := db.First(&metadata, videoID).Error; err == nil && metadata.SuccessfulSourceSize != nil && metadata.SuccessfulSourceModTimeNS != nil {
+			s.gatesMu.Lock()
+			observer := s.sourceObserver
+			s.gatesMu.Unlock()
+			if observer != nil {
+				observer(db, videoID, *metadata.SuccessfulSourceSize, *metadata.SuccessfulSourceModTimeNS)
+			}
+		}
+		return nil
 	})
+	return err
 }
 
 func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoID uint, expectedSourceVersion string) error {

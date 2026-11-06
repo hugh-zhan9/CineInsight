@@ -14,6 +14,7 @@ import (
 const previewMediaRoutePrefix = "/preview/media/"
 
 type PreviewSession struct {
+	NativeSource   *NativePlaybackSource    `json:"native_source,omitempty"`
 	VideoID        uint                     `json:"video_id"`
 	Mode           string                   `json:"mode"`
 	DisplayName    string                   `json:"display_name"`

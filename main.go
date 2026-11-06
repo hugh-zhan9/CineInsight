@@ -52,6 +52,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0}, // 设为透明
 		OnStartup:        app.startup,
+		OnDomReady:       app.nativePlaybackDOMReady,
 		// 有字幕、超分、代理或下载任务在跑时先请前端确认再退出（D-PC21）；内部发起的退出直接放行。
 		OnBeforeClose: app.beforeClose,
 		OnShutdown:    app.shutdown,

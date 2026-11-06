@@ -203,7 +203,7 @@ func (s *VideoService) reconcileConsolidationItem(ctx context.Context, e *consol
 				if err := places.staged.recheck(); err != nil {
 					return true, err
 				}
-				if err := os.Remove(places.staged.path); err != nil {
+				if err := nativeRemovePath(places.staged.path); err != nil {
 					return true, err
 				}
 				log.StagedSourcePath = ""
@@ -249,7 +249,7 @@ func (s *VideoService) reconcileConsolidationItem(ctx context.Context, e *consol
 		// 只删除已验证的本任务输出；源及不明占位者完全保留。
 		for _, artifact := range []consolidationArtifact{places.target, places.temp} {
 			if artifact.exists {
-				if err := os.Remove(artifact.path); err != nil {
+				if err := nativeRemovePath(artifact.path); err != nil {
 					return false, err
 				}
 			}

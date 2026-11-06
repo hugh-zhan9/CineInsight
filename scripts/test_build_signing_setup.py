@@ -27,6 +27,7 @@ class BuildSigningSetupTests(unittest.TestCase):
         self.stub('wails', '''echo build >> "$TEST_EVENTS"
 mkdir -p "$TEST_ROOT/build/bin/析微影策.app"''')
         self.stub('python3', '''case "$1" in
+*bundle_native_playback.py) echo native-playback >> "$TEST_EVENTS"; [ "${TEST_NATIVE_FAIL:-0}" = 0 ] || exit 45; exit 0 ;;
 */bundle_image_tools.py)
   echo image-tools >> "$TEST_EVENTS"
   [ "$TEST_IMAGE_TOOLS_FAIL" = 0 ] || exit 44
@@ -69,7 +70,7 @@ esac''')
     def test_first_build_initializes_before_compilation_and_signs(self):
         result = self.run_build('--build-only')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.events(), ['setup', 'created', 'apple', 'build', 'image-tools', 'sign'])
+        self.assertEqual(self.events(), ['setup', 'created', 'apple', 'build', 'native-playback', 'image-tools', 'sign'])
 
     def test_repeated_build_reuses_identity(self):
         self.config.write_text('original identity')
@@ -77,7 +78,7 @@ esac''')
             result = self.run_build('--build-only')
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.config.read_text(), 'original identity')
-        self.assertEqual(self.events(), ['setup', 'apple', 'build', 'image-tools', 'sign'] * 2)
+        self.assertEqual(self.events(), ['setup', 'apple', 'build', 'native-playback', 'image-tools', 'sign'] * 2)
 
     def test_setup_failure_stops_before_build_and_install(self):
         self.env['TEST_SETUP_FAIL'] = '1'
@@ -90,7 +91,14 @@ esac''')
         self.env['TEST_SIGN_FAIL'] = '1'
         result = self.run_build('--skip-build')
         self.assertEqual(result.returncode, 43, result.stderr)
-        self.assertEqual(self.events(), ['setup', 'created', 'image-tools', 'sign'])
+        self.assertEqual(self.events(), ['setup', 'created', 'native-playback', 'image-tools', 'sign'])
+
+    def test_native_packaging_failure_blocks_signing_and_install(self):
+        self.env['TEST_NATIVE_FAIL']='1'
+        result=self.run_build('--build-only')
+        self.assertEqual(result.returncode,45,result.stderr)
+        self.assertNotIn('sign',self.events())
+        self.assertNotIn('forbidden-install',self.events())
 
     def test_image_packaging_failure_blocks_signing_and_install(self):
         self.env['TEST_IMAGE_TOOLS_FAIL'] = '1'

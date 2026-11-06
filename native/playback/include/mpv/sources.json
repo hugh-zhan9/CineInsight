@@ -1,0 +1,17 @@
+{
+  "version": "v0.41.0",
+  "headers": {
+    "client.h": {
+      "source": "https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/include/mpv/client.h",
+      "sha256": "3c073236a09cb456c6e80587d5523c8771c32fb22ca014e0f99cc3d43905b75c"
+    },
+    "render.h": {
+      "source": "https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/include/mpv/render.h",
+      "sha256": "192691941602052f00df0587f126246c48785a1cf21de68d22a92ea1908d1c55"
+    },
+    "render_gl.h": {
+      "source": "https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/include/mpv/render_gl.h",
+      "sha256": "48662c0ed9872a14dd9e1684105c97f69f94a0414709c254c5d372adc41d2e69"
+    }
+  }
+}

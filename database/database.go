@@ -566,6 +566,9 @@ func ApplySchema(db *gorm.DB) error {
 	}
 	// 以下三个迁移排在全部「列刚建出来」迁移之后（P-001 评审 Minor 1）：它们的判据都看数据本身（mode = ''、值 <= 0 / NULL、唯一索引是否在位），
 	// 不依赖 AutoMigrate 之前的观测，可以重复执行。
+	if err := migrateStructureSettings(db); err != nil {
+		return err
+	}
 	if err := migrateViewingDiary(db); err != nil {
 		return fmt.Errorf("迁移观看日记失败: %w", err)
 	}
@@ -622,6 +625,7 @@ func ApplySchema(db *gorm.DB) error {
 		defaultExts := ".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
 		settings = models.Settings{
 			ConfirmBeforeDelete:          true,
+			AutoStructureEnabled:         true,
 			DeleteOriginalFile:           false,
 			VideoExtensions:              defaultExts,
 			ImageExtensions:              DefaultImageExtensions,
@@ -676,6 +680,9 @@ func ApplySchema(db *gorm.DB) error {
 	}
 	if err := registerMaintenanceCallbacks(db); err != nil {
 		return fmt.Errorf("注册数据库维护屏障失败: %w", err)
+	}
+	if err := initializeStructureCutoff(db); err != nil {
+		return err
 	}
 	return finishRecommendationIdentity(db)
 }

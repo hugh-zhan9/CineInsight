@@ -60,7 +60,7 @@ describe('HomePage blocks', () => {
   it('loads every block from its existing API with the documented arguments', async () => {
     const wrapper = await mountPage();
     expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledWith({}, '', 0, 11); // 多取一条判断有没有放全
-    expect(api.SuggestTonightVideos).toHaveBeenCalledWith({ filter: {}, watch_state: 'any', favorites_only: false, max_duration_seconds: 0, exclude_ids: [] }, 3);
+    expect(api.SuggestTonightVideos).toHaveBeenCalledWith({ filter: {}, watch_state: 'any', favorites_only: false, max_duration_seconds: 0, exclude_ids: [] }, 9);
     expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith({ filter: { smart_view: 'recently_added' }, limit: 15 });
     expect(api.GetRecap).toHaveBeenCalledTimes(1);
     expect(api.GetRecap).toHaveBeenCalledWith(thisMonth);
@@ -202,15 +202,15 @@ describe('HomePage hero', () => {
 });
 
 describe('HomePage actions', () => {
-  it('rerolls tonight excluding the current batch without changing the hero', async () => {
+  it('rerolls tonight excluding the current batch and updates its recommendation hero', async () => {
     api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [] });
     const wrapper = await mountPage();
     api.SuggestTonightVideos.mockResolvedValue([suggestion(14)]);
     await wrapper.get('[data-test="home-tonight-reroll"]').trigger('click');
     await flushPromises();
-    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [11, 12, 13] }), 3);
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [11, 12, 13] }), 9);
     expect(wrapper.findAll('[data-test="home-tonight-item"]').map(item => item.text())).toEqual([expect.stringContaining('影片14')]);
-    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片11');
+    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片14');
     api.SuggestTonightVideos.mockResolvedValue([]);
     await wrapper.get('[data-test="home-tonight-reroll"]').trigger('click');
     await flushPromises();
@@ -232,7 +232,7 @@ describe('HomePage actions', () => {
     expect(wrapper.emitted('navigate')).toEqual([['recap']]);
   });
 
-  it('refreshes continue watching, recent and recap when the page becomes active again, keeping tonight and the hero', async () => {
+  it('refreshes continue watching, recent and recap when the page becomes active again, adding fresh tonight suggestions while preserving the continue hero', async () => {
     const wrapper = await mountPage();
     api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [video(3), video(1, { watch_position_seconds: 300 })] });
     api.SearchLibraryVideoPage.mockResolvedValue({ videos: [video(23)] });
@@ -244,9 +244,9 @@ describe('HomePage actions', () => {
     expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledTimes(2);
     expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(2);
     expect(api.GetRecap).toHaveBeenCalledTimes(2);
-    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
     expect(wrapper.findAll('[data-test="home-tonight-item"]').map(item => item.text())).toEqual([
-      expect.stringContaining('影片11'), expect.stringContaining('影片12'), expect.stringContaining('影片13')
+      expect.stringContaining('影片11'), expect.stringContaining('影片12'), expect.stringContaining('影片13'), expect.stringContaining('影片14'), expect.stringContaining('影片15'), expect.stringContaining('影片16')
     ]);
     expect(wrapper.findAll('[data-test="home-recent-item"]')).toHaveLength(1);
     expect(wrapper.findAll('[data-test="home-continue"] [data-test="recap-card-video"]').map(item => item.text())).toEqual([
@@ -658,13 +658,13 @@ describe('HomePage 播放后的推荐补位', () => {
     expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片14');
   });
 
-  it.each(['empty', 'failed'])('候选 %s 保留旧卡片并说明', async mode => {
+  it.each(['empty', 'failed'])('候选 %s：空成功移除已播放项，失败保留并说明', async mode => {
     const wrapper = await mountPage();
     await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
     if (mode === 'empty') api.SuggestTonightVideos.mockResolvedValue([]);
     else api.SuggestTonightVideos.mockRejectedValue(new Error('读取失败'));
     await wrapper.vm.replacePlayedTonight(11);
-    expect(ids(wrapper)).toEqual([11, 12, 13]);
+    expect(ids(wrapper)).toEqual(mode === 'empty' ? [12, 13] : [11, 12, 13]);
     expect(wrapper.get(mode === 'empty' ? '[data-test="home-tonight-notice"]' : '[data-test="home-tonight-error"]').text()).not.toBe('');
   });
 
@@ -680,7 +680,7 @@ describe('HomePage 播放后的推荐补位', () => {
     expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
     finish([suggestion(14)]);
     await Promise.all([first, second]);
-    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [14, 12, 13] }), 1);
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [11, 14, 12, 13] }), 1);
     expect(ids(wrapper)).toEqual([14, 15, 13]);
   });
 
@@ -706,9 +706,32 @@ it('今晚打开但没播放，返回后从其他入口播放同一部不补位'
   await wrapper.setProps({ pageActive: false });
   await wrapper.setProps({ pageActive: true });
   await wrapper.vm.replacePlayedTonight(11);
-  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
   await wrapper.findAll('[data-test="home-tonight-item"]')[0].trigger('click');
   wrapper.vm.openVideo(video(11));
   await wrapper.vm.replacePlayedTonight(11);
-  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
+});
+
+ it('renders nine requested cards and rotates exactly three positions on return', async () => {
+  api.SuggestTonightVideos.mockResolvedValueOnce(Array.from({ length: 9 }, (_, i) => suggestion(i + 11))).mockResolvedValueOnce([suggestion(30), suggestion(31), suggestion(32)]);
+  const w = await mountPage();
+  expect(w.findAll('[data-test=home-tonight-item]')).toHaveLength(9);
+  await w.setProps({ pageActive: false }); await w.setProps({ pageActive: true }); await flushPromises();
+  expect(w.vm.tonightBlock.items.map(item => item.video.id)).toEqual([30,31,32,14,15,16,17,18,19]);
+  await w.get('[data-test=home-discover]').trigger('click'); expect(w.emitted('navigate').at(-1)).toEqual(['discover']);
+ });
+
+it('immediately removes a deleted recommendation hero even with no replacement', async () => {
+ api.ListContinueWatchingWithFilter.mockResolvedValue({videos:[]});api.SuggestTonightVideos.mockResolvedValueOnce([suggestion(11)]).mockResolvedValue([]);
+ const w=await mountPage();expect(w.get('[data-test=home-hero-title]').text()).toBe('影片11');
+ w.vm.removeDiscoveryVideos([11]);await flushPromises();
+ expect(w.find('[data-test=home-hero]').exists()).toBe(false);expect(w.find('[data-test=home-tonight-item]').exists()).toBe(false);
+});
+
+it('does not revive a deleted hero from a late continue-watching response', async () => {
+ api.ListContinueWatchingWithFilter.mockResolvedValue({videos:[]});api.SuggestTonightVideos.mockResolvedValueOnce([suggestion(11)]).mockResolvedValue([]);
+ const w=await mountPage();let complete;api.ListContinueWatchingWithFilter.mockReturnValueOnce(new Promise(resolve=>{complete=resolve}));
+ const pending=w.vm.loadContinue();w.vm.removeDiscoveryVideos([11]);complete({videos:[video(11)]});await pending;await flushPromises();
+ expect(w.vm.continueBlock.items).toEqual([]);expect(w.find('[data-test=home-hero]').exists()).toBe(false);
 });

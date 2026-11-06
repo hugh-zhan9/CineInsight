@@ -254,7 +254,7 @@ func (s *TrashService) MoveToTrash(srcPath string) (string, error) {
 	if isRecordedTrashPath(srcPath) {
 		return srcPath, nil
 	}
-	return systemTrashMove(srcPath)
+	return nativeSystemTrashMove(srcPath)
 }
 
 // mapSystemTrashError 把 trashItemAtURL 的 NSError 映射成本包的错误（详细设计 §2.1 表）。
@@ -370,7 +370,7 @@ func removeLegacyTrashLinkAfterRestore(mode string, fileMoved bool, originalPath
 	if !legacyRestoreResidue(mode, fileMoved, originalPath, trashPath) {
 		return nil
 	}
-	if err := os.Remove(trashPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := nativeRemovePath(trashPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -660,8 +660,8 @@ func (s *TrashService) MoveToTrashAt(srcPath string, targetPath string) error {
 	}
 
 	if err := os.Link(srcPath, targetPath); err == nil {
-		if err := os.Remove(srcPath); err != nil {
-			_ = os.Remove(targetPath)
+		if err := nativeRemovePath(srcPath); err != nil {
+			_ = nativeRemovePath(targetPath)
 			return err
 		}
 		return nil
@@ -706,8 +706,8 @@ func (s *TrashService) RestoreFromTrash(trashPath string, targetPath string) err
 	}
 
 	if err := os.Link(trashPath, targetPath); err == nil {
-		if err := os.Remove(trashPath); err != nil {
-			_ = os.Remove(targetPath)
+		if err := nativeRemovePath(trashPath); err != nil {
+			_ = nativeRemovePath(targetPath)
 			return fmt.Errorf("清理回收站源文件失败: %w", err)
 		}
 		return nil
@@ -733,7 +733,7 @@ func (s *TrashService) copyToExclusiveAndDelete(srcPath string, targetPath strin
 	defer func() {
 		_ = target.Close()
 		if removeTarget {
-			_ = os.Remove(targetPath)
+			_ = nativeRemovePath(targetPath)
 		}
 	}()
 
@@ -774,7 +774,7 @@ func (s *TrashService) copyToExclusiveAndDelete(srcPath string, targetPath strin
 	if err := source.Close(); err != nil {
 		return err
 	}
-	if err := os.Remove(srcPath); err != nil {
+	if err := nativeRemovePath(srcPath); err != nil {
 		return err
 	}
 	removeTarget = false
@@ -2213,7 +2213,7 @@ func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
 			if !matched {
 				return ErrTrashIdentityMismatch
 			}
-			if err := os.Remove(row.TrashPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := nativeRemovePath(row.TrashPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				if errors.Is(err, os.ErrPermission) {
 					return ErrTrashPermissionDenied
 				}
@@ -2324,7 +2324,7 @@ func (s *TrashService) trashStagedSource(id uint) (string, error) {
 			return "", err
 		}
 		code = TrashResultFileMissing
-	} else if _, err := systemTrashMove(source.StagedPath); err != nil {
+	} else if _, err := nativeSystemTrashMove(source.StagedPath); err != nil {
 		return "", err
 	}
 	now := s.now()

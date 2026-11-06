@@ -130,7 +130,7 @@ func (s *VideoService) startControlledPlayback(parent context.Context, id uint) 
 	}()
 	owner.state = ControlledPlaybackState{Status: "starting", VideoID: id}
 	owner.changed()
-	lease, err := s.prepareQueueMedia(ctx, id, false)
+	lease, err := s.prepareQueueMedia(ctx, id, false, false)
 	if err != nil {
 		return err
 	}

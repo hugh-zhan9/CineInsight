@@ -56,7 +56,9 @@
             @preview-externally="$emit('preview-externally', details.video)"
             @preview-session-stale="handlePlayerSessionStale"
             @bookmark-range-end="bookmarkRangeFinished = true"
-          />
+          >
+              <template #ending="{ ending, replay, retire }"><PlaybackEndScreen :ending="ending" :replay="replay" :retire="retire" @selected="$emit('close')" /></template>
+            </InlineVideoPlayer>
         </section>
 
         <QueueActionButton :video-ids="[details.video.id]" />
@@ -389,9 +391,10 @@
 </template>
 
 <script>
+import PlaybackEndScreen from './player/PlaybackEndScreen.vue';
 import { playVideoAfterProgress as PlayVideo } from '../utils/watchProgress.js';
 import {
-  AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
+  AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetPlaybackSession, GetVideoDetails, ListCollections, ListPeople,
   GetPersonImages, RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonImage, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
   SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
   UpdateVideoRating, SetVideoFavorite, SetVideoLiked, SetVideoWatched, GetSubtitleSegments
@@ -431,7 +434,7 @@ const sameIDSet = (a, b) => {
 
 export default {
   name: 'PreviewDrawer',
-  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog, InlineVideoPlayer, AppBanner, AppIcon, SkeletonBlock },
+  components: { PlaybackEndScreen, QueueActionButton, BookmarkPanel, ImageLibraryPicker, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog, InlineVideoPlayer, AppBanner, AppIcon, SkeletonBlock },
   props: {
     // 宿主的 @media-restored（见 handlePersonMediaRestored）。声明成 prop 而不是放进 emits：从「最近操作」撤销人物媒体删除时
     // 抽屉可能早已关掉，Vue 会丢掉已卸下组件的 $emit，拿着宿主传进来的这个监听才能照样通知到宿主。宿主写法不变。
@@ -1175,7 +1178,7 @@ export default {
         return;
       }
       try {
-        const session = await GetPreviewSession(videoID);
+        const session = await GetPlaybackSession(videoID);
         if (this.isCurrentVideoRequest(videoID, entryToken)) this.nestedSession = session;
       } catch (err) {
         if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `刷新预览会话失败：${err}`;

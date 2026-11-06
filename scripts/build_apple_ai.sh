@@ -22,7 +22,12 @@ else
 fi
 mkdir -p "${OUTPUT}/MacOS"
 xcrun clang -fobjc-arc -O2 -Wno-deprecated-declarations -mmacosx-version-min=15.0 -c "${SOURCES}/vision.m" -o "${OUTPUT}/vision.o"
-xcrun swiftc -parse-as-library -O -target "$(uname -m)-apple-macos15.0" ${swift_defines[@]+"${swift_defines[@]}"} \
+swift_limits=()
+if [[ -n "${CINEINSIGHT_SWIFT_JOBS:-}" ]]; then
+  [[ "${CINEINSIGHT_SWIFT_JOBS}" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid CINEINSIGHT_SWIFT_JOBS' >&2; exit 2; }
+  swift_limits=(-j "${CINEINSIGHT_SWIFT_JOBS}" -num-threads "${CINEINSIGHT_SWIFT_JOBS}")
+fi
+xcrun swiftc ${swift_limits[@]+"${swift_limits[@]}"} -parse-as-library -O -target "$(uname -m)-apple-macos15.0" ${swift_defines[@]+"${swift_defines[@]}"} \
   "${SOURCES}"/*.swift "${OUTPUT}/vision.o" -import-objc-header "${SOURCES}/vision.h" \
   -framework Vision -framework ImageIO -framework CoreImage -o "${OUTPUT}/MacOS/cineinsight-apple-ai"
 rm "${OUTPUT}/vision.o"

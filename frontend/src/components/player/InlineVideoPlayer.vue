@@ -47,10 +47,11 @@
   <div class="inline-player surface-cinema">
     <div v-if="!activeSession" class="preview-drawer__placeholder">正在准备预览…</div>
     <div v-else-if="browsePreview && (activeSession.mode !== 'inline' || inlinePlaybackFailed)" class="preview-drawer__placeholder" role="status" data-test="exploration-preview-unavailable">在详情中准备播放</div>
-    <template v-else-if="activeSession.mode === 'inline' && activeSession.inline_source && !inlinePlaybackFailed">
+    <template v-else-if="((activeSession.mode === 'inline' && activeSession.inline_source) || (activeSession.mode === 'native' && activeSession.native_source)) && !inlinePlaybackFailed">
       <dialog open ref="playerShell" class="preview-drawer__player-shell playback-shell" aria-label="视频播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
         <component :is="'media-controller'" ref="playerSurface" :id="`detail-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand">
-        <video
+        <component :is="activeSession.mode === 'native' ? 'cine-native-media' : 'video'"
+          :playbackSource.prop="activeSession.mode === 'native' ? nativePlaybackSource : null"
           ref="videoElement"
           slot="media"
           :key="previewMediaGeneration"
@@ -64,12 +65,14 @@
           @playing="handlePlaying"
           @timeupdate="handleTimeUpdate"
           @seeking="handleSeeking"
+          @seeked="handleSeeked"
           @pause="handlePause"
           @ended="handleEnded"
           @error="handleVideoError"
         >
-          <source :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
-        </video>
+          <source v-if="activeSession.mode === 'inline'" :src="activeSession.inline_source.locator_value" :type="activeSession.inline_source.mime" @error="handleSourceError" />
+        </component>
+        <div v-if="ending" slot="centered-chrome" class="inline-player__ending"><slot name="ending" :ending="ending" :replay="replayEnded" :retire="retireEnded" /></div>
         <PlaybackControls :key="`controls-${previewMediaGeneration}`" ref="controls" :video-element="() => $refs.videoElement" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface" @seek-hover="handleSeekPointerMove" @seek-leave="seekPreview = null">
           <template v-if="!browsePreview" #settings><PlaybackSubtitleControls :key="`subtitles-${previewMediaGeneration}`" :video-id="Number(videoId)" :source-version="activeSession.source_version" :video-element="() => $refs.videoElement" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" :playback-range="bookmarkRangeActive ? readyBookmark : null" @menu-change="$refs.controls?.holdControls($event)" /></template>
           <template v-if="activeSeekSprite" #seek-preview>
@@ -95,8 +98,9 @@
     <!-- 内嵌播放器报错（D-PC26、PLAY-05）：解码失败不再是一块黑屏，给出系统播放器与播放代理两条路。
          直放的源解码失败时还会自动排一项代理（2026-10-13），就绪后自动切回内嵌。
          已经在经代理播放时再生成一份也没用，只留系统播放器。 -->
-    <div v-else-if="activeSession.mode === 'inline' && inlinePlaybackFailed" class="preview-drawer__placeholder" role="alert" data-test="preview-inline-error">
+    <div v-else-if="['inline','native'].includes(activeSession.mode) && inlinePlaybackFailed" class="preview-drawer__placeholder" role="alert" data-test="preview-inline-error">
       <p>无法内嵌播放此文件</p>
+<button v-if="activeSession.mode==='native'" type="button" class="btn btn--secondary btn--sm" data-test="native-playback-retry" @click="retryNativePlayback">重试本机播放</button>
       <div class="detail-action-row">
         <button type="button" class="btn btn--primary" data-test="preview-inline-error-external" @click="$emit('preview-externally', Number(videoId))">用系统播放器预览</button>
         <button v-if="!playingThroughProxy && proxyBlocked !== 'unavailable'" type="button" class="btn btn--secondary" data-test="preview-inline-error-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
@@ -115,7 +119,7 @@
       <p v-if="proxyStatusLine" class="preview-drawer__proxy-progress" role="status" data-test="preview-proxy-preparing-status">{{ proxyStatusLine }}</p>
       <p v-if="proxyAlertLine" class="preview-drawer__proxy-progress" role="alert" data-test="preview-proxy-preparing-alert">{{ proxyAlertLine }}</p>
     </div>
-    <template v-else-if="activeSession.mode === 'external-preview' && activeSession.external_action">
+    <template v-else-if="['external-preview','native-unavailable'].includes(activeSession.mode) && activeSession.external_action">
       <div class="preview-drawer__placeholder">
         <p>{{ activeSession.reason_message }}</p>
         <button type="button" class="btn btn--primary" @click="$emit('preview-externally', Number(videoId))">{{ activeSession.external_action.button_label }}</button>
@@ -131,14 +135,15 @@ import { handlePlaybackKey } from '../../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './PlaybackSubtitleControls.vue';
 import PlaybackControls from './PlaybackControls.vue';
 import { markRaw } from 'vue';
-import { CancelPreviewProxy, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus, GetPreviewSession, RecordViewEvent, RequestPreviewProxy } from '../../../wailsjs/go/main/App';
+import { CancelPreviewProxy, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus, GetPlaybackSession, RecordViewEvent, RequestPreviewProxy } from '../../../wailsjs/go/main/App';
 import { detailPlaybackOrigin, detailPlaybackStartMs, formatDuration } from '../../utils/mediaDetails.js';
 import { isWatchCompleted } from '../../utils/watchState.js';
 import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../../utils/viewThreshold.js';
 import { confirmAction } from '../../utils/feedback.js';
 import { PLAYBACK_PROXY_CODE_LABELS, advanceProxyTracking, playbackProxyItemStateText, proxyRequestErrorText } from '../../utils/playbackProxy.js';
 import { newPreviewProxyOwner } from '../../utils/previewProxy.js';
-import { claimActivePlayer, releaseActivePlayer } from '../../utils/activePlayer.js';
+import '../../utils/nativeMedia.js';
+import { installPlaybackBarrier, claimActivePlayer, releaseActivePlayer } from '../../utils/activePlayer.js';
 
 export default {
   name: 'InlineVideoPlayer',
@@ -154,7 +159,7 @@ export default {
     autoplay: { type: Boolean, default: false },
     durationSeconds: { type: Number, default: 0 }
   },
-  emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end', 'playback-started'],
+  emits: ['watch-progress', 'preview-session-stale', 'preview-externally', 'bookmark-range-end', 'playback-started', 'playback-ended'],
   data() {
     return {
       ownSession: null,
@@ -168,12 +173,15 @@ export default {
       playbackProxy: null, proxyBusy: false, proxyError: '', proxyNotice: '',
       // 自动请求被后端挡下的原因：too_large（只给手动生成）、unavailable（没有 ffmpeg，只给系统播放器）。
       proxyBlocked: '',
+      ending: null,
+      endingSeek: false,
       // 正在等的那一项代理（D-PC26）：{ videoID, state }，state 为 playbackProxyItemState 的结果，
       // 入队请求还没返回时 phase 为 submitting。只有它完成时才自动切换，旧结果不会触发。
       proxyTracking: null
     };
   },
   computed: {
+    nativePlaybackSource(){const source=this.activeSession?.native_source;if(!source)return null;let start=this.bookmarkSourceMismatch?0:(this.readyBookmark?.startMS??detailPlaybackStartMs(this.playbackStartOptions()));if(this.startTimeMs==null&&!this.readyBookmark&&isWatchCompleted(start/1000,Number(this.durationSeconds))){start=0;}return {...source,start_ms:start};},
     browsePreview() { return this.usage === 'browse-preview'; },
     controlled() { return this.session !== undefined; },
     activeSession() { return this.controlled ? this.session : this.ownSession; },
@@ -271,13 +279,15 @@ export default {
     videoId() { this.resetForVideo(); }
   },
   created() {
-    this._activeHandle = { pause: () => this.pause() };
+    this._activeHandle = { pause: () => this.pauseAndReportProgress() };
     // 自动代理按宿主实例记账（后端 owner）：抽屉与整页详情看同一部时互不取消。
     this._proxyOwner = newPreviewProxyOwner('player');
     this._proxyOwnerSeq = 0;
     this._autoProxy = null;
   },
+  updated() { installPlaybackBarrier(this.$refs.videoElement,this._activeHandle); },
   mounted() {
+installPlaybackBarrier(this.$refs.videoElement,this._activeHandle);
     // 代理队列的排位与完成（D-PC26）：本项完成后自动重取预览会话。
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('playback-proxy-state', status => this.applyProxyStatus(status, { fromEvent: true }));
@@ -296,12 +306,14 @@ export default {
     handlePlaybackKey(event) { handlePlaybackKey(event, this.$refs.videoElement); },
     // ===== 宿主可调 =====
     play() { this.$refs.playerShell?.focus({ preventScroll: true }); return this.$refs.videoElement?.play(); },
-    pause() { this.$refs.videoElement?.pause(); },
+    pause() { return this.$refs.videoElement?.pause(); },
     // 切走之前同步发出最后位置；随后到达的原生 pause / 卸载事件不再重复写旧位置。
     pauseAndReportProgress() {
-      this.pause();
-      this.emitWatchProgress(true, false);
-      this.hasPlaybackStarted = false;
+      this._stoppingProgress=true;
+      const finish=()=>{this.emitWatchProgress(true,false);this.hasPlaybackStarted=false;this._stoppingProgress=false;};
+      let result;try{result=this.pause();}catch(error){this._stoppingProgress=false;throw error;}
+      if(result?.then)return result.then(finish,error=>{this._stoppingProgress=false;throw error;});
+      finish();
     },
     currentTime() { return Number(this.$refs.videoElement?.currentTime || 0); },
     scrollIntoView(options) { this.$refs.videoElement?.scrollIntoView?.(options); },
@@ -327,7 +339,7 @@ export default {
     // 代理增删之后的重取失败则保留原会话，只给出提示。说明里不带原始错误（G-3）。
     async loadOwnSession(videoID, token, refresh) {
       try {
-        const session = await GetPreviewSession(videoID);
+        const session = await GetPlaybackSession(videoID);
         if (this.isCurrentRequest(videoID, token)) this.ownSession = session;
       } catch (err) {
         console.error('读取预览会话失败:', err);
@@ -510,8 +522,9 @@ export default {
     // 每次打开内嵌播放器是一个会话：会话标识每次新生成，累计播放首次越过 viewThreshold、或判定看完时
     // 调一次 RecordViewEvent(inline_view)。起播来源（D-PC42）在第一次开始播放时定下，整场播放不变。
     startViewSession(session) {
-      const inline = session?.mode === 'inline' && session?.inline_source;
+      const inline = (session?.mode === 'inline' && session?.inline_source) || (session?.mode==='native' && session?.native_source);
       const videoID = Number(session?.video_id || this.videoId || 0);
+      this.ending = null; this.endingSeek = false;
       this.viewSession = !this.browsePreview && inline && videoID
         ? markRaw({ id: newViewSessionID(), videoID, origin: '', accumulator: createPlaybackAccumulator(), recorded: false })
         : null;
@@ -521,10 +534,20 @@ export default {
       return Number.isFinite(duration) && duration > 0 ? duration : 0;
     },
     handleEnded() {
+      releaseActivePlayer(this._activeHandle);
       this.emitWatchProgress(true, true);
-      if (this.viewSession) this.viewSession.ended = true;
+      const session = this.viewSession;
+      if (session && !session.ended && !this.browsePreview && !this.bookmarkRangeActive && !this.endingSeek && !this.$refs.videoElement?.seeking && this.hasPlaybackStarted) {
+        this.ending = { videoID: Number(this.videoId), sourceVersion: this.activeSession?.source_version || '', viewSessionID: session.id, cycle: 1, origin: 'inline', reason: 'eof' };
+        this.$emit('playback-ended', this.ending);
+      }
+      if (session) session.ended = true;
     },
+    handleSeeked() { if (!this.$refs.videoElement?.paused) this.endingSeek = false; },
+    async replayEnded() { const video = this.$refs.videoElement; if (!video) throw new Error('播放器已关闭'); video.currentTime = 0; await video.play(); },
+    async retireEnded() { await this.$refs.controls?.leaveFullscreen(); await this.pauseAndReportProgress();if(this.$refs.videoElement?.nativePlayback)await this.$refs.videoElement.retire(); },
     handlePlay() {
+      this.ending = null; this.endingSeek = false;
       if (this.browsePreview) {
         const video = this.$refs.videoElement, range = this.readyBookmark;
         if (!video || !range) { video?.pause(); return; }
@@ -548,9 +571,10 @@ export default {
     handlePause() {
       releaseActivePlayer(this._activeHandle);
       this.viewSession?.accumulator.breakSegment();
-      this.emitWatchProgress(true, false);
+      if(!this._stoppingProgress)this.emitWatchProgress(true, false);
     },
     handleSeeking() {
+      this.endingSeek = true;
       this.viewSession?.accumulator.breakSegment();
       if (this.browsePreview && this.readyBookmark && this.$refs.videoElement) {
         const video = this.$refs.videoElement;
@@ -572,7 +596,7 @@ export default {
       this.emitWatchProgress(false, false);
     },
     maybeRecordView(completedHint) {
-      if (this.browsePreview) return;
+      if (this.browsePreview || this.$refs.videoElement?.sourceAvailable===false) return;
       const session = this.viewSession;
       if (!session || session.recorded || (!this.hasPlaybackStarted && !completedHint)) return;
       const video = this.$refs.videoElement;
@@ -587,7 +611,7 @@ export default {
         .catch(err => console.error('记录有效观看失败:', err));
     },
     emitWatchProgress(force, completed, videoID = null) {
-      if (this.browsePreview) return;
+      if (this.browsePreview || this.$refs.videoElement?.sourceAvailable===false) return;
       if (this.resettingVideo) return;
       this.maybeRecordView(completed);
       if (!this.hasPlaybackStarted && !completed) return; const video = this.$refs.videoElement; const positionSeconds = Number(video?.currentTime || 0);
@@ -608,6 +632,7 @@ export default {
     // <source> 的 error 只在它还带着地址时才算数——换会话时清掉地址再 load() 也会触发一次。
     handleVideoError(event) {
       if (this.resettingVideo || !event?.target?.error) return;
+if(event.target.nativePlayback){this.emitWatchProgress(true,false);this.hasPlaybackStarted=false;}
       this.markInlinePlaybackFailed();
     },
     handleSourceError(event) {
@@ -615,13 +640,14 @@ export default {
       this.markInlinePlaybackFailed();
     },
     // 直放的源解码失败（2026-10-13）：两个按钮照留，同时自动排一项代理；已经在经代理播放就不再生成。
+    retryNativePlayback(){if(this.controlled)this.$emit('preview-session-stale',Number(this.videoId));else this.loadOwnSession(Number(this.videoId),this._loadToken,true);},
     markInlinePlaybackFailed() {
       if (this.inlinePlaybackFailed) return;
       this.inlinePlaybackFailed = true;
-      if (!this.playingThroughProxy) this.requestAutoProxy();
+      if (this.activeSession?.mode!=='native' && !this.playingThroughProxy) this.requestAutoProxy();
     },
     resetVideoElement() {
-      const video = this.$refs.videoElement; if (!video) return; this.resettingVideo = true;
+      const video = this.$refs.videoElement; if (!video) return; if(video.nativePlayback){video.close('replaced').catch(()=>{});return;} this.resettingVideo = true;
       try { video.pause(); } catch (err) {} try { video.currentTime = 0; } catch (err) {}
       video.defaultMuted = true; video.muted = true; this.appliedSeekKey = ''; video.removeAttribute('src'); const source = video.querySelector('source'); if (source) source.removeAttribute('src'); video.load();
       this.lastProgressEmittedAt = 0; this.hasPlaybackStarted = false; this.seekPreview = null; this.resettingVideo = false;
@@ -685,4 +711,5 @@ export default {
 .detail-action-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .preview-drawer__proxy-progress { margin: 0; color: var(--text-secondary); font-size: var(--fs-caption); }
 
+.inline-player__ending { width: min(900px, 100%); max-height: 100%; overflow-y: auto; pointer-events: auto; }
 </style>

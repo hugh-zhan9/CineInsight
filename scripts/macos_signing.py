@@ -96,7 +96,13 @@ def sign(app):
     if any(path.is_symlink() for path in app.rglob('*')):
         raise ValueError('Symlinks in app bundles are not supported')
     if app.suffix!='.app' or not (app/'Contents/Info.plist').is_file(): raise ValueError('Expected an app bundle')
-    data=identity(); manifest=checked_manifest(app)
+    data=identity(); manifests=[]
+    enhancement=checked_manifest(app)
+    if enhancement:manifests.append(enhancement)
+    native=app/'Contents/Resources/native-playback'
+    if native.exists():
+        from bundle_native_playback import checked_runtime
+        manifests.append(checked_runtime(native))
     bundles=sorted([app,*app.rglob('*.app')],key=lambda p:len(p.parts),reverse=True)
     executables=set()
     for bundle in bundles:
@@ -118,12 +124,12 @@ def sign(app):
         identifier='com.cineinsight.local.'+hashlib.sha256(str(path.relative_to(app)).encode()).hexdigest()[:24]
         sign_one(path,identifier); signed.add(path.resolve())
     for bundle in bundles:
-        if bundle==app and manifest:
-            path,doc=manifest
-            for item in doc['files']:
-                target=(path.parent/item['path']).resolve()
-                if target in signed: item['sha256']=sha256(target)
-            path.write_text(json.dumps(doc,indent=2)+'\n')
+        if bundle==app:
+            for path,doc in manifests:
+                for item in doc['files']:
+                    target=(path.parent/item['path']).resolve()
+                    if target in signed: item['sha256']=sha256(target)
+                path.write_text(json.dumps(doc,indent=2)+'\n')
         info=read_plist(bundle/'Contents/Info.plist')
         sign_one(bundle,info['CFBundleIdentifier'])
     run('/usr/bin/codesign','--verify','--deep','--strict',str(app))

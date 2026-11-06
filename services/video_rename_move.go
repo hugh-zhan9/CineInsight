@@ -160,15 +160,15 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 
 	subtitleMoved := subtitleExists && subtitlePathChanged
 	if subtitleMoved {
-		if err := os.Rename(oldSubtitlePath, newSubtitlePath); err != nil {
+		if err := nativeRenamePath(oldSubtitlePath, newSubtitlePath); err != nil {
 			return fmt.Errorf("重命名字幕文件失败: %w", err)
 		}
 	}
 
 	// 重命名磁盘文件
-	if err := os.Rename(oldPath, newPath); err != nil {
+	if err := nativeRenamePath(oldPath, newPath); err != nil {
 		if subtitleMoved {
-			if rollbackErr := os.Rename(newSubtitlePath, oldSubtitlePath); rollbackErr != nil {
+			if rollbackErr := nativeRenamePath(newSubtitlePath, oldSubtitlePath); rollbackErr != nil {
 				return errors.Join(fmt.Errorf("重命名文件失败: %w", err), fmt.Errorf("回滚字幕文件失败: %w", rollbackErr))
 			}
 		}
@@ -181,11 +181,11 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 		"path": newPath,
 	}).Error; err != nil {
 		rollbackErrors := []error{fmt.Errorf("更新数据库失败: %w", err)}
-		if rollbackErr := os.Rename(newPath, oldPath); rollbackErr != nil {
+		if rollbackErr := nativeRenamePath(newPath, oldPath); rollbackErr != nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚视频文件失败: %w", rollbackErr))
 		}
 		if subtitleMoved {
-			if rollbackErr := os.Rename(newSubtitlePath, oldSubtitlePath); rollbackErr != nil {
+			if rollbackErr := nativeRenamePath(newSubtitlePath, oldSubtitlePath); rollbackErr != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚字幕文件失败: %w", rollbackErr))
 			}
 		}

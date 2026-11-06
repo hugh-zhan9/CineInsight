@@ -38,24 +38,35 @@ type QueueCapability struct {
 	Reason    string `json:"reason"`
 }
 type QueueSession struct {
-	EntryKind       string  `json:"entry_kind"`
-	ClipStartMS     *int64  `json:"clip_start_ms,omitempty"`
-	ClipEndMS       *int64  `json:"clip_end_ms,omitempty"`
-	Token           string  `json:"token"`
-	VideoID         uint    `json:"video_id"`
-	SourceVersion   string  `json:"source_version"`
-	Locator         string  `json:"locator"`
-	MIME            string  `json:"mime"`
-	StartSeconds    float64 `json:"start_seconds"`
-	Duration        float64 `json:"duration"`
-	ViewCycle       uint64  `json:"view_cycle"`
-	DesiredPaused   bool    `json:"desired_paused"`
-	ControlSequence uint64  `json:"control_sequence"`
+	MediaMode       string                `json:"media_mode"`
+	NativeSource    *NativePlaybackSource `json:"native_source,omitempty"`
+	EntryKind       string                `json:"entry_kind"`
+	ClipStartMS     *int64                `json:"clip_start_ms,omitempty"`
+	ClipEndMS       *int64                `json:"clip_end_ms,omitempty"`
+	Token           string                `json:"token"`
+	VideoID         uint                  `json:"video_id"`
+	SourceVersion   string                `json:"source_version"`
+	Locator         string                `json:"locator"`
+	MIME            string                `json:"mime"`
+	StartSeconds    float64               `json:"start_seconds"`
+	Duration        float64               `json:"duration"`
+	ViewCycle       uint64                `json:"view_cycle"`
+	DesiredPaused   bool                  `json:"desired_paused"`
+	ControlSequence uint64                `json:"control_sequence"`
 }
 
 // QueueSnapshot 显式列出 QueuePage 的字段而不是匿名嵌入：Wails 绑定生成器解析不了匿名嵌入结构体里
 // 引用的类型（models.PlaybackQueueState、*QueueEntryDTO），会报 "Not found" 并生成 any。JSON 形状不变。
+type QueueEnding struct {
+	Token         string `json:"token"`
+	ViewCycle     uint64 `json:"view_cycle"`
+	VideoID       uint   `json:"video_id"`
+	SourceVersion string `json:"source_version"`
+	Reason        string `json:"reason"`
+}
+
 type QueueSnapshot struct {
+	Ending         *QueueEnding              `json:"ending,omitempty"`
 	HasClips       bool                      `json:"has_clips"`
 	State          models.PlaybackQueueState `json:"state"`
 	Items          []QueueEntryDTO           `json:"items"`
@@ -82,6 +93,7 @@ type InlineQueueEvent struct {
 }
 
 type playbackQueueRun struct {
+	endingRevision                                                  uint64
 	entry                                                           models.PlaybackQueueEntry
 	cleanupPending                                                  bool
 	controlSequence                                                 uint64
@@ -190,6 +202,17 @@ func (s *PlaybackQueueService) Snapshot(ctx context.Context, query QueueQuery) (
 		if r := s.run; r != nil && !r.failed && r.lease != nil && r.player == "inline" && page.State.ActiveToken == r.token {
 			m := r.lease
 			result.Session = &QueueSession{EntryKind: r.entry.EntryKind, ClipStartMS: r.entry.ClipStartMS, ClipEndMS: r.entry.ClipEndMS, Token: r.token, VideoID: m.video.ID, SourceVersion: m.sourceVersion(), Locator: "/preview/queue/" + r.token, MIME: m.mime, StartSeconds: m.start, Duration: m.video.Duration, ViewCycle: r.cycle, DesiredPaused: r.desiredPaused, ControlSequence: r.controlSequence}
+			if m.native {
+				result.Session.MediaMode = "native"
+				result.Session.NativeSource = &NativePlaybackSource{VideoID: m.video.ID, SourceVersion: m.sourceVersion()}
+				result.Session.Locator = ""
+				result.Session.MIME = ""
+			} else {
+				result.Session.MediaMode = "inline"
+			}
+		}
+		if r := s.run; r != nil && r.ended && !r.failed && r.lease != nil && r.player == "inline" && r.entry.EntryKind != "clip" && !page.HasFollowing && page.State.Status == "ended" && page.State.ActiveToken == r.token && page.State.Revision == r.endingRevision {
+			result.Ending = &QueueEnding{Token: r.token, ViewCycle: r.cycle, VideoID: r.lease.video.ID, SourceVersion: r.lease.sourceVersion(), Reason: "exhausted"}
 		}
 		return nil
 	})
@@ -299,7 +322,7 @@ func (s *PlaybackQueueService) playLocked(ctx context.Context, entryID uint, rev
 				prepareErr = clipVideoVisible(prepCtx, entry.VideoID)
 			}
 			if prepareErr == nil {
-				lease, prepareErr = s.video.prepareQueueMedia(prepCtx, entry.VideoID, r.player == "inline")
+				lease, prepareErr = s.video.prepareQueueMedia(prepCtx, entry.VideoID, r.player == "inline", r.player == "inline" && entry.EntryKind != "clip")
 			}
 			if prepareErr == nil && r.player == "iina" {
 				prepareErr = s.player.Load(prepCtx, lease, r.token, func(event InlineQueueEvent) error { return s.reportPlayerEvent(event) })

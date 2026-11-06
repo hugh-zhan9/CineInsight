@@ -12,7 +12,7 @@ window.go={main:{App:new Proxy({},{get:(_,method)=>async(...args)=>{
  if(method==='GetVideoDetails')return {video,effective_title:video.display_title,people:[],collections:[],artwork:{},streams:[]};
  if(method==='GetVideoRecommendations')return {directory:[],tags:[]};
  if(method==='GetPlaybackSubtitle')return {status:'ready',cues:[]};
- if(method==='GetPreviewSession')return {video_id:1,mode:'inline',source_version:source,inline_source:{locator_value:'./clip.mp4',mime:'video/mp4'}};
+ if(method==='GetPreviewSession'||method==='GetPlaybackSession')return {video_id:1,mode:'inline',source_version:source,inline_source:{locator_value:'./clip.mp4',mime:'video/mp4'}};
  if(method==='GetPlaybackProxyStatus')return {running:false,queued:0,results:[]};
  if(method==='ListVideoBookmarks')return {items:[],has_more:false};
  if(method==='GetVideoChapterSets')return ok({video_id:1,title:video.display_title,duration_ms:3000,source_version:source,embedded:{set_id:'embedded:1',kind:'embedded',revision:1,source_status:'unread',chapters:[]},manual});

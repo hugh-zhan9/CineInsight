@@ -143,8 +143,10 @@ type Tag struct {
 
 // Settings 应用设置
 type Settings struct {
-	MapTilesEnabled bool   `gorm:"not null;default:false" json:"map_tiles_enabled"`
-	DesktopPlayer   string `json:"desktop_player"` // Empty/system keeps the system player; iina_controlled is explicit.
+	AutoStructureEnabled         bool   `json:"auto_structure_enabled"`
+	AutoStructureInitialCutoffID *uint  `json:"-"`
+	MapTilesEnabled              bool   `gorm:"not null;default:false" json:"map_tiles_enabled"`
+	DesktopPlayer                string `json:"desktop_player"` // Empty/system keeps the system player; iina_controlled is explicit.
 	// Jellyfin 配置只由独立配置入口维护，不进入通用设置写回。
 	JellyfinEnabled       bool    `json:"jellyfin_enabled"`
 	JellyfinPort          int     `json:"jellyfin_port"`
