@@ -9026,11 +9026,11 @@ export namespace services {
 	    aspect_ratio?: number;
 	    duration_ms?: number;
 	    unavailable_reason: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationCard(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.entry_id = source["entry_id"];
@@ -9045,16 +9045,16 @@ export namespace services {
 	}
 	export class ExplorationCards {
 	    items: ExplorationCard[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationCards(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.items = this.convertValues(source["items"], ExplorationCard);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -9077,18 +9077,18 @@ export namespace services {
 	    status: string;
 	    data?: ExplorationCards;
 	    error?: ExperienceError;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationCardsResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
 	        this.data = this.convertValues(source["data"], ExplorationCards);
 	        this.error = this.convertValues(source["error"], ExperienceError);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -9112,11 +9112,11 @@ export namespace services {
 	    scope: string;
 	    scene_id: string;
 	    entry_ids: number[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationItemsRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.database_epoch = source["database_epoch"];
@@ -9129,11 +9129,11 @@ export namespace services {
 	    request_id: string;
 	    revision: number;
 	    scene_id: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationReceipt(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.request_id = source["request_id"];
@@ -9149,11 +9149,11 @@ export namespace services {
 	    selected_id: number;
 	    gallery_id: number;
 	    gallery_entry_ids: number[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -9177,11 +9177,11 @@ export namespace services {
 	    view?: ExplorationView;
 	    entry_id?: number;
 	    source_version?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.database_epoch = source["database_epoch"];
@@ -9196,7 +9196,7 @@ export namespace services {
 	        this.entry_id = source["entry_id"];
 	        this.source_version = source["source_version"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -9219,11 +9219,11 @@ export namespace services {
 	    start_ms: number;
 	    end_ms: number;
 	    source_version: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationSample(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.start_ms = source["start_ms"];
@@ -9238,11 +9238,11 @@ export namespace services {
 	    media_id: number;
 	    presented: boolean;
 	    samples: ExplorationSample[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationSceneEntry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.entry_id = source["entry_id"];
@@ -9252,7 +9252,7 @@ export namespace services {
 	        this.presented = source["presented"];
 	        this.samples = this.convertValues(source["samples"], ExplorationSample);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -9284,11 +9284,11 @@ export namespace services {
 	    remaining_count: number;
 	    entries: ExplorationSceneEntry[];
 	    last_receipt: ExplorationReceipt;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationSnapshot(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.database_epoch = source["database_epoch"];
@@ -9304,7 +9304,7 @@ export namespace services {
 	        this.entries = this.convertValues(source["entries"], ExplorationSceneEntry);
 	        this.last_receipt = this.convertValues(source["last_receipt"], ExplorationReceipt);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -9327,18 +9327,18 @@ export namespace services {
 	    status: string;
 	    data?: ExplorationSnapshot;
 	    error?: ExperienceError;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExplorationResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
 	        this.data = this.convertValues(source["data"], ExplorationSnapshot);
 	        this.error = this.convertValues(source["error"], ExperienceError);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -9357,10 +9357,10 @@ export namespace services {
 		    return a;
 		}
 	}
-
-
-
-
+	
+	
+	
+	
 	export class ExternalSubtitleDetails {
 	    path: string;
 	    language: string;
@@ -13559,11 +13559,11 @@ export namespace services {
 	    height: number;
 	    start_seconds: number;
 	    duration_seconds: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MediaProcessingRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
@@ -13593,11 +13593,11 @@ export namespace services {
 	    result_url: string;
 	    comparison_url: string;
 	    format: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MediaProcessingView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -18605,11 +18605,11 @@ export namespace services {
 	    suggested: boolean;
 	    is_favorite: boolean;
 	    personal_rating?: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageGoalItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
@@ -18637,11 +18637,11 @@ export namespace services {
 	    notices: string[];
 	    truncated: boolean;
 	    generated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageGoalPlan(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.epoch = source["epoch"];
@@ -18656,7 +18656,7 @@ export namespace services {
 	        this.truncated = source["truncated"];
 	        this.generated_at = source["generated_at"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -18679,11 +18679,11 @@ export namespace services {
 	    id: number;
 	    kind: string;
 	    keeper_id: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageReviewCandidate(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -18695,18 +18695,18 @@ export namespace services {
 	    analysis_key: string;
 	    locked_ids: number[];
 	    candidates: StorageReviewCandidate[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageReviewSnapshot(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.analysis_key = source["analysis_key"];
 	        this.locked_ids = source["locked_ids"];
 	        this.candidates = this.convertValues(source["candidates"], StorageReviewCandidate);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -18731,11 +18731,11 @@ export namespace services {
 	    target_bytes: number;
 	    video_review?: StorageReviewSnapshot;
 	    image_review?: StorageReviewSnapshot;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageGoalRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.epoch = source["epoch"];
@@ -18744,7 +18744,7 @@ export namespace services {
 	        this.video_review = this.convertValues(source["video_review"], StorageReviewSnapshot);
 	        this.image_review = this.convertValues(source["image_review"], StorageReviewSnapshot);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -18769,11 +18769,11 @@ export namespace services {
 	    available_bytes: number;
 	    media_bytes: number;
 	    count: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageGoalVolume(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -18787,18 +18787,18 @@ export namespace services {
 	    epoch: string;
 	    items: StorageGoalVolume[];
 	    sampled_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageGoalVolumes(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.epoch = source["epoch"];
 	        this.items = this.convertValues(source["items"], StorageGoalVolume);
 	        this.sampled_at = source["sampled_at"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -19011,8 +19011,8 @@ export namespace services {
 	
 	
 	
-
-
+	
+	
 	export class SubtitleBackup {
 	    id: string;
 	    created_at: string;
