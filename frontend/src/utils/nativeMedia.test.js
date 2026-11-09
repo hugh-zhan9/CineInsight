@@ -59,3 +59,14 @@ it('does not retire a replacement session when an old Close reply arrives',async
  state=snapshot({session_id:'replacement',video_id:2,source_version:'second'});api.OpenNativePlayback.mockResolvedValue({...state,seq:0});element.playbackSource={video_id:2,source_version:'second'};await flushPromises();const releases=api.ReleaseNativePlaybackOwner.mock.calls.length;
  finish();const error=await pending;expect(error.name).toBe('AbortError');expect(api.ReleaseNativePlaybackOwner).toHaveBeenCalledTimes(releases);expect(element._session.session_id).toBe('replacement');expect(element._closed).toBe(false);
 });
+it('uses the saved audio preference on each native source open',async()=>{
+ let saved=JSON.stringify({volume:.37,muted:false});
+ vi.stubGlobal('localStorage',{getItem:()=>saved,setItem:(_key,value)=>{saved=value;}});
+ try {
+  const element=await media();
+  expect(api.OpenNativePlayback).toHaveBeenLastCalledWith(expect.objectContaining({volume:.37,muted:false}));
+  saved=JSON.stringify({volume:.61,muted:false});
+  element.playbackSource={video_id:2,source_version:'next'};await flushPromises();
+  expect(api.OpenNativePlayback).toHaveBeenLastCalledWith(expect.objectContaining({video_id:2,volume:.61,muted:false}));
+ } finally {vi.unstubAllGlobals();}
+});

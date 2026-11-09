@@ -2,7 +2,7 @@
   <section class="media-wall" data-test="media-wall">
     <div ref="viewport" class="media-wall__viewport" role="grid" tabindex="0" :aria-label="`媒体墙，${entries.length}项，缩放${Math.round(camera.scale * 100)}%`" :aria-activedescendant="visibleEntries.some(entry => entry.entry_id === selectedId) ? `wall-entry-${selectedId}` : undefined" @wheel.prevent="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @keydown="keyDown">
       <div class="media-wall__plane" :style="planeStyle">
-        <MediaTile v-for="entry in visibleEntries" :id="`wall-entry-${entry.entry_id}`" :key="entry.entry_id" :entry="entry" :card="cards[entry.entry_id]" :loader="loader" :retry-signal="retrySignal" :edge="camera.scale * 160 <= 80 ? 96 : 256" :selected="selectedId === entry.entry_id" :show-title="camera.scale >= .8 && selectedId === entry.entry_id" :style="cellStyle(entry.slot)" @loaded="setLoaded" @failed="(id, failed) => $emit('failed', id, failed)" @open="open" />
+        <MediaTile v-for="entry in visibleEntries" :id="`wall-entry-${entry.entry_id}`" :key="entry.entry_id" :entry="entry" :card="cards[entry.entry_id]" :loader="loader" :priority="visibleIDs.has(entry.entry_id) ? 1 : 0" :retry-signal="retrySignal" :edge="camera.scale * 160 <= 80 ? 96 : 256" :selected="selectedId === entry.entry_id" :show-title="camera.scale >= .8 && selectedId === entry.entry_id" :style="cellStyle(entry.slot)" @loaded="setLoaded" @failed="(id, failed) => $emit('failed', id, failed)" @open="open" />
       </div>
     </div>
     <div class="media-wall__controls">
@@ -29,7 +29,8 @@ export default {
   emits: ['view', 'visible', 'exposure', 'open', 'select', 'failed'],
   data() { return { camera: { scale: this.view.scale, x: this.view.x, y: this.view.y }, viewport: { width: 0, height: 0 }, loaded: {}, drag: null, suppressClick: false }; },
   computed: {
-    visibleEntries() { return wallVisibleSlots(this.entries.length, this.camera, this.viewport).map(slot => this.entries[slot]).filter(Boolean); },
+    visibleIDs() { return new Set(wallVisibleSlots(this.entries.length, this.camera, this.viewport, 0).map(slot => this.entries[slot]?.entry_id)); },
+    visibleEntries() { return wallVisibleSlots(this.entries.length, this.camera, this.viewport).map(slot => this.entries[slot]).filter(Boolean).sort((a, b) => Number(this.visibleIDs.has(b.entry_id)) - Number(this.visibleIDs.has(a.entry_id))); },
     planeStyle() { const bounds = wallBounds(this.entries.length); return { width: `${bounds.width}px`, height: `${bounds.height}px`, transform: `translate(${this.camera.x}px, ${this.camera.y}px) scale(${this.camera.scale})` }; }
   },
   watch: {

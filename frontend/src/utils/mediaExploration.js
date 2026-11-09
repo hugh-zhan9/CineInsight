@@ -103,6 +103,7 @@ export function createExplorationImageLoader(limit = 6) {
   const pending = [], running = new Set();
   function pump() {
     while (active < limit && pending.length) {
+      pending.sort((a, b) => b.priority - a.priority);
       const job = pending.shift(); if (job.controller.signal.aborted) continue;
       active++; running.add(job);
       Promise.resolve().then(() => fetch(job.url, { signal: job.controller.signal, cache: 'no-store' }))
@@ -113,12 +114,12 @@ export function createExplorationImageLoader(limit = 6) {
     }
   }
   return {
-    load(url) {
+    load(url, priority = 0) {
       const controller = new AbortController();
       let job;
-      const promise = new Promise((resolve, reject) => { job = { url, controller, resolve, reject }; pending.push(job); pump(); });
+      const promise = new Promise((resolve, reject) => { job = { url, priority, controller, resolve, reject }; pending.push(job); pump(); });
       const cancel = () => { controller.abort(); job.reject(new DOMException('已取消', 'AbortError')); };
-      return { promise, cancel };
+      return { promise, cancel, setPriority(value) { job.priority = value; } };
     },
     cancelAll() { for (const job of [...pending, ...running]) { job.controller.abort(); job.reject(new DOMException('已取消', 'AbortError')); } pending.length = 0; },
     get active() { return active; }

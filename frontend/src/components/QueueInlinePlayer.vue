@@ -2,7 +2,7 @@
   <dialog open ref="playerShell" class="queue-inline-player playback-shell surface-cinema" aria-label="队列播放器" tabindex="0" @keydown.capture="handlePlaybackKey">
     <component :is="'media-controller'" ref="playerSurface" :id="`queue-media-${$.uid}`" class="playback-surface" tabindex="0" lang="zh-CN" nohotkeys gesturesdisabled novolumepref nomutedpref nosubtitleslangpref noautoseektolive defaultstreamtype="on-demand" @mediaseekrequest.capture="seekRequest" @mediaplayrequest.capture="guardPlayRequest">
     <component :is="identity.media_mode==='native' ? 'cine-native-media' : 'video'" :playbackSource.prop="nativePlaybackSource" slot="media" ref="video" :src="identity.media_mode==='native'?undefined:identity.locator" playsinline preload="metadata" @click="togglePlayback" data-test="queue-inline-video"
-      @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
+      @volumechange="rememberAudio" @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @ratechange="scheduleClipEnd" @timeupdate="progress" @ended="ended" @error="failed" />
     <PlaybackControls v-if="!retired && (!isClip || clipRange)" ref="controls" :seek-range="clipRange" :seek-disabled="isClip && (!initialized || clipCompleting)" @seek="seekClip" :video-element="() => $refs.video" :dialog-element="() => $refs.playerShell" :surface-element="() => $refs.playerSurface">
       <template #settings><PlaybackSubtitleControls :video-id="identity.video_id" :source-version="identity.source_version" :queue-token="identity.token" :playback-range="clipRange" :video-element="() => $refs.video" :leave-fullscreen="() => $refs.controls?.leaveFullscreen()" @menu-change="$refs.controls?.holdControls($event)" /></template>
@@ -14,6 +14,7 @@
   </dialog>
 </template>
 <script>
+import { restorePlaybackAudio, rememberPlaybackAudio } from '../utils/playbackAudio.js';
 import { queueClipRange, clampClipSeconds } from '../utils/playbackClip.js';
 import { isWatchCompleted } from '../utils/watchState.js';
 import { handlePlaybackKey, isPlaybackKeyboardControl } from '../utils/playbackKeyboard.js';
@@ -43,7 +44,7 @@ export default {
       if (this.session.desired_paused) video.pause(); else this.play();
     }
   },
-  mounted(){installPlaybackBarrier(this.$refs.video,this._activeHandle);},
+  mounted(){restorePlaybackAudio(this.$refs.video);installPlaybackBarrier(this.$refs.video,this._activeHandle);},
   updated(){installPlaybackBarrier(this.$refs.video,this._activeHandle);},
   beforeUnmount() {
     this.retired = true; this.clearClipTimer();
@@ -53,6 +54,7 @@ if(this.$refs.video?.nativePlayback)this.$refs.video.close('navigate').catch(()=
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   },
   methods: {
+    rememberAudio(event) { if (!this.retired && event.target === this.$refs.video) rememberPlaybackAudio(event.target); },
     async replayEnded() { const video = this.$refs.video; if (!video || this.retired) throw new Error('播放器已关闭'); video.currentTime = 0; await video.play(); },
     async retireEnded() { await this.$refs.controls?.leaveFullscreen(); await this.$refs.video?.pause(); await this._reports; if(this.$refs.video?.nativePlayback)await this.$refs.video.retire();this.retired = true; },
     handlePlaybackKey(event) {
@@ -135,6 +137,7 @@ if(this.$refs.video?.nativePlayback)this.$refs.video.close('navigate').catch(()=
     },
     showError(text) { this.error = text; this.$emit('error', text); },
     loaded() {
+      restorePlaybackAudio(this.$refs.video);
       if (this.initialized) return;
       const video = this.$refs.video;
       const requested = Number(this.identity.start_seconds || 0);

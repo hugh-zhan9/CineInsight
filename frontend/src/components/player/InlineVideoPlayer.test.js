@@ -59,6 +59,8 @@ function installRuntime() {
 }
 
 beforeEach(() => {
+  const saved = new Map();
+  vi.stubGlobal('localStorage', { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) });
   vi.clearAllMocks();
   api.GetPlaybackProxy.mockResolvedValue(null);
   api.GetPlaybackProxyStatus.mockResolvedValue({ running: false, queued: 0, queued_video_ids: [], current_video_id: 0, results: [] });
@@ -71,7 +73,7 @@ afterEach(() => {
   while (mounted.length) mounted.pop().unmount();
   releaseActivePlayer(currentActivePlayer());
   delete window.runtime;
-  vi.restoreAllMocks();
+  vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 
 describe('InlineVideoPlayer 会话（D-UI-11）', () => {
@@ -815,4 +817,23 @@ it('offers an ending once per actual whole-video cycle, never for seeking or a b
   await video.trigger('seeking');await video.trigger('seeked');await video.trigger('ended');expect(wrapper.emitted('playback-ended')).toHaveLength(1);
   await video.trigger('play');await video.trigger('playing');wrapper.vm.bookmarkRangeActive=true;
   await video.trigger('ended');expect(wrapper.emitted('playback-ended')).toHaveLength(1);
+});
+
+
+it('remembers audible volume across videos and repeated metadata events', async () => {
+  const wrapper = await mountPlayer();
+  const video = wrapper.get('video');
+  video.element.volume = .42; video.element.muted = false;
+  await video.trigger('volumechange');
+  await wrapper.setProps({ videoId: 2, session: inlineSession(2) }); await flushPromises();
+  const next = wrapper.get('video');
+  await next.trigger('loadedmetadata');
+  expect(next.element.volume).toBe(.42);
+  expect(next.element.muted).toBe(false);
+  next.element.volume = .63; await next.trigger('volumechange');
+  await next.trigger('loadedmetadata');
+  expect(next.element.volume).toBe(.63); expect(next.element.muted).toBe(false);
+  const reopened = await mountPlayer({ videoId: 3, session: inlineSession(3) });
+  expect(reopened.get('video').element.volume).toBe(.63);
+  expect(reopened.get('video').element.muted).toBe(false);
 });

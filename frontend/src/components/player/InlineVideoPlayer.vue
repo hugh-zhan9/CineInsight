@@ -15,7 +15,7 @@
       bookmark-range-end；requestID 换了（新对象）就再定位一次。带 sourceToken 时与会话的 source_version 不一致就不套用任何起播位置
       （原片在解析书签之后变了）。它只管定位与区间末尾暂停：origin 只看 startTimeMs / resumePositionSeconds，从书签起播时请把
       startTimeMs 也设成书签起点；播放中换了书签，这一场改按 jump 上报。
-  - autoplay（Boolean）：每个会话读到元数据、定好位置后自动开始播放一次。起播一律静音（沿用抽屉），用户自己开声音。
+  - autoplay（Boolean）：每个会话读到元数据、定好位置后自动开始播放一次。恢复上次音量和静音状态；首次使用保持静音。
   - durationSeconds（Number）：片库记录的时长（秒）。播放器还读不到时长时，悬停预览图与有效观看判定用它。
 
   Events
@@ -58,7 +58,7 @@
           class="preview-drawer__video"
           playsinline
           preload="metadata"
-          :muted="true"
+          @volumechange="rememberAudio"
           @click="$refs.controls?.togglePlayback()"
           @loadedmetadata="handleLoadedMetadata"
           @play="handlePlay"
@@ -131,6 +131,7 @@
 </template>
 
 <script>
+import { restorePlaybackAudio, rememberPlaybackAudio } from '../../utils/playbackAudio.js';
 import { handlePlaybackKey } from '../../utils/playbackKeyboard.js';
 import PlaybackSubtitleControls from './PlaybackSubtitleControls.vue';
 import PlaybackControls from './PlaybackControls.vue';
@@ -303,6 +304,7 @@ installPlaybackBarrier(this.$refs.videoElement,this._activeHandle);
   },
   methods: {
     formatDuration,
+    rememberAudio(event) { if (!this.resettingVideo && event.target === this.$refs.videoElement) rememberPlaybackAudio(event.target); },
     handlePlaybackKey(event) { handlePlaybackKey(event, this.$refs.videoElement); },
     // ===== 宿主可调 =====
     play() { this.$refs.playerShell?.focus({ preventScroll: true }); return this.$refs.videoElement?.play(); },
@@ -492,7 +494,7 @@ installPlaybackBarrier(this.$refs.videoElement,this._activeHandle);
     },
     // ===== 起播位置 =====
     handleLoadedMetadata() { this.configureVideoElement(); this.maybeAutoplay(); },
-    configureVideoElement() { const video = this.$refs.videoElement; if (!video) return; video.defaultMuted = true; video.muted = true; this.applyStartTime(video); },
+    configureVideoElement() { const video = this.$refs.videoElement; if (!video) return; restorePlaybackAudio(video); this.applyStartTime(video); },
     // 起播参数（PLAY-10）：指定时刻优先，否则用宿主按 watchState 算好的续播断点；与 detailPlaybackStartMs 同一套判断。
     playbackStartOptions() {
       const videoID = Number(this.videoId);
@@ -649,7 +651,7 @@ if(event.target.nativePlayback){this.emitWatchProgress(true,false);this.hasPlayb
     resetVideoElement() {
       const video = this.$refs.videoElement; if (!video) return; if(video.nativePlayback){video.close('replaced').catch(()=>{});return;} this.resettingVideo = true;
       try { video.pause(); } catch (err) {} try { video.currentTime = 0; } catch (err) {}
-      video.defaultMuted = true; video.muted = true; this.appliedSeekKey = ''; video.removeAttribute('src'); const source = video.querySelector('source'); if (source) source.removeAttribute('src'); video.load();
+      this.appliedSeekKey = ''; video.removeAttribute('src'); const source = video.querySelector('source'); if (source) source.removeAttribute('src'); video.load();
       this.lastProgressEmittedAt = 0; this.hasPlaybackStarted = false; this.seekPreview = null; this.resettingVideo = false;
     },
     // ===== 悬停进度条的 seek 预览图 =====

@@ -17,7 +17,7 @@
     <AppBanner v-if="failedCount" tone="info" :title="`有 ${failedCount} 项画面暂时无法显示`" data-test="explore-image-failures">
       <template #actions><button type="button" class="btn btn--secondary btn--sm" :disabled="locked" data-test="explore-retry-images" @click="retrySignal++">重试画面</button><button v-if="remainingFailed" type="button" class="btn btn--secondary btn--sm" :disabled="locked" @click="reshuffle">重新洗牌</button></template>
     </AppBanner>
-    <AppBanner v-if="libraryChanged" tone="info" title="片库有变化，当前排列保持不变">
+    <AppBanner v-if="libraryChanged" tone="info" title="片库有变化，正在核对并补充内容">
       <template #actions><button type="button" class="btn btn--secondary btn--sm" :disabled="locked" @click="refresh">核对当前内容</button></template>
     </AppBanner>
     <p v-if="loading && !snapshot" class="explore-status" role="status">正在准备这一轮的画面…</p>
@@ -91,9 +91,10 @@ export default {
     remainingFailed() { const unseen = (this.snapshot?.entries || []).filter(e => !e.presented); return this.snapshot?.remaining_count > 0 && this.snapshot.remaining_count <= unseen.length && unseen.length > 0 && unseen.every(e => this.cards[e.entry_id]?.unavailable_reason || this.failedCards[e.entry_id]); }
   },
   watch: {
-    pageActive(active) { if (!active) { this.suspend(); this.flush().catch(error => { this.error = error.message; }); } else { this.focused = document.hasFocus(); if (!this.snapshot) this.start(); else this.$nextTick(() => this.$refs.wall?.focus()); } }
+    pageActive(active) { if (!active) { this.suspend(); this.flush().catch(error => { this.error = error.message; }); } else { this.focused = document.hasFocus(); if (!this.snapshot) this.start(); else { this.$nextTick(() => this.$refs.wall?.focus()); this.scheduleRefill(); } } }
   },
   created() {
+    this._openedEntries = new Set(); this._libraryRevision = 0; this._disposed = false;
     this._tracker = createMediaExposureTracker(); this._wanted = new Set(); this._reading = null;
     this._controller = markRaw(createExplorationController(this.api, (state, pendingView) => this.acceptSnapshot(state, pendingView)));
   },
@@ -106,7 +107,7 @@ export default {
     this._saveTimer = setInterval(() => { if (!this.frozen && this._controller.pending && !this._controller.blocked && !this.busy) this.flush().catch(error => { this.error = error.message; }); }, 1000);
     this._offEvents = [];
     for (const name of ['videos-changed', 'video-updated', 'video-deleted', 'image-library-changed', 'image-updated', 'image-deleted', 'scan-completed', 'library-changed', 'version-groups-changed', 'library-scan-summary', 'library-watcher-reconciled', 'image-scan-completed']) {
-      const off = window.runtime?.EventsOn?.(name, () => { this.libraryChanged = true; this.closePreview(); }); if (typeof off === 'function') this._offEvents.push(off);
+      const off = window.runtime?.EventsOn?.(name, () => { this.libraryChanged = true; this._libraryRevision++; this.scheduleRefill(); }); if (typeof off === 'function') this._offEvents.push(off);
     }
     for (const [name, handler] of [
       ['exploration-quiesced', () => { this.frozen = true; this.suspend(); this.notice = '数据库维护中，探索已暂停。'; }],
@@ -114,12 +115,56 @@ export default {
     ]) { const off = window.runtime?.EventsOn?.(name, handler); if (typeof off === 'function') this._offEvents.push(off); }
     if (this.pageActive) this.start();
   },
-  beforeUnmount() { this.suspend(); clearInterval(this._saveTimer); window.removeEventListener(MODAL_OPEN_EVENT, this._modalOpen); window.removeEventListener('focus', this._focus); window.removeEventListener('blur', this._focus); document.removeEventListener('visibilitychange', this._focus); for (const off of this._offEvents || []) off(); },
+  beforeUnmount() { this._disposed = true; clearTimeout(this._refillTimer); this.suspend(); clearInterval(this._saveTimer); window.removeEventListener(MODAL_OPEN_EVENT, this._modalOpen); window.removeEventListener('focus', this._focus); window.removeEventListener('blur', this._focus); document.removeEventListener('visibilitychange', this._focus); for (const off of this._offEvents || []) off(); },
   methods: {
+    scheduleRefill() {
+      clearTimeout(this._refillTimer);
+      if (this._disposed || !this.pageActive || this.locked || this._controller.blocked || this.error || (!this.libraryChanged && !this._openedEntries.size)) return;
+      this._refillTimer = setTimeout(() => this.refill(), 0);
+    },
+    async refill() {
+      clearTimeout(this._refillTimer);
+      if (this._disposed || !this.pageActive || this.locked || this._controller.blocked || this.error) return;
+      const revision = this._libraryRevision;
+      await this.run(async () => {
+        if (this.libraryChanged) {
+          await this._controller.change('replenish');
+          this.libraryChanged = revision !== this._libraryRevision;
+          const ids = (this.view.mode === 'wall' ? this.$refs.wall?.visibleEntries || [] : this.galleryEntries).map(entry => entry.entry_id);
+          const ticket = this.generation;
+          for (let offset = 0; offset < ids.length && this.pageActive; offset += 256) {
+            const result = await this.api.items({ ...explorationContext(this.snapshot), entry_ids: ids.slice(offset, offset + 256) });
+            if (ticket !== this.generation || !this.pageActive) break;
+            for (const card of result.items) this.cards[card.entry_id] = card;
+          }
+          if (Object.values(this.cards).some(card => card.unavailable_reason)) this.notice = '部分内容已不可用，暂时没有墙外内容可补充。';
+        }
+        while (this._openedEntries.size && this.pageActive && !this.frozen) {
+          const current = new Set(this.snapshot.entries.map(entry => entry.entry_id));
+          for (const id of this._openedEntries) if (!current.has(id)) this._openedEntries.delete(id);
+          const ids = [...this._openedEntries].slice(0, 256);
+          if (!ids.length) break;
+          await this._controller.change('replace', { entry_ids: ids });
+          for (const id of ids) this._openedEntries.delete(id);
+          this.notice = this.snapshot.entries.some(entry => ids.includes(entry.entry_id)) ? '暂时没有墙外的新内容可补充，已保留原位置。' : '';
+        }
+      });
+    },
     async start() { this.loading = true; this.error = ''; try { await this._controller.open(this.scope); } catch (error) { this.error = error.message; } finally { this.loading = false; } },
     acceptSnapshot(state, pendingView) {
-      const changed = this.snapshot?.scene_id !== state.scene_id || this.snapshot?.database_epoch !== state.database_epoch || this.snapshot?.scope !== state.scope || this.snapshot?.entries.some((entry, index) => state.entries[index]?.entry_id !== entry.entry_id || state.entries[index]?.media_id !== entry.media_id);
-      if (changed) { this.generation++; this.loader.cancelAll(); this.cards = {}; this.failedCards = {}; this._wanted.clear(); this._reading = null; this._tracker.reset(); this.closePreview(); }
+      const changed = this.snapshot?.scene_id !== state.scene_id || this.snapshot?.database_epoch !== state.database_epoch || this.snapshot?.scope !== state.scope;
+      if (changed) { this.generation++; this.loader.cancelAll(); this.cards = {}; this.failedCards = {}; this._wanted.clear(); this._reading = null; this._tracker.reset(); this._openedEntries.clear(); this.closePreview(false); }
+      else {
+        if (this.snapshot.round_id !== state.round_id) this._tracker.reset();
+        const previous = new Map(this.snapshot.entries.map(entry => [entry.entry_id, entry.media_id]));
+        const retained = new Set(state.entries.filter(entry => previous.get(entry.entry_id) === entry.media_id).map(entry => entry.entry_id));
+        if (retained.size !== this.snapshot.entries.length || retained.size !== state.entries.length) {
+          this.generation++; this._reading = null; this._wanted.clear();
+          this._tracker.forget(this.snapshot.entries.filter(entry => !retained.has(entry.entry_id)).map(entry => entry.entry_id));
+          this.$nextTick(() => this.loadCards((this.view.mode === 'wall' ? this.$refs.wall?.visibleEntries || [] : this.galleryEntries).map(entry => entry.entry_id)));
+        }
+        for (const id of Object.keys(this.cards)) if (!retained.has(Number(id))) { delete this.cards[id]; delete this.failedCards[id]; }
+      }
       this.snapshot = state; this.scope = state.scope;
       this.view = { ...state.view_state, ...(pendingView || {}), gallery_entry_ids: pendingView?.gallery_entry_ids || state.view_state.gallery_entry_ids || [] };
     },
@@ -134,7 +179,8 @@ export default {
     },
     loadCards(ids) {
       if (!this.pageActive || !this.snapshot) return Promise.resolve();
-      for (const id of ids) if (!this.cards[id]) this._wanted.add(id);
+      const current = new Set(this.snapshot.entries.map(entry => entry.entry_id));
+      this._wanted = new Set(ids.filter(id => current.has(id) && !this.cards[id]));
       if (this._reading) return this._reading;
       const ticket = this.generation;
       const run = this.drainCards(ticket).catch(error => { if (ticket === this.generation) this.error = error.message; }).finally(() => { if (this._reading === run) this._reading = null; });
@@ -145,7 +191,8 @@ export default {
         const ids = [...this._wanted].slice(0, 256); for (const id of ids) this._wanted.delete(id);
         const result = await this.api.items({ ...explorationContext(this.snapshot), entry_ids: ids });
         if (ticket !== this.generation || !this.pageActive) return;
-        for (const card of result.items) this.cards[card.entry_id] = card;
+        const current = new Set(this.snapshot.entries.map(entry => entry.entry_id));
+        for (const card of result.items) if (current.has(card.entry_id)) this.cards[card.entry_id] = card;
       }
     },
     invalidateCards() {
@@ -153,7 +200,7 @@ export default {
       this.$nextTick(() => this.loadCards((this.view.mode === 'wall' ? this.$refs.wall?.visibleEntries || [] : this.galleryEntries).map(e => e.entry_id)));
     },
     async flush() { return this._controller.flush(); },
-    async run(action) { if (this.busy) return; this.busy = true; this.error = ''; try { return await action(); } catch (error) { this.error = error.message; } finally { this.busy = false; } },
+    async run(action) { if (this.busy) return; this.busy = true; this.error = ''; try { return await action(); } catch (error) { this.error = error.message; } finally { this.busy = false; this.scheduleRefill(); } },
     async changeScope(scope) { if (this.locked) return; await this.run(() => this._controller.open(scope)); },
     async next() {
       if (this.locked) return;
@@ -169,7 +216,7 @@ export default {
       });
     },
     async reshuffle() { if (!this.locked) await this.run(() => this._controller.change('reshuffle')); },
-    async refresh() { if (this.locked) return; await this.run(async () => { await this._controller.change('refresh'); this.libraryChanged = false; this.invalidateCards(); }); },
+    async refresh() { if (this.locked) return; await this.run(async () => { await this._controller.change('replenish'); this.libraryChanged = false; this.invalidateCards(); }); },
     async recover() { await this.run(async () => { if (!this.snapshot) return this._controller.open(this.scope); await this._controller.recover(); this.invalidateCards(); }); },
     async reload() {
       if (!await confirmAction({ title: '刷新探索场景', message: '将放弃尚未确认保存的浏览记录和视口，读取已保存的场景。', confirmLabel: '刷新场景' })) return;
@@ -186,6 +233,7 @@ export default {
       } catch (error) { if (ticket === this.previewGeneration) this.error = error.message || String(error); return; }
       if (ticket !== this.previewGeneration || !this.pageActive) return;
       if (!card || card.unavailable_reason) { this.error = card?.unavailable_reason || '内容尚未读取，请重试'; return; }
+      this._openedEntries.add(entry.entry_id);
       this.preview = { entry, card, image: { id: entry.media_id, name: card.title } }; this.previewSession = null; this.previewError = ''; this._tracker.update([], { active: false });
       if (entry.kind !== 'video') return;
       this.previewBusy = true;
@@ -209,14 +257,14 @@ export default {
       catch (error) { if (ticket === this.previewGeneration) this.previewError = error.message || String(error); }
       finally { if (ticket === this.previewGeneration) this.previewBusy = false; }
     },
-    closePreview() { this.previewGeneration++; this.$refs.previewPlayer?.pause(); this.preview = null; this.previewSession = null; this.previewBusy = false; this.$nextTick(() => { if (this.pageActive && !this.frozen) this.$refs.wall?.focus(); }); },
+    closePreview(refill = true) { this.previewGeneration++; this.$refs.previewPlayer?.pause(); this.preview = null; this.previewSession = null; this.previewBusy = false; this.$nextTick(() => { if (this.pageActive && !this.frozen) this.$refs.wall?.focus(); }); if (refill) this.scheduleRefill(); },
     previewImageFailed(event) { if (this.preview && event.target.getAttribute('src') === this.previewFrameURL) this.previewError = '画面暂时无法读取，可换个画面或打开详情。'; },
-    async stepPreview(delta) { const entry = this.snapshot.entries[this.previewIndex + delta]; if (!entry) return; this.closePreview(); await this.openPreview(entry); },
-    async openDetail() { const id = this.preview?.entry.media_id; if (!id) return; this.closePreview(); await this.run(async () => { await this.flush(); if (this.pageActive) this.$emit('open-video', id); }); },
+    async stepPreview(delta) { const entry = this.snapshot.entries[this.previewIndex + delta]; if (!entry) return; this.closePreview(false); await this.openPreview(entry); },
+    async openDetail() { const id = this.preview?.entry.media_id; if (!id) return; this.closePreview(false); await this.run(async () => { await this.flush(); if (this.pageActive) this.$emit('open-video', id); }); },
     patchImage(fields) { if (this.preview?.entry.kind === 'image' && fields.id === this.preview.entry.media_id) this.preview.image = { ...this.preview.image, ...fields }; },
     openPerson(person) { this.closePreview(); this.$emit('open-person', person); },
     openImageManage(image) { this.closePreview(); this.$emit('open-in-manage', image); },
-    suspend() { this.generation++; this.closePreview(); this.loader.cancelAll(); this._wanted.clear(); this._reading = null; this._tracker.update([], { active: false }); },
+    suspend() { this.generation++; this.closePreview(false); this.loader.cancelAll(); this._wanted.clear(); this._reading = null; this._tracker.update([], { active: false }); },
     async prepareClose() { this.frozen = true; this.suspend(); if (this._controller.blocked) await this._controller.recover(); await this.flush(); },
     resumeClose() { this.frozen = false; },
   }

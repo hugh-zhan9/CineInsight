@@ -127,7 +127,7 @@ clip 行保存范围与独立 batch/position/count。后端只前进到同批下
 
 ### 探索短预览用途（2026-11-04）
 
-`InlineVideoPlayer`新增显式`usage=browse-preview`，默认playback保持原调用方行为。探索用途不创建正式观看tracker，不写自身的播放次数、断点、已看或日记，不自动生成代理，不向全局队列追加项目；单实例、静音起步，在所选最多8秒区间内播放/重播并限制seek。进入正式详情前退休局部预览，正式播放继续走原owner。图片点击进入PhotoLightbox后仍按原阈值记录查看，微缩墙本身不记正式查看。不能直接内嵌的会话显示有来源绑定的取样帧和详情入口；未知时长只显示原缩略图及说明。具体合同与验证见[探索设计](../loopx/design/2026-11-04-media-exploration/需求设计文档.md#D-ME-08)。
+`InlineVideoPlayer`新增显式`usage=browse-preview`，默认playback保持原调用方行为。探索用途不创建正式观看tracker，不写自身的播放次数、断点、已看或日记，不自动生成代理，不向全局队列追加项目；单实例、沿用上次音量及静音状态（首次静音），在所选最多8秒区间内播放/重播并限制seek。进入正式详情前退休局部预览，正式播放继续走原owner。图片点击进入PhotoLightbox后仍按原阈值记录查看，微缩墙本身不记正式查看。不能直接内嵌的会话显示有来源绑定的取样帧和详情入口；未知时长只显示原缩略图及说明。具体合同与验证见[探索设计](../loopx/design/2026-11-04-media-exploration/需求设计文档.md#D-ME-08)。
 
 ## 2026-11-06 原生应用内播放与结束推荐
 
@@ -138,3 +138,8 @@ clip 行保存范围与独立 batch/position/count。后端只前进到同批下
 正式整片队列加性返回`media_mode/native_source`，NativeOpen/字幕仍核对当前queue token、video/source身份，HTTP队列媒体接口不提供native源字节。原统计/断点仍由InlineVideoPlayer、PlaybackQueueService写入。正常单片结束及authoritative队列耗尽显示最多3个推荐和重播；选择后核验来源、退役旧会话，再进入详情自动播放。区间、拖动和探索守原合同。
 
 受控原片操作经native source mutation port：短FD登记gate与匹配路径屏障覆盖变更期间，先关闭匹配来源，再rename/remove/系统废纸篓或记录删除；非匹配已有FD不等待全局目录复制锁。打包验证固定运行时hash、arm64、依赖闭包与最低系统；最终签名只更新打包副本manifest。发布包缺组件不查cwd/开发目录。实际验收范围以[执行记录](../loopx/plans/2026-11-05-discovery-playback.md)为准，本轮实现验收已完成，既有失败按执行记录单列。
+
+
+### 2026-11-09 应用内音量记忆
+
+用户要求上一个视频有声音时，下一个不要归零。详情、探索预览和队列共用本机 `cineinsight-playback-audio` 偏好（volume 0–1、muted布尔），切换或重建播放器恢复该值；显式静音和音量0也保留。重复loadedmetadata不再重置用户操作。原生播放器每次打开会话使用当前偏好，HTML媒体通过初始化后volumechange保存；退出清理不覆盖偏好。不更改外部播放器及手机端音量，也不改变观看统计。

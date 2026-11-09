@@ -196,6 +196,10 @@ func (s *MediaExplorationService) Update(ctx context.Context, r ExplorationReque
 				if err := explorationRefreshAvailability(tx, state); err != nil {
 					return err
 				}
+			case "replace", "replenish":
+				if err := explorationRefill(tx, &state, r.EntryIDs, r.Action == "replenish"); err != nil {
+					return err
+				}
 			case "sample":
 				value, _ := json.Marshal(samples)
 				updated := tx.Model(&models.MediaExplorationEntry{}).Where("id = ? AND state_id = ? AND scene_id = ? AND media_kind = ?", r.EntryID, state.ID, state.SceneID, "video").Update("sample_points_json", string(value))

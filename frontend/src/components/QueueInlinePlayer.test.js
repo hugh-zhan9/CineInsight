@@ -169,3 +169,16 @@ it('clamps clip keyboard seeks and consumes the clip end exactly once', async ()
 it('does not play a malformed clip as a whole video', async () => {
   await clipPlayer(20000, 10000); expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled(); expect(wrapper.find('[data-test="queue-inline-error"]').exists()).toBe(true);
 });
+
+it('restores volume for the next queue player and preserves explicit mute and zero volume', async () => {
+  let saved=JSON.stringify({volume:.42,muted:false});
+  vi.stubGlobal('localStorage',{getItem:()=>saved,setItem:(_key,value)=>{saved=value;}});
+  try {
+    let video=await player();
+    expect(video.element.volume).toBe(.42); expect(video.element.muted).toBe(false);
+    video.element.volume=0; video.element.muted=true; await video.trigger('volumechange');
+    wrapper.unmount(); wrapper=null;
+    video=await player();
+    expect(video.element.volume).toBe(0); expect(video.element.muted).toBe(true);
+  } finally {vi.unstubAllGlobals();}
+});

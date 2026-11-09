@@ -14,6 +14,10 @@ function fixture(count = 40) {
   const api = { open: vi.fn(async () => JSON.parse(JSON.stringify(state))), items: vi.fn(async request => ({ items: request.entry_ids.map(id => ({ entry_id: id, media_id: id, kind: 'video', title: `视频 ${id}`, duration_ms: 100000, thumbnail_url: `/preview/thumbnail/${id}?exploration_scope=all` })) })), update: vi.fn(async request => {
     state.revision++; state.last_receipt = { request_id: request.request_id };
     if (request.action === 'present') { for (const e of state.entries) if (request.entry_ids.includes(e.entry_id)) e.presented = true; state.presented_count = state.entries.filter(e => e.presented).length; }
+    if (request.action === 'replace' || request.action === 'replenish') {
+      const ids = request.entry_ids || [state.entries[0]?.entry_id];
+      state.entries = state.entries.map(entry => ids.includes(entry.entry_id) ? { ...entry, entry_id: entry.entry_id + 1000, media_id: entry.media_id + 1000, presented: false, samples: [] } : entry);
+    }
     if (request.action === 'save_view') state.view_state = request.view;
     if (request.action === 'sample') state.entries.find(e => e.entry_id === request.entry_id).samples = [{ start_ms: 12000, end_ms: 20000, source_version: 'source' }];
     return JSON.parse(JSON.stringify(state));
@@ -109,4 +113,78 @@ describe('exploration page', () => {
     expect(wrapper.findComponent(Player).exists()).toBe(false);
     expect(api.update.mock.calls.some(([request]) => request.action === 'sample')).toBe(false);
   });
+});
+
+
+it('replaces all opened items on close while retaining other cards and camera', async () => {
+  const api = fixture(), wrapper = await page(api);
+  await wrapper.vm.loadCards([1, 2, 3]);
+  const third = wrapper.vm.cards[3];
+  wrapper.vm.cameraChanged({ scale: 1.2, x: -300, y: -400 });
+  await wrapper.vm.openPreview(wrapper.vm.snapshot.entries[0]);
+  await wrapper.vm.stepPreview(1);
+  expect(api.update.mock.calls.some(([r]) => r.action === 'replace')).toBe(false);
+  wrapper.vm.closePreview(); await wrapper.vm.refill(); await flushPromises();
+  expect(api.update.mock.calls.find(([r]) => r.action === 'replace')[0].entry_ids).toEqual([1, 2]);
+  expect(wrapper.vm.snapshot.entries.slice(0, 3).map(e => e.entry_id)).toEqual([1001, 1002, 3]);
+  expect(wrapper.vm.cards[3]).toBe(third);
+  expect(wrapper.vm.view).toMatchObject({ scale: 1.2, x: -300, y: -400 });
+});
+
+it('waits for detail return before replacing the opened item', async () => {
+  const api = fixture(), wrapper = await page(api);
+  await wrapper.vm.openPreview(wrapper.vm.snapshot.entries[0]);
+  await wrapper.vm.openDetail(); await wrapper.setProps({ pageActive: false });
+  await wrapper.vm.refill();
+  expect(api.update.mock.calls.some(([r]) => r.action === 'replace')).toBe(false);
+  await wrapper.setProps({ pageActive: true }); await wrapper.vm.refill();
+  expect(wrapper.vm.snapshot.entries[0].entry_id).toBe(1001);
+});
+
+it('coalesces library events and refills after returning without refreshing the whole wall', async () => {
+  const handlers = {};
+  window.runtime = { EventsOn: (name, fn) => { handlers[name] = fn; return () => {}; } };
+  try {
+    const api = fixture(), wrapper = await page(api);
+    await wrapper.setProps({ pageActive: false });
+    handlers['image-deleted'](); handlers['image-library-changed']();
+    await wrapper.vm.refill();
+    expect(api.update.mock.calls.some(([r]) => r.action === 'replenish')).toBe(false);
+    await wrapper.setProps({ pageActive: true }); await wrapper.vm.refill();
+    expect(api.update.mock.calls.filter(([r]) => r.action === 'replenish')).toHaveLength(1);
+    expect(wrapper.vm.snapshot.entries[0].entry_id).toBe(1001);
+    expect(wrapper.vm.snapshot.entries[1].entry_id).toBe(2);
+  } finally { delete window.runtime; }
+});
+
+it('acknowledges reused entries again after an automatic round change', async () => {
+  const api=fixture(), wrapper=await page(api); let now=0;
+  vi.spyOn(performance,'now').mockImplementation(()=>now);
+  const cells=[{id:1,loaded:true,fraction:1}];
+  wrapper.vm.exposure(cells);now=300;wrapper.vm.exposure(cells);await wrapper.vm.flush();
+  api.update.mockResolvedValueOnce({...wrapper.vm.snapshot,round_id:'next-round',revision:wrapper.vm.snapshot.revision+1,entries:wrapper.vm.snapshot.entries.map(e=>({...e,presented:false}))});
+  await wrapper.vm._controller.change('replace',{entry_ids:[2]});
+  now=1000;wrapper.vm.exposure(cells);now=1300;wrapper.vm.exposure(cells);await wrapper.vm.flush();
+  expect(api.update.mock.calls.filter(([r])=>r.action==='present')).toHaveLength(2);
+});
+
+it('discards a stale metadata failure after local replacement and loads the new slot', async () => {
+  const api=fixture(), wrapper=await page(api);
+  let reject;api.items.mockImplementationOnce(()=>new Promise((_resolve,r)=>{reject=r;}));
+  const old=wrapper.vm.loadCards([1]);
+  await wrapper.vm._controller.change('replace',{entry_ids:[1]});
+  const fresh=wrapper.vm.loadCards([1001]);
+  reject(Object.assign(new Error('retired entry'),{code:'invalid_request'}));
+  await old;await fresh;await flushPromises();
+  expect(wrapper.vm.error).toBe('');
+  expect(wrapper.vm.cards[1001]?.title).toBe('视频 1001');
+});
+
+
+it('ignores a delayed viewport notification containing retired entries', async () => {
+  const api=fixture(),wrapper=await page(api);
+  await wrapper.vm._controller.change('replace',{entry_ids:[1]});
+  api.items.mockClear();
+  await wrapper.vm.loadCards([1,1001]);
+  expect(api.items).toHaveBeenCalledWith(expect.objectContaining({entry_ids:[1001]}));
 });

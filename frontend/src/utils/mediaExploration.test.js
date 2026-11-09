@@ -69,6 +69,31 @@ describe('exploration mutation owner', () => {
   });
 });
 
+it('loads visible requests before queued overscan and updates priorities during panning', async () => {
+  const complete = [];
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => complete.push(() => resolve({ ok: true, blob: async () => new Blob(['image']) })))));
+  const loader = createExplorationImageLoader(1);
+  let settled;
+  try {
+    const first = loader.load('/first');
+    const outside = loader.load('/outside', 0);
+    const visible = loader.load('/visible', 1);
+    const incoming = loader.load('/incoming', 0);
+    settled = Promise.allSettled([first.promise, outside.promise, visible.promise, incoming.promise]);
+    incoming.setPriority?.(2);
+    await Promise.resolve();
+    complete.shift()(); await first.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/first', '/incoming']);
+    complete.shift()(); await incoming.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetch.mock.calls.at(-1)[0]).toBe('/visible');
+    complete.shift()(); await visible.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    complete.shift()(); await outside.promise;
+  } finally { loader.cancelAll(); await settled; await Promise.resolve(); vi.unstubAllGlobals(); }
+});
+
 it('loads at most six images and cancels both running and queued consumers', async () => {
   const fetch = vi.fn((_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))));
   vi.stubGlobal('fetch', fetch);

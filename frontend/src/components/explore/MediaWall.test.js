@@ -24,6 +24,28 @@ it('does not count a wall clipped outside the actual application viewport', asyn
   expect(wrapper.emitted('exposure').at(-1)[0][0].fraction).toBe(0);
 });
 
+it('requests on-screen cells before overscan without changing their slots', () => {
+  offscreenGeometry();
+  const entries = Array.from({ length: 1024 }, (_, slot) => ({ ...entry, entry_id: slot + 1, slot }));
+  const wrapper = mount(MediaWall, { props: { entries, loader: {}, view: { scale: 1, x: -324, y: -324 } }, global: { stubs: { MediaTile: true } } }); mounted.push(wrapper);
+  const ordered = wrapper.vm.visibleEntries;
+  expect(ordered[0].slot).toBe(66);
+  const firstOverscan = ordered.findIndex(item => !wrapper.vm.visibleIDs.has(item.entry_id));
+  expect(firstOverscan).toBeGreaterThan(0);
+  expect(ordered.slice(firstOverscan).every(item => !wrapper.vm.visibleIDs.has(item.entry_id))).toBe(true);
+  expect(entries[0].slot).toBe(0);
+});
+
+it('updates an existing tile request priority without fetching the image again', async () => {
+  const setPriority = vi.fn();
+  const load = vi.fn(() => ({ promise: new Promise(() => {}), cancel: vi.fn(), setPriority }));
+  const wrapper = mount(MediaTile, { props: { entry, card: { thumbnail_url: '/fixture?x=1' }, loader: { load }, priority: 0 } }); mounted.push(wrapper);
+  expect(load).toHaveBeenCalledWith('/fixture?x=1&edge=96', 0);
+  await wrapper.setProps({ priority: 1 });
+  expect(setPriority).toHaveBeenCalledWith(1);
+  expect(load).toHaveBeenCalledTimes(1);
+});
+
 it('does not count an offscreen gallery even when its own observer root is full', async () => {
   vi.useFakeTimers(); offscreenGeometry();
   const wrapper = mount(RandomGallery, { props: { entries: [entry], loader: {} }, global: { stubs: { MediaTile: { props: ['entry'], template: '<button :data-entry-id="entry.entry_id" />' } } } }); mounted.push(wrapper);

@@ -131,7 +131,7 @@ func validateExplorationRequest(r ExplorationRequest) error {
 		return ErrExplorationInvalid
 	}
 	switch r.Action {
-	case "present":
+	case "present", "replace":
 		if len(r.EntryIDs) == 0 || len(r.EntryIDs) > explorationBatchLimit {
 			return ErrExplorationInvalid
 		}
@@ -157,7 +157,7 @@ func validateExplorationRequest(r ExplorationRequest) error {
 			}
 			seen[id] = true
 		}
-	case "next", "reshuffle", "refresh":
+	case "next", "reshuffle", "refresh", "replenish":
 	case "sample":
 		if r.EntryID == 0 || r.EntryID > experienceMaxSafeInteger || r.SourceVersion == "" || len(r.SourceVersion) > 256 {
 			return ErrExplorationInvalid
@@ -165,7 +165,7 @@ func validateExplorationRequest(r ExplorationRequest) error {
 	default:
 		return ErrExplorationInvalid
 	}
-	if r.Action != "present" && len(r.EntryIDs) != 0 || r.Action != "save_view" && r.View != nil || r.Action != "sample" && (r.EntryID != 0 || r.SourceVersion != "") {
+	if r.Action != "present" && r.Action != "replace" && len(r.EntryIDs) != 0 || r.Action != "save_view" && r.View != nil || r.Action != "sample" && (r.EntryID != 0 || r.SourceVersion != "") {
 		return ErrExplorationInvalid
 	}
 	return nil

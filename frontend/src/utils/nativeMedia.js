@@ -1,3 +1,4 @@
+import { readPlaybackAudio } from './playbackAudio.js';
 import {
  AcquireNativePlaybackOwner, ReleaseNativePlaybackOwner, OpenNativePlayback,
  CommandNativePlayback, SetNativePlaybackViewport, GetNativePlaybackSnapshot,
@@ -17,6 +18,7 @@ export class NativeMediaElement extends HTMLElement {
  connectedCallback(){if(!this.hasAttribute('tabindex'))this.tabIndex=0;this.style.display='block';this.style.aspectRatio='16 / 9';this._geometry=()=>this.scheduleViewport();window.addEventListener('resize',this._geometry);window.addEventListener('scroll',this._geometry,true);document.addEventListener('visibilitychange',this._geometry);this._resize=new ResizeObserver(this._geometry);this._resize.observe(this);this._mutations=new MutationObserver(this._geometry);this._mutations.observe(document.body,{subtree:true,attributes:true,childList:true,attributeFilter:['style','class','open','hidden']});if(this._source)this._start();}
  disconnectedCallback(){this._resize?.disconnect();this._mutations?.disconnect();window.removeEventListener('resize',this._geometry);window.removeEventListener('scroll',this._geometry,true);document.removeEventListener('visibilitychange',this._geometry);cancelAnimationFrame(this._raf);clearTimeout(this._viewportTimer);this.close('navigate').catch(()=>{});}
  async _start(){
+ const audio=readPlaybackAudio();this._initialMuted=audio.muted;this._initialVolume=audio.volume;
  const previous=this.close('replaced');const generation=++this._generation;this._closed=false;this._retiring=false;this._error=null;this._state={seq:-1,state:'opening',position_ms:0,duration_ms:0,paused:true,muted:true,volume:1,rate:1};this._seq=0;this._revision=0;this._subtitleRevision=0;this._commands=Promise.resolve();this._lastViewport='';
  this._opened=(async()=>{
   await previous;if(!this._current(generation))throw abort();
@@ -26,7 +28,7 @@ export class NativeMediaElement extends HTMLElement {
   const owner=await api.acquire({component_nonce:crypto.randomUUID(),window_epoch:capability.window_epoch});
   if(!this._current(generation)){await api.release(owner);throw abort();}this._owner=owner;
   this._off=window.runtime?.EventsOn?.('native-playback-state',state=>{if(this._current(generation)&&state.session_id===this._session?.session_id)this._apply(state);});
-  const session=await api.open({...owner,request_id:crypto.randomUUID(),video_id:this._source.video_id,source_version:this._source.source_version,queue_token:this._source.queue_token||'',start_ms:this._source.start_ms||0,paused:true,muted:this._initialMuted??true,volume:this._initialVolume??1});
+  const session=await api.open({...owner,request_id:crypto.randomUUID(),video_id:this._source.video_id,source_version:this._source.source_version,queue_token:this._source.queue_token||'',start_ms:this._source.start_ms||0,paused:true,muted:this._initialMuted,volume:this._initialVolume});
   if(!this._current(generation)){await api.release(owner);throw abort();}this._session=session;
   this._apply(await api.snapshot(this._ref()));this.scheduleViewport();return session;
  })();this._opened.catch(error=>{if(this._current(generation))this._fail(error);});

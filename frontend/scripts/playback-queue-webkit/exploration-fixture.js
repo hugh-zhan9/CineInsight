@@ -5,6 +5,7 @@ import '../../src/styles/tokens.css';
 import '../../src/styles/components.css';
 
 const clone = value => JSON.parse(JSON.stringify(value)), calls = [], handlers = new Map();
+let deletedEntry = 0;
 let page, detail = false, revision = 1, scene = 'scene-1', view = { mode: 'wall', scale: .35, x: 0, y: 0, selected_id: 0, gallery_id: 0, gallery_entry_ids: [] }, receipt = {};
 let entries = Array.from({ length: 1024 }, (_, i) => ({ entry_id: i + 1, media_id: i + 1, kind: i % 3 === 0 ? 'video' : 'image', slot: i, presented: false, samples: [] }));
 const snapshot = () => ({ database_epoch: 'fixture-db', scope: 'all', scene_id: scene, round_id: 'round-1', revision, view_state: view, status: 'ready', available_count: 2000, presented_count: entries.filter(e => e.presented).length, remaining_count: 2000 - entries.filter(e => e.presented).length, entries, last_receipt: receipt });
@@ -12,7 +13,7 @@ window.runtime = { EventsOn(name, callback) { handlers.set(name, callback); retu
 window.go = { main: { App: new Proxy({}, { get: (_, method) => async (...args) => {
   calls.push({ method, args: clone(args) });
   if (method === 'OpenMediaExploration') return { status: 'ok', data: clone(snapshot()) };
-  if (method === 'GetMediaExplorationItems') return { status: 'ok', data: { items: args[0].entry_ids.map(id => { const entry = entries.find(e => e.entry_id === id); return { entry_id: id, media_id: entry.media_id, kind: entry.kind, title: `${entry.kind === 'image' ? '照片' : '视频'} ${id}`, duration_ms: entry.kind === 'video' ? 6000 : null, thumbnail_url: `/preview/thumbnail/${id}?exploration_scope=all`, unavailable_reason: '' }; }) } };
+  if (method === 'GetMediaExplorationItems') return { status: 'ok', data: { items: args[0].entry_ids.map(id => { const entry = entries.find(e => e.entry_id === id); if (!entry) throw new Error('retired card ' + id); return { entry_id: id, media_id: entry.media_id, kind: entry.kind, title: `${entry.kind === 'image' ? '照片' : '视频'} ${id}`, duration_ms: entry.kind === 'video' ? 6000 : null, thumbnail_url: `/preview/thumbnail/${id}?exploration_scope=all`, unavailable_reason: '' }; }) } };
   if (method === 'UpdateMediaExploration') {
     const request = clone(args[0]);
     if (request.expected_revision !== revision) return { status: 'error', error: { code: 'exploration_conflict', message: 'fixture revision conflict' } };
@@ -20,6 +21,18 @@ window.go = { main: { App: new Proxy({}, { get: (_, method) => async (...args) =
     if (request.action === 'present') for (const id of request.entry_ids) entries.find(e => e.entry_id === id).presented = true;
     if (request.action === 'save_view') view = request.view;
     if (request.action === 'sample') entries.find(e => e.entry_id === request.entry_id).samples = [{ start_ms: 500, end_ms: 1300, source_version: 'synthetic-source' }];
+    if (request.action === 'replace' || request.action === 'replenish') {
+      const ids = new Set(request.entry_ids || [deletedEntry]);
+      const replaced = new Map();
+      entries = entries.map(entry => {
+        if (!ids.has(entry.entry_id)) return entry;
+        const id = entry.entry_id + 10000; replaced.set(entry.entry_id, id);
+        return { ...entry, entry_id: id, media_id: id, presented: false, samples: [] };
+      });
+      if (replaced.has(view.selected_id)) view.selected_id = replaced.get(view.selected_id);
+      view.gallery_entry_ids = view.gallery_entry_ids.map(id => replaced.get(id) || id);
+      deletedEntry = 0;
+    }
     if (request.action === 'next') { scene = 'scene-2'; entries = Array.from({ length: 976 }, (_, i) => ({ entry_id: i + 1025, media_id: i + 1025, kind: 'image', slot: i, presented: false, samples: [] })); }
     return { status: 'ok', data: clone(snapshot()) };
   }
@@ -86,17 +99,32 @@ window.fixture = { async run() {
   video.currentTime = 4; await until(() => !video.seeking && video.currentTime <= 1.301, 'seek clamps to preview range');
   const formal = ['RecordViewEvent', 'UpdateVideoWatchProgress', 'PlayVideo', 'RequestPreviewProxy', 'CreatePlaybackProxy'];
   assert(!calls.some(c => formal.includes(c.method)), 'no formal facts or automatic proxy');
+  video.volume = .37; video.muted = false; await pause(40);
   const saved = { ...page.view }, savedScene = page.snapshot.scene_id;
   document.querySelector('[data-test=explore-detail]').click(); await until(() => detail && document.querySelector('#back'), 'open detail callback');
   assert(!document.querySelector('video'), 'detail transition retires preview');
   document.querySelector('#back').click(); await until(() => document.querySelector('.media-wall__viewport'), 'return to exploration');
   assert(page.snapshot.scene_id === savedScene && Math.abs(page.view.scale - saved.scale) < .001 && Math.abs(page.view.x - saved.x) < 1, 'return preserves scene and camera');
+  await until(() => !page.busy && !page.snapshot.entries.some(entry => entry.entry_id === videoEntry.entry_id), 'detail return replaces opened slot');
+  assert(page.snapshot.entries[videoEntry.slot].slot === videoEntry.slot, 'replacement retains slot');
+  const nextVideo = page.snapshot.entries.find(entry => entry.kind === 'video');
+  await page.openPreview(nextVideo);
+  await until(() => document.querySelector('video')?.readyState >= 2, 'second video ready');
+  const nextPlayer = document.querySelector('video');
+  assert(Math.abs(nextPlayer.volume - .37) < .001 && !nextPlayer.muted, 'audio retained in next video');
+  page.closePreview();
+  await until(() => !page.busy && !page.snapshot.entries.some(entry => entry.entry_id === nextVideo.entry_id), 'close replaces previewed slot').catch(error => { error.message += ' ' + JSON.stringify({error:page.error,notice:page.notice,busy:page.busy,locked:page.locked,opened:[...page._openedEntries],entry:nextVideo.entry_id,preview:!!page.preview,calls:calls.slice(-8)});throw error;});
+  deletedEntry = page.snapshot.entries[2].entry_id;
+  const removed = deletedEntry, neighbor = page.snapshot.entries[3].entry_id;
+  handlers.get('image-deleted')?.(); handlers.get('image-library-changed')?.();
+  await until(() => !page.busy && page.snapshot.entries[2].entry_id !== removed, 'delete event replenishes slot');
+  assert(page.snapshot.entries[3].entry_id === neighbor, 'delete preserves neighbor');
   document.querySelector('[data-test=explore-gallery]').click(); await nextTick();
   assert(document.querySelectorAll('.random-gallery .media-tile').length === 24, 'gallery bounded to 24');
   await page.prepareClose(); assert(!document.querySelector('video') && !page._controller.pending, 'close flush settles view and presentation'); page.resumeClose();
   page.changeMode('wall'); await nextTick(); page.$refs.wall.fit(); await pause(50);
   await until(() => { const tiles = [...document.querySelectorAll('.media-wall .media-tile')]; return tiles.length > 0 && tiles.every(tile => tile.querySelector('img')?.complete && tile.querySelector('img').naturalWidth > 0); }, 'settled wall after resume');
   frameTimes.sort((a, b) => a - b);
-  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'gallery-24', 'close-flush'] };
+  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'return-replacement', 'close-replacement', 'delete-replenishment', 'audio-retained', 'gallery-24', 'close-flush'] };
 } };
 window.ready = true;
