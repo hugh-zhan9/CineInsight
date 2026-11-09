@@ -90,7 +90,8 @@ const DEFAULT_FILTER = {
   keyword: '', directory: '', tag_ids: [], person_ids: [], favorite_only: false, min_rating: null, max_rating: null,
   min_size: 0, max_size: 0, taken_after: null, taken_before: null, sort_mode: 'taken', ai_tag_state: '', missing: ''
 };
-const searchCalls = () => api.SearchImagePage.mock.calls.map(([request]) => request);
+// The directory sidebar owns its separate 24-item queries; these assertions cover the host photo stream.
+const searchCalls = () => api.SearchImagePage.mock.calls.map(([request]) => request).filter(request => request.filter.sort_mode === DEFAULT_FILTER.sort_mode);
 const lastSearch = () => searchCalls().at(-1);
 
 beforeEach(() => {

@@ -24,7 +24,7 @@
 </template>
 <script>
 import PhotoMapCanvas from './PhotoMapCanvas.vue';
-import PhotoLightbox from './PhotoLightbox.vue';
+import PhotoLightbox from './PhotoPreview.vue';
 import MapConnectionControls from '../MapConnectionControls.vue';
 import DialogShell from '../ui/DialogShell.vue';
 import {photoMapAPI} from '../../utils/photoMap.js';

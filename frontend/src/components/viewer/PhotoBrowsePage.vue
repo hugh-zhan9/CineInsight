@@ -236,7 +236,7 @@
 //   没经过 App 的改动（后台扫描新增、「最近操作」里撤销删除…）靠切回本页时核对一次各月张数发现，变了同样原地重取。
 // 事件：navigate(key)、open-person({ id, name })、open-in-manage({ id, name })（「在图片管理中打开」）、image-changed(fields)（看图里存成功的收藏 / 评分）。
 import { ListImageFolderGroups, ListImageTimelineBuckets, ListPeople, SearchImagePage } from '../../../wailsjs/go/main/App';
-import PhotoLightbox from './PhotoLightbox.vue';
+import PhotoLightbox from './PhotoPreview.vue';
 import PhotoMapPanel from './PhotoMapPanel.vue';
 import PhotoAnniversaries from './PhotoAnniversaries.vue';
 import AppBadge from '../ui/AppBadge.vue';

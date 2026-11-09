@@ -37,7 +37,8 @@ window.go = { main: { App: new Proxy({}, { get: (_, method) => async (...args) =
     return { status: 'ok', data: clone(snapshot()) };
   }
   if (method === 'GetPreviewSession') return { video_id: args[0], mode: 'inline', source_version: 'synthetic-source', inline_source: { locator_value: '/clip.mp4', mime: 'video/mp4' } };
-  if (method === 'GetImageDetail') return { image: { id: args[0], name: `照片 ${args[0]}` }, people: [] };
+  if (method === 'GetImageDetail') return { image: { id: args[0], name: `照片 ${args[0]}`, directory: '/fixture/photos', width:256, height:256 }, people: [] };
+  if (method === 'SearchImagePage') return { images: [20001,20002,20003].map(id => ({ id, name: `同目录 ${id}`, directory: '/fixture/photos', width:256,height:256 })), next_cursor:null };
   if (method === 'RecordImageView') return { recorded: true, view_count: 1 };
   if (method === 'GetPlaybackProxyStatus') return { running: false, queued: 0, results: [] };
   return null;
@@ -124,7 +125,20 @@ window.fixture = { async run() {
   await page.prepareClose(); assert(!document.querySelector('video') && !page._controller.pending, 'close flush settles view and presentation'); page.resumeClose();
   page.changeMode('wall'); await nextTick(); page.$refs.wall.fit(); await pause(50);
   await until(() => { const tiles = [...document.querySelectorAll('.media-wall .media-tile')]; return tiles.length > 0 && tiles.every(tile => tile.querySelector('img')?.complete && tile.querySelector('img').naturalWidth > 0); }, 'settled wall after resume');
+  const wallBeforeDirectory = page.snapshot.entries.map(entry => entry.entry_id).join(',');
+  const photoEntry = page.snapshot.entries.find(entry => entry.kind === 'image');
+  await page.openPreview(photoEntry);
+  await until(() => document.querySelectorAll('.photo-directory__tile').length === 3, 'directory thumbnails loaded');
+  const originURL = document.querySelector('[data-test=photo-lightbox-img]').getAttribute('src');
+  document.querySelectorAll('.photo-directory__tile')[1].click();
+  await until(() => document.querySelector('[data-test=photo-lightbox-img]')?.getAttribute('src') === '/preview/image/20002', 'directory selection opens in same preview');
+  assert(document.querySelectorAll('[data-test=photo-lightbox]').length === 1, 'directory selection does not stack lightboxes');
+  assert(page.snapshot.entries.map(entry => entry.entry_id).join(',') === wallBeforeDirectory, 'directory navigation preserves wall');
+  document.querySelector('[data-test=photo-directory-return]').click();
+  await until(() => document.querySelector('[data-test=photo-lightbox-img]')?.getAttribute('src') === originURL, 'return restores original scoped photo');
+  const directoryRequest = calls.find(call => call.method === 'SearchImagePage').args[0];
+  assert(directoryRequest.filter.directory === '/fixture/photos' && directoryRequest.limit === 24, 'bounded exact-directory request');
   frameTimes.sort((a, b) => a - b);
-  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'return-replacement', 'close-replacement', 'delete-replenishment', 'audio-retained', 'gallery-24', 'close-flush'] };
+  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'return-replacement', 'close-replacement', 'delete-replenishment', 'audio-retained', 'gallery-24', 'close-flush', 'directory-list', 'directory-inline-selection', 'directory-origin-return', 'directory-wall-stability'] };
 } };
 window.ready = true;

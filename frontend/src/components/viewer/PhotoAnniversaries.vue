@@ -21,7 +21,7 @@
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue';
 import { ListImageAnniversaries } from '../../../wailsjs/go/main/App';
-import PhotoLightbox from './PhotoLightbox.vue';
+import PhotoLightbox from './PhotoPreview.vue';
 import AppBanner from '../ui/AppBanner.vue';
 import { functionalPolishError } from '../../utils/functionalPolishErrors.js';
 const props = defineProps({ personIds: { type: Array, default: () => [] }, pageActive: { type: Boolean, default: true } });

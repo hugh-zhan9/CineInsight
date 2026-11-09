@@ -67,7 +67,7 @@ import EmptyState from '../ui/EmptyState.vue';
 import DialogShell from '../ui/DialogShell.vue';
 import MediaWall from '../explore/MediaWall.vue';
 import RandomGallery from '../explore/RandomGallery.vue';
-import PhotoLightbox from './PhotoLightbox.vue';
+import PhotoLightbox from './PhotoPreview.vue';
 import InlineVideoPlayer from '../player/InlineVideoPlayer.vue';
 import { createExplorationController, createExplorationImageLoader, explorationAssetURL, explorationContext, mediaExplorationAPI } from '../../utils/mediaExploration.js';
 import { createMediaExposureTracker } from '../../utils/mediaExposure.js';

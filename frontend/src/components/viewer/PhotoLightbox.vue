@@ -86,6 +86,8 @@
             </template>
           </dl>
 
+          <slot name="related" />
+
           <section class="photo-lightbox__block" data-test="photo-lightbox-people">
             <h3>人物</h3>
             <p v-if="detail.loading" class="photo-lightbox__muted"><AppSpinner :size="16" /> 正在读取…</p>
