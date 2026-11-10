@@ -336,7 +336,7 @@
 	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
       <DiscoverPage ref="discoverPage" v-if="discoverMounted" v-show="currentPage === 'discover'" :page-active="currentPage === 'discover' && appReady && !relaunchRequired" :initial-request="pageRequests.discover || null" @open-video="openVideoByID($event, { from: 'discover' })" />
-      <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" @open-cleanup="openCleanupCenter({ tab: 'image', open: true })" />
+      <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :images-version="photoImagesVersion" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" @open-cleanup="openCleanupCenter({ tab: 'image', open: true })" />
 	  <SearchResultsPage v-if="searchResultsMounted" v-show="currentPage === 'search-results'" :page-active="currentPage === 'search-results'" :initial-request="searchResultsRequest" :watch-whole-video="watchQueueWholeVideo" @open-video="openVideo($event, { from: 'search-results' })" @open-entity="openRecapEntity" />
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" :watch-whole-video="watchQueueWholeVideo" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
 	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->

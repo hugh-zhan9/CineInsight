@@ -76,7 +76,7 @@ import { confirmAction } from '../../utils/feedback.js';
 
 export default {
   name: 'ExplorePage', components: { SegmentedControl, PageHeader, AppBanner, EmptyState, DialogShell, MediaWall, RandomGallery, PhotoLightbox, InlineVideoPlayer },
-  props: { pageActive: { type: Boolean, default: true }, api: { type: Object, default: () => mediaExplorationAPI } },
+  props: { pageActive: { type: Boolean, default: true }, imagesVersion: { type: Number, default: 0 }, api: { type: Object, default: () => mediaExplorationAPI } },
   emits: ['open-video', 'open-person', 'open-in-manage', 'open-cleanup'],
   data() { return { snapshot: null, scope: 'all', view: { mode: 'wall', scale: .35, x: 0, y: 0, selected_id: 0, gallery_id: 0, gallery_entry_ids: [] }, cards: {}, failedCards: {}, retrySignal: 0, loader: markRaw(createExplorationImageLoader()), loading: false, busy: false, frozen: false, error: '', notice: '', libraryChanged: false, focused: true, preview: null, previewSession: null, previewError: '', previewBusy: false, generation: 0, previewGeneration: 0 }; },
   computed: {
@@ -91,6 +91,7 @@ export default {
     remainingFailed() { const unseen = (this.snapshot?.entries || []).filter(e => !e.presented); return this.snapshot?.remaining_count > 0 && this.snapshot.remaining_count <= unseen.length && unseen.length > 0 && unseen.every(e => this.cards[e.entry_id]?.unavailable_reason || this.failedCards[e.entry_id]); }
   },
   watch: {
+    imagesVersion() { this.markLibraryChanged(); },
     pageActive(active) { if (!active) { this.suspend(); this.flush().catch(error => { this.error = error.message; }); } else { this.focused = document.hasFocus(); if (!this.snapshot) this.start(); else { this.$nextTick(() => this.$refs.wall?.focus()); this.scheduleRefill(); } } }
   },
   created() {
@@ -107,7 +108,7 @@ export default {
     this._saveTimer = setInterval(() => { if (!this.frozen && this._controller.pending && !this._controller.blocked && !this.busy) this.flush().catch(error => { this.error = error.message; }); }, 1000);
     this._offEvents = [];
     for (const name of ['videos-changed', 'video-updated', 'video-deleted', 'image-library-changed', 'image-updated', 'image-deleted', 'scan-completed', 'library-changed', 'version-groups-changed', 'library-scan-summary', 'library-watcher-reconciled', 'image-scan-completed']) {
-      const off = window.runtime?.EventsOn?.(name, () => { this.libraryChanged = true; this._libraryRevision++; this.scheduleRefill(); }); if (typeof off === 'function') this._offEvents.push(off);
+      const off = window.runtime?.EventsOn?.(name, () => this.markLibraryChanged()); if (typeof off === 'function') this._offEvents.push(off);
     }
     for (const [name, handler] of [
       ['exploration-quiesced', () => { this.frozen = true; this.suspend(); this.notice = '数据库维护中，探索已暂停。'; }],
@@ -117,6 +118,7 @@ export default {
   },
   beforeUnmount() { this._disposed = true; clearTimeout(this._refillTimer); this.suspend(); clearInterval(this._saveTimer); window.removeEventListener(MODAL_OPEN_EVENT, this._modalOpen); window.removeEventListener('focus', this._focus); window.removeEventListener('blur', this._focus); document.removeEventListener('visibilitychange', this._focus); for (const off of this._offEvents || []) off(); },
   methods: {
+    markLibraryChanged() { this.libraryChanged = true; this._libraryRevision++; this.scheduleRefill(); },
     scheduleRefill() {
       clearTimeout(this._refillTimer);
       if (this._disposed || !this.pageActive || this.locked || this._controller.blocked || this.error || (!this.libraryChanged && !this._openedEntries.size)) return;
@@ -232,7 +234,8 @@ export default {
         card = result.items[0]; if (card) this.cards[entry.entry_id] = card;
       } catch (error) { if (ticket === this.previewGeneration) this.error = error.message || String(error); return; }
       if (ticket !== this.previewGeneration || !this.pageActive) return;
-      if (!card || card.unavailable_reason) { this.error = card?.unavailable_reason || '内容尚未读取，请重试'; return; }
+      if (!card) { this.error = '内容尚未读取，请重试'; return; }
+      if (card.unavailable_reason) { this.markLibraryChanged(); return; }
       this._openedEntries.add(entry.entry_id);
       this.preview = { entry, card, image: { id: entry.media_id, name: card.title } }; this.previewSession = null; this.previewError = ''; this._tracker.update([], { active: false });
       if (entry.kind !== 'video') return;

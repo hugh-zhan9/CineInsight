@@ -10717,6 +10717,7 @@ export namespace services {
 	export class ImageCursor {
 	    sort_mode: string;
 	    created_at?: string;
+	    name?: string;
 	    taken_at?: string;
 	    size: number;
 	    rating?: number;
@@ -10731,6 +10732,7 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sort_mode = source["sort_mode"];
 	        this.created_at = source["created_at"];
+	        this.name = source["name"];
 	        this.taken_at = source["taken_at"];
 	        this.size = source["size"];
 	        this.rating = source["rating"];

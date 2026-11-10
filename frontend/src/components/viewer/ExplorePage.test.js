@@ -188,3 +188,59 @@ it('ignores a delayed viewport notification containing retired entries', async (
   await wrapper.vm.loadCards([1,1001]);
   expect(api.items).toHaveBeenCalledWith(expect.objectContaining({entry_ids:[1001]}));
 });
+
+
+it('reconciles image-management changes on return without moving other slots', async () => {
+  const api = fixture(), wrapper = await page(api);
+  await wrapper.vm.loadCards([1, 2]);
+  const second = wrapper.vm.cards[2];
+  wrapper.vm.cameraChanged({ scale: 1.2, x: -300, y: -400 });
+  await wrapper.setProps({ pageActive: false });
+  await wrapper.setProps({ imagesVersion: 1 });
+  await wrapper.vm.refill();
+  expect(api.update.mock.calls.some(([r]) => r.action === 'replenish')).toBe(false);
+  await wrapper.setProps({ pageActive: true });
+  await wrapper.vm.refill();
+  expect(api.update.mock.calls.filter(([r]) => r.action === 'replenish')).toHaveLength(1);
+  expect(wrapper.vm.snapshot.entries[0].entry_id).toBe(1001);
+  expect(wrapper.vm.cards[2]).toBe(second);
+  expect(wrapper.vm.view).toMatchObject({ scale: 1.2, x: -300, y: -400 });
+});
+
+it('reconciles an unavailable clicked image instead of blocking automatic refill', async () => {
+  const api = fixture(), wrapper = await page(api);
+  api.items.mockResolvedValueOnce({ items: [{ entry_id: 1, media_id: 1, kind: 'image', unavailable_reason: '图片已不在当前可见图库' }] });
+  await wrapper.vm.openPreview(wrapper.vm.snapshot.entries[0]);
+  expect(wrapper.vm.preview).toBeNull();
+  await wrapper.vm.refill();
+  expect(wrapper.vm.error).toBe('');
+  expect(wrapper.vm.snapshot.entries[0].entry_id).toBe(1001);
+});
+
+it('keeps genuine item query failures visible and does not repeat writes', async () => {
+  const api = fixture(), wrapper = await page(api);
+  api.items.mockRejectedValueOnce(new Error('读取失败'));
+  await wrapper.vm.openPreview(wrapper.vm.snapshot.entries[0]);
+  await wrapper.vm.refill();
+  expect(wrapper.vm.error).toBe('读取失败');
+  expect(api.update).not.toHaveBeenCalled();
+});
+
+
+it('automatically reconciles an unavailable item and explains an exhausted replacement pool', async () => {
+  const api = fixture(), wrapper = await page(api);
+  api.items.mockResolvedValueOnce({ items: [{ entry_id: 1, media_id: 1, kind: 'image', unavailable_reason: '图片已不在当前可见图库' }] });
+  api.update.mockImplementation(async () => ({ ...wrapper.vm.snapshot, revision: wrapper.vm.snapshot.revision + 1 }));
+  vi.useFakeTimers();
+  try {
+    await wrapper.vm.openPreview(wrapper.vm.snapshot.entries[0]);
+    // Keep the unavailable card and expose it to the reconciliation projection.
+    wrapper.vm.$refs.wall.visibleEntries = [wrapper.vm.snapshot.entries[0]];
+    api.items.mockResolvedValue({ items: [{ entry_id: 1, unavailable_reason: '图片已不在当前可见图库' }] });
+    await vi.advanceTimersByTimeAsync(0); await flushPromises();
+    expect(api.update.mock.calls.filter(([r]) => r.action === 'replenish')).toHaveLength(1);
+    expect(wrapper.vm.snapshot.entries[0].entry_id).toBe(1);
+    expect(wrapper.vm.notice).toContain('没有墙外内容可补充');
+    expect(wrapper.vm.error).toBe('');
+  } finally { vi.useRealTimers(); }
+});

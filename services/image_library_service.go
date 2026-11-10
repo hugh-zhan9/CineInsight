@@ -20,6 +20,7 @@ const (
 	ImageSortSize   = "size"
 	ImageSortRating = "rating"
 	ImageSortTaken  = "taken"
+	ImageSortName   = "name"
 )
 
 // imageTakenSortKeyExpr 是「拍摄时间」排序键：优先 EXIF 拍摄时间，缺失时回退入库时间。
@@ -93,6 +94,7 @@ const (
 type ImageCursor struct {
 	SortMode  string `json:"sort_mode"`
 	CreatedAt string `json:"created_at,omitempty"`
+	Name      string `json:"name,omitempty"`
 	// TakenAt 是 taken 排序键 COALESCE(taken_at, created_at) 的取值，不是原始 EXIF 时间。
 	TakenAt      string   `json:"taken_at,omitempty"`
 	Size         int64    `json:"size"`
@@ -209,7 +211,7 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 		filter.SortMode = ImageSortRecent
 	}
 	switch filter.SortMode {
-	case ImageSortRecent, ImageSortSize, ImageSortRating, ImageSortTaken:
+	case ImageSortRecent, ImageSortSize, ImageSortRating, ImageSortTaken, ImageSortName:
 	default:
 		return ImageFilter{}, fmt.Errorf("不支持的排序模式: %s", filter.SortMode)
 	}
@@ -291,6 +293,8 @@ func applyImageFilterFrom(query *gorm.DB, filter ImageFilter, db *gorm.DB) *gorm
 
 func orderImageQuery(query *gorm.DB, sortMode string) *gorm.DB {
 	switch sortMode {
+	case ImageSortName:
+		return query.Order("images.name ASC").Order("images.id DESC")
 	case ImageSortTaken:
 		return query.Order(imageTakenSortKeyExpr + " DESC").Order("images.id DESC")
 	case ImageSortSize:
@@ -313,6 +317,11 @@ func validateImageCursor(sortMode string, cursor *ImageCursor) error {
 		return errors.New("照片游标 ID 无效")
 	}
 	switch sortMode {
+	case ImageSortName:
+		if cursor.Rating != nil || cursor.RatingIsNull {
+			return errors.New("name 游标包含评分字段")
+		}
+		return nil
 	case ImageSortRecent:
 		if cursor.Rating != nil || cursor.RatingIsNull {
 			return errors.New("recent 游标包含评分字段")
@@ -367,7 +376,7 @@ func imageTakenSortKeyOf(takenAt *time.Time, createdAt time.Time) time.Time {
 
 // SearchImagePage 按 DTO 游标稳定分页照片页（AC-4/D-017）：recent=created_at DESC（默认）、
 // size=体积 DESC、rating=评分 DESC 且 NULL 排后、taken=拍摄时间 DESC（缺失回退入库时间），
-// 均以 id DESC 决胜。
+// name=名称 ASC；均以 id DESC 决胜。
 func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImagePage, error) {
 	filter, err := normalizeImageFilter(request.Filter)
 	if err != nil {
@@ -384,6 +393,11 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 
 	query := applyImageFilter(database.DB.Model(&models.Image{}).Preload("Tags"), filter)
 	switch filter.SortMode {
+	case ImageSortName:
+		if cursor != nil {
+			query = query.Where("(images.name > ? OR (images.name = ? AND images.id < ?))", cursor.Name, cursor.Name, cursor.ID)
+		}
+		query = orderImageQuery(query, ImageSortName)
 	case ImageSortRecent:
 		if cursor != nil {
 			cursorTime, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
@@ -430,6 +444,8 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 		last := page.Images[len(page.Images)-1]
 		next := &ImageCursor{SortMode: filter.SortMode, ID: last.ID}
 		switch filter.SortMode {
+		case ImageSortName:
+			next.Name = last.Name
 		case ImageSortRecent:
 			next.CreatedAt = last.CreatedAt.Format(time.RFC3339Nano)
 		case ImageSortTaken:

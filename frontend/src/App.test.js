@@ -3291,3 +3291,13 @@ it('validates an ending choice, retires its player, then enters detail; rejects 
   api.ResolveVisibleVideoForPlayback.mockRejectedValueOnce(new Error('source unavailable'));
   await expect(w.vm.openEndedVideo(99,{retire})).rejects.toThrow('source unavailable');expect(retire).toHaveBeenCalledTimes(1);
 });
+
+
+it('passes image changes from management to the retained exploration host', async () => {
+  const wrapper = await mountApp();
+  await wrapper.vm.navigateTo('explore'); await flushPromises();
+  const host = wrapper.findComponent({ name: 'ExplorePage' });
+  const before = host.props('imagesVersion');
+  wrapper.vm.markViewerImagesChanged(); await flushPromises();
+  expect(host.props('imagesVersion')).toBe(before + 1);
+});
