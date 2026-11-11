@@ -680,3 +680,16 @@ describe('缺失某项筛选（D-MC-03）', () => {
     wrapper.unmount();
   });
 });
+
+ it('emits independent directory/file conditions and offers file sorts', async () => {
+  const wrapper=mount(LibraryToolbar,{props:baseProps()});
+  await wrapper.get('[data-test="library-directory-keyword"]').setValue('电影');
+  await wrapper.get('[data-test="library-filename-keyword"]').setValue('预告');
+  expect(wrapper.emitted('update:directoryKeyword').at(-1)).toEqual(['电影']);
+  expect(wrapper.emitted('update:filenameKeyword').at(-1)).toEqual(['预告']);
+  const select=wrapper.get('[aria-label="排序方式"]');
+  for (const mode of ['filename_asc','filename_desc','size_asc','size_desc']) {
+   await select.setValue(mode);expect(wrapper.emitted('update:sortMode').at(-1)).toEqual([mode]);
+  }
+  wrapper.unmount();
+ });

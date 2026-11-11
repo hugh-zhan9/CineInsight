@@ -56,13 +56,13 @@ func taskCenterItemByKey(t *testing.T, snapshot TaskCenterSnapshot, key string) 
 	return TaskCenterItem{}
 }
 
-// APP-03：适配表必须恰好覆盖登记表的 34 个 key（P-007 加入 scene_index，P-008 加入 video_edit，数据维护加入四项，
+// APP-03：适配表必须恰好覆盖登记表的 35 个 key（P-007 加入 scene_index，P-008 加入 video_edit，数据维护加入四项，
 // D-P3-05 加入 local_metadata_export，体验扩展加入 chapter_summary，临时处理加入 media_processing）。登记表新增一个 key 而适配表没跟上、
 // 或适配表里留着登记表已删掉的 key，这个用例都会失败；快照的 Items 也按登记表顺序全部列出。
 func TestAPP03TaskCenterAdaptersCoverEveryRegistryKey(t *testing.T) {
 	keys := services.BackgroundTaskKeys()
-	if len(keys) != 34 {
-		t.Fatalf("登记表应有 34 个 key（包含 chapter_summary、media_processing 与 video_structure），实际 %d: %v", len(keys), keys)
+	if len(keys) != 35 {
+		t.Fatalf("登记表应有 35 个 key（包含 chapter_summary、media_processing 与 video_structure），实际 %d: %v", len(keys), keys)
 	}
 	registered := map[string]bool{}
 	for _, key := range keys {

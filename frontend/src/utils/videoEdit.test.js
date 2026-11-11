@@ -110,6 +110,23 @@ describe('配方变换（不改入参）', () => {
   });
 });
 
+describe('裁剪轨道作用域', () => {
+  it('drop只修改被选择的素材，同序号其他素材选择保留', () => {
+    let recipe = { v: 1, crop: { items: [{ video_id: 11 }, { video_id: 22 }] }, tracks: { audio: [], subtitle: [] } };
+    recipe = setTrackChoice(recipe, 'subtitle', 0, 22, 'stream', 3, 22);
+    recipe = setTrackChoice(recipe, 'subtitle', 0, 11, 'drop', 0, 11);
+    expect(recipe.tracks.subtitle).toEqual([
+      { output: 0, video_id: 22, choice: 'stream', stream_index: 3, scope_video_id: 22 },
+      { output: 0, video_id: 0, choice: 'drop', stream_index: 0, scope_video_id: 11 }
+    ]);
+    recipe = setTrackChoice(recipe, 'subtitle', 0, 22, 'drop', 0, 22);
+    expect(recipe.tracks.subtitle).toEqual([
+      { output: 0, video_id: 0, choice: 'drop', stream_index: 0, scope_video_id: 11 },
+      { output: 0, video_id: 0, choice: 'drop', stream_index: 0, scope_video_id: 22 }
+    ]);
+  });
+});
+
 describe('预检口径', () => {
   it('预检只对同一 revision 与模式有效', () => {
     const project = { id: 3, revision: 4, mode: 'precise' };

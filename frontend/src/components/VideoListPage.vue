@@ -13,6 +13,8 @@
       :select-all-total="selectAllScope.total"
       :selecting-all="selectingAllMatching"
       :search-keyword="searchKeyword"
+      :directory-keyword="directoryKeyword"
+      :filename-keyword="filenameKeyword"
       :search-mode="searchMode"
       :smart-view="smartView"
       :missing="missingFilter"
@@ -49,6 +51,8 @@
       :filter-batch-edit-available="metadataBatchFilterUsable"
       @update:collapse-versions="setCollapseVersions"
       @update:search-keyword="searchKeyword = $event"
+      @update:directory-keyword="directoryKeyword = $event"
+      @update:filename-keyword="filenameKeyword = $event"
       @update:smart-view="smartView = $event"
       @update:missing="missingFilter = $event"
       @update:sort-mode="sortMode = $event"
@@ -582,7 +586,7 @@ const LIBRARY_LAYOUT_KEY = 'cineinsight-library-layout';
 const LIBRARY_LAYOUTS = ['list', 'grid'];
 const REMOVED_LAYOUT_NOTICE = '片库管理不再有缩略图墙，已换成列表。浏览海报请去观看侧「视频」。';
 // 片库管理的排序（与工具栏的排序选项一致）；保存视图带来别的排序时退回均衡排序。
-const LIBRARY_SORT_MODES = ['balanced', 'rating_desc', 'rating_asc'];
+const LIBRARY_SORT_MODES = ['balanced', 'rating_desc', 'rating_asc', 'filename_asc', 'filename_desc', 'size_asc', 'size_desc'];
 // 观看向智能视图的中文名（保存视图用到它们时，提示里要说清是哪一个被拿掉了；命令面板与工具栏同一套说法）。
 const REMOVED_SMART_VIEW_LABELS = {
   continue_watching: '继续观看', favorites: '收藏', liked: '点赞', recently_played: '最近播放',
@@ -673,6 +677,8 @@ export default {
       minRating: '',
       maxRating: '',
       sortMode: 'balanced',
+      directoryKeyword: '',
+      filenameKeyword: '',
       sizeOptions: [
         { label: '0-10M', value: { min: 0, max: 10 * 1024 * 1024 } },
         { label: '10M-100M', value: { min: 10 * 1024 * 1024, max: 100 * 1024 * 1024 } },
@@ -1027,6 +1033,8 @@ export default {
         similarVideoID: this.semanticSimilarVideoID,
         focusedVideoID: this.focusedVideo?.id || 0,
         smartView: this.smartView,
+        directory: this.directoryKeyword.trim(),
+        filename: this.filenameKeyword.trim(),
         missing: this.missingFilter,
         staleReason: this.staleReasonFilter,
         tags: [...this.selectedTags].sort((a, b) => a - b),
@@ -1608,6 +1616,8 @@ export default {
       if (!isCurrent()) return false;
       this.leaveSavedView(); this.resetConditionsForCommand();
       this.searchMode = 'file'; this.sortMode = filter.sort_mode || 'balanced';
+      this.directoryKeyword = filter.directory_keyword || '';
+      this.filenameKeyword = filter.filename_keyword || '';
       this.extraConditions = { watch_state: filter.watch_state || 'any', favorites_only: Boolean(filter.favorites_only), min_duration_seconds: Number(filter.min_duration_seconds || 0), max_duration_seconds: Number(filter.max_duration_seconds || 0) };
       this.selectedTags = [...(filter.tag_ids || [])]; this.selectedPeople = people;
       this.collapseVersions = Boolean(filter.collapse_versions);
@@ -1626,6 +1636,8 @@ export default {
       this.minRating = '';
       this.maxRating = '';
       this.searchKeyword = '';
+      this.directoryKeyword = '';
+      this.filenameKeyword = '';
       this.handleSearch(true, true);
     },
     removeExtraCondition(key) {
@@ -1778,11 +1790,11 @@ export default {
       return estimateVideoRowHeight(video, widthBucket, subtitleMode, density) + versions;
     },
     hasStructuredFilters() {
-      return this.extraConditionChips.length > 0 || !!this.focusedVideo || !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
+      return !!this.directoryKeyword.trim() || !!this.filenameKeyword.trim() || this.extraConditionChips.length > 0 || !!this.focusedVideo || !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
     },
     // 当前有没有会让结果变少的条件：决定空列表显示「筛选没命中」还是「目录里没有视频」。
     hasActiveConditions() {
-      return this.extraConditionChips.length > 0 || !!this.focusedVideo || !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
+      return !!this.directoryKeyword.trim() || !!this.filenameKeyword.trim() || this.extraConditionChips.length > 0 || !!this.focusedVideo || !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
         this.selectedTags.length > 0 || this.selectedPeople.length > 0 ||
         this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '';
     },
@@ -1796,6 +1808,8 @@ export default {
         ...(this.extraConditionChips.length ? this.extraConditions : {}),
         search_mode: semantic ? 'file' : this.searchMode,
         keyword: this.focusedVideo || semantic ? '' : this.currentQueryKeyword(),
+        ...(this.directoryKeyword.trim() ? { directory_keyword: this.directoryKeyword.trim() } : {}),
+        ...(this.filenameKeyword.trim() ? { filename_keyword: this.filenameKeyword.trim() } : {}),
         ...(this.focusedVideo ? { video_id: this.focusedVideo.id } : {}),
         smart_view: this.smartView,
         missing: this.missingFilter,
@@ -1813,6 +1827,8 @@ export default {
     },
     // 与后端 applyLibraryFilter 同口径的本地判定：就地改完一行后据此决定它还在不在当前视图里。
     matchesSmartView(video) {
+      if (!String(video.directory || '').toLowerCase().includes(this.directoryKeyword.trim().toLowerCase())) return false;
+      if (!String(video.name || '').toLowerCase().includes(this.filenameKeyword.trim().toLowerCase())) return false;
       if (this.extraConditions.favorites_only && !video.is_favorite) return false;
       if (this.extraConditions.watch_state !== 'any' && Boolean(video.is_watched) !== (this.extraConditions.watch_state === 'watched')) return false;
       if (this.extraConditions.min_duration_seconds > 0 && !(video.duration >= this.extraConditions.min_duration_seconds)) return false;
@@ -1971,6 +1987,8 @@ export default {
       this.minRating = '';
       this.maxRating = '';
       this.searchKeyword = '';
+      this.directoryKeyword = '';
+      this.filenameKeyword = '';
     },
     // mode：create 另存为新视图；update 用当前条件覆盖；rename 只改名（D-PC35、LIB-15）。
     openSaveViewDialog(mode = 'create') {
@@ -2019,6 +2037,8 @@ export default {
       this.focusedVideo = null;
       this.searchMode = view.search_mode || 'file';
       this.searchKeyword = view.keyword || '';
+      this.directoryKeyword = view.directory_keyword || '';
+      this.filenameKeyword = view.filename_keyword || '';
       this.smartView = viewRemoved ? '' : storedView;
       this.extraConditions = { watch_state: view.watch_state || 'any', favorites_only: Boolean(view.favorites_only), min_duration_seconds: Number(view.min_duration_seconds || 0), max_duration_seconds: Number(view.max_duration_seconds || 0) };
       this.missingFilter = view.missing || '';

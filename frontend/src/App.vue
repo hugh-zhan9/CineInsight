@@ -704,6 +704,9 @@ export default {
     this.registerRuntimeEvent('native-playback-stop-failed', message => notifyError(message));
     this.registerRuntimeEvent('delete-file-choice-changed', value => { this.settings = { ...this.settings, delete_original_file: Boolean(value) }; });
     this.registerRuntimeEvent('library-scan-summary', event => this.handleLibraryScanSummary(event));
+    this.registerRuntimeEvent('video-edit-state', event => {
+      if (event?.item_status === 'completed' && Number(event.item_id) > 0) this.handleVideosChangedElsewhere();
+    });
     // 迁移并切换在后台完成：用户可能已经离开设置页，遮罩由这里统一弹出（D-PC55）。
     this.registerRuntimeEvent('database-switch-state', status => {
       if (status?.completed && status?.relaunch_required) {

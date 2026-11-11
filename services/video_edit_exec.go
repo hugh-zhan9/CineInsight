@@ -132,6 +132,9 @@ func editWorkdirItemID(name string) (uint, bool) {
 
 // removeEditWorkdir 只删名字严格匹配的工作目录；路径为空或名字不符时什么也不做。
 func removeEditWorkdir(path string) {
+	if replacementJournalExists(path) {
+		return
+	}
 	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
 		return
 	}
@@ -256,9 +259,26 @@ func (s *VideoEditService) processItem(ctx context.Context, item models.VideoEdi
 	if free < required {
 		return editError("disk_full", "输出目录可用空间不足：需要约 %s，可用 %s", formatEnhancementBytes(required), formatEnhancementBytes(free))
 	}
+	if replacementJournalExists(workdir) {
+		return replacementPending()
+	}
 	_ = os.RemoveAll(workdir)
 	if err := os.MkdirAll(workdir, 0o755); err != nil {
 		return editError("encode_failed", "无法创建工作目录：%s", err.Error())
+	}
+	if plan.PublishMode == "replace_source" {
+		if len(plan.Sources) != 1 || plan.Kind != "crop" || plan.ContainerProfile == nil {
+			return editError("recipe_invalid", "原片替换冻结计划无效")
+		}
+		if err = syncSubtitleParentDirectory(plan.OutputDir); err != nil {
+			return err
+		}
+		if err = os.Chmod(workdir, 0700); err != nil {
+			return err
+		}
+		if !replacementHasSHA(plan.Sources[0].Path, plan.Sources[0].SHA256) {
+			return editError("source_changed", "来源内容已改变")
+		}
 	}
 	bg, cancel := editBackground(ctx)
 	err = s.updateEditItem(bg, item.ID, map[string]any{"work_dir": workdir, "phase": models.VideoEditPhaseEncode})
@@ -285,11 +305,17 @@ func (s *VideoEditService) processItem(ctx context.Context, item models.VideoEdi
 		return err
 	}
 	reporter.report(ctx, models.VideoEditPhasePublish, 0.97, true)
+	if plan.PublishMode == "replace_source" {
+		return s.publishEditReplacement(ctx, item, plan, staging)
+	}
 	return s.publishEditOutput(ctx, item, plan, staging)
 }
 
 // encodeEditSegments 逐段生成 mkv 片段，再用 concat demuxer -c copy 拼成 final.part。
 func (s *VideoEditService) encodeEditSegments(ctx context.Context, ffmpeg string, plan editPlan, workdir string, reporter *editProgressReporter) (string, error) {
+	if plan.ContainerProfile != nil {
+		return s.encodeFullCrop(ctx, ffmpeg, plan, workdir, reporter)
+	}
 	blank := filepath.Join(workdir, "blank.srt")
 	if err := os.WriteFile(blank, []byte("1\n00:00:00,000 --> 00:00:00,040\n​\n"), 0o644); err != nil {
 		return "", editError("encode_failed", "无法写入工作目录")
@@ -350,6 +376,11 @@ func (s *VideoEditService) verifyEditOutput(ctx context.Context, plan editPlan, 
 	}
 	if probe.Video == nil {
 		return editError("verify_failed", "成品没有视频流")
+	}
+	if plan.ContainerProfile != nil {
+		if err := s.verifyFullCropProfile(plan, probe, staging); err != nil {
+			return err
+		}
 	}
 	if plan.Video.Crop != nil && (probe.Video.Width != plan.Video.Width || probe.Video.Height != plan.Video.Height) {
 		return editError("verify_failed", "成品裁剪尺寸与计划不一致")
@@ -537,6 +568,9 @@ func (s *VideoEditService) SweepOrphanWorkdirs(ctx context.Context) (removed int
 			if !ok || s.editWorkdirInUse(ctx, id) {
 				return filepath.SkipDir
 			}
+			if replacementJournalExists(path) {
+				return filepath.SkipDir
+			}
 			if os.RemoveAll(path) == nil {
 				removed++
 			}
@@ -563,7 +597,7 @@ func (s *VideoEditService) editWorkdirInUse(ctx context.Context, itemID uint) bo
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false
 	}
-	return err != nil || item.Status == models.VideoEditStatusRunning
+	return err != nil || replacementJournalExists(replacementWorkDir(item)) || item.Status == models.VideoEditStatusRunning
 }
 
 // editPublishRenameAttempts 是排他 rename 撞上「刚被占用」时重新选名的次数上限。

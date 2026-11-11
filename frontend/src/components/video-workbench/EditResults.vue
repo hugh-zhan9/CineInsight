@@ -9,6 +9,7 @@
           <AppBadge class="edit-badge">{{ statusText(item) }}</AppBadge>
           <ProgressBar v-if="item.status === 'running'" class="edit-progress" :value="percent(item) / 100" :label="phaseText(item)" />
         </div>
+        <button v-if="item.error_code === 'replace_recovery_pending'" type="button" class="btn btn--secondary" :data-test="`edit-result-recover-${item.id}`" @click="$emit('recover-replacement', item.id)">磁盘恢复后重试恢复</button>
         <p v-if="failureText(item)" class="edit-error" :data-test="`edit-result-error-${item.id}`">{{ failureText(item) }}</p>
         <p v-if="item.status === 'completed' && item.error_message" class="help-text">提示：{{ item.error_message }}</p>
         <p
@@ -18,19 +19,20 @@
         >成品已不在片库</p>
         <div v-if="item.status === 'completed' && item.output_video_id && outputState[item.output_video_id] === 'present'" class="edit-inline">
           <button type="button" class="btn btn--secondary btn--sm" :data-test="`edit-result-preview-${item.id}`" @click="$emit('open-video', item.output_video_id)">预览成品</button>
-          <label class="edit-check">
+          <span v-if="item.publish_mode === 'replace_source'" class="help-text">原文件已替换</span>
+          <label v-else class="edit-check">
             <input type="checkbox" :checked="Boolean(verified[item.id])" :data-test="`edit-result-confirm-${item.id}`" @change="setVerified(item.id, $event.target.checked)" />
             确认成品无误
           </label>
           <button
-            v-if="verified[item.id]"
+            v-if="verified[item.id] && item.publish_mode !== 'replace_source'"
             type="button"
             class="btn btn--danger btn--sm"
             :data-test="`edit-result-cleanup-${item.id}`"
             @click="$emit('cleanup-sources', [...(item.source_video_ids || [])])"
           >清理原片…</button>
           <button
-            v-if="canLinkVersion"
+            v-if="canLinkVersion && item.publish_mode !== 'replace_source'"
             type="button"
             class="btn btn--secondary btn--sm"
             :disabled="linking"
@@ -62,7 +64,7 @@ export default {
   props: {
     project: { type: Object, required: true }
   },
-  emits: ['open-video', 'cleanup-sources'],
+  emits: ['open-video', 'cleanup-sources', 'recover-replacement'],
   data() {
     // outputState：成品视频 ID → 'present' | 'missing'；还没查到的不给入口。
     return { verified: {}, linking: false, outputState: {}, outputToken: 0 };
@@ -123,8 +125,9 @@ export default {
       return Number(item.source_video_ids?.[0] || 0);
     },
     async linkVersion(item) {
+      if (item.publish_mode === 'replace_source') return;
       const ids = [this.originVideoID(item), Number(item.output_video_id)];
-      if (!ids[0] || !ids[1] || this.linking) return;
+      if (!ids[0] || !ids[1] || ids[0] === ids[1] || this.linking) return;
       const ok = await confirmAction({
         title: '与原片建立版本组',
         message: `把成品「${item.output_name || '成品'}」与原片合并为一个版本组？之后可在片库「管理版本组…」里设标签或移出。`,

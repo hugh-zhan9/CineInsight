@@ -109,7 +109,7 @@ import { backgroundTaskLabel, idleWaitReasonLabel, isIdleGateNotWaitingError } f
 // 图片自动化（EXIF、图片指纹、图片 AI 打标）与 AI 打标 worker 的启动批次和定时轮次抄下来；
 // 后端改了受控范围，这里要跟着改——说明文字由它生成，不再手写一句。
 export const IDLE_GATED_TASK_KEYS = [
-  'technical', 'phash', 'cleanup', 'collection_suggest', 'frame_hash', 'face', 'proxy',
+  'technical', 'phash', 'cleanup', 'collection_suggest', 'frame_hash', 'crop_detection', 'face', 'proxy',
   'ai_tagging', 'exif', 'image_phash', 'image_ai_tagging'
 ];
 

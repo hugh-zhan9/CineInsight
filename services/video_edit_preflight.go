@@ -32,6 +32,7 @@ type editStream struct {
 	SampleAspectRatio string
 	Rotation          float64
 	PixFmt            string
+	BitDepth          int
 	FrameRate         string
 	TimeBase          string
 	SampleRate        int
@@ -73,6 +74,7 @@ type editProbeJSON struct {
 		Height            int    `json:"height"`
 		SampleAspectRatio string `json:"sample_aspect_ratio"`
 		PixFmt            string `json:"pix_fmt"`
+		BitsPerRawSample  string `json:"bits_per_raw_sample"`
 		RFrameRate        string `json:"r_frame_rate"`
 		AvgFrameRate      string `json:"avg_frame_rate"`
 		TimeBase          string `json:"time_base"`
@@ -139,6 +141,7 @@ func parseEditProbe(raw []byte) (editProbe, error) {
 		if editFrameRateValue(stream.FrameRate) <= 0 || editFrameRateValue(stream.FrameRate) > 240 {
 			stream.FrameRate = raw.AvgFrameRate
 		}
+		stream.BitDepth, _ = strconv.Atoi(raw.BitsPerRawSample)
 		stream.SampleRate, _ = strconv.Atoi(raw.SampleRate)
 		stream.BitRate, _ = strconv.ParseInt(raw.BitRate, 10, 64)
 		for _, side := range raw.SideDataList {
@@ -343,6 +346,7 @@ type EditOutputTrack struct {
 
 // EditTrackConflict 是无法按语言+序号自动对应的一处映射，须在配方 tracks 里明确选择。
 type EditTrackConflict struct {
+	ScopeVideoID uint             `json:"scope_video_id,omitempty"`
 	Seq          int              `json:"seq"`
 	Kind         string           `json:"kind"`
 	OutputIndex  int              `json:"output_index"`
@@ -380,6 +384,7 @@ type EditOutputSegment struct {
 
 // EditPreflightOutput 是一个导出项的输出规格（merge/hd_replace 一项，trim_intro 每个来源一项）。
 type EditPreflightOutput struct {
+	PublishMode    string              `json:"publish_mode"`
 	Seq            int                 `json:"seq"`
 	VideoIDs       []uint              `json:"video_ids"`
 	PlannedName    string              `json:"planned_name"`
@@ -464,14 +469,15 @@ func editStreamInfos(streams []editStream) []EditStreamInfo {
 
 // editSourceCtx 是预检阶段一个来源的全部事实。ok=false 时已经写过错误，不再参与计划。
 type editSourceCtx struct {
-	video        models.Video
-	path         string
-	size         int64
-	modTimeNS    int64
-	probe        editProbe
-	sidecarSRT   bool
-	sidecarOther []string
-	ok           bool
+	infrastructureErr error
+	video             models.Video
+	path              string
+	size              int64
+	modTimeNS         int64
+	probe             editProbe
+	sidecarSRT        bool
+	sidecarOther      []string
+	ok                bool
 }
 
 var editSidecarOtherExts = []string{".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup"}
@@ -511,6 +517,29 @@ func (s *VideoEditService) preflight(ctx context.Context, project models.VideoEd
 	}
 	plans = s.applyFastMode(ctx, pre, project.Mode, plans, sources)
 	s.checkEditEncoders(ctx, pre, project.Mode, plans)
+	if len(pre.Errors) == 0 {
+		for i := range plans {
+			plan := plans[i]
+			if plan.PublishMode == "replace_source" {
+				if err := replacementSafeSource(plan.Sources[0].Path); err != nil {
+					pre.addError(VideoEditErrorCode(err), fmt.Sprintf("replace_source:%d", plan.Seq), 0, plan.Seq, "%s", err.Error())
+					continue
+				}
+				sha, err := replacementSHA(plan.Sources[0].Path)
+				if err != nil {
+					pre.addError("source_changed", fmt.Sprintf("replace_hash:%d", plan.Seq), 0, plan.Seq, "无法核对来源内容")
+					continue
+				}
+				plans[i].Sources[0].SHA256 = sha
+				plan = plans[i]
+			}
+			if plan.ContainerProfile != nil {
+				if err := s.sampleFullCrop(ctx, plan); err != nil {
+					pre.addError(VideoEditErrorCode(err), fmt.Sprintf("container_sample:%d", plan.Seq), 0, plan.Seq, "%s", err.Error())
+				}
+			}
+		}
+	}
 	s.finishEditOutputs(ctx, pre, plans)
 	pre.Ready = len(pre.Errors) == 0
 	return pre, plans, nil
@@ -560,6 +589,9 @@ func (s *VideoEditService) collectEditSources(ctx context.Context, pre *EditPref
 		sources[id] = sc
 		info := EditPreflightSource{VideoID: id, Audio: []EditStreamInfo{}, Subtitles: []EditStreamInfo{}, SidecarOther: []string{}}
 		info.Error = s.inspectEditSource(ctx, pre, id, byID, sc)
+		if sc.infrastructureErr != nil {
+			return nil, sc.infrastructureErr
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -596,6 +628,20 @@ func (s *VideoEditService) inspectEditSource(ctx context.Context, pre *EditPrefl
 		return "视频不存在或已删除"
 	}
 	sc.video, sc.path = video, video.Path
+	db, dbErr := editDB(ctx)
+	if dbErr != nil {
+		sc.infrastructureErr = dbErr
+		return "来源查询失败"
+	}
+	pending, pendingErr := editReplacementPathPendingError(db, video.Path)
+	if pendingErr != nil {
+		sc.infrastructureErr = pendingErr
+		return "来源查询失败"
+	}
+	if pending {
+		pre.addError("replace_recovery_pending", fmt.Sprintf("replacement_pending:%d", id), id, 0, "《%s》的原文件替换尚待恢复", video.Name)
+		return "原文件替换尚待恢复"
+	}
 	if video.IsStale {
 		pre.addError("source_missing", fmt.Sprintf("source_missing:%d", id), id, 0, "《%s》已失效，请先在片库纠偏", video.Name)
 		return "来源已失效"
@@ -695,8 +741,17 @@ func (s *VideoEditService) checkEditEncoders(ctx context.Context, pre *EditPrefl
 		if !oneOf(plan.Video.Encoder, needed...) {
 			needed = append(needed, plan.Video.Encoder)
 		}
-		if len(plan.Audio) > 0 && !oneOf("aac", needed...) {
-			needed = append(needed, "aac")
+		audioEncoder := "aac"
+		if plan.ContainerProfile != nil {
+			audioEncoder = plan.ContainerProfile.AudioEncoder
+			for _, track := range plan.Subtitles {
+				if !track.Image && !oneOf(track.Codec, needed...) {
+					needed = append(needed, track.Codec)
+				}
+			}
+		}
+		if len(plan.Audio) > 0 && !oneOf(audioEncoder, needed...) {
+			needed = append(needed, audioEncoder)
 		}
 	}
 	encoders, err := s.availableEncoders(ctx)
@@ -717,7 +772,12 @@ func (s *VideoEditService) finishEditOutputs(ctx context.Context, pre *EditPrefl
 	needs := map[string]*dirNeed{}
 	order := []string{}
 	for _, plan := range plans {
-		name, free, err := firstFreeEditOutputName(ctx, plan.OutputDir, plan.OutputBase, plan.OutputExt)
+		name, free, err := "", true, error(nil)
+		if plan.PublishMode == "replace_source" {
+			name = filepath.Base(plan.Sources[0].Path)
+		} else {
+			name, free, err = firstFreeEditOutputName(ctx, plan.OutputDir, plan.OutputBase, plan.OutputExt)
+		}
 		switch {
 		case err != nil:
 			// 权限、名字过长、数据库等错误：不是「被占用」，照实说明（文案擦掉路径）。
@@ -728,19 +788,37 @@ func (s *VideoEditService) finishEditOutputs(ctx context.Context, pre *EditPrefl
 				"输出文件名「%s%s」及 (2)…(99) 均已被占用", plan.OutputBase, plan.OutputExt)
 		}
 		output := EditPreflightOutput{
-			Seq: plan.Seq, VideoIDs: []uint{}, PlannedName: name, Container: plan.Container, VideoCodec: plan.Video.Codec,
+			PublishMode: editPublishMode(plan.PublishMode), Seq: plan.Seq, VideoIDs: []uint{}, PlannedName: name, Container: plan.Container, VideoCodec: plan.Video.Codec,
 			Encoder: plan.Video.Encoder, Width: plan.Video.Width, Height: plan.Video.Height, FrameRate: plan.Video.FrameRate,
 			PixFmt: plan.Video.PixFmt, ColorPrimaries: plan.Video.ColorPrimaries, ColorTransfer: plan.Video.ColorTransfer,
-			ColorSpace: plan.Video.ColorSpace, HDR: plan.Video.Main10 && oneOf(plan.Video.ColorTransfer, "smpte2084", "arib-std-b67"),
+			ColorSpace: plan.Video.ColorSpace, HDR: (plan.Video.Main10 || plan.ContainerProfile != nil && editPixelDepth(plan.Video.PixFmt) > 8) && oneOf(plan.Video.ColorTransfer, "smpte2084", "arib-std-b67"),
 			BitRate: plan.Video.BitRate, AudioCodec: "aac", AudioTracks: []EditOutputTrack{}, SubtitleTracks: []EditOutputTrack{},
 			Attachments: len(plan.Attachments), Sidecar: plan.Sidecar.Mode, DurationMS: plan.DurationMS,
 			EstimatedBytes: plan.EstimatedBytes, WorkBytes: plan.WorkBytes, Segments: []EditOutputSegment{},
+		}
+		if plan.ContainerProfile != nil {
+			output.AudioCodec = plan.ContainerProfile.AudioCodec
 		}
 		if plan.Mode == "fast" {
 			output.AudioCodec = "copy"
 		}
 		if tracks, ok := pre.trackOutputs[plan.Seq]; ok {
 			output.AudioTracks, output.SubtitleTracks = tracks[0], tracks[1]
+			if plan.ContainerProfile != nil {
+				output.AudioTracks = append([]EditOutputTrack(nil), output.AudioTracks...)
+				output.SubtitleTracks = append([]EditOutputTrack(nil), output.SubtitleTracks...)
+				for i := range output.AudioTracks {
+					if !output.AudioTracks[i].Dropped {
+						output.AudioTracks[i].Codec = plan.ContainerProfile.AudioCodec
+					}
+				}
+				for i, j := 0, 0; i < len(output.SubtitleTracks); i++ {
+					if !output.SubtitleTracks[i].Dropped && j < len(plan.Subtitles) {
+						output.SubtitleTracks[i].Codec = plan.Subtitles[j].Codec
+						j++
+					}
+				}
+			}
 		}
 		for _, source := range plan.Sources {
 			output.VideoIDs = append(output.VideoIDs, source.VideoID)

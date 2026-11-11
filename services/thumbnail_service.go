@@ -119,6 +119,14 @@ func SeekSpriteIndex(videoID uint, durationSeconds float64) *SeekSpriteDescripto
 
 // ResolveThumbnail 返回有效缓存，必要时按源视频生成。
 func (s *ThumbnailService) ResolveThumbnail(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
+	release, err := rLockLibraryPathsContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.resolveThumbnailUnderPathRead(ctx, videoID)
+}
+func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
@@ -204,6 +212,14 @@ func seekSpriteCacheName(videoID uint, descriptor SeekSpriteDescriptor) string {
 // 并返回 ErrSeekSpriteNotReady。生成不占用请求生命周期，也不与缩略图共用锁，
 // 长视频的全片解码不会阻塞悬停请求或同视频的缩略图路由。
 func (s *ThumbnailService) ResolveSeekSprite(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
+	release, err := rLockLibraryPathsContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.resolveSeekSpriteUnderPathRead(ctx, videoID)
+}
+func (s *ThumbnailService) resolveSeekSpriteUnderPathRead(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
@@ -246,6 +262,14 @@ func (s *ThumbnailService) ensureSeekSpriteAsync(videoID uint) {
 
 // generateSeekSprite 同步生成并提交 seek sprite 缓存。
 func (s *ThumbnailService) generateSeekSprite(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
+	release, err := rLockLibraryPathsContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.generateSeekSpriteUnderPathRead(ctx, videoID)
+}
+func (s *ThumbnailService) generateSeekSpriteUnderPathRead(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
 	video, err := s.videoService.GetVideo(videoID)
 	if err != nil {
 		return nil, err
@@ -448,6 +472,23 @@ func runSeekSpriteFFmpeg(ctx context.Context, binary, sourcePath, destinationPat
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg: %w: %s", err, truncateLogSnippet(string(output), 400))
+	}
+	return nil
+}
+
+// invalidateReplacementThumbnails runs under the caller's path write lock.
+func invalidateReplacementThumbnails(dataDir string, id uint) error {
+	dir := filepath.Join(dataDir, "thumbnails")
+	names := []string{filepath.Join(dir, fmt.Sprintf("%d.jpg", id))}
+	extra, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("%d.seek*.jpg", id)))
+	if err != nil {
+		return err
+	}
+	names = append(names, extra...)
+	for _, p := range names {
+		if err = os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }

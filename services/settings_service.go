@@ -115,6 +115,7 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.SceneVisualIntervalSeconds = NormalizeSceneVisualIntervalSeconds(input.SceneVisualIntervalSeconds)
 		settings.SceneModelMirrorURL = strings.TrimSpace(input.SceneModelMirrorURL)
 		// 帧哈希序列（D-026）：自动开关即时生效，扫描后自动化每次读一次这一列。
+		settings.AutoCropDetection = input.AutoCropDetection
 		settings.AutoFrameHashSequence = input.AutoFrameHashSequence
 		// 浏览器插件桥接（D-B03、D-B05、D-B06）：目录与并发存进去的就是生效值。
 		//

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"video-master/models"
 )
@@ -17,32 +18,37 @@ import (
 const editPlanVersion = 1
 
 type editPlan struct {
-	V              int                  `json:"v"`
-	Seq            int                  `json:"seq"`
-	Kind           string               `json:"kind"`
-	Mode           string               `json:"mode"`
-	Container      string               `json:"container"`
-	OutputDir      string               `json:"output_dir"`
-	OutputBase     string               `json:"output_base"`
-	OutputExt      string               `json:"output_ext"`
-	Sources        []editPlanSource     `json:"sources"`
-	Video          editPlanVideo        `json:"video"`
-	Audio          []editPlanTrack      `json:"audio"`
-	Subtitles      []editPlanTrack      `json:"subtitles"`
-	Attachments    []editPlanAttachment `json:"attachments"`
-	Segments       []editPlanSegment    `json:"segments"`
-	Sidecar        editPlanSidecar      `json:"sidecar"`
-	DurationMS     int64                `json:"duration_ms"`
-	EstimatedBytes int64                `json:"estimated_bytes"`
-	WorkBytes      int64                `json:"work_bytes"`
+	V                int                   `json:"v"`
+	PublishMode      string                `json:"publish_mode,omitempty"`
+	ContainerProfile *editContainerProfile `json:"container_profile,omitempty"`
+	Seq              int                   `json:"seq"`
+	Kind             string                `json:"kind"`
+	Mode             string                `json:"mode"`
+	Container        string                `json:"container"`
+	OutputDir        string                `json:"output_dir"`
+	OutputBase       string                `json:"output_base"`
+	OutputExt        string                `json:"output_ext"`
+	Sources          []editPlanSource      `json:"sources"`
+	Video            editPlanVideo         `json:"video"`
+	Audio            []editPlanTrack       `json:"audio"`
+	Subtitles        []editPlanTrack       `json:"subtitles"`
+	Attachments      []editPlanAttachment  `json:"attachments"`
+	Segments         []editPlanSegment     `json:"segments"`
+	Sidecar          editPlanSidecar       `json:"sidecar"`
+	DurationMS       int64                 `json:"duration_ms"`
+	EstimatedBytes   int64                 `json:"estimated_bytes"`
+	WorkBytes        int64                 `json:"work_bytes"`
 }
 
 type editPlanSource struct {
-	VideoID    uint   `json:"video_id"`
-	Path       string `json:"path"`
-	Size       int64  `json:"size"`
-	ModTimeNS  int64  `json:"mod_time_ns"`
-	DurationMS int64  `json:"duration_ms"`
+	RecordSize int64     `json:"record_size,omitempty"`
+	SHA256     string    `json:"sha256,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+	VideoID    uint      `json:"video_id"`
+	Path       string    `json:"path"`
+	Size       int64     `json:"size"`
+	ModTimeNS  int64     `json:"mod_time_ns"`
+	DurationMS int64     `json:"duration_ms"`
 }
 
 // editPlanVideo：精确模式的统一视频规格；快速模式只用 Codec/尺寸做校验，不重编码。
@@ -243,7 +249,7 @@ func editQuantizeMS(durMS int64, rate string) int64 {
 
 func editVideoEncodeArgs(video editPlanVideo) []string {
 	args := []string{"-c:v", video.Encoder, "-b:v", strconv.FormatInt(video.BitRate, 10)}
-	if strings.HasPrefix(video.Encoder, "lib") {
+	if video.Encoder == "libx264" || video.Encoder == "libx265" {
 		args = append(args, "-preset", "medium")
 	}
 	if video.Main10 {

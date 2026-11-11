@@ -623,23 +623,13 @@ func (a *App) servePreviewMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	media, err := a.videoService.ResolvePreviewMedia(videoID)
+	media, file, err := a.videoService.OpenPreviewMedia(r.Context(), videoID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			http.Error(w, "preview media not found", http.StatusNotFound)
-			return
+		} else {
+			http.Error(w, "preview media unavailable", http.StatusInternalServerError)
 		}
-		http.Error(w, fmt.Sprintf("preview media unavailable: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	file, err := os.Open(media.Path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			http.Error(w, "preview media not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("open preview media failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()

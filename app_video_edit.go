@@ -226,12 +226,11 @@ func (a *App) GetVideoEditStatus() services.VideoEditStatus {
 	return a.videoEdit.Status(ctx)
 }
 
-// recoverVideoEdit 是启动对账与孤儿工作目录清扫（startup 里异步调用）。
+// recoverVideoEdit 仅异步清扫孤儿工作目录；必需的文件恢复已在绑定前完成。
 func (a *App) recoverVideoEdit(ctx context.Context) {
 	if a.videoEdit == nil || a.databaseUnavailableReason() != "" {
 		return
 	}
-	a.videoEdit.RecoverOnStartup(ctx)
 	if removed, err := a.videoEdit.SweepOrphanWorkdirs(ctx); err != nil {
 		log.Printf("App startup video edit workdir sweep failed err=%v", services.WithoutAbsolutePaths(err))
 	} else if removed > 0 {
@@ -283,4 +282,23 @@ func (a *App) videoEditQuitTask(running map[string]bool) (QuitBlockingTask, bool
 		task.Running = 1
 	}
 	return task, task.Running+task.Queued > 0
+}
+
+// RetryEditReplacementRecovery 在磁盘重新可用时恢复文件发布，不重新编码。
+func (a *App) RetryEditReplacementRecovery(itemID uint) (*services.EditProjectView, error) {
+	service, ctx, cancel, err := a.videoEditCall(videoEditPreflightTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	view, err := service.RetryReplacementRecovery(ctx, itemID)
+	return videoEditResult("RetryEditReplacementRecovery", view, err)
+}
+
+// recoverVideoEditBeforeBindings resolves file replacement journals before any source can be opened.
+func (a *App) recoverVideoEditBeforeBindings(ctx context.Context) {
+	if a.videoEdit == nil || a.databaseUnavailableReason() != "" {
+		return
+	}
+	a.videoEdit.RecoverOnStartup(ctx)
 }

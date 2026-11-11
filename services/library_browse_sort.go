@@ -20,7 +20,7 @@ const titleSortKeyCursorMax = 512
 
 func isKeysetBrowseSort(sortMode string) bool {
 	switch sortMode {
-	case LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc:
+	case LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc, LibrarySortFilenameAsc, LibrarySortFilenameDesc, LibrarySortSizeAsc, LibrarySortSizeDesc:
 		return true
 	}
 	return false
@@ -29,8 +29,19 @@ func isKeysetBrowseSort(sortMode string) bool {
 // validateBrowseCursor 按模式校验三种新排序的游标：只带自己的字段，其余必须为空。
 func validateBrowseCursor(sortMode string, cursor *LibraryVideoCursor) error {
 	other := fmt.Errorf("%s 游标包含其他排序的字段", sortMode)
-	if cursor.Score != 0 || cursor.Size != 0 || cursor.Rating != nil || cursor.RatingIsNull {
+	if cursor.Score != 0 || cursor.Rating != nil || cursor.RatingIsNull {
 		return other
+	}
+	fileSort := sortMode == LibrarySortFilenameAsc || sortMode == LibrarySortFilenameDesc
+	sizeSort := sortMode == LibrarySortSizeAsc || sortMode == LibrarySortSizeDesc
+	if !sizeSort && cursor.Size != 0 || !fileSort && cursor.Filename != "" {
+		return other
+	}
+	if fileSort || sizeSort {
+		if cursor.CreatedAt != nil || cursor.Year != nil || cursor.YearIsNull || cursor.TitleKey != "" || sizeSort && cursor.Size < 0 {
+			return other
+		}
+		return nil
 	}
 	switch sortMode {
 	case LibrarySortAddedDesc:
@@ -103,6 +114,27 @@ func (s *VideoService) searchLibraryBrowsePage(filter LibraryFilter, cursor *Lib
 		return nil, err
 	}
 	switch filter.SortMode {
+	case LibrarySortFilenameAsc, LibrarySortFilenameDesc, LibrarySortSizeAsc, LibrarySortSizeDesc:
+		column, value := "videos.size", any(int64(0))
+		if filter.SortMode == LibrarySortFilenameAsc || filter.SortMode == LibrarySortFilenameDesc {
+			column = "videos.name COLLATE BINARY"
+			if query.Dialector.Name() == "postgres" {
+				column = `videos.name COLLATE "C"`
+			}
+			if cursor != nil {
+				value = cursor.Filename
+			}
+		} else if cursor != nil {
+			value = cursor.Size
+		}
+		direction, compare := "ASC", ">"
+		if filter.SortMode == LibrarySortFilenameDesc || filter.SortMode == LibrarySortSizeDesc {
+			direction, compare = "DESC", "<"
+		}
+		if cursor != nil {
+			query = query.Where("("+column+" "+compare+" ? OR ("+column+" = ? AND videos.id "+compare+" ?))", value, value, cursor.ID)
+		}
+		query = query.Order(column + " " + direction).Order("videos.id " + direction)
 	case LibrarySortAddedDesc:
 		if cursor != nil {
 			at, err := libraryCreatedAtCursorTime(*cursor.CreatedAt, cursor.ID)
@@ -146,6 +178,10 @@ func (s *VideoService) searchLibraryBrowsePage(filter LibraryFilter, cursor *Lib
 func browseCursorAfter(sortMode string, last models.Video) *LibraryVideoCursor {
 	next := &LibraryVideoCursor{SortMode: sortMode, ID: last.ID}
 	switch sortMode {
+	case LibrarySortFilenameAsc, LibrarySortFilenameDesc:
+		next.Filename = last.Name
+	case LibrarySortSizeAsc, LibrarySortSizeDesc:
+		next.Size = last.Size
 	case LibrarySortAddedDesc:
 		createdAt := last.CreatedAt
 		next.CreatedAt = &createdAt

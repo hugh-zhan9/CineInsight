@@ -1,7 +1,7 @@
 <template>
   <section class="edit-section edit-export" data-test="edit-export">
     <h3>导出</h3>
-    <p v-if="project.kind === 'crop'" class="help-text">按裁剪尺寸重新编码，另存为新视频。点击导出会自动检查参数、轨道和可用空间。</p>
+    <p v-if="project.kind === 'crop'" class="help-text">按裁剪尺寸重新编码。{{ recipe.crop?.publish_policy === 'replace_full' ? '整片裁剪保留原文件名和容器并替换原片，选定时间段仍另存。' : '另存为新视频。' }}点击导出会自动检查参数、轨道和可用空间。</p>
     <div v-if="project.kind !== 'crop' || project.mode === 'fast'" class="edit-inline" role="radiogroup" aria-label="导出模式">
       <label class="edit-radio"><input type="radio" value="precise" :checked="project.mode !== 'fast'" :disabled="!editable" data-test="edit-mode-precise" @change="$emit('set-mode', 'precise')" /> 精确（重新编码，切点到帧）</label>
       <label class="edit-radio"><input type="radio" value="fast" :checked="project.mode === 'fast'" :disabled="!editable || fastUnavailable" data-test="edit-mode-fast" @change="$emit('set-mode', 'fast')" /> 快速（不重编码，按关键帧切）</label>
@@ -191,7 +191,7 @@ export default {
     chooseTrack(conflict, value) {
       if (!value) return;
       const [choice, index] = value.startsWith('stream:') ? ['stream', Number(value.slice(7))] : [value, 0];
-      this.$emit('change', setTrackChoice(this.recipe, conflict.kind, conflict.output_index, Number(conflict.video_id), choice, index));
+      this.$emit('change', setTrackChoice(this.recipe, conflict.kind, conflict.output_index, Number(conflict.video_id), choice, index, Number(conflict.scope_video_id || 0)));
     },
     toggleAck(key, checked) {
       const rest = this.acknowledged.filter(existing => existing !== key);

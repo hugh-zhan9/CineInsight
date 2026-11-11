@@ -109,6 +109,9 @@ func bookmarkSource(db *gorm.DB, id uint) (models.Video, os.FileInfo, error) {
 		}
 		return video, nil, err
 	}
+	if editReplacementPathPending(db, video.Path) {
+		return video, nil, replacementPending()
+	}
 	if video.IsStale {
 		return video, nil, ErrBookmarkSourceUnavailable
 	}

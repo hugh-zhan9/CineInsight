@@ -226,6 +226,7 @@ export function buildSettingsPayload(form) {
     auto_image_exif_backfill: form.auto_image_exif_backfill,
     auto_image_perceptual_hash: form.auto_image_perceptual_hash || false,
     auto_collection_suggestions: form.auto_collection_suggestions || false,
+    auto_crop_detection: form.auto_crop_detection || false,
     auto_frame_hash_sequence: form.auto_frame_hash_sequence || false,
     idle_scheduling_enabled: form.idle_scheduling_enabled !== false,
     idle_threshold_minutes: normalizeIdleThresholdMinutes(form.idle_threshold_minutes),

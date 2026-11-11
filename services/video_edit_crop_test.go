@@ -338,10 +338,17 @@ func TestVideoEditCropAnalysisKeepsConfirmedAndDarkFrames(t *testing.T) {
 
 func TestVideoEditCropEndToEnd(t *testing.T) {
 	ffmpeg, ffprobe := requireEditFFmpeg(t)
-	for _, variant := range []string{"plain", "sar", "rotated", "selection"} {
+	for _, variant := range []string{"plain", "sar", "rotated", "selection", "replace"} {
 		t.Run(variant, func(t *testing.T) {
 			s := newRealEditService(t)
 			dir := t.TempDir()
+			if variant == "replace" {
+				var e error
+				dir, e = filepath.EvalSymlinks(dir)
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
 			path := filepath.Join(dir, "borders.mp4")
 			filter := "pad=320:180:112:10:black"
 			if variant == "sar" {
@@ -378,6 +385,11 @@ func TestVideoEditCropEndToEnd(t *testing.T) {
 				t.Fatalf("detection want %+v got %+v", expected, got.Recipe.Crop.Items[0].Rect)
 			}
 			got = mustUpdateRecipe(t, s, got, func(r *EditRecipe) {
+				// 这些整片用例保护历史另存、字幕复制与原片只读；新默认替换由替换发布专项验证。
+				// selection仍使用新默认，验证选定时间段始终另存。
+				if variant != "selection" && variant != "replace" {
+					r.Crop.PublishPolicy = "save_copy"
+				}
 				r.Crop.Items[0].Confirmed = true
 				if variant == "selection" {
 					r.Crop.Items[0].Range = &EditCropRange{StartMS: 500, EndMS: 1500}
@@ -398,7 +410,11 @@ func TestVideoEditCropEndToEnd(t *testing.T) {
 			if err != nil || p.Video.Width != expected.Width || p.Video.Height != expected.Height || len(p.Audio) != 1 || p.DurationMS < wantDuration-100 || p.DurationMS > wantDuration+200 {
 				t.Fatalf("output: %+v %v", p, err)
 			}
-			if sha256OfFile(t, path) != sourceHash {
+			if variant == "replace" {
+				if out != path || sha256OfFile(t, path) == sourceHash || done.Items[0].OutputVideoID == nil || *done.Items[0].OutputVideoID != v.ID {
+					t.Fatal("full crop did not replace same source")
+				}
+			} else if sha256OfFile(t, path) != sourceHash {
 				t.Fatal("source modified")
 			}
 			if !strings.Contains(readFileString(t, strings.TrimSuffix(out, filepath.Ext(out))+".srt"), "字幕") {

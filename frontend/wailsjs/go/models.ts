@@ -931,6 +931,8 @@ export namespace models {
 	    name: string;
 	    search_mode: string;
 	    keyword: string;
+	    directory_keyword: string;
+	    filename_keyword: string;
 	    smart_view: string;
 	    tag_ids_json: string;
 	    person_ids_json: string;
@@ -959,6 +961,8 @@ export namespace models {
 	        this.name = source["name"];
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
+	        this.directory_keyword = source["directory_keyword"];
+	        this.filename_keyword = source["filename_keyword"];
 	        this.smart_view = source["smart_view"];
 	        this.tag_ids_json = source["tag_ids_json"];
 	        this.person_ids_json = source["person_ids_json"];
@@ -1053,6 +1057,7 @@ export namespace models {
 	    auto_compatibility_proxy: boolean;
 	    proxy_cache_limit_bytes: number;
 	    auto_face_analysis: boolean;
+	    auto_crop_detection: boolean;
 	    auto_frame_hash_sequence: boolean;
 	    browser_bridge_enabled: boolean;
 	    browser_bridge_token: string;
@@ -1134,6 +1139,7 @@ export namespace models {
 	        this.auto_compatibility_proxy = source["auto_compatibility_proxy"];
 	        this.proxy_cache_limit_bytes = source["proxy_cache_limit_bytes"];
 	        this.auto_face_analysis = source["auto_face_analysis"];
+	        this.auto_crop_detection = source["auto_crop_detection"];
 	        this.auto_frame_hash_sequence = source["auto_frame_hash_sequence"];
 	        this.browser_bridge_enabled = source["browser_bridge_enabled"];
 	        this.browser_bridge_token = source["browser_bridge_token"];
@@ -6509,6 +6515,8 @@ export namespace services {
 	    video_id?: number;
 	    search_mode: string;
 	    keyword: string;
+	    directory_keyword: string;
+	    filename_keyword: string;
 	    path_prefix: string;
 	    smart_view: string;
 	    tag_ids: number[];
@@ -6537,6 +6545,8 @@ export namespace services {
 	        this.video_id = source["video_id"];
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
+	        this.directory_keyword = source["directory_keyword"];
+	        this.filename_keyword = source["filename_keyword"];
 	        this.path_prefix = source["path_prefix"];
 	        this.smart_view = source["smart_view"];
 	        this.tag_ids = source["tag_ids"];
@@ -7161,6 +7171,7 @@ export namespace services {
 	}
 	
 	export class EditCropRecipe {
+	    publish_policy?: string;
 	    items: EditCropItem[];
 	
 	    static createFrom(source: any = {}) {
@@ -7169,6 +7180,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publish_policy = source["publish_policy"];
 	        this.items = this.convertValues(source["items"], EditCropItem);
 	    }
 	
@@ -7363,6 +7375,7 @@ export namespace services {
 	    }
 	}
 	export class EditItemView {
+	    publish_mode: string;
 	    id: number;
 	    seq: number;
 	    status: string;
@@ -7382,6 +7395,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publish_mode = source["publish_mode"];
 	        this.id = source["id"];
 	        this.seq = source["seq"];
 	        this.status = source["status"];
@@ -7530,6 +7544,7 @@ export namespace services {
 		}
 	}
 	export class EditTrackConflict {
+	    scope_video_id?: number;
 	    seq: number;
 	    kind: string;
 	    output_index: number;
@@ -7544,6 +7559,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scope_video_id = source["scope_video_id"];
 	        this.seq = source["seq"];
 	        this.kind = source["kind"];
 	        this.output_index = source["output_index"];
@@ -7572,6 +7588,7 @@ export namespace services {
 		}
 	}
 	export class EditPreflightOutput {
+	    publish_mode: string;
 	    seq: number;
 	    video_ids: number[];
 	    planned_name: string;
@@ -7604,6 +7621,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publish_mode = source["publish_mode"];
 	        this.seq = source["seq"];
 	        this.video_ids = source["video_ids"];
 	        this.planned_name = source["planned_name"];
@@ -7890,6 +7908,7 @@ export namespace services {
 	    }
 	}
 	export class EditTrackChoice {
+	    scope_video_id?: number;
 	    output: number;
 	    video_id: number;
 	    choice: string;
@@ -7901,6 +7920,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scope_video_id = source["scope_video_id"];
 	        this.output = source["output"];
 	        this.video_id = source["video_id"];
 	        this.choice = source["choice"];
@@ -11744,6 +11764,7 @@ export namespace services {
 	    year?: number;
 	    year_is_null: boolean;
 	    title_key?: string;
+	    filename?: string;
 	    id: number;
 	
 	    static createFrom(source: any = {}) {
@@ -11761,6 +11782,7 @@ export namespace services {
 	        this.year = source["year"];
 	        this.year_is_null = source["year_is_null"];
 	        this.title_key = source["title_key"];
+	        this.filename = source["filename"];
 	        this.id = source["id"];
 	    }
 	}
@@ -17679,6 +17701,8 @@ export namespace services {
 	    video_id?: number;
 	    search_mode: string;
 	    keyword: string;
+	    directory_keyword: string;
+	    filename_keyword: string;
 	    path_prefix: string;
 	    smart_view: string;
 	    tag_ids: number[];
@@ -17708,6 +17732,8 @@ export namespace services {
 	        this.video_id = source["video_id"];
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
+	        this.directory_keyword = source["directory_keyword"];
+	        this.filename_keyword = source["filename_keyword"];
 	        this.path_prefix = source["path_prefix"];
 	        this.smart_view = source["smart_view"];
 	        this.tag_ids = source["tag_ids"];

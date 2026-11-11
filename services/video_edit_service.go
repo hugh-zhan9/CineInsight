@@ -21,11 +21,15 @@ import (
 
 // VideoEditService 拥有视频工作台的编辑配方、冻结计划、执行记录与工作目录（视频编辑合同）。
 // 项目与导出项两张表是事实源；全应用单 worker 按项 ID 先进先出执行，worker 是项状态的单写者。
-// 原片只读：服务从不删除或改写来源，成品一律另存、不覆盖并入库。
+// 历史配方与其他编辑类型另存；新整片裁剪只在冻结的replace_source分支原路径替换，日志保护恢复。
 type VideoEditService struct {
-	probe   *MediaProbeService
-	slot    *MediaWorkSlot
-	dataDir string
+	replacementRename      func(string, string) error
+	replacementHook        func(string) error
+	replacementCommitReply func(error) error
+	containerInspector     func(string, string) (string, error)
+	probe                  *MediaProbeService
+	slot                   *MediaWorkSlot
+	dataDir                string
 
 	// 测试接缝：外部命令、编码器探测、磁盘空间、平台、时间源与分析算法。
 	runOutput     videoEditOutputRunner
@@ -96,6 +100,7 @@ func NewVideoEditService(probe *MediaProbeService, slot *MediaWorkSlot, dataDir 
 		slot = NewMediaWorkSlot()
 	}
 	return &VideoEditService{
+		replacementRename: replacementNativeRename,
 		probe:             probe,
 		slot:              slot,
 		dataDir:           dataDir,
@@ -161,6 +166,7 @@ type EditRecipeUpdateRequest struct {
 
 // EditItemView 是导出项快照；路径一律不暴露。
 type EditItemView struct {
+	PublishMode    string     `json:"publish_mode"`
 	ID             uint       `json:"id"`
 	Seq            int        `json:"seq"`
 	Status         string     `json:"status"`
@@ -384,7 +390,8 @@ func buildEditProjectView(project models.VideoEditProject, items []models.VideoE
 
 func buildEditItemView(item models.VideoEditItem) EditItemView {
 	var plan struct {
-		Sources []struct {
+		PublishMode string `json:"publish_mode"`
+		Sources     []struct {
 			VideoID uint `json:"video_id"`
 		} `json:"sources"`
 	}
@@ -395,7 +402,7 @@ func buildEditItemView(item models.VideoEditItem) EditItemView {
 	}
 	return EditItemView{
 		ID: item.ID, Seq: item.Seq, Status: item.Status, Phase: item.Phase, Progress: item.Progress,
-		OutputName: item.OutputName, OutputVideoID: item.OutputVideoID, SourceVideoIDs: ids,
+		OutputName: item.OutputName, OutputVideoID: item.OutputVideoID, SourceVideoIDs: ids, PublishMode: editPublishMode(plan.PublishMode),
 		ErrorCode: item.ErrorCode, ErrorMessage: item.ErrorMessage, StartedAt: item.StartedAt, FinishedAt: item.FinishedAt,
 	}
 }
@@ -553,6 +560,11 @@ func editActiveStatuses() []string {
 
 // DeleteProject 删除非排队/运行/分析中的项目与其导出项记录；从不删除来源或已入库的成品。
 func (s *VideoEditService) DeleteProject(ctx context.Context, projectID uint) error {
+	release, lockErr := rLockLibraryPathsContext(ctx)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	project, err := loadEditProject(ctx, projectID)
 	if err != nil {
 		return err
@@ -563,6 +575,11 @@ func (s *VideoEditService) DeleteProject(ctx context.Context, projectID uint) er
 	items, err := loadEditItems(ctx, projectID)
 	if err != nil {
 		return err
+	}
+	for _, item := range items {
+		if replacementJournalExists(replacementWorkDir(item)) {
+			return replacementPending()
+		}
 	}
 	deleted := false
 	err = database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
@@ -796,6 +813,11 @@ func (s *VideoEditService) finishItem(ctx context.Context, item models.VideoEdit
 	if current, err := loadEditItemByID(bg, item.ID); err == nil {
 		item = current
 	}
+	if replacementJournalExists(replacementWorkDir(item)) {
+		_ = s.markReplacementPending(bg, item.ID)
+		s.emitItemByID(bg, item.ID)
+		return
+	}
 	removeEditWorkdir(item.WorkDir)
 	status, code := models.VideoEditStatusFailed, VideoEditErrorCode(runErr)
 	if errors.Is(runErr, context.Canceled) || ctx.Err() != nil {
@@ -1005,6 +1027,9 @@ func (s *VideoEditService) QueueProject(ctx context.Context, request EditQueueRe
 
 // RequeueProject 对中断、失败或部分成功的项目「继续未完成项」：重新预检并冻结，已完成项不重做。
 func (s *VideoEditService) RequeueProject(ctx context.Context, request EditQueueRequest) (*EditQueueResult, error) {
+	if err := s.guardReplacementProject(ctx, request.ProjectID); err != nil {
+		return nil, err
+	}
 	project, err := loadEditProject(ctx, request.ProjectID)
 	if err != nil {
 		return nil, err
@@ -1019,6 +1044,9 @@ func (s *VideoEditService) RequeueProject(ctx context.Context, request EditQueue
 	}
 	completed := map[int]bool{}
 	for _, item := range items {
+		if replacementJournalExists(replacementWorkDir(item)) {
+			return nil, replacementPending()
+		}
 		if item.Status == models.VideoEditStatusCompleted {
 			completed[item.Seq] = true
 		}
@@ -1171,6 +1199,7 @@ func (s *VideoEditService) RecoverOnStartup(parent context.Context) {
 	s.worker.Add(1)
 	s.mu.Unlock()
 	defer s.worker.Done()
+	s.recoverReplacements(parent)
 	db, err := editDB(parent)
 	if err != nil {
 		return
@@ -1189,6 +1218,9 @@ func (s *VideoEditService) RecoverOnStartup(parent context.Context) {
 	}
 	projects := map[uint]bool{}
 	for _, item := range items {
+		if replacementJournalExists(replacementWorkDir(item)) {
+			continue
+		}
 		projects[item.ProjectID] = true
 		if item.Status == models.VideoEditStatusRunning && item.PublishTarget != "" && item.OutputVideoID == nil {
 			if s.reconcilePublishedItem(parent, item) {

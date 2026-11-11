@@ -263,6 +263,7 @@ func (a *App) runPostScanAutomation(result *services.ScanSyncResult) {
 			}
 		}()
 	}
+	a.wakeCropDetection()
 	if settings.AutoFrameHashSequence {
 		go func() {
 			// 帧哈希回填是逐项循环的重任务：既过门，也带项间检查点，

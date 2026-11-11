@@ -163,7 +163,7 @@ func TestLibraryBrowseSortsCollapseVersionGroups(t *testing.T) {
 	if _, err := NewVersionGroupService().Create(context.Background(), []uint{videos[0].ID, videos[1].ID}, "阿凡达"); err != nil {
 		t.Fatal(err)
 	}
-	for _, sortMode := range []string{LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc} {
+	for _, sortMode := range []string{LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc, LibrarySortFilenameAsc, LibrarySortFilenameDesc, LibrarySortSizeAsc, LibrarySortSizeDesc} {
 		filter := LibraryFilter{SortMode: sortMode, CollapseVersions: true}
 		got := collectBrowsePages(t, filter, 1, nil)
 		if len(got) != 2 || !containsUint(got, videos[0].ID) || containsUint(got, videos[1].ID) {

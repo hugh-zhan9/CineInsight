@@ -44,14 +44,14 @@ func (s *VideoService) relocateVideoFrom(db *gorm.DB, id uint, newPath string) e
 // relocateVideoRecord 是重新定位的数据库部分（校验新路径、改写路径与大小、清除失效、同步短视频标签），不含补探测。
 // 失联找回在路径写锁内只做这一步，放开锁之后再补探测（D-LD-03）。
 func (s *VideoService) relocateVideoRecord(db *gorm.DB, id uint, newPath string) error {
-	if err := s.checkBTPath(newPath); err != nil {
+	if err := s.checkVideoSourceMutation(newPath); err != nil {
 		return err
 	}
 	var old models.Video
 	if err := db.First(&old, id).Error; err != nil {
 		return err
 	}
-	if err := s.checkBTPath(old.Path); err != nil {
+	if err := s.checkVideoSourceMutation(old.Path); err != nil {
 		return err
 	}
 	newPath = filepath.Clean(strings.TrimSpace(newPath))

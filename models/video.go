@@ -251,6 +251,7 @@ type Settings struct {
 	// 帧哈希序列（D-026）。默认关，零值即默认，不需要显式迁移，也不用（更不能用）
 	// gorm default 标签。回填要逐帧抽整部片，是本应用里最吃 CPU 的一类任务，
 	// 什么时候跑该由用户决定。
+	AutoCropDetection     bool `json:"auto_crop_detection"`
 	AutoFrameHashSequence bool `json:"auto_frame_hash_sequence"`
 
 	// 浏览器插件桥接（D-B03、D-B05、D-B06）。
@@ -344,6 +345,8 @@ type SavedLibraryView struct {
 	Name               string `gorm:"not null;uniqueIndex:idx_saved_library_views_name_active,where:deleted_at IS NULL" json:"name"`
 	SearchMode         string `gorm:"not null;default:'file'" json:"search_mode"`
 	Keyword            string `json:"keyword"`
+	DirectoryKeyword   string `gorm:"type:text" json:"directory_keyword"`
+	FilenameKeyword    string `gorm:"type:text" json:"filename_keyword"`
 	SmartView          string `gorm:"index" json:"smart_view"`
 	TagIDsJSON         string `gorm:"type:text;not null;default:'[]'" json:"tag_ids_json"`
 	// PersonIDsJSON 是保存视图里的人物筛选（D-PC33），JSON 数组，空为 []。

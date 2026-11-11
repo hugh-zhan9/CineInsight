@@ -41,7 +41,7 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 }
 func (s *VideoService) addScannedVideoWithBTGrant(path string, grant *btImportGrant) (*models.Video, bool, error) {
 	if grant == nil {
-		if err := s.checkBTPath(path); err != nil {
+		if err := s.checkVideoSourceMutation(path); err != nil {
 			return nil, false, err
 		}
 	} else if err := grant.check(path); err != nil {
@@ -100,7 +100,7 @@ func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video
 }
 func (s *VideoService) restoreScannerDeletedVideoWithoutEntryWithBTGrant(video models.Video, grant *btImportGrant) (*models.Video, error) {
 	if grant == nil {
-		if err := s.checkBTPath(video.Path); err != nil {
+		if err := s.checkVideoSourceMutation(video.Path); err != nil {
 			return nil, err
 		}
 	} else if err := grant.check(video.Path); err != nil {

@@ -154,6 +154,10 @@ export function CancelCollectionSuggestionAnalysis() {
   return window['go']['main']['App']['CancelCollectionSuggestionAnalysis']();
 }
 
+export function CancelCropDetection() {
+  return window['go']['main']['App']['CancelCropDetection']();
+}
+
 export function CancelDataHealthCheck() {
   return window['go']['main']['App']['CancelDataHealthCheck']();
 }
@@ -736,6 +740,10 @@ export function GetCollectionSuggestionStatus() {
 
 export function GetControlledPlaybackState() {
   return window['go']['main']['App']['GetControlledPlaybackState']();
+}
+
+export function GetCropDetectionStatus() {
+  return window['go']['main']['App']['GetCropDetectionStatus']();
 }
 
 export function GetDatabaseBackendStatus() {
@@ -1818,6 +1826,10 @@ export function RetryDownload(arg1) {
   return window['go']['main']['App']['RetryDownload'](arg1);
 }
 
+export function RetryEditReplacementRecovery(arg1) {
+  return window['go']['main']['App']['RetryEditReplacementRecovery'](arg1);
+}
+
 export function RetryEnhancementTask(arg1) {
   return window['go']['main']['App']['RetryEnhancementTask'](arg1);
 }
@@ -2088,6 +2100,10 @@ export function StartCleanupConsolidation(arg1, arg2) {
 
 export function StartCollectionSuggestionAnalysis() {
   return window['go']['main']['App']['StartCollectionSuggestionAnalysis']();
+}
+
+export function StartCropDetection() {
+  return window['go']['main']['App']['StartCropDetection']();
 }
 
 export function StartDatabaseSwitch(arg1) {

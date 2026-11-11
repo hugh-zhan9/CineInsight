@@ -365,7 +365,7 @@ func (s *VideoService) addVideoWithBTGrant(path string, grant *btImportGrant) (*
 	path = filepath.Clean(strings.TrimSpace(path))
 
 	if grant == nil {
-		if err := s.checkBTPath(path); err != nil {
+		if err := s.checkVideoSourceMutation(path); err != nil {
 			return nil, false, err
 		}
 	} else if err := grant.check(path); err != nil {
@@ -460,6 +460,9 @@ func (s *VideoService) GetVideo(id uint) (*models.Video, error) {
 	if err := database.DB.First(&video, id).Error; err != nil {
 		return nil, err
 	}
+	if editReplacementPathPending(database.DB, video.Path) {
+		return nil, replacementPending()
+	}
 	return &video, nil
 }
 
@@ -532,7 +535,7 @@ func (s *VideoService) restoreTrashEntryAuthorized(entry *models.VideoTrashEntry
 			return nil, err
 		}
 	} else if grant == nil {
-		if err := s.checkBTPath(entry.OriginalPath); err != nil {
+		if err := s.checkVideoSourceMutation(entry.OriginalPath); err != nil {
 			return nil, err
 		}
 	} else if err := grant.check(entry.OriginalPath); err != nil {
@@ -710,6 +713,13 @@ func (s *VideoService) restoreTrashEntryAuthorized(entry *models.VideoTrashEntry
 // 那些视频的代理同样该跟着走——软删除与永久删除在这里是同一条路，回收站里的
 // 视频不需要代理，恢复之后要用再重新触发一次。
 func (s *VideoService) deleteVideo(id uint, deleteFile bool) error {
+	var guarded models.Video
+	if e := database.DB.First(&guarded, id).Error; e != nil {
+		return e
+	}
+	if editReplacementPathPending(database.DB, guarded.Path) {
+		return replacementPending()
+	}
 	return s.deleteVideoBy(id, deleteFile, "user")
 }
 
@@ -748,6 +758,9 @@ func (s *VideoService) deleteVideoRecordBy(id uint, deleteFile bool, deletedBy s
 //
 // 不支持废纸篓、没权限、卷离线时记录与条目都保持原状（pending 条目被撤销），不降级。
 func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedBy, batchID string) (string, error) {
+	if replacementVideoIDPending(database.DB, id) {
+		return "", replacementPending()
+	}
 	if batchID == "" {
 		batchID = newDeleteBatchID()
 	}
@@ -873,6 +886,9 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 // deleteVideoToSystemTrash 是 mode=trash 的删除：pending_move 条目 → 移入系统废纸篓 →
 // 记下实际路径 → 事务里置 deleted 并软删记录。
 func (s *VideoService) deleteVideoToSystemTrash(video *models.Video, entry *models.VideoTrashEntry) (string, error) {
+	if editReplacementPathPending(database.DB, video.Path) {
+		return "", replacementPending()
+	}
 	trashService := NewTrashService()
 	entry.State = trashStatePendingMove
 	entry.TrashPath = ""
@@ -1645,6 +1661,9 @@ func (s *VideoService) permanentlyDeleteVideoLocked(id uint) (string, error) {
 }
 
 func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
+	if replacementVideoIDPending(database.DB, id) {
+		return "", replacementPending()
+	}
 	// 只接受活跃记录（默认 scope）：已软删的视频归回收站管，永久删除会绕过条目与身份核对（I5）。
 	var video models.Video
 	if err := database.DB.First(&video, id).Error; err != nil {
@@ -1821,7 +1840,7 @@ func (s *VideoService) RefreshVideoMetadata(id uint) error {
 		return err
 	}
 
-	if err := s.checkBTPath(video.Path); err != nil {
+	if err := s.checkVideoSourceMutation(video.Path); err != nil {
 		return err
 	}
 
@@ -1829,4 +1848,12 @@ func (s *VideoService) RefreshVideoMetadata(id uint) error {
 		return err
 	}
 	return database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) })
+}
+
+// checkVideoSourceMutation composes source-owner guards without coupling BT policy to editing.
+func (s *VideoService) checkVideoSourceMutation(path string) error {
+	if editReplacementPathPending(database.DB, path) {
+		return replacementPending()
+	}
+	return s.checkBTPath(path)
 }

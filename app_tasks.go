@@ -237,6 +237,7 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskEnhancement:          (*App).taskCenterEnhancement,
 	services.BackgroundTaskProxy:                (*App).taskCenterProxy,
 	services.BackgroundTaskFace:                 (*App).taskCenterFace,
+	services.BackgroundTaskCropDetection:        (*App).taskCenterCropDetection,
 	services.BackgroundTaskFrameHash:            (*App).taskCenterFrameHash,
 	services.BackgroundTaskPerceptualHash:       (*App).taskCenterPerceptualHash,
 	services.BackgroundTaskTechnical:            (*App).taskCenterTechnical,

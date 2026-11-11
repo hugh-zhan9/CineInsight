@@ -33,6 +33,12 @@ export const EDIT_ITEM_ERROR_LABELS = {
   verify_failed: '成品校验失败',
   output_conflict: '输出文件名被占用',
   publish_failed: '入库失败',
+  replace_recovery_pending: '原文件替换待恢复',
+  replace_managed_source: '托管下载文件不能替换',
+  replace_path_unsafe: '来源路径不支持安全替换',
+  container_profile_unsupported: '无法保持此容器输出',
+  source_container_mismatch: '文件扩展名与实际容器不一致',
+  container_profile_incompatible: '原容器无法编码当前裁剪参数或轨道',
   cancelled: '已取消',
   interrupted: '已中断'
 };
@@ -341,16 +347,18 @@ export function addManualSegment(recipe, longDurationMs) {
 // ===== 轨道映射 =====
 // 对一个冲突（输出轨 output 在来源 videoID 上对不上）做明确选择（Q9）。choice=drop 表示整条输出轨
 // 不导出，按后端约定 video_id 填 0，并替掉该输出轨上的其他选择。kind = 'audio' | 'subtitle'。
-export function setTrackChoice(recipe, kind, output, videoID, choice, streamIndex = 0) {
+export function setTrackChoice(recipe, kind, output, videoID, choice, streamIndex = 0, scopeVideoID = 0) {
   const next = cloneRecipe(recipe);
   next.tracks = next.tracks || { audio: [], subtitle: [] };
+  const scope = next.crop ? (Number(scopeVideoID) || Number(videoID)) : 0;
+  const scoped = scope ? { scope_video_id: scope } : {};
   const list = (next.tracks[kind] || []).filter(entry => {
-    if (entry.output !== output) return true;
+    if (Number(entry.scope_video_id || 0) !== scope || entry.output !== output) return true;
     if (choice === 'drop') return false;
     return entry.video_id !== 0 && entry.video_id !== videoID;
   });
-  if (choice === 'drop') list.push({ output, video_id: 0, choice: 'drop', stream_index: 0 });
-  else list.push({ output, video_id: videoID, choice, stream_index: choice === 'stream' ? Number(streamIndex) : 0 });
+  if (choice === 'drop') list.push({ output, video_id: 0, choice: 'drop', stream_index: 0, ...scoped });
+  else list.push({ output, video_id: videoID, choice, stream_index: choice === 'stream' ? Number(streamIndex) : 0, ...scoped });
   next.tracks[kind] = list;
   return next;
 }

@@ -30,6 +30,9 @@
           <kbd class="search-field__hint">⌘F</kbd>
         </div>
 
+        <div class="search-field"><input :value="directoryKeyword" @input="$emit('update:directoryKeyword', $event.target.value); $emit('search', false, true)" @keyup.enter="$emit('search', true, true)" type="text" class="search-field__input" placeholder="目录包含…" aria-label="目录包含" data-test="library-directory-keyword" /></div>
+        <div class="search-field"><input :value="filenameKeyword" @input="$emit('update:filenameKeyword', $event.target.value); $emit('search', false, true)" @keyup.enter="$emit('search', true, true)" type="text" class="search-field__input" placeholder="文件名包含…" aria-label="文件名包含" data-test="library-filename-keyword" /></div>
+
         <button type="button" class="btn btn--secondary" data-test="library-query-open" @click="$emit('open-query')">组合搜索…</button>
         <select v-model="smartViewModel" @change="$emit('search', true)" class="select-input toolbar-control" aria-label="智能视图">
           <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
@@ -56,6 +59,10 @@
           <option value="balanced">均衡排序</option>
           <option value="rating_desc">评分从高到低</option>
           <option value="rating_asc">评分从低到高</option>
+          <option value="filename_asc">文件名称升序</option>
+          <option value="filename_desc">文件名称降序</option>
+          <option value="size_asc">文件大小从小到大</option>
+          <option value="size_desc">文件大小从大到小</option>
         </select>
 
         <button type="button" class="btn btn--secondary toolbar-trigger" data-test="toolbar-search-scenes" title="带上当前筛选条件进入场景检索（语义搜索词不带入）" @click="$emit('search-scenes')">在当前筛选中搜场景</button>
@@ -322,6 +329,8 @@ export default {
     // 片库页正在为「全选当前结果」补取剩余的页。
     selectingAll: { type: Boolean, default: false },
     searchKeyword: { type: String, default: '' },
+    directoryKeyword: { type: String, default: '' },
+    filenameKeyword: { type: String, default: '' },
     searchMode: { type: String, default: 'file' },
     smartView: { type: String, default: '' },
     // 「缺失某项」筛选（D-MC-03），取值见 VIDEO_MISSING_OPTIONS；空串不筛。
@@ -365,7 +374,7 @@ export default {
   },
   emits: [
     'search-scenes', 'open-query',
-    'update:searchKeyword', 'update:smartView', 'update:missing', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
+    'update:directoryKeyword', 'update:filenameKeyword', 'update:searchKeyword', 'update:smartView', 'update:missing', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
     'search', 'set-search-mode', 'toggle-tag', 'clear-tags', 'open-tag-manager',
     'toggle-select-all', 'clear-conditions', 'apply-filter', 'open-save-view',

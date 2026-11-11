@@ -170,6 +170,9 @@ func (a *App) UpdateSettings(input models.Settings) error {
 
 	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
+		if bridgeErr != nil || bridgeBefore == nil || bridgeBefore.AutoCropDetection != input.AutoCropDetection {
+			a.configureCropDetection(input.AutoCropDetection)
+		}
 		if a.videoStructure != nil && (bridgeErr != nil || bridgeBefore == nil || bridgeBefore.AutoStructureEnabled != input.AutoStructureEnabled || bridgeBefore.ScanExcludePaths != input.ScanExcludePaths || bridgeBefore.IdleThresholdMinutes != input.IdleThresholdMinutes || bridgeBefore.IdleRequireACPower != input.IdleRequireACPower || bridgeBefore.IdleWindowStart != input.IdleWindowStart || bridgeBefore.IdleWindowEnd != input.IdleWindowEnd) {
 			a.videoStructure.Wake()
 		}
@@ -418,6 +421,7 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 		a.perceptualHash.StopAndWait()
 	}
 	// 帧哈希回填同样逐项写 video_frame_hash_sequences，此前漏在清单外（清理检测遗留 Q5）。
+	a.stopCropDetection()
 	if a.frameHash != nil {
 		a.frameHash.StopAndWait()
 	}
@@ -496,6 +500,9 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	a.resumeCleanupConsolidation()
 	if a.videoEdit != nil {
 		a.videoEdit.Resume()
+		if settings, e := a.settingsService.GetSettings(); e == nil {
+			a.configureCropDetection(settings.AutoCropDetection)
+		}
 	}
 	a.resumeDataCare()
 	// Rule and publication consumers must accept events before BT can import again.

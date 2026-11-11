@@ -28,9 +28,13 @@ const (
 	LibrarySortRatingDesc     = "rating_desc"
 	LibrarySortRatingAsc      = "rating_asc"
 	// UI 二期海报墙的三种排序（§2.3）。Jellyfin 与手机端不传这几个值。
-	LibrarySortAddedDesc = "added_desc" // created_at DESC, id DESC
-	LibrarySortYearDesc  = "year_desc"  // year DESC NULLS LAST, id DESC
-	LibrarySortTitleAsc  = "title_asc"  // title_sort_key ASC, id ASC
+	LibrarySortAddedDesc    = "added_desc" // created_at DESC, id DESC
+	LibrarySortYearDesc     = "year_desc"  // year DESC NULLS LAST, id DESC
+	LibrarySortFilenameAsc  = "filename_asc"
+	LibrarySortFilenameDesc = "filename_desc"
+	LibrarySortSizeAsc      = "size_asc"
+	LibrarySortSizeDesc     = "size_desc"
+	LibrarySortTitleAsc     = "title_asc" // title_sort_key ASC, id ASC
 
 	LibraryViewAll              = ""
 	LibraryViewFavorites        = "favorites"
@@ -76,6 +80,8 @@ type LibraryFilter struct {
 	VideoID            uint   `json:"video_id,omitempty"`
 	SearchMode         string `json:"search_mode"`
 	Keyword            string `json:"keyword"`
+	DirectoryKeyword   string `json:"directory_keyword"`
+	FilenameKeyword    string `json:"filename_keyword"`
 	PathPrefix         string `json:"path_prefix"`
 	SmartView          string `json:"smart_view"`
 	TagIDs             []uint `json:"tag_ids"`
@@ -113,6 +119,7 @@ type LibraryVideoCursor struct {
 	Year         *int       `json:"year,omitempty"`
 	YearIsNull   bool       `json:"year_is_null"`
 	TitleKey     string     `json:"title_key,omitempty"`
+	Filename     string     `json:"filename,omitempty"`
 	ID           uint       `json:"id"`
 }
 
@@ -231,6 +238,8 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 		return LibraryFilter{}, fmt.Errorf("不支持的搜索模式: %s", filter.SearchMode)
 	}
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	filter.DirectoryKeyword = strings.TrimSpace(filter.DirectoryKeyword)
+	filter.FilenameKeyword = strings.TrimSpace(filter.FilenameKeyword)
 	filter.PathPrefix = strings.TrimSpace(filter.PathPrefix)
 	if filter.PathPrefix != "" {
 		filter.PathPrefix = filepath.Clean(filter.PathPrefix)
@@ -274,7 +283,7 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 	}
 	switch filter.SortMode {
 	case LibrarySortBalanced, LibrarySortRatingDesc, LibrarySortRatingAsc,
-		LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc:
+		LibrarySortAddedDesc, LibrarySortYearDesc, LibrarySortTitleAsc, LibrarySortFilenameAsc, LibrarySortFilenameDesc, LibrarySortSizeAsc, LibrarySortSizeDesc:
 	default:
 		return LibraryFilter{}, fmt.Errorf("不支持的排序模式: %s", filter.SortMode)
 	}
@@ -428,6 +437,13 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 			)`, pattern)
 		} else {
 			query = query.Where("(LOWER(videos.display_title) LIKE ? ESCAPE '\\' OR LOWER(videos.original_title) LIKE ? ESCAPE '\\' OR LOWER(videos.name) LIKE ? ESCAPE '\\' OR LOWER(videos.path) LIKE ? ESCAPE '\\')", pattern, pattern, pattern, pattern)
+		}
+	}
+	for _, condition := range []struct{ column, value string }{
+		{"videos.directory", filter.DirectoryKeyword}, {"videos.name", filter.FilenameKeyword},
+	} {
+		if condition.value != "" {
+			query = query.Where("LOWER("+condition.column+") LIKE ? ESCAPE '\\'", "%"+strings.ToLower(escapeSQLLike(condition.value))+"%")
 		}
 	}
 	if filter.PathPrefix != "" {
@@ -905,7 +921,7 @@ func buildSavedLibraryView(name string, input LibraryFilter) (models.SavedLibrar
 	}
 	return models.SavedLibraryView{
 		WatchState: filter.WatchState, FavoritesOnly: filter.FavoritesOnly, MinDurationSeconds: filter.MinDurationSeconds, MaxDurationSeconds: filter.MaxDurationSeconds,
-		Name: name, SearchMode: filter.SearchMode, Keyword: filter.Keyword, SmartView: filter.SmartView,
+		Name: name, SearchMode: filter.SearchMode, Keyword: filter.Keyword, DirectoryKeyword: filter.DirectoryKeyword, FilenameKeyword: filter.FilenameKeyword, SmartView: filter.SmartView,
 		TagIDsJSON: string(tagJSON), PersonIDsJSON: string(personJSON), MinSize: filter.MinSize, MaxSize: filter.MaxSize,
 		MinHeight: filter.MinHeight, MaxHeight: filter.MaxHeight,
 		MinRating: filter.MinRating, MaxRating: filter.MaxRating, Missing: filter.Missing, SortMode: filter.SortMode,
@@ -950,7 +966,7 @@ func (s *VideoService) UpdateSavedLibraryView(id uint, name string, filter Libra
 	}
 	updates := map[string]interface{}{
 		"watch_state": next.WatchState, "favorites_only": next.FavoritesOnly, "min_duration_seconds": next.MinDurationSeconds, "max_duration_seconds": next.MaxDurationSeconds,
-		"name": next.Name, "search_mode": next.SearchMode, "keyword": next.Keyword, "smart_view": next.SmartView,
+		"name": next.Name, "search_mode": next.SearchMode, "keyword": next.Keyword, "directory_keyword": next.DirectoryKeyword, "filename_keyword": next.FilenameKeyword, "smart_view": next.SmartView,
 		"tag_ids_json": next.TagIDsJSON, "person_ids_json": next.PersonIDsJSON,
 		"min_size": next.MinSize, "max_size": next.MaxSize, "min_height": next.MinHeight, "max_height": next.MaxHeight,
 		"min_rating": next.MinRating, "max_rating": next.MaxRating, "missing": next.Missing, "sort_mode": next.SortMode,
@@ -1211,7 +1227,7 @@ func validateLibraryVideoCursor(sortMode string, cursor *LibraryVideoCursor) err
 		return validateBrowseCursor(sortMode, cursor)
 	}
 	// 既有三种排序不带新排序的字段（§2.3）。
-	if cursor.CreatedAt != nil || cursor.Year != nil || cursor.YearIsNull || cursor.TitleKey != "" {
+	if cursor.CreatedAt != nil || cursor.Year != nil || cursor.YearIsNull || cursor.TitleKey != "" || cursor.Filename != "" {
 		return fmt.Errorf("%s 游标包含其他排序的字段", sortMode)
 	}
 	if sortMode == LibrarySortBalanced {

@@ -8,6 +8,7 @@ import {
   CancelAIReviewApproval, CancelAutomationRuleRun, CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelDataHealthCheck, CancelFaceAnalysis, CancelImageAITagging,
   CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
   CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelLocalMetadataExport, CancelLostMediaTask, CancelMovieChartRefresh,
+  CancelCropDetection, StartCropDetection,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSceneIndex, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
   CreateDatabaseBackup, RunGatedTaskNow, StartCleanupAnalysisFromSettings, StartCollectionSuggestionAnalysis,
   StartImageAITagging, StartImageCleanupAnalysis, StartImageEXIFBackfill,
@@ -34,6 +35,7 @@ import { backgroundTaskLabel, BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdl
 const TASK_BINDINGS = {
   subtitle: { cancel: () => CancelSubtitle() },
   phash: { start: () => StartPerceptualHashBackfill(), cancel: () => CancelPerceptualHashBackfill() },
+  crop_detection: { start: () => StartCropDetection(), cancel: () => CancelCropDetection() },
   frame_hash: { start: () => StartFrameHashBackfill(), cancel: () => CancelFrameHashBackfill() },
   technical: { start: () => StartTechnicalBackfill(), cancel: () => CancelTechnicalBackfill() },
   local_metadata: { start: () => StartLocalMetadataBackfill(), cancel: () => CancelLocalMetadataBackfill() },

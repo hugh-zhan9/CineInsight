@@ -10,6 +10,7 @@ func AllModels() []interface{} {
 		&MediaExplorationState{},
 		&MediaExplorationEntry{},
 		&Video{},
+		&VideoCropDetectionState{},
 		// Image 紧跟 Video：short_feed_image_interactions、image_people、
 		// image_trash_entries 等一大批表都有外键指向 images，它排在后面的话
 		// 那些表会先被复制而撞外键。它自己只有 many2many 关联（image_tags），

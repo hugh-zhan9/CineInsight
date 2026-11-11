@@ -93,3 +93,21 @@ describe('导出结果（TC-23）', () => {
     expect(wrapper.find('[data-test="edit-result-version-4"]').exists()).toBe(false);
   });
 });
+
+it('原路径替换结果禁止清理原片和自版本分组，恢复使用独立入口', async () => {
+  const item = { ...completed, publish_mode: 'replace_source', source_video_ids: [90] };
+  const wrapper = mount(EditResults, { props: { project: { ...trimProject([item]), kind: 'crop' } } });
+  await flushPromises();
+  expect(wrapper.text()).toContain('原文件已替换');
+  expect(wrapper.find('[data-test="edit-result-confirm-4"]').exists()).toBe(false);
+  wrapper.vm.verified[4] = true;
+  await wrapper.vm.$nextTick();
+  expect(wrapper.find('[data-test="edit-result-cleanup-4"]').exists()).toBe(false);
+  expect(wrapper.find('[data-test="edit-result-version-4"]').exists()).toBe(false);
+  await wrapper.vm.linkVersion(item);
+  expect(api.CreateVersionGroup).not.toHaveBeenCalled();
+  await wrapper.setProps({ project: trimProject([{ ...item, error_code: 'replace_recovery_pending' }]) });
+  await wrapper.get('[data-test="edit-result-recover-4"]').trigger('click');
+  expect(wrapper.emitted('recover-replacement')).toEqual([[4]]);
+  wrapper.unmount();
+});

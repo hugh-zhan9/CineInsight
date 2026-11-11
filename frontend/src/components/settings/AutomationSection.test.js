@@ -2,7 +2,7 @@ import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
 
-vi.mock('../../../wailsjs/go/main/App', () => ({ SelectDirectory: vi.fn() }));
+vi.mock('../../../wailsjs/go/main/App', () => ({ SelectDirectory: vi.fn(), GetCropDetectionStatus: vi.fn(async()=>({running:false,processed:3,failed:1})) }));
 
 import AutomationSection from './AutomationSection.vue';
 
@@ -56,3 +56,5 @@ describe('AutomationSection（P-032）', () => {
     wrapper.unmount();
   });
 });
+
+it('黑边识别开关明确仅创建待处理项目',async()=>{const {form,wrapper}=mountSection();await wrapper.get('[data-test="auto-crop-detection-toggle"]').setValue(true);expect(form.auto_crop_detection).toBe(true);expect(wrapper.text()).toContain('不会自动裁剪或导出');wrapper.unmount();});

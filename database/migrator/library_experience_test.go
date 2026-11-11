@@ -16,7 +16,7 @@ func TestMigrateLibraryExperiencePreferencesAndFiltersRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag := models.Tag{Name: "positive", PreferenceRevision: 5}
-	view := models.SavedLibraryView{Name: "compound", SearchMode: "file", WatchState: "unwatched", FavoritesOnly: true, MinDurationSeconds: 1200, MaxDurationSeconds: 7200, SortMode: "balanced"}
+	view := models.SavedLibraryView{Name: "compound", DirectoryKeyword: "电影", FilenameKeyword: "预告", SearchMode: "file", WatchState: "unwatched", FavoritesOnly: true, MinDurationSeconds: 1200, MaxDurationSeconds: 7200, SortMode: "balanced"}
 	if err := source.Create(&tag).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestMigrateLibraryExperiencePreferencesAndFiltersRoundTrip(t *testing.T) {
 		if err := step.to.First(&gotPref, pref.ID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if gotTag.PreferenceRevision != 5 || gotView.WatchState != "unwatched" || !gotView.FavoritesOnly || gotView.MinDurationSeconds != 1200 || gotView.MaxDurationSeconds != 7200 || gotPref.Effect != "boost" || gotPref.Revision != 8 {
+		if gotTag.PreferenceRevision != 5 || gotView.DirectoryKeyword != "电影" || gotView.FilenameKeyword != "预告" || gotView.WatchState != "unwatched" || !gotView.FavoritesOnly || gotView.MinDurationSeconds != 1200 || gotView.MaxDurationSeconds != 7200 || gotPref.Effect != "boost" || gotPref.Revision != 8 {
 			t.Fatalf("round trip lost conditions: %+v %+v %+v", gotTag, gotView, gotPref)
 		}
 	}

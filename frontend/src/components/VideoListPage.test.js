@@ -381,6 +381,30 @@ describe('VideoListPage media-detail integration', () => {
     expect(wrapper.vm.currentLibraryFilter()).toEqual(expect.objectContaining({person_ids:[7],tag_ids:[9],watch_state:'unwatched',favorites_only:true,max_duration_seconds:7200}));wrapper.unmount();
   });
 
+  it('carries directory and filename conditions through queries, views and command resets', async () => {
+    const wrapper = await mountPage();
+    vi.spyOn(wrapper.vm, 'handleSearch').mockResolvedValue();
+    await wrapper.vm.applyParsedQueryFilter({ directory_keyword: ' 电影 ', filename_keyword: '预告', sort_mode: 'filename_desc' });
+    expect(wrapper.vm.currentLibraryFilter()).toEqual(expect.objectContaining({directory_keyword: '电影', filename_keyword: '预告', sort_mode: 'filename_desc'}));
+    const queryKey = wrapper.vm.virtualListQueryKey;
+    wrapper.vm.filenameKeyword = '正片';
+    expect(wrapper.vm.virtualListQueryKey).not.toBe(queryKey);
+    expect(wrapper.vm.matchesSmartView({directory:'/电影/甲',name:'正片.mp4'})).toBe(true);
+    expect(wrapper.vm.matchesSmartView({directory:'/其他',name:'正片.mp4'})).toBe(false);
+    wrapper.vm.savedViews = [{id:42,name:'saved',directory_keyword:'电影',filename_keyword:'预告',sort_mode:'size_desc'}];
+    wrapper.vm.selectedSavedViewID = 42;
+    vi.spyOn(wrapper.vm,'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.applySelectedSavedView();
+    expect(wrapper.vm.currentLibraryFilter()).toEqual(expect.objectContaining({directory_keyword:'电影',filename_keyword:'预告',sort_mode:'size_desc'}));
+    wrapper.vm.resetConditionsForCommand();
+    expect(wrapper.vm.currentLibraryFilter()).not.toHaveProperty('directory_keyword');
+    expect(wrapper.vm.currentLibraryFilter()).not.toHaveProperty('filename_keyword');
+    wrapper.vm.directoryKeyword = '电影';wrapper.vm.filenameKeyword = '预告';
+    wrapper.vm.clearAllConditions();
+    expect(wrapper.vm.directoryKeyword).toBe('');expect(wrapper.vm.filenameKeyword).toBe('');
+    wrapper.unmount();
+  });
+
   it('sends nullable rating filters and sort mode through the generated request DTO', async () => {
     const wrapper = await mountPage();
     wrapper.vm.minRating = '0';

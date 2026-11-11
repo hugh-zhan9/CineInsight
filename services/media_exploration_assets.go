@@ -134,7 +134,7 @@ func (s *MediaExplorationService) ResolveAsset(ctx context.Context, r Exploratio
 	var delivered os.FileInfo
 	switch asset {
 	case "thumbnail":
-		media, err := thumbs.ResolveExplorationThumbnail(ctx, kind, id, edge, images)
+		media, err := thumbs.resolveExplorationThumbnailUnderPathRead(ctx, kind, id, edge, images)
 		if err != nil {
 			return nil, err
 		}

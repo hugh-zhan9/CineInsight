@@ -498,6 +498,9 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 
 	missingVideos := make([]models.Video, 0)
 	for _, video := range allExisting {
+		if editReplacementPathPending(database.DB, video.Path) {
+			continue
+		}
 		if _, exists := scannedByPath[video.Path]; !exists {
 			if scanCandidateIsMissing(video, result) {
 				if missing, err := removalGuard.missing(video.Path, excludedPaths); err != nil {
@@ -753,6 +756,9 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 	}
 	eligibleExisting := allExisting[:0]
 	for _, video := range allExisting {
+		if editReplacementPathPending(database.DB, video.Path) {
+			continue
+		}
 		withheld, btErr := btSnapshot.Withheld(video.Path)
 		if btErr != nil {
 			result.recordError("bt_policy", "", "", btErr)
@@ -765,12 +771,18 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 	allExisting = eligibleExisting
 	existingByPath := make(map[string]models.Video, len(allExisting))
 	for _, video := range allExisting {
+		if editReplacementPathPending(database.DB, video.Path) {
+			continue
+		}
 		existingByPath[filepath.Clean(video.Path)] = video
 	}
 
 	missingCandidates := make([]models.Video, 0)
 	missingIDs := make(map[uint]struct{})
 	for _, video := range allExisting {
+		if editReplacementPathPending(database.DB, video.Path) {
+			continue
+		}
 		path := filepath.Clean(video.Path)
 		if !pathBelongsToAny(path, successfulTargets) {
 			if video.IsStale {

@@ -102,7 +102,7 @@ func TestBackgroundTaskRegistryRejectsUnknownKey(t *testing.T) {
 	if IsBackgroundTaskKey("not_a_task") {
 		t.Fatal("未知 key 不该被认作合法")
 	}
-	if len(BackgroundTaskKeys()) != 34 {
+	if len(BackgroundTaskKeys()) != 35 {
 		t.Fatalf("固定 key 集合应有 33 项，实际 %d", len(BackgroundTaskKeys()))
 	}
 	if !IsBackgroundTaskKey(string(BackgroundTaskSceneIndex)) || BackgroundTaskSceneIndex != "scene_index" {

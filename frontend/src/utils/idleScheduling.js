@@ -9,6 +9,7 @@ export const BACKGROUND_TASK_LABELS = {
   proxy: '播放代理',
   face: '人脸分析',
   frame_hash: '帧哈希',
+  crop_detection: '黑边识别',
   phash: '近重复指纹',
   technical: '技术信息',
   local_metadata: '本地资料',

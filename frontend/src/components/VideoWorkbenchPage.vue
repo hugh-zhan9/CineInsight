@@ -32,7 +32,7 @@
             <button v-if="cancellable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
             <button v-if="duplicable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
             <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--secondary btn--sm" :aria-expanded="exportOpen" data-test="crop-open-export" @click="exportOpen = !exportOpen">导出设置</button>
-            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :disabled="queueBusy || saving || cropInteracting || (editable && !cropReady)" data-test="crop-export" @click="queue([])">{{ queueBusy ? '正在检查并导出…' : (requeueable ? '继续未完成项' : '导出') }}</button>
+            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :disabled="queueBusy || saving || cropInteracting || (editable && !cropReady)" data-test="crop-export" @click="queue([])">{{ queueBusy ? '正在检查并导出…' : (requeueable ? '继续未完成项' : (recipe.crop?.publish_policy === 'replace_full' ? '导出（整片替换原文件）' : '导出')) }}</button>
           </header>
           <p v-if="project.error_message && project.status !== 'completed'" class="edit-error" data-test="workbench-project-error">{{ project.error_message }}</p>
           <p v-if="!editable && project.status !== 'analyzing'" class="help-text" data-test="workbench-readonly">项目已排队或已导出，配方只读。</p>
@@ -85,7 +85,8 @@
             :key="`results-${project.id}`"
             :project="project"
             @open-video="$emit('open-video', $event)"
-            @cleanup-sources="$emit('cleanup-sources', $event)"
+            @cleanup-sources="cleanupSafeSources"
+            @recover-replacement="retryReplacement"
           />
         </template>
       </div>
@@ -95,7 +96,7 @@
 
 <script>
 import {
-  GetEditCropSource, NavigateEditFrame, AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
+  RetryEditReplacementRecovery, GetEditCropSource, NavigateEditFrame, AnalyzeEditProject, CancelEditAnalysis, CancelEditProject, DeleteEditProject, DuplicateEditProject, GetEditProject, GetVideoEditStatus, GetVideosByIDs,
   ListEditProjects, ListEditProjectsBefore, PreflightEditProject, QueueEditProject, RequeueEditProject, UpdateEditRecipe
 } from '../../wailsjs/go/main/App';
 import EditExportPanel from './video-workbench/EditExportPanel.vue';
@@ -228,6 +229,14 @@ export default {
     clearTimeout(this.listTimer);
   },
   methods: {
+    cleanupSafeSources(ids) {
+      const outputs = new Set((this.project?.items || []).map(item => Number(item.output_video_id)).filter(Boolean));
+      this.$emit('cleanup-sources', (ids || []).filter(id => !outputs.has(Number(id))));
+    },
+    async retryReplacement(itemID) {
+      try { this.acceptProject(await RetryEditReplacementRecovery(itemID)); }
+      catch (err) { notifyError(editErrorText(err)); }
+    },
     kindLabel: editKindLabel,
     statusLabel: editStatusLabel,
     async loadList() {

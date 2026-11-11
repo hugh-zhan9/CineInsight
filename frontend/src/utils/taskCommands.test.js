@@ -54,9 +54,9 @@ describe('任务中心动作与绑定对齐（APP-03）', () => {
     expect(api.CancelAIReviewApproval).toHaveBeenLastCalledWith('image', '');
   });
 
-  it('APP-03 后端适配表覆盖 34 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
+  it('APP-03 后端适配表覆盖 35 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
     const capabilities = backendAdapterCapabilities();
-    expect(capabilities).toHaveLength(34);
+    expect(capabilities).toHaveLength(35);
     const missing = [];
     for (const { key, canStart, canCancel } of capabilities) {
       expect(key, '适配表里的常量应当能在登记表里找到取值').toBeTruthy();
@@ -137,3 +137,5 @@ describe('命令面板任务组的任务名（APP-03）', () => {
     expect(labels['task:movie_chart']).toBe('榜单抓取 · 运行中 · 取消');
   });
 });
+
+it('黑边识别使用明确启动与取消绑定',async()=>{await taskActionRunner('crop_detection','start')();expect(api.StartCropDetection).toHaveBeenCalledTimes(1);await taskActionRunner('crop_detection','cancel')();expect(api.CancelCropDetection).toHaveBeenCalledTimes(1);});

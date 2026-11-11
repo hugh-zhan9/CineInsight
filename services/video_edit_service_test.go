@@ -108,6 +108,84 @@ func (f *fakeEditMedia) progress(ctx context.Context, name string, args []string
 	}
 	out := args[len(args)-1]
 	workdir := filepath.Dir(out)
+	if strings.HasSuffix(out, "final.part") && strings.Contains(strings.Join(args, " "), "-filter:v") {
+		value := func(key string) string {
+			for i := len(args) - 2; i >= 0; i-- {
+				if args[i] == key {
+					return args[i+1]
+				}
+			}
+			return ""
+		}
+		duration, _ := strconv.ParseFloat(value("-t"), 64)
+		width, height := 320, 180
+		if m := editCropPattern.FindStringSubmatch(strings.ReplaceAll(value("-filter:v"), "crop=", "crop=")); len(m) > 0 {
+			width, _ = strconv.Atoi(m[1])
+			height, _ = strconv.Atoi(m[2])
+		}
+		f.mu.Lock()
+		source := f.probes[value("-i")]
+		f.mu.Unlock()
+		var payload map[string]any
+		_ = json.Unmarshal([]byte(source), &payload)
+		streams, _ := payload["streams"].([]any)
+		var selected []any
+		mapped := map[int]bool{}
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == "-map" {
+				var index int
+				if _, err := fmt.Sscanf(args[i+1], "0:%d", &index); err == nil {
+					mapped[index] = true
+				}
+			}
+		}
+		for _, raw := range streams {
+			stream := raw.(map[string]any)
+			if !mapped[int(stream["index"].(float64))] {
+				continue
+			}
+			switch stream["codec_type"] {
+			case "video":
+				stream["width"], stream["height"] = width, height
+				codec := value("-c:v")
+				switch codec {
+				case "h264_videotoolbox", "libx264":
+					codec = "h264"
+				case "hevc_videotoolbox", "libx265":
+					codec = "hevc"
+				case "libvpx-vp9":
+					codec = "vp9"
+				case "flv":
+					codec = "flv1"
+				case "msmpeg4":
+					codec = "msmpeg4v3"
+				}
+				stream["codec_name"] = codec
+			case "audio":
+				codec := value("-c:a")
+				if codec == "libmp3lame" {
+					codec = "mp3"
+				}
+				if codec == "libopus" {
+					codec = "opus"
+				}
+				stream["codec_name"] = codec
+			}
+			selected = append(selected, stream)
+		}
+		format := value("-f")
+		if oneOf(format, "mp4", "mov", "3gp", "f4v") {
+			format = "mov,mp4,m4a,3gp,3g2,mj2"
+		}
+		if oneOf(format, "matroska", "webm") {
+			format = "matroska,webm"
+		}
+		if format == "vob" {
+			format = "mpeg"
+		}
+		raw, _ := json.Marshal(map[string]any{"streams": selected, "format": map[string]any{"format_name": format, "duration": fmt.Sprint(duration)}})
+		return "", os.WriteFile(out, raw, 0644)
+	}
 	if strings.HasSuffix(out, "final.part") {
 		f.mu.Lock()
 		total := f.segmentMS[workdir]
@@ -139,12 +217,21 @@ func newFakeEditService(t *testing.T) (*VideoEditService, *fakeEditMedia) {
 	setupVideoServiceTestDB(t)
 	media := &fakeEditMedia{probes: map[string]string{}, segmentMS: map[string]int64{}}
 	service := NewVideoEditService(nil, NewMediaWorkSlot(), t.TempDir())
+	service.containerInspector = func(path, format string) (string, error) {
+		if strings.Contains(format, "matroska") {
+			return "matroska", nil
+		}
+		if strings.Contains(format, "mov") {
+			return "mp4", nil
+		}
+		return format, nil
+	}
 	service.runOutput = media.output
 	service.runProgress = media.progress
 	service.findFFmpeg = func() (string, error) { return "ffmpeg", nil }
 	service.findFFprobe = func() (string, error) { return "ffprobe", nil }
 	service.listEncoders = func(context.Context, string) (map[string]bool, error) {
-		return map[string]bool{"h264_videotoolbox": true, "hevc_videotoolbox": true, "libx264": true, "libx265": true, "aac": true}, nil
+		return map[string]bool{"h264_videotoolbox": true, "hevc_videotoolbox": true, "libx264": true, "libx265": true, "aac": true, "subrip": true, "srt": true, "ass": true, "mov_text": true, "webvtt": true}, nil
 	}
 	service.diskFree = func(string) (uint64, error) { return 1 << 40, nil }
 	t.Cleanup(service.StopAndWait)
@@ -153,6 +240,11 @@ func newFakeEditService(t *testing.T) (*VideoEditService, *fakeEditMedia) {
 
 // addFakeSource 建一个来源文件与库记录，并登记它的探测结果（默认 320×180、jpn+eng 两条音轨、1 条字幕）。
 func (f *fakeEditMedia) addFakeSource(t *testing.T, dir, name string, durationMS int64) models.Video {
+	var canonicalErr error
+	dir, canonicalErr = filepath.EvalSymlinks(dir)
+	if canonicalErr != nil {
+		t.Fatal(canonicalErr)
+	}
 	t.Helper()
 	path := filepath.Join(dir, name)
 	writeEditTestFile(t, path, "source:"+name)

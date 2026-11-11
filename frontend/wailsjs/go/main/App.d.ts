@@ -82,6 +82,8 @@ export function CancelCleanupConsolidation():Promise<void>;
 
 export function CancelCollectionSuggestionAnalysis():Promise<void>;
 
+export function CancelCropDetection():Promise<void>;
+
 export function CancelDataHealthCheck():Promise<void>;
 
 export function CancelEditAnalysis(arg1:number):Promise<void>;
@@ -373,6 +375,8 @@ export function GetCollectionEpisodeReport(arg1:number,arg2:number,arg3:number):
 export function GetCollectionSuggestionStatus():Promise<services.CollectionSuggestionStatus>;
 
 export function GetControlledPlaybackState():Promise<services.ControlledPlaybackState>;
+
+export function GetCropDetectionStatus():Promise<services.FrameHashStatus>;
 
 export function GetDatabaseBackendStatus():Promise<services.DatabaseBackendStatus>;
 
@@ -914,6 +918,8 @@ export function RetryAITagging(arg1:number):Promise<void>;
 
 export function RetryDownload(arg1:string):Promise<services.BrowserDownloadActionResult>;
 
+export function RetryEditReplacementRecovery(arg1:number):Promise<services.EditProjectView>;
+
 export function RetryEnhancementTask(arg1:number):Promise<services.EnhancementTaskView>;
 
 export function RetryImageAITagging(arg1:number):Promise<Array<models.ImageAITagCandidate>>;
@@ -1049,6 +1055,8 @@ export function StartCleanupAnalysisFromSettings():Promise<services.CleanupStatu
 export function StartCleanupConsolidation(arg1:string,arg2:boolean):Promise<services.CleanupConsolidationStatus>;
 
 export function StartCollectionSuggestionAnalysis():Promise<services.CollectionSuggestionStatus>;
+
+export function StartCropDetection():Promise<services.FrameHashStatus>;
 
 export function StartDatabaseSwitch(arg1:string):Promise<void>;
 

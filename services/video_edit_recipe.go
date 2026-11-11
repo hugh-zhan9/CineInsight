@@ -122,10 +122,12 @@ type EditTrackChoices struct {
 // EditTrackChoice 把输出轨 output（预检 tracks 里的 output_index）在来源 video_id 上
 // 映射到 stream_index（choice=stream）或填充（silence/none）；choice=drop 时整条输出轨不导出。
 type EditTrackChoice struct {
-	Output      int    `json:"output"`
-	VideoID     uint   `json:"video_id"`
-	Choice      string `json:"choice"`
-	StreamIndex int    `json:"stream_index"`
+	// ScopeVideoID仅用于crop单素材输出；VideoID仍按旧轨道映射约定，drop为0。
+	ScopeVideoID uint   `json:"scope_video_id,omitempty"`
+	Output       int    `json:"output"`
+	VideoID      uint   `json:"video_id"`
+	Choice       string `json:"choice"`
+	StreamIndex  int    `json:"stream_index"`
 }
 
 // VideoEditError 是带固定错误码的错误；文案形如 "code: 说明"，前端按前缀取码。
@@ -203,7 +205,7 @@ func defaultEditRecipe(kind string, videoIDs []uint) (EditRecipe, error) {
 	recipe := EditRecipe{V: videoEditRecipeVersion}
 	switch kind {
 	case models.VideoEditKindCrop:
-		recipe.Crop = &EditCropRecipe{}
+		recipe.Crop = &EditCropRecipe{PublishPolicy: "replace_full"}
 		for _, id := range videoIDs {
 			recipe.Crop.Items = append(recipe.Crop.Items, EditCropItem{VideoID: id})
 		}
@@ -264,6 +266,27 @@ func validateEditRecipeStructure(kind string, recipe EditRecipe) error {
 		}
 	default:
 		return editError("recipe_invalid", "未知的编辑类型")
+	}
+
+	for _, choices := range [][]EditTrackChoice{recipe.Tracks.Audio, recipe.Tracks.Subtitle} {
+		for _, choice := range choices {
+			if choice.ScopeVideoID == 0 {
+				continue
+			}
+			if kind != models.VideoEditKindCrop {
+				return editError("recipe_invalid", "素材作用域仅用于画面裁剪轨道")
+			}
+			member := false
+			for _, item := range recipe.Crop.Items {
+				if item.VideoID == choice.ScopeVideoID {
+					member = true
+					break
+				}
+			}
+			if !member {
+				return editError("recipe_invalid", "轨道作用域不属于当前裁剪项目")
+			}
+		}
 	}
 	return validateTrackChoices(recipe.Tracks)
 }
@@ -357,7 +380,7 @@ func validateTrackChoices(tracks EditTrackChoices) error {
 		return editError("recipe_invalid", "轨道映射选择过多")
 	}
 	check := func(choices []EditTrackChoice, fill string, label string) error {
-		seen := map[[2]uint]bool{}
+		seen := map[[3]uint]bool{}
 		for _, choice := range choices {
 			if choice.Output < 0 {
 				return editError("recipe_invalid", "%s映射的输出轨序号无效", label)
@@ -378,7 +401,7 @@ func validateTrackChoices(tracks EditTrackChoices) error {
 			default:
 				return editError("recipe_invalid", "%s映射的 choice 无效", label)
 			}
-			key := [2]uint{uint(choice.Output), choice.VideoID}
+			key := [3]uint{uint(choice.Output), choice.VideoID, choice.ScopeVideoID}
 			if seen[key] {
 				return editError("recipe_invalid", "%s映射对同一输出轨与来源重复给出", label)
 			}

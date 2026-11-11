@@ -3301,3 +3301,17 @@ it('passes image changes from management to the retained exploration host', asyn
   wrapper.vm.markViewerImagesChanged(); await flushPromises();
   expect(host.props('imagesVersion')).toBe(before + 1);
 });
+
+it('编辑完成时即使工作台未挂载也通过全局入口刷新片库', async () => {
+  const handlers = {};
+  window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return () => { delete handlers[name]; }; } };
+  const wrapper = await mountApp();
+  const changed = vi.spyOn(wrapper.vm, 'handleVideosChangedElsewhere').mockResolvedValue();
+  handlers['video-edit-state']({ status: 'running', item_status: 'running', item_id: 3 });
+  handlers['video-edit-state']({ status: 'completed', item_status: '', item_id: 0 });
+  expect(changed).not.toHaveBeenCalled();
+  handlers['video-edit-state']({ status: 'running', item_status: 'completed', item_id: 3 });
+  expect(changed).toHaveBeenCalledTimes(1);
+  wrapper.unmount();
+  delete window.runtime;
+});

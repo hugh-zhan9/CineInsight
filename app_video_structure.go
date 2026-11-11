@@ -96,5 +96,8 @@ func (a *App) taskCenterVideoStructure(src *taskCenterSources) taskCenterKeyStat
 func (a *App) wireVideoStructure() {
 	a.videoStructure.SetBackgroundTaskRegistry(a.backgroundTasks)
 
-	a.mediaProbeService.SetSourceObserver(a.videoStructure.SourceObserved)
+	a.mediaProbeService.SetSourceObserver(func(db *gorm.DB, id uint, size, mtime int64) {
+		a.videoStructure.SourceObserved(db, id, size, mtime)
+		a.wakeCropDetection()
+	})
 }

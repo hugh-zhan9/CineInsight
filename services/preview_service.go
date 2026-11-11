@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"mime"
@@ -255,4 +256,22 @@ func fallbackVideoMIME(path string) string {
 		return mimeType
 	}
 	return "application/octet-stream"
+}
+
+// OpenPreviewMedia resolves and opens an immutable file handle under one path read admission.
+func (s *VideoService) OpenPreviewMedia(ctx context.Context, id uint) (*PreviewMedia, *os.File, error) {
+	release, err := rLockLibraryPathsContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+	media, err := s.ResolvePreviewMedia(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := os.Open(media.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return media, file, nil
 }

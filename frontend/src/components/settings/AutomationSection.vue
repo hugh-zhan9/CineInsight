@@ -2,6 +2,7 @@
   <!-- 自动化设置 -->
   <div :id="`settings-automation`" class="settings-section">
     <h3>自动化与扫描</h3>
+    <div class="setting-item"><label class="switch"><input data-test="auto-crop-detection-toggle" type="checkbox" v-model="form.auto_crop_detection" /><span class="slider"></span><span>自动识别视频黑边</span></label><p class="help-text">检查全库及新增、变更的视频，识别结果加入视频工作台等待处理。不会自动裁剪或导出。</p><p v-if="cropStatus" class="help-text" data-test="crop-detection-status">{{ cropStatus.running ? '正在检查' : '最近检查' }}：已处理 {{ cropStatus.processed || 0 }}，失败 {{ cropStatus.failed || 0 }}</p></div>
     <div class="setting-item">
       <label class="switch">
         <input type="checkbox" v-model="form.auto_scan_on_startup" />
@@ -193,13 +194,15 @@
 </template>
 
 <script>
-import { StopControlledPlayback } from '../../../wailsjs/go/main/App';
+import { GetCropDetectionStatus, StopControlledPlayback } from '../../../wailsjs/go/main/App';
 import { SelectDirectory } from '../../../wailsjs/go/main/App';
 
 // 自动化与扫描分区。两份扫描黑名单以换行分隔存在设置字段里，这里带着它们的
 // 增删逻辑一起搬过来；选目录失败的提示交回页面顶部的保存状态栏。
 export default {
- data: () => ({controlledError: ''}),
+ data: () => ({controlledError: '', cropStatus: null, cropOff: null}),
+ mounted() { this.loadCropStatus(); this.cropOff = window.runtime?.EventsOn?.('crop-detection-state', status => {this.cropStatus=status;}); },
+ beforeUnmount() { if(typeof this.cropOff==='function')this.cropOff(); },
   name: 'AutomationSection',
   props: {
     form: { type: Object, required: true }
@@ -214,6 +217,7 @@ export default {
     }
   },
   methods: {
+    async loadCropStatus(){try{this.cropStatus=await GetCropDetectionStatus();}catch{this.cropStatus=null;}},
     async stopControlled() {this.controlledError='';try{await StopControlledPlayback();}catch(error){this.controlledError=String(error)}},
     async addScanExcludeDirectory() {
       try {

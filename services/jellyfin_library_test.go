@@ -391,3 +391,31 @@ func TestJellyfinProgressNearEndMarksWatched(t *testing.T) {
 		t.Fatalf("看到一半不该判看完: %+v", second)
 	}
 }
+
+func TestJellyfinSavedViewDirectoryAndFilenameConditions(t *testing.T) {
+	s, token, first, _ := jellyfinLibraryFixture(t)
+	for _, filter := range []LibraryFilter{
+		{DirectoryKeyword: first.Directory, FilenameKeyword: first.Name},
+		{DirectoryKeyword: "absent-directory", FilenameKeyword: first.Name},
+		{DirectoryKeyword: first.Directory, FilenameKeyword: "absent-file"},
+	} {
+		view, err := s.video.SaveLibraryView(SavedLibraryViewInput{Name: fmt.Sprintf("file view %d", len(filter.DirectoryKeyword)+len(filter.FilenameKeyword)), LibraryFilter: filter})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, count := jellyfinItems(t, jellyfinRequest(s, "GET", "/Items?ParentId="+jellyfinID(jellySaved, view.ID), token, ""))
+		expected := 0
+		if filter.DirectoryKeyword == first.Directory && filter.FilenameKeyword == first.Name {
+			expected = 1
+		}
+		if count != expected || len(items) != expected {
+			t.Fatalf("filter %+v: count %d items %+v", filter, count, items)
+		}
+		if expected == 1 && items[0]["Id"] != jellyfinID(jellyVideo, first.ID) {
+			t.Fatal(items)
+		}
+		if err := s.video.DeleteSavedLibraryView(view.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

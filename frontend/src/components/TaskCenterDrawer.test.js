@@ -82,7 +82,7 @@ describe('任务中心快照展示（APP-03）', () => {
     expect(wrapper.find('[data-test="task-center-recent"]').exists()).toBe(true);
   });
 
-  it('APP-03 34 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
+  it('APP-03 35 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
     api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({
       overrides: {
         phash: { state: 'running', progress: { done: 3, total: 10 }, actions: ['cancel'] },
@@ -92,12 +92,14 @@ describe('任务中心快照展示（APP-03）', () => {
     const wrapper = mountDrawer();
     await flushPromises();
 
-    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(34);
+    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(35);
     expect(wrapper.get('[data-test="task-center-section-running"]').text()).toContain('近重复指纹');
     expect(wrapper.get('[data-test="task-center-section-waiting_idle"]').text()).toContain('图片 EXIF');
-    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(32);
+    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(33);
     const names = wrapper.findAll('.task-item .task-item__name').map(name => name.text());
     expect(names).toEqual(expect.arrayContaining(Object.values(BACKGROUND_TASK_LABELS)));
+    expect(wrapper.find('[data-test="task-item-state-crop_detection"]').exists()).toBe(true);
+    expect(names).toContain('黑边识别');
     for (const key of ['image_cleanup', 'watchlist_enrich', 'movie_chart', 'browser_download']) {
       expect(names, key).not.toContain(key);
     }

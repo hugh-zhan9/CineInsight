@@ -19,6 +19,9 @@ func (s *VideoEditService) DuplicateProject(ctx context.Context, projectID uint)
 	if err != nil {
 		return nil, err
 	}
+	if recipe.Crop != nil {
+		recipe.Crop.PublishPolicy = "replace_full"
+	}
 	raw, err := encodeEditRecipe(recipe)
 	if err != nil {
 		return nil, err

@@ -36,7 +36,8 @@ type EditCropRange struct {
 
 // EditCropRecipe 是固定黑边裁剪批次。
 type EditCropRecipe struct {
-	Items []EditCropItem `json:"items"`
+	PublishPolicy string         `json:"publish_policy,omitempty"`
+	Items         []EditCropItem `json:"items"`
 }
 
 // EditCropResult 是自动检测建议；已确认项不覆盖，未识别时保留原框。
@@ -100,6 +101,9 @@ func (s *VideoEditService) CropSource(ctx context.Context, projectID, videoID ui
 func validateCropStructure(crop *EditCropRecipe) error {
 	if crop == nil || len(crop.Items) < 1 || len(crop.Items) > videoEditTrimMaxItems {
 		return editError("recipe_invalid", "画面裁剪需要 1–%d 项", videoEditTrimMaxItems)
+	}
+	if crop.PublishPolicy != "" && crop.PublishPolicy != "replace_full" && crop.PublishPolicy != "save_copy" {
+		return editError("recipe_invalid", "裁剪发布策略无效")
 	}
 	seen := map[uint]bool{}
 	for _, item := range crop.Items {
@@ -190,13 +194,19 @@ func (s *VideoEditService) buildCropPlans(ctx context.Context, pre *EditPrefligh
 		rect := *item.Rect
 		b.plan.Video.Crop, b.plan.Video.CanvasWidth, b.plan.Video.CanvasHeight = &rect, width, height
 		b.plan.Video.Width, b.plan.Video.Height = rect.Width, rect.Height
-		audio := mapEditTracks(pre, seq, editTrackAudio, item.VideoID, "source", sc.probe.Audio, nil, nil, mode)
-		subs := mapEditTracks(pre, seq, editTrackSubtitle, item.VideoID, "source", sc.probe.Subtitles, nil, nil, mode)
+		audio := mapEditTracks(pre, seq, editTrackAudio, item.VideoID, "source", sc.probe.Audio, nil, cropTrackChoices(recipe.Tracks.Audio, item.VideoID), mode)
+		subs := mapEditTracks(pre, seq, editTrackSubtitle, item.VideoID, "source", sc.probe.Subtitles, nil, cropTrackChoices(recipe.Tracks.Subtitle, item.VideoID), mode)
 		source := b.source(sc)
 		b.plan.Segments = append(b.plan.Segments, editPlanSegment{VideoSource: source, VideoStream: sc.probe.Video.Index,
 			InMS: start, RequestedInMS: start, DurMS: end - start,
 			Audio: audio.segmentRefs(item.VideoID, source, start), Subtitles: subs.segmentRefs(item.VideoID, source, start), SidecarSource: source, SidecarInMS: start})
 		s.completeEditPlan(pre, b, []*editSourceCtx{sc}, sc, " (裁剪)", audio, subs)
+		if recipe.Crop.PublishPolicy == "replace_full" && item.Range == nil {
+			s.fullCropTrackConflicts(pre, b.plan, sc, audio, subs)
+			if err := s.configureFullCrop(&b.plan, sc); err != nil {
+				pre.addError(VideoEditErrorCode(err), "container:"+key, item.VideoID, seq, "%s", err.Error())
+			}
+		}
 		if len(sc.probe.Subtitles) > 0 && (rect.X != 0 || rect.Y != 0 || rect.Width != width || rect.Height != height) {
 			pre.addWarning("crop_subtitle_position", "crop_subtitle_position:"+key, item.VideoID, seq, "《%s》含内嵌字幕，裁剪后字幕定位可能受影响，请检查成品", sc.video.Name)
 		}
@@ -287,43 +297,70 @@ func (s *VideoEditService) analyzeCrops(ctx context.Context, projectID uint, rec
 			result.Crops = append(result.Crops, EditCropResult{VideoID: item.VideoID, Status: "confirmed"})
 			continue
 		}
-		sc := sources[item.VideoID]
-		width, height := editDisplaySize(sc.probe.Video)
-		if width < 2 || height < 2 {
-			return editError("analysis_failed", "无法确定画面尺寸")
+		detection, err := s.detectCropSource(ctx, ffmpeg, sources[item.VideoID], func(progress float64) {
+			s.setAnalysisProgress(projectID, (float64(index)+progress)/float64(len(recipe.Crop.Items)))
+		})
+		if err != nil {
+			return err
 		}
-		samples := []EditCropRect{}
-		for sample := 0; sample < 7; sample++ {
-			at := sc.probe.DurationMS * int64(sample+1) / 8
-			runCtx, cancel := context.WithTimeout(ctx, videoEditProbeTimeout)
-			_, tail, runErr := s.runOutput(runCtx, ffmpeg, []string{"-nostdin", "-hide_banner", "-v", "info", "-threads", "2", "-filter_threads", "1", "-ss", editSeconds(at), "-i", sc.path,
-				"-map", fmt.Sprintf("0:%d", sc.probe.Video.Index), "-an", "-sn", "-vf", fmt.Sprintf("scale=%d:%d,setsar=1,cropdetect=limit=0.08:round=2:reset=0:skip=0", width, height), "-frames:v", "8", "-t", "2", "-f", "null", "-"})
-			cancel()
-			if runErr != nil {
-				return editError("analysis_failed", "《%s》检测黑边失败：%s", sc.video.Name, scrubEditPaths(runErr.Error(), sc.path))
-			}
-			if r := parseEditCropSample(tail, width, height); r != nil {
-				samples = append(samples, *r)
-			}
-			s.setAnalysisProgress(projectID, (float64(index)+float64(sample+1)/7)/float64(len(recipe.Crop.Items)))
+		if detection.Applied {
+			item.Rect, item.SourceVersion, item.Confirmed = detection.Rect, detection.SourceVersion, false
 		}
-		size, modTime, err := editFileFingerprint(sc.path)
-		if err != nil || size != sc.size || modTime != sc.modTimeNS {
-			return editError("source_changed", "《%s》检测期间来源发生变化", sc.video.Name)
-		}
-		// 检测已核实的画布同时供手动编辑使用，不依赖另一轮导出预检是否成功。
-		detection := EditCropResult{VideoID: item.VideoID, Status: "undetected",
-			DisplayWidth: width, DisplayHeight: height, DurationMS: sc.probe.DurationMS,
-			SourceVersion: editCropSourceVersion(size, modTime)}
-		if len(samples) >= 3 {
-			detection.Rect = editCropUnion(samples)
-			detection.Status, detection.Applied = "detected", true
-			if *detection.Rect == (EditCropRect{Width: width, Height: height}) {
-				detection.Status = "no_borders"
-			}
-			item.Rect, item.SourceVersion, item.Confirmed = detection.Rect, editCropSourceVersion(size, modTime), false
-		}
+
 		result.Crops = append(result.Crops, detection)
 	}
 	return ctx.Err()
+}
+
+// cropTrackChoices只把当前素材的显式选择交给通用映射器；不改变其他编辑类型的全局轨道合同。
+// 历史crop的无作用域选择原来未生效，继续忽略，不能因升级把它应用到整批原片。
+func cropTrackChoices(choices []EditTrackChoice, videoID uint) []EditTrackChoice {
+	result := []EditTrackChoice{}
+	for _, choice := range choices {
+		if choice.ScopeVideoID == videoID {
+			result = append(result, choice)
+		}
+	}
+	return result
+}
+
+// detectCropSource is the shared fixed-border algorithm; it does not own any project state.
+func (s *VideoEditService) detectCropSource(ctx context.Context, ffmpeg string, sc *editSourceCtx, progress func(float64)) (EditCropResult, error) {
+	width, height := editDisplaySize(sc.probe.Video)
+	if width < 2 || height < 2 {
+		return EditCropResult{}, editError("analysis_failed", "无法确定画面尺寸")
+	}
+	samples := []EditCropRect{}
+	for sample := 0; sample < 7; sample++ {
+		at := sc.probe.DurationMS * int64(sample+1) / 8
+		runCtx, cancel := context.WithTimeout(ctx, videoEditProbeTimeout)
+		_, tail, runErr := s.runOutput(runCtx, ffmpeg, []string{"-nostdin", "-hide_banner", "-v", "info", "-threads", "2", "-filter_threads", "1", "-ss", editSeconds(at), "-i", sc.path,
+			"-map", fmt.Sprintf("0:%d", sc.probe.Video.Index), "-an", "-sn", "-vf", fmt.Sprintf("scale=%d:%d,setsar=1,cropdetect=limit=0.08:round=2:reset=0:skip=0", width, height), "-frames:v", "8", "-t", "2", "-f", "null", "-"})
+		cancel()
+		if runErr != nil {
+			return EditCropResult{}, editError("analysis_failed", "《%s》检测黑边失败：%s", sc.video.Name, scrubEditPaths(runErr.Error(), sc.path))
+		}
+		if r := parseEditCropSample(tail, width, height); r != nil {
+			samples = append(samples, *r)
+		}
+		if progress != nil {
+			progress(float64(sample+1) / 7)
+		}
+	}
+	size, modTime, err := editFileFingerprint(sc.path)
+	if err != nil || size != sc.size || modTime != sc.modTimeNS {
+		return EditCropResult{}, editError("source_changed", "《%s》检测期间来源发生变化", sc.video.Name)
+	}
+	// 检测已核实的画布同时供手动编辑使用，不依赖另一轮导出预检是否成功。
+	detection := EditCropResult{VideoID: sc.video.ID, Status: "undetected",
+		DisplayWidth: width, DisplayHeight: height, DurationMS: sc.probe.DurationMS,
+		SourceVersion: editCropSourceVersion(size, modTime)}
+	if len(samples) >= 3 {
+		detection.Rect = editCropUnion(samples)
+		detection.Status, detection.Applied = "detected", true
+		if *detection.Rect == (EditCropRect{Width: width, Height: height}) {
+			detection.Status = "no_borders"
+		}
+	}
+	return detection, ctx.Err()
 }

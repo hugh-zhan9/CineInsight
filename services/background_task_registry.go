@@ -13,6 +13,7 @@ const (
 	BackgroundTaskEnhancement          BackgroundTaskKey = "enhancement"
 	BackgroundTaskProxy                BackgroundTaskKey = "proxy"
 	BackgroundTaskFace                 BackgroundTaskKey = "face"
+	BackgroundTaskCropDetection        BackgroundTaskKey = "crop_detection"
 	BackgroundTaskFrameHash            BackgroundTaskKey = "frame_hash"
 	BackgroundTaskPerceptualHash       BackgroundTaskKey = "phash"
 	BackgroundTaskTechnical            BackgroundTaskKey = "technical"
@@ -69,6 +70,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskProxy,
 	BackgroundTaskFace,
 	BackgroundTaskFrameHash,
+	BackgroundTaskCropDetection,
 	BackgroundTaskPerceptualHash,
 	BackgroundTaskTechnical,
 	BackgroundTaskLocalMetadata,

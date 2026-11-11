@@ -100,6 +100,8 @@ type App struct {
 	// 容量 1，三条流水线在处理每一项之前各自取一次。新增重 ffmpeg 任务请复用它，
 	// 不要各建一个——各建一个等于没有限制。
 	mediaWorkSlot       *services.MediaWorkSlot
+	cropDetection       *services.CropDetectionService
+	cropAuto            cropDetectionLoop
 	frameHash           *services.FrameHashService
 	playbackProxies     *services.PlaybackProxyService
 	enhancement         *services.EnhancementService
@@ -282,6 +284,9 @@ func NewApp() *App {
 	if dataDirErr != nil {
 		app.setStartupError(dataDirErr)
 	}
+	app.cropDetection = services.NewCropDetectionService(app.videoEdit, mediaWorkSlot)
+	app.cropDetection.SetBackgroundTaskRegistry(app.backgroundTasks)
+
 	return app
 }
 
@@ -482,8 +487,7 @@ func (a *App) startup(ctx context.Context) {
 				result.Found, result.Removed, result.Kept, result.Errors)
 		}
 	}()
-	// 视频工作台的启动对账（running/queued 项改 interrupted，rename 后崩溃的项补做入库），
-	// 之后清扫孤儿工作目录；与超分对账一样异步，不挡窗口。
+	// 文件恢复已在绑定前完成；全库孤儿目录遍历仍异步，不阻塞正常窗口启动。
 	go a.recoverVideoEdit(ctx)
 	// 外部播放多半发生在应用没开着的时候，启动时先补一次 IINA 断点；
 	// 之后靠监听断点目录实时跟进，看完切回来就已经更新好了，不用重启应用。
@@ -508,6 +512,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.startDiagnosticOwner(ctx)
 	a.startVideoStructure(ctx)
+	if settings, err := a.settingsService.GetSettings(); err == nil {
+		a.configureCropDetection(settings.AutoCropDetection)
+	}
 	// 想看片单的在线补全：先把进程重启后残留的 running 刷回 pending，再起 worker。
 	a.watchlistService.StartEnrichment(ctx)
 	// UI 二期：后台对账片名排序键（§2.3），再给全部未关联的想看条目跑一轮片库自动关联（D-P2-03）；
@@ -616,9 +623,13 @@ func (a *App) wireStartupHooks(emit func(event string, data any)) {
 		}
 		emitTaskState("frame-hash-backfill-state", status)
 	})
+	if a.cropDetection != nil {
+		a.cropDetection.SetEventEmitter(func(status services.CropDetectionStatus) { emitTaskState("crop-detection-state", status) })
+	}
 	a.libraryWatcher.SetEventEmitters(func(status services.LibraryWatcherStatus) {
 		emit("library-watcher-status", status)
 	}, func(event services.LibraryReconcileEvent) {
+		a.wakeCropDetection()
 		if a.videoStructure != nil {
 			if event.Result != nil && (event.Result.Stale > 0 || event.Result.Relocated > 0) {
 				a.videoStructure.Wake()
@@ -785,6 +796,7 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
 	}
+	a.stopCropDetection()
 	if a.frameHash != nil {
 		a.frameHash.StopAndWait()
 	}
