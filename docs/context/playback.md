@@ -37,6 +37,7 @@
 - **直接播 + 自动代理（用户 2026-10-13 裁决，同日按评审修订，[设计](../../docs/loopx/design/2026-10-13-preview-formats/需求设计文档.md)）:** 没有有效代理时，桌面预览按实际编码判定能否直放（`services/preview_direct_play.go` 的 `decideDesktopPreview`）：.mp4 / .m4v / .mov 且容器确是 ISO-BMFF、视频 h264（8 位 4:2:0）/ hevc（标签不是 hev1）/ prores、音频 aac / mp3 / alac / ac3 / eac3 / 常见 LPCM 或无音频 → `inline` 直放源文件（mov 报 `video/quicktime`）；.webm / .ogv / .ogg 照旧；其余要代理。快照缺失时限时 5 秒补探一次（新增 `media_streams.codec_tag`），判不出就按扩展名沿用旧行为，失败按「视频 + 源指纹」记在内存里不再重探。要代理时：没有 ffmpeg 按旧行为；预计产物超过 min(10 GiB, 代理上限 × 20%) 为 `proxy-manual`（「文件较大（约 X GB）…」，只给手动生成）；否则 `proxy-preparing`，由预览宿主按 owner 自动请求代理（见 2.23「自动代理」），显示排位 / 生成中与「用系统播放器预览」，就绪后切到内嵌。直放源解码失败同样自动请求。手机端与 Jellyfin 的白名单、正式播放打开源文件都不变。
 - **降级策略:** 判不出编码（探测失败）的非白名单文件，以及等代理期间与代理失败后，都可用统计中立的系统播放器预览，不污染正式播放统计。
 - **资源路由:** 预览媒体通过 `preview_asset_handler.go` 暴露受控资源路径，由前端 `<video>` 使用；列表缩略图通过 `/preview/thumbnail/{videoID}` 按需生成并缓存，源文件更新后自动失效，生成失败只显示占位图。
+- **缩略图期限（2026-11-11）:** 普通与探索共用的单张视频取图方法有10秒预算，包含同视频生成队列等待；请求取消/超时退出队列，FFmpeg随context终止并限制输出管道收尾等待，失败不发布临时图片。避免一次异常取帧无限持有片库路径读锁、挡住编辑导出入库；不改变时间缩略图及seek sprite各自的执行预算。
 
 ### 2.6 播放可靠性与失效纠偏
 - **统计保护:** 正式播放只在播放器成功启动之后才更新统计：`launchPlayback` 用 `open`（或 `iina-cli`）启动外部播放器，进程启动成功（`cmd.Start` 返回 nil）即算成功，结果为 `PlaybackAttemptResult.dispatch_succeeded=true`；它不代表文件真的播起来了，更不代表看了多久（因此洞察页把这类事件叫「启动播放」，见 2.18）。启动失败不会污染 `play_count` / `random_play_count` / `last_played_at`。筛选内随机在启动成功后还要等 30 秒延迟提交（见 2.1）。（旧写法把这一步叫作「dispatch success」，指的就是上述进程启动成功，PLAY-15，2026-09-30 按代码更正。）

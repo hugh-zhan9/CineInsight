@@ -17,6 +17,7 @@ import (
 
 const (
 	thumbnailRoutePrefix           = "/preview/thumbnail/"
+	thumbnailTimeout               = 10 * time.Second
 	seekSpriteRoutePrefix          = "/preview/seek-sprite/"
 	seekSpriteFrameWidth           = 160
 	seekSpriteFrameHeight          = 90
@@ -127,6 +128,11 @@ func (s *ThumbnailService) ResolveThumbnail(ctx context.Context, videoID uint) (
 	return s.resolveThumbnailUnderPathRead(ctx, videoID)
 }
 func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
+	// One-frame extraction must not indefinitely hold the library read lock and
+	// block export publication. Share the budget with same-video queue waiting;
+	// exploration also reaches this helper while holding its own path read lock.
+	ctx, cancel := context.WithTimeout(ctx, thumbnailTimeout)
+	defer cancel()
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
@@ -145,10 +151,17 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 		return nil, fmt.Errorf("创建缩略图缓存目录失败: %w", err)
 	}
 
-	lockValue, _ := s.locks.LoadOrStore(videoID, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	lock.Lock()
-	defer lock.Unlock()
+	lockValue, _ := s.locks.LoadOrStore(videoID, make(chan struct{}, 1))
+	lock := lockValue.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(videoID), 10)+".jpg")
 	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
@@ -176,6 +189,9 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 	seekSeconds := thumbnailSeekSeconds(video.Duration)
 	if err := s.runFFmpeg(ctx, ffmpegPath, video.Path, tempPath, seekSeconds); err != nil {
 		return nil, fmt.Errorf("生成缩略图失败: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	generatedInfo, err := os.Stat(tempPath)
 	if err != nil {
@@ -442,7 +458,11 @@ func runThumbnailFFmpeg(ctx context.Context, binary, sourcePath, destinationPath
 		"-q:v", "4",
 		"-y", destinationPath,
 	)
+	cmd.WaitDelay = 2 * time.Second
 	if output, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("ffmpeg: %w: %s", err, truncateLogSnippet(string(output), 400))
 	}
 	return nil
