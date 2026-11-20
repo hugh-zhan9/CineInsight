@@ -272,8 +272,9 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 			if s.libraryError(w, err) {
 				return
 			}
+			var source *models.Video
 			if kind == jellyVideo {
-				_, err = s.visibleVideo(r, id)
+				source, err = s.visibleVideo(r, id)
 			} else {
 				_, err = s.folderByID(r, kind, id)
 			}
@@ -281,7 +282,7 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if parts[2] == "similar" && kind == jellyVideo {
-				items, total, start, err := s.queryItems(r, r.URL.Query(), id)
+				items, total, start, err := s.queryItems(r, r.URL.Query(), source)
 				if !s.libraryError(w, err) {
 					jellyfinJSON(w, jellyfinResult(items, total, start))
 				}
@@ -453,10 +454,10 @@ func (s *JellyfinServer) folderByID(r *http.Request, kind string, id uint) (map[
 }
 
 func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]interface{}, int64, int, error) {
-	return s.queryItems(r, q, 0)
+	return s.queryItems(r, q, nil)
 }
 
-func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uint) ([]map[string]interface{}, int64, int, error) {
+func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, related *models.Video) ([]map[string]interface{}, int64, int, error) {
 	q, err := jellyfinNormalizeQuery(q)
 	if err != nil {
 		return nil, 0, 0, err
@@ -477,13 +478,13 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 	}
 	include := strings.ToLower(jellyfinParam(q, "IncludeItemTypes"))
 	if include == "person" {
-		if relatedTo != 0 {
+		if related != nil {
 			return []map[string]interface{}{}, 0, start, nil
 		}
 		return s.listPeople(r, q, start, limit)
 	}
 	if jellyfinParam(q, "ListItemIds") != "" {
-		if relatedTo != 0 {
+		if related != nil {
 			return nil, 0, start, errJellyfinQuery
 		}
 		return s.containingCollections(r, q, start, limit)
@@ -495,7 +496,7 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 	wantsVideos := include == "" || jellyfinCSVContains(include, "movie") || jellyfinCSVContains(include, "video")
 	// Group folders list their children unless the client asks for the leaf videos underneath.
 	if kind == jellyGroup && !(recursive && wantsVideos) {
-		if relatedTo != 0 {
+		if related != nil {
 			return []map[string]interface{}{}, 0, start, nil
 		}
 		return s.listFolders(r, q, id, start, limit)
@@ -541,8 +542,8 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 	if err != nil {
 		return nil, 0, start, err
 	}
-	if relatedTo != 0 {
-		query = s.relatedVideoQuery(query, relatedTo)
+	if related != nil {
+		query = s.relatedVideoQuery(query, related.ID, related.Directory)
 	}
 	if kind == jellyPerson {
 		query = query.Where("videos.id IN (?)", database.DB.Model(&models.VideoPerson{}).Select("video_id").Where("person_id = ?", id))
@@ -671,8 +672,14 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 	if err != nil {
 		return nil, 0, start, err
 	}
-	if relatedTo != 0 && jellyfinParam(q, "SortBy") == "" {
-		query = query.Clauses(clause.OrderBy{Columns: []clause.OrderByColumn{{Column: clause.Column{Name: "videos.id"}, Desc: true, Reorder: true}}})
+	if related != nil && jellyfinParam(q, "SortBy") == "" {
+		if related.Directory != "" {
+			query = query.Clauses(clause.OrderBy{Expression: clause.Expr{
+				SQL: "CASE WHEN videos.directory = ? THEN 0 ELSE 1 END, videos.id DESC", Vars: []interface{}{related.Directory},
+			}})
+		} else {
+			query = query.Clauses(clause.OrderBy{Columns: []clause.OrderByColumn{{Column: clause.Column{Name: "videos.id"}, Desc: true, Reorder: true}}})
+		}
 	}
 	if limit == 0 {
 		return items, total, start, nil

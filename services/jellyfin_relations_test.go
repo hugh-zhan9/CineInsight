@@ -16,8 +16,14 @@ import (
 
 func TestJellyfinPeopleCollectionsAndRelatedVideos(t *testing.T) {
 	s, token, source, personVideo := jellyfinLibraryFixture(t)
+	// Put the related fixtures outside the source folder so this test exercises relationship links.
+	dir := filepath.Join(source.Directory, "relations")
+	personVideo.Directory, personVideo.Path = dir, filepath.Join(dir, personVideo.Name)
+	if err := database.DB.Save(&personVideo).Error; err != nil {
+		t.Fatal(err)
+	}
 	create := func(name string) models.Video {
-		v := models.Video{Name: name, Path: filepath.Join(source.Directory, name), Directory: source.Directory}
+		v := models.Video{Name: name, Path: filepath.Join(dir, name), Directory: dir}
 		if err := database.DB.Create(&v).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -258,5 +264,50 @@ func TestJellyfinFilebarQueryBoundaries(t *testing.T) {
 	}
 	if _, total := jellyfinItems(t, jellyfinRequest(s, "GET", "/Items/"+jellyfinID(jellyVideo, video.ID)+"/Similar?ParentId="+jellyfinID(jellyGroup, 1), token, "")); total != 0 {
 		t.Fatal("similar returned folders")
+	}
+}
+
+func TestJellyfinSimilarPrioritizesIndexedDirectorySiblings(t *testing.T) {
+	s, token, source, sibling := jellyfinLibraryFixture(t)
+	add := func(dir, name string, stale bool) models.Video {
+		t.Helper()
+		video := models.Video{Directory: dir, Name: name, Path: filepath.Join(dir, name), IsStale: stale}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+		return video
+	}
+	_ = add(source.Directory, "stale.avi", true)
+	subdir := filepath.Join(source.Directory, "sub")
+	_ = add(subdir, "unrelated.avi", false)
+	related := add(subdir, "related.avi", false)
+	if err := database.DB.Create(&models.VideoSameSourceRelation{
+		VideoAID: source.ID, VideoBID: related.ID, Status: models.VideoSameSourceStatusDetected,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	id := jellyfinID(jellyVideo, source.ID)
+	base := "/Users/" + jellyfinUserID + "/Items/" + id
+	for _, tc := range []struct {
+		query string
+		want  uint
+		total int
+	}{
+		{"Limit=1", sibling.ID, 2},
+		{"StartIndex=1&Limit=1", related.ID, 2},
+		{"SearchTerm=second", sibling.ID, 1},
+		{"SortBy=SortName&SortOrder=Ascending&Limit=1", related.ID, 2},
+		{"ExcludeItemIds=" + jellyfinID(jellyVideo, sibling.ID), related.ID, 1},
+	} {
+		items, total := jellyfinItems(t, jellyfinRequest(s, "GET", base+"/Similar?"+tc.query, token, ""))
+		if total != tc.total || len(items) != 1 || items[0]["Id"] != jellyfinID(jellyVideo, tc.want) {
+			t.Fatalf("%s: total=%d items=%v", tc.query, total, items)
+		}
+	}
+	if w := jellyfinRequest(s, "GET", base+"/AdditionalParts", token, ""); w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("directory siblings aren't split video parts: %d %s", w.Code, w.Body)
+	}
+	if w := jellyfinRequest(s, "GET", base+"/Similar", "", ""); w.Code != 401 {
+		t.Fatalf("unauthenticated directory request returned %d", w.Code)
 	}
 }

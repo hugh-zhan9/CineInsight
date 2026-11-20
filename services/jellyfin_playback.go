@@ -22,6 +22,48 @@ func jellyfinSubtitlePath(video models.Video) string {
 	return strings.TrimSuffix(video.Path, filepath.Ext(video.Path)) + ".srt"
 }
 
+// Legacy container aliases describe the same original bytes, not another output format.
+// Keep this list narrow; e.g. MPEG-TS is not MPEG-PS, and FLV is not F4V.
+func jellyfinLegacyContainer(ext string) (container, contentType string) {
+	switch ext {
+	case "avi", "divx":
+		return "avi", "video/x-msvideo"
+	case "asf", "wmv":
+		return "asf", "video/x-ms-asf"
+	case "mpg", "mpeg":
+		return "mpeg", "video/mpeg"
+	}
+	return "", ""
+}
+
+func jellyfinFileContainer(path string) string {
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+}
+
+func jellyfinOriginalContentType(path string) string {
+	if _, contentType := jellyfinLegacyContainer(jellyfinFileContainer(path)); contentType != "" {
+		// WMV has its own established MIME type even though its container is ASF.
+		if jellyfinFileContainer(path) == "wmv" {
+			return "video/x-ms-wmv"
+		}
+		return contentType
+	}
+	if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path))); contentType != "" {
+		return contentType
+	}
+	return "application/octet-stream"
+}
+
+// A suffix alone cannot establish that a differently named codec/container profile is supported.
+// ffprobe's fresh snapshot must confirm provenance before using an alias in negotiation.
+func jellyfinProbedLegacyContainer(path string, snapshot models.VideoTechnicalMetadata) string {
+	container, _ := jellyfinLegacyContainer(jellyfinFileContainer(path))
+	if container != "" && strings.EqualFold(snapshot.FormatName, container) {
+		return container
+	}
+	return ""
+}
+
 // jellyfinStreamSummary is what the stream snapshot contributes to the item DTO besides the
 // MediaSource itself: Jellyfin repeats MediaStreams, Width/Height and HasSubtitles at the top level.
 type jellyfinStreamSummary struct {
@@ -72,7 +114,12 @@ func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]ma
 		summary.hasSubtitles = true
 		summary.streams = append(summary.streams, map[string]interface{}{"Index": nextIndex, "Type": "Subtitle", "Codec": "srt", "IsDefault": false, "IsForced": false, "IsExternal": true, "IsTextSubtitleStream": true, "SupportsExternalStream": true, "DeliveryMethod": "External", "DeliveryUrl": fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.srt", id, id, nextIndex), "DisplayTitle": "外置字幕"})
 	}
-	source := map[string]interface{}{"Id": id, "Name": video.Name, "Path": video.Name, "Protocol": "File", "Type": "Default", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(video.Path)), "."), "Size": video.Size, "RunTimeTicks": int64(video.Duration * 1e7), "SupportsDirectPlay": true, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsRemote": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": summary.streams, "DirectStreamUrl": "/Videos/" + id + "/stream?Static=true", "DefaultAudioStreamIndex": audioIndex}
+	container := jellyfinFileContainer(video.Path)
+	streamPath := "/Videos/" + id + "/stream"
+	if legacy, _ := jellyfinLegacyContainer(container); legacy != "" {
+		streamPath += "." + container
+	}
+	source := map[string]interface{}{"Id": id, "Name": video.Name, "Path": video.Name, "Protocol": "File", "Type": "Default", "Container": container, "Size": video.Size, "RunTimeTicks": int64(video.Duration * 1e7), "SupportsDirectPlay": true, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsRemote": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": summary.streams, "DirectStreamUrl": streamPath + "?Static=true", "DefaultAudioStreamIndex": audioIndex}
 	if video.Duration > 0 {
 		source["Bitrate"] = int64(float64(video.Size) * 8 / video.Duration)
 	}
@@ -190,6 +237,10 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 		if s.libraryError(w, err) {
 			return
 		}
+		if container := jellyfinProbedLegacyContainer(video.Path, snapshot); container != "" {
+			sources[0]["Container"] = container
+			sources[0]["DirectStreamUrl"] = "/Videos/" + jellyfinID(jellyVideo, id) + "/stream." + container + "?Static=true"
+		}
 		playID, err := jellyfinRandom(16)
 		if s.libraryError(w, err) {
 			return
@@ -218,15 +269,16 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 	}
 	if parts[0] == "items" && len(parts) == 3 && parts[2] == "download" {
 		// Fileball's download/"play via path" action fetches the original through this route.
-		contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(video.Path)))
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		jellyfinServeFile(w, r, video.Path, contentType, filepath.Base(video.Path))
+		jellyfinServeFile(w, r, video.Path, jellyfinOriginalContentType(video.Path), filepath.Base(video.Path))
 		return
 	}
 	if parts[0] == "videos" && len(parts) == 3 && (parts[2] == "stream" || strings.HasPrefix(parts[2], "stream.")) {
-		if parts[2] != "stream" && parts[2] != "stream"+strings.ToLower(filepath.Ext(video.Path)) {
+		original := jellyfinFileContainer(video.Path)
+		requested := strings.TrimPrefix(parts[2], "stream.")
+		originalFamily, _ := jellyfinLegacyContainer(original)
+		requestedFamily, _ := jellyfinLegacyContainer(requested)
+		sameLegacyFamily := originalFamily != "" && originalFamily == requestedFamily
+		if parts[2] != "stream" && (requested == "" || requested != original && !sameLegacyFamily) {
 			jellyfinError(w, 400, "此服务不提供转封装或转码")
 			return
 		}
@@ -238,11 +290,7 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			jellyfinError(w, 400, "仅支持原片直播放")
 			return
 		}
-		contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(video.Path)))
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		jellyfinServeFile(w, r, video.Path, contentType, "")
+		jellyfinServeFile(w, r, video.Path, jellyfinOriginalContentType(video.Path), "")
 		return
 	}
 	if parts[0] == "videos" && len(parts) == 6 && parts[2] == jellyfinID(jellyVideo, id) && parts[3] == "subtitles" && parts[5] == "stream.srt" {
@@ -423,13 +471,17 @@ func jellyfinCodecName(name string) string {
 // jellyfinCodecMatches follows ContainerHelper.ContainsContainer: an empty list matches
 // everything and a leading "-" turns the list into an exclusion list.
 func jellyfinCodecMatches(list, value string) bool {
+	return jellyfinProfileNameMatches(list, value, jellyfinCodecName)
+}
+
+func jellyfinProfileNameMatches(list, value string, normalize func(string) string) bool {
 	if list == "" {
 		return true
 	}
 	negative := strings.HasPrefix(list, "-")
-	value = jellyfinCodecName(value)
+	value = normalize(value)
 	for _, entry := range strings.Split(strings.TrimPrefix(list, "-"), ",") {
-		if jellyfinCodecName(entry) == value {
+		if normalize(entry) == value {
 			return !negative
 		}
 	}
@@ -471,14 +523,24 @@ func jellyfinCanDirectPlay(video models.Video, snapshot models.VideoTechnicalMet
 	if profile == nil {
 		return true, ""
 	}
-	container := strings.TrimPrefix(strings.ToLower(filepath.Ext(video.Path)), ".")
+	container := jellyfinFileContainer(video.Path)
+	verifiedFamily := jellyfinProbedLegacyContainer(video.Path, snapshot)
+	containerMatches := func(list string) bool {
+		return jellyfinProfileNameMatches(list, container, func(name string) string {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if family, _ := jellyfinLegacyContainer(name); verifiedFamily != "" && family == verifiedFamily {
+				return family
+			}
+			return name
+		})
+	}
 	audioCodec := ""
 	if mainAudio != nil {
 		audioCodec = mainAudio.CodecName
 	}
 	matched := false
 	for _, direct := range profile.DirectPlayProfiles {
-		if !strings.EqualFold(direct.Type, "Video") || !jellyfinCodecMatches(direct.Container, container) || !jellyfinCodecMatches(direct.VideoCodec, mainVideo.CodecName) {
+		if !strings.EqualFold(direct.Type, "Video") || !containerMatches(direct.Container) || !jellyfinCodecMatches(direct.VideoCodec, mainVideo.CodecName) {
 			continue
 		}
 		if mainAudio != nil && !jellyfinCodecMatches(direct.AudioCodec, audioCodec) {
@@ -491,7 +553,7 @@ func jellyfinCanDirectPlay(video models.Video, snapshot models.VideoTechnicalMet
 		return false, fmt.Sprintf("DirectPlayProfiles 不含 container=%s video=%s audio=%s", container, mainVideo.CodecName, audioCodec)
 	}
 	for _, restriction := range append(append([]jellyfinCodecProfile{}, profile.CodecProfiles...), profile.ContainerProfiles...) {
-		if !jellyfinCodecMatches(restriction.Container, container) {
+		if !containerMatches(restriction.Container) {
 			continue
 		}
 		// Jellyfin consults only Video and VideoAudio profiles for video items; SubContainer only

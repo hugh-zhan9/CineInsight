@@ -286,7 +286,11 @@ func TestJellyfinDetailExtrasAreEmptyNotMissing(t *testing.T) {
 	}
 	for _, path := range []string{"/Items/" + id + "/Similar?Limit=12&Fields=PrimaryImageAspectRatio", "/Movies/" + id + "/Similar", "/Users/" + jellyfinUserID + "/Items/" + id + "/Intros"} {
 		items, total := jellyfinItems(t, jellyfinRequest(s, "GET", path, token, ""))
-		if total != 0 || len(items) != 0 {
+		want := 0
+		if strings.Contains(path, "/Similar") {
+			want = 1 // the other indexed video in the fixture's source directory
+		}
+		if total != want || len(items) != want {
 			t.Errorf("%s: %v", path, items)
 		}
 	}

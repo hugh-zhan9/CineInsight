@@ -130,11 +130,16 @@ func (s *JellyfinServer) containingCollections(r *http.Request, q url.Values, st
 	return s.listFolders(r, q, 1, start, limit)
 }
 
-// relatedVideoQuery only reads existing relationships; the caller owns visibility and paging.
-func (s *JellyfinServer) relatedVideoQuery(query *gorm.DB, sourceID uint) *gorm.DB {
+// relatedVideoQuery reads indexed same-directory videos and existing relationships.
+// The caller owns library visibility, filtering, and paging.
+func (s *JellyfinServer) relatedVideoQuery(query *gorm.DB, sourceID uint, directory string) *gorm.DB {
 	people := database.DB.Model(&models.VideoPerson{}).Select("video_id").Where("person_id IN (?)", database.DB.Model(&models.VideoPerson{}).Select("person_id").Where("video_id = ?", sourceID))
 	collections := database.DB.Model(&models.CollectionVideo{}).Select("video_id").Where("collection_id IN (?)", database.DB.Model(&models.CollectionVideo{}).Select("collection_id").Where("video_id = ?", sourceID)).Where("collection_id IN (?)", database.DB.Model(&models.MediaCollection{}).Select("id"))
 	tags := database.DB.Table("video_tags").Select("video_id").Where("tag_id IN (?)", database.DB.Table("video_tags").Select("tag_id").Where("video_id = ?", sourceID)).Where("tag_id IN (?)", database.DB.Model(&models.Tag{}).Select("id").Where("automatic_kind = ?", ""))
 	sameSource := database.DB.Model(&models.VideoSameSourceRelation{}).Select("CASE WHEN video_a_id = ? THEN video_b_id ELSE video_a_id END", sourceID).Where("(video_a_id = ? OR video_b_id = ?) AND status = ?", sourceID, sourceID, models.VideoSameSourceStatusDetected)
-	return query.Where("videos.id <> ?", sourceID).Where("(videos.id IN (?) OR videos.id IN (?) OR videos.id IN (?) OR videos.id IN (?))", people, collections, tags, sameSource)
+	query = query.Where("videos.id <> ?", sourceID)
+	if directory != "" {
+		return query.Where("(videos.directory = ? OR videos.id IN (?) OR videos.id IN (?) OR videos.id IN (?) OR videos.id IN (?))", directory, people, collections, tags, sameSource)
+	}
+	return query.Where("(videos.id IN (?) OR videos.id IN (?) OR videos.id IN (?) OR videos.id IN (?))", people, collections, tags, sameSource)
 }
