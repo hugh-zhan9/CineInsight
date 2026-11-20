@@ -20,6 +20,7 @@ struct Response: Encodable {
     var segments: [Segment]?
     var translations: [String]?
     var candidates: [Candidate]?
+    var translationStatus: String?
 }
 struct Failure: Error { let code: String }
 /// `confidence` is nil when the recognizer reported none (the macOS 15 recognizer may not).

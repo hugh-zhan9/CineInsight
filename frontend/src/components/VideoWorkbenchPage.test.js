@@ -80,6 +80,30 @@ function toastText() {
 }
 
 describe('视频工作台页（视频编辑合同「界面」）', () => {
+  it('裁剪时可展开长项目列表，翻页入口不随项目行滚动，收起后保留编辑器', async () => {
+    const project = mergeProject({ id: 60, kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21 }] }, tracks: tracks() } });
+    api.ListEditProjects.mockResolvedValue(Array.from({ length: 50 }, (_, i) => ({ ...project, id: 60 - i })));
+    api.ListEditProjectsBefore.mockResolvedValue([{ ...project, id: 10 }]);
+    const wrapper = await mountPage(project);
+    const toggle = wrapper.get('[aria-controls="workbench-edit-projects"]');
+    const list = wrapper.get('[data-test="edit-projects-list"]');
+    const editor = wrapper.get('[data-test="crop-editor"]').element;
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+    await toggle.trigger('click');
+    expect(toggle.attributes('aria-expanded')).toBe('true');
+    expect(list.isVisible()).toBe(true);
+    expect(list.findAll('li')).toHaveLength(50);
+    expect(list.find('[data-test="edit-projects-more"]').exists()).toBe(false);
+    await wrapper.get('[data-test="edit-projects-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListEditProjectsBefore).toHaveBeenCalledWith(11, 50);
+    expect(list.findAll('li')).toHaveLength(51);
+    await toggle.trigger('click');
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+    expect(wrapper.get('[data-test="edit-projects"]').element.style.display).toBe('none');
+    expect(wrapper.get('[data-test="crop-editor"]').element).toBe(editor);
+  });
+
   it('裁剪工作区在预检超时后仍可调整；导出侧栏保留预检错误且不放行', async () => {
     const project = mergeProject({ kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21, rect: null, source_version: '', confirmed: false }] }, tracks: tracks() },
       analysis: { kind: 'crop', status: 'completed', crops: [{ video_id: 21, status: 'undetected', display_width: 320, display_height: 180, source_version: '12:34', duration_ms: 2000 }] } });

@@ -22,10 +22,13 @@ class BuildSigningSetupTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                         TEST_EVENTS=str(self.log), TEST_IDENTITY=str(self.config),
                         TEST_ROOT=str(self.root), TEST_SETUP_FAIL='0', TEST_SIGN_FAIL='0', TEST_IMAGE_TOOLS_FAIL='0',
-                        TEST_SPEECH_MISSING='', TEST_SPEECH_FAIL='0', TEST_SPEECH_STILL_MISSING='0', TEST_SPEECH_CHECK_FAIL='0')
+                        TEST_SPEECH_MISSING='', TEST_SPEECH_FAIL='0', TEST_SPEECH_STILL_MISSING='0', TEST_SPEECH_CHECK_FAIL='0',
+                        TEST_TRANSLATION_FAIL='0')
         self.stub('uname', 'echo Darwin')
         self.stub('xcrun', 'echo 14.0')
-        self.stub('wails', '''for arg in "$@"; do [ "$arg" != --skip-speech-assets ] || exit 92; done
+        self.stub('wails', '''for arg in "$@"; do
+  [ "$arg" != --skip-speech-assets ] && [ "$arg" != --skip-translation-assets ] || exit 92
+done
 echo build >> "$TEST_EVENTS"
 mkdir -p "$TEST_ROOT/build/bin/析微影策.app"''')
         self.stub('python3', '''case "$1" in
@@ -36,6 +39,12 @@ mkdir -p "$TEST_ROOT/build/bin/析微影策.app"''')
   [ "$4" = "$TEST_ROOT/build/bin/析微影策.app/Contents/Resources/apple-ai/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" ] || exit 96
   [ "$5" = --languages ] && [ "$6" = ja,ko,en,zh ] || exit 95
   if [ ! -f "$TEST_ROOT/speech-ready" ]; then printf '%s\n' "$TEST_SPEECH_MISSING"; fi
+  exit 0 ;;
+*/translation_assets.py)
+  echo translation-assets >> "$TEST_EVENTS"
+  [ "$2" = --helper ] || exit 91
+  [ "$3" = "$TEST_ROOT/build/bin/析微影策.app/Contents/Resources/apple-ai/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" ] || exit 90
+  [ "$TEST_TRANSLATION_FAIL" = 0 ] || exit 89
   exit 0 ;;
 *bundle_native_playback.py) echo native-playback >> "$TEST_EVENTS"; [ "${TEST_NATIVE_FAIL:-0}" = 0 ] || exit 45; exit 0 ;;
 */bundle_image_tools.py)
@@ -144,7 +153,7 @@ esac''')
         self.env['TEST_SPEECH_MISSING'] = 'ja ko'
         result = self.run_build('--skip-build')
         self.assertEqual(result.returncode, 98, result.stderr)
-        self.assertEqual(self.events()[-4:], ['speech-check', 'speech-install', 'speech-check', 'forbidden-install'])
+        self.assertEqual(self.events()[-5:], ['speech-check', 'speech-install', 'speech-check', 'translation-assets', 'forbidden-install'])
 
     def test_speech_failure_preserves_installed_application(self):
         self.add_speech_helper()
@@ -180,7 +189,24 @@ esac''')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('speech-check', self.events())
         self.assertNotIn('speech-install', self.events())
+        self.assertNotIn('translation-assets', self.events())
         self.assertNotIn('forbidden-install', self.events())
+
+    def test_translation_failure_preserves_installed_application(self):
+        self.add_speech_helper()
+        self.env['TEST_TRANSLATION_FAIL'] = '1'
+        result = self.run_build('--skip-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('translation-assets', self.events())
+        self.assertNotIn('forbidden-install', self.events())
+        self.assertIn('字幕翻译资源准备未完成', result.stderr)
+
+    def test_skip_translation_leaves_speech_preparation_enabled(self):
+        self.add_speech_helper()
+        result = self.run_build('--skip-translation-assets')
+        self.assertEqual(result.returncode, 98, result.stderr)
+        self.assertIn('speech-check', self.events())
+        self.assertNotIn('translation-assets', self.events())
 
     def test_explicit_skip_does_not_check_speech_or_forward_flag_to_wails(self):
         self.add_speech_helper()
@@ -189,6 +215,7 @@ esac''')
         self.assertEqual(result.returncode, 98, result.stderr)
         self.assertNotIn('speech-check', self.events())
         self.assertNotIn('speech-install', self.events())
+        self.assertIn('translation-assets', self.events())
         self.assertIn('跳过语音资源', result.stdout)
 
     def test_missing_helper_skips_system_resources(self):

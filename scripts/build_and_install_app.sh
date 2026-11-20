@@ -11,6 +11,7 @@ TMP_DIR_ROOT="${TMPDIR:-/tmp}"
 SKIP_BUILD=0
 BUILD_ONLY=0
 SKIP_SPEECH_ASSETS=0
+SKIP_TRANSLATION_ASSETS=0
 WAILS_ARGS=()
 
 log() {
@@ -25,17 +26,19 @@ fail() {
 usage() {
   cat <<EOF
 用法:
-  $(basename "$0") [--skip-build | --build-only] [--skip-speech-assets] [wails build 参数...]
+  $(basename "$0") [--skip-build | --build-only] [--skip-speech-assets] [--skip-translation-assets] [wails build 参数...]
 
 说明:
   1. 自动初始化或复用本机签名配置，再执行 wails build（默认使用 Go 1.24.9）
   2. 产出 ${BUILD_APP_PATH}、打包已构建的超分/JPEG运行时并完成签名验证
      JPEG 前置构建：bash scripts/build_image_tools.sh
   3. 检查日/韩/英/中文本机语音资源，已安装的跳过，缺少的调用 install_speech_assets.sh 补装
-     使用本次构建的识别组件；准备失败时停止，保留已安装应用
+     检查日→中、韩→中、英→中的本机字幕翻译资源；缺少时由 macOS 提示确认下载
+     使用本次构建的系统字幕组件；准备失败时停止，保留已安装应用
   4. 关闭正在运行的 ${APP_NAME}，将新包替换到 ${INSTALL_APP_PATH}
-  5. --build-only 在第 2 步结束，不检查语音资源、不替换已安装应用
+  5. --build-only 在第 2 步结束，不检查或安装语言资源、不替换已安装应用
      --skip-speech-assets 跳过语音资源检查与补装，仍正常安装应用
+     --skip-translation-assets 跳过翻译资源检查与补装，仍正常安装应用
 
 示例:
   $(basename "$0")
@@ -193,6 +196,24 @@ prepare_speech_assets() {
   log "语音资源准备完成"
 }
 
+prepare_translation_assets() {
+  local helper="${BUILD_APP_PATH}/Contents/Resources/apple-ai/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai"
+
+  if (( SKIP_TRANSLATION_ASSETS == 1 )); then
+    log "跳过字幕翻译资源检查与补装（--skip-translation-assets）"
+    return
+  fi
+  if [[ ! -x "${helper}" ]]; then
+    log "跳过字幕翻译资源检查：本次构建不含苹果系统字幕组件"
+    return
+  fi
+
+  log "检查本机字幕翻译资源（日→中、韩→中、英→中）"
+  python3 "${SCRIPT_DIR}/translation_assets.py" --helper "${helper}" ||
+    fail "字幕翻译资源准备未完成，尚未替换已安装应用；请按 macOS 提示处理后重试，或用 --skip-translation-assets 跳过。"
+  log "字幕翻译资源准备完成"
+}
+
 replace_installed_app() {
   local temp_dir temp_app backup_app
 
@@ -255,6 +276,10 @@ main() {
         SKIP_SPEECH_ASSETS=1
         shift
         ;;
+      --skip-translation-assets)
+        SKIP_TRANSLATION_ASSETS=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -289,6 +314,7 @@ main() {
   fi
 
   prepare_speech_assets
+  prepare_translation_assets
   replace_installed_app
   launch_installed_app
   log "完成，已替换 ${INSTALL_APP_PATH}"

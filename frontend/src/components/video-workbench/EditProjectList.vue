@@ -1,5 +1,5 @@
 <template>
-  <aside class="edit-projects" data-test="edit-projects">
+  <aside id="workbench-edit-projects" class="edit-projects" aria-label="编辑项目" data-test="edit-projects">
     <div class="edit-inline edit-inline--spread">
       <h3>编辑项目</h3>
       <button type="button" class="btn btn--secondary btn--sm" data-test="edit-projects-refresh" @click="$emit('refresh')">刷新</button>
@@ -8,7 +8,7 @@
     <p v-else-if="!projects.length" class="help-text" data-test="edit-projects-empty">
       还没有编辑项目。在片库里多选视频后点「合并为新视频」或「批量去片头」，或在行菜单选「高清替换…」。
     </p>
-    <ul class="edit-projects__list">
+    <ul class="edit-projects__list" data-test="edit-projects-list">
       <li
         v-for="project in projects"
         :key="project.id"

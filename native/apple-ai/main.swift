@@ -91,6 +91,7 @@ func detect(_ path: String, engine: any SpeechEngine) async throws -> (candidate
 #endif
                 // macOS 15 runs NSApplication; reached without any earlier suspension of main (see the function).
                 hiddenSessionTranslate(job)
+            case "translation_status": emit(try await translationResourceStatus(request))
             case "prepare_translation": try prepareTranslation(request)
             default: try fail("apple_invalid_request")
             }

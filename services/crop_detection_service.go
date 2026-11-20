@@ -12,7 +12,7 @@ import (
 	"video-master/models"
 )
 
-const cropDetectionAlgorithm = 1
+const cropDetectionAlgorithm = 2
 
 var errCropDetectionConflict = errors.New("crop_detection_conflict")
 
@@ -239,9 +239,16 @@ func (s *CropDetectionService) process(ctx context.Context, v models.Video, retr
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	if exists && old.SourceVersion == version && old.AlgorithmVersion == cropDetectionAlgorithm && (!retry || old.Status != "failed") {
-		s.skipped()
-		return nil
+	if exists && old.SourceVersion == version {
+		// An algorithm upgrade may revisit undecided/no-border sources, but
+		// must not re-create an already delivered draft (even if deleted)
+		// or retry a failed source without explicit retry.
+		if old.Status == "detected" ||
+			old.Status == "failed" && !retry ||
+			old.Status != "failed" && old.AlgorithmVersion >= cropDetectionAlgorithm {
+			s.skipped()
+			return nil
+		}
 	}
 	if err = s.slot.Acquire(ctx); err != nil {
 		return err

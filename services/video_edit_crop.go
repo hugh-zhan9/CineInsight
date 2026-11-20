@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"video-master/models"
@@ -240,8 +238,6 @@ func (s *VideoEditService) cropRangeHasFrame(ctx context.Context, sc *editSource
 	return false, nil
 }
 
-var editCropPattern = regexp.MustCompile(`crop=(\d+):(\d+):(\d+):(\d+)`)
-
 // editCropUnion 保守保留所有有效取样框的并集，不因某一暗场缩小有效画面。
 func editCropUnion(rects []EditCropRect) *EditCropRect {
 	if len(rects) == 0 {
@@ -255,21 +251,6 @@ func editCropUnion(rects []EditCropRect) *EditCropRect {
 	}
 	r.Width, r.Height = right-r.X, bottom-r.Y
 	return &r
-}
-
-func parseEditCropSample(tail string, width, height int) *EditCropRect {
-	rects := []EditCropRect{}
-	for _, match := range editCropPattern.FindAllStringSubmatch(tail, -1) {
-		var values [4]int
-		for i := range values {
-			values[i], _ = strconv.Atoi(match[i+1])
-		}
-		r := EditCropRect{Width: values[0], Height: values[1], X: values[2], Y: values[3]}
-		if editCropValid(&r, width, height) {
-			rects = append(rects, r)
-		}
-	}
-	return editCropUnion(rects)
 }
 
 func (s *VideoEditService) analyzeCrops(ctx context.Context, projectID uint, recipe *EditRecipe, result *EditAnalysisResult) error {
@@ -330,21 +311,26 @@ func (s *VideoEditService) detectCropSource(ctx context.Context, ffmpeg string, 
 	if width < 2 || height < 2 {
 		return EditCropResult{}, editError("analysis_failed", "无法确定画面尺寸")
 	}
+	sampleW, sampleH := editCropSampleSize(width, height)
 	samples := []EditCropRect{}
-	for sample := 0; sample < 7; sample++ {
-		at := sc.probe.DurationMS * int64(sample+1) / 8
+	for sample := 0; sample < editCropSampleWindows; sample++ {
+		if err := ctx.Err(); err != nil {
+			return EditCropResult{}, err
+		}
+		at := sc.probe.DurationMS * int64(sample+1) / (editCropSampleWindows + 1)
 		runCtx, cancel := context.WithTimeout(ctx, videoEditProbeTimeout)
-		_, tail, runErr := s.runOutput(runCtx, ffmpeg, []string{"-nostdin", "-hide_banner", "-v", "info", "-threads", "2", "-filter_threads", "1", "-ss", editSeconds(at), "-i", sc.path,
-			"-map", fmt.Sprintf("0:%d", sc.probe.Video.Index), "-an", "-sn", "-vf", fmt.Sprintf("scale=%d:%d,setsar=1,cropdetect=limit=0.08:round=2:reset=0:skip=0", width, height), "-frames:v", "8", "-t", "2", "-f", "null", "-"})
+		raw, _, runErr := s.runOutput(runCtx, ffmpeg, []string{"-nostdin", "-hide_banner", "-v", "error", "-threads", "2", "-filter_threads", "1", "-ss", editSeconds(at), "-i", sc.path,
+			"-map", fmt.Sprintf("0:%d", sc.probe.Video.Index), "-an", "-sn", "-vf", fmt.Sprintf("scale=%d:%d:flags=area:out_range=full,setsar=1,format=yuv420p", sampleW, sampleH),
+			"-frames:v", fmt.Sprint(editCropSampleFrames), "-t", "2", "-fps_mode", "passthrough", "-threads:v", "1", "-f", "rawvideo", "pipe:1"})
 		cancel()
 		if runErr != nil {
 			return EditCropResult{}, editError("analysis_failed", "《%s》检测黑边失败：%s", sc.video.Name, scrubEditPaths(runErr.Error(), sc.path))
 		}
-		if r := parseEditCropSample(tail, width, height); r != nil {
-			samples = append(samples, *r)
+		if r := editCropWindow(raw, sampleW, sampleH); r != nil {
+			samples = append(samples, editCropMapToDisplay(*r, sampleW, sampleH, width, height))
 		}
 		if progress != nil {
-			progress(float64(sample+1) / 7)
+			progress(float64(sample+1) / editCropSampleWindows)
 		}
 	}
 	size, modTime, err := editFileFingerprint(sc.path)

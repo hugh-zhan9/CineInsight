@@ -35,6 +35,7 @@ type editStream struct {
 	BitDepth          int
 	FrameRate         string
 	TimeBase          string
+	StartSeconds      float64
 	SampleRate        int
 	Channels          int
 	ChannelLayout     string
@@ -78,6 +79,7 @@ type editProbeJSON struct {
 		RFrameRate        string `json:"r_frame_rate"`
 		AvgFrameRate      string `json:"avg_frame_rate"`
 		TimeBase          string `json:"time_base"`
+		StartTime         string `json:"start_time"`
 		SampleRate        string `json:"sample_rate"`
 		Channels          int    `json:"channels"`
 		ChannelLayout     string `json:"channel_layout"`
@@ -142,6 +144,9 @@ func parseEditProbe(raw []byte) (editProbe, error) {
 			stream.FrameRate = raw.AvgFrameRate
 		}
 		stream.BitDepth, _ = strconv.Atoi(raw.BitsPerRawSample)
+		if start, err := strconv.ParseFloat(strings.TrimSpace(raw.StartTime), 64); err == nil && !math.IsNaN(start) && !math.IsInf(start, 0) {
+			stream.StartSeconds = start
+		}
 		stream.SampleRate, _ = strconv.Atoi(raw.SampleRate)
 		stream.BitRate, _ = strconv.ParseInt(raw.BitRate, 10, 64)
 		for _, side := range raw.SideDataList {
@@ -534,7 +539,8 @@ func (s *VideoEditService) preflight(ctx context.Context, project models.VideoEd
 				plan = plans[i]
 			}
 			if plan.ContainerProfile != nil {
-				if err := s.sampleFullCrop(ctx, plan); err != nil {
+				source := sources[plan.Sources[0].VideoID]
+				if err := s.sampleFullCrop(ctx, plan, source.probe); err != nil {
 					pre.addError(VideoEditErrorCode(err), fmt.Sprintf("container_sample:%d", plan.Seq), 0, plan.Seq, "%s", err.Error())
 				}
 			}

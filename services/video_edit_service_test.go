@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,8 @@ import (
 
 // 服务层单测用进程内假 ffmpeg/ffprobe：来源探测返回登记的 JSON；片段命令写出文件并累计 -t 时长；
 // 拼接命令把「成品探测结果」写进 final.part，校验阶段读回它。
+
+var fakeEditCropPattern = regexp.MustCompile(`crop=(\d+):(\d+):(\d+):(\d+)`)
 
 type fakeEditMedia struct {
 	mu         sync.Mutex
@@ -119,7 +122,7 @@ func (f *fakeEditMedia) progress(ctx context.Context, name string, args []string
 		}
 		duration, _ := strconv.ParseFloat(value("-t"), 64)
 		width, height := 320, 180
-		if m := editCropPattern.FindStringSubmatch(strings.ReplaceAll(value("-filter:v"), "crop=", "crop=")); len(m) > 0 {
+		if m := fakeEditCropPattern.FindStringSubmatch(value("-filter:v")); len(m) > 0 {
 			width, _ = strconv.Atoi(m[1])
 			height, _ = strconv.Atoi(m[2])
 		}

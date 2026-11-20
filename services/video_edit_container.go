@@ -196,7 +196,38 @@ func fullCropArgs(plan editPlan, target string) []string {
 	return append(args, "-frames:v", strconv.FormatInt(editFrameCount(plan.DurationMS, plan.Video.FrameRate), 10), "-t", editSeconds(plan.DurationMS), "-map_metadata", "-1", "-map_chapters", "-1", "-progress", "pipe:1", "-nostats", "-f", profile.Muxer, target)
 }
 
-func (s *VideoEditService) sampleFullCrop(ctx context.Context, plan editPlan) error {
+// fullCropSamplePlan 只在短样本中省略明确晚于取样窗口的音轨。部分容器不会写入没有音频包的轨道，
+// 不能把这种短样本的缺轨当成整片无法导出；正式编码和发布校验仍要求保留所有选中的音轨。
+func fullCropSamplePlan(plan editPlan, source editProbe) editPlan {
+	plan.DurationMS = min(plan.DurationMS, 1000)
+	if len(plan.Audio) == 0 {
+		return plan
+	}
+	segment := plan.Segments[0]
+	late := map[int]bool{}
+	for _, stream := range source.Audio {
+		if relativeStart := stream.StartSeconds - source.StartSeconds; relativeStart >= float64(plan.DurationMS)/1000 {
+			late[stream.Index] = true
+		}
+	}
+	if len(late) == 0 {
+		return plan
+	}
+	tracks := make([]editPlanTrack, 0, len(plan.Audio))
+	refs := make([]editPlanRef, 0, len(segment.Audio))
+	for i, ref := range segment.Audio {
+		if !late[ref.Stream] {
+			tracks = append(tracks, plan.Audio[i])
+			refs = append(refs, ref)
+		}
+	}
+	segment.Audio = refs
+	plan.Audio = tracks
+	plan.Segments = []editPlanSegment{segment}
+	return plan
+}
+
+func (s *VideoEditService) sampleFullCrop(ctx context.Context, plan editPlan, source editProbe) error {
 	if plan.ContainerProfile == nil {
 		return nil
 	}
@@ -208,7 +239,7 @@ func (s *VideoEditService) sampleFullCrop(ctx context.Context, plan editPlan) er
 		return err
 	}
 	defer os.RemoveAll(dir)
-	plan.DurationMS = min(plan.DurationMS, 1000)
+	plan = fullCropSamplePlan(plan, source)
 	ffmpeg, err := s.findFFmpeg()
 	if err != nil {
 		return editError("encoder_unavailable", "找不到ffmpeg")

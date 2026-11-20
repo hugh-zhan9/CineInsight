@@ -14,6 +14,18 @@ func translationLanguages() async -> [Language] {
     await LanguageAvailability().supportedLanguages.map { Language(code:$0.minimalIdentifier,name:displayLanguage($0.minimalIdentifier),installed:false) }
 }
 
+/// Read-only: no session or UI is needed to distinguish installed from downloadable language pairs.
+func translationResourceStatus(_ request: Request) async throws -> Response {
+    guard let source=request.source, !source.isEmpty, source != "auto",
+          let target=request.target, !target.isEmpty, target != "auto" else { try fail("apple_source_language_required") }
+    switch await LanguageAvailability().status(from:Locale.Language(identifier:source),to:Locale.Language(identifier:target)) {
+    case .installed: return Response(translationStatus:"installed")
+    case .supported: return Response(translationStatus:"supported")
+    case .unsupported: return Response(translationStatus:"unsupported")
+    @unknown default: try fail("apple_system_failed")
+    }
+}
+
 /// A validated batch of at most 50 lines. `immediate` answers empty and same-language batches without a session.
 struct TranslationJob {
     var batch=[TranslationSession.Request]()

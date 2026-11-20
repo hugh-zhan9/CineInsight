@@ -1,6 +1,6 @@
 <template>
   <section class="page-content workbench-page" :class="{ 'workbench-page--crop': project?.kind === 'crop', 'workbench-page--projects': projectsOpen }" data-test="workbench-page">
-    <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头、高清替换与画面裁剪。成品另存入库，原片保持不变；确认成品无误后才提供原片清理入口。" />
+    <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头、高清替换与画面裁剪。整片裁剪可按项目设置替换原文件，其他编辑成品另存入库。" />
     <div class="workbench-layout">
       <EditProjectList
         v-show="project?.kind !== 'crop' || projectsOpen"
@@ -22,7 +22,7 @@
         <div v-else-if="!project" class="workbench-loading" role="status" aria-label="正在读取项目"><SkeletonBlock :lines="4" /></div>
         <template v-else>
           <header class="workbench-project" data-test="workbench-project">
-            <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm" :aria-expanded="projectsOpen" @click="projectsOpen = !projectsOpen">编辑项目</button>
+            <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm" aria-controls="workbench-edit-projects" :aria-expanded="projectsOpen" @click="projectsOpen = !projectsOpen">编辑项目</button>
             <div>
               <h3>{{ project.title || '未命名项目' }}</h3>
               <span class="help-text">{{ kindLabel(project.kind) }} · {{ statusLabel(project.status) }} · 版本 {{ project.revision }}</span>

@@ -88,7 +88,7 @@ func TestVideoEditFullCropContainerProfilesReal(t *testing.T) {
 			if sha256OfFile(t, src) != before || plan.OutputBase+plan.OutputExt != filepath.Base(src) {
 				t.Fatal("original changed or output name lost")
 			}
-			if err = s.sampleFullCrop(ctx, plan); err != nil {
+			if err = s.sampleFullCrop(ctx, plan, probe); err != nil {
 				t.Fatal(err)
 			}
 			if ext == ".mov" || ext == ".mkv" {
@@ -124,6 +124,62 @@ func TestVideoEditFullCropContainerProfilesReal(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestVideoEditFullCropDelayedAudioReal(t *testing.T) {
+	ffmpeg, ffprobe := requireEditFFmpeg(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "delayed.mp4")
+	runFixtureCommand(t, ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=25:d=4",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4",
+		"-itsoffset", "2", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=2",
+		"-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "libx264", "-threads", "2", "-c:a", "aac", src)
+	s := NewVideoEditService(nil, NewMediaWorkSlot(), dir)
+	s.goos = "linux"
+	s.findFFmpeg = func() (string, error) { return ffmpeg, nil }
+	s.findFFprobe = func() (string, error) { return ffprobe, nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	probe, err := s.probeEditSource(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.Audio) != 2 || probe.Audio[1].StartSeconds-probe.StartSeconds <= 1 {
+		t.Fatalf("fixture lacks delayed second audio track: %+v", probe.Audio)
+	}
+	size, mtime, err := editFileFingerprint(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := &editSourceCtx{path: src, size: size, modTimeNS: mtime, probe: probe, video: models.Video{ID: 1, Path: src}, ok: true}
+	plan := editPlan{Kind: "crop", Mode: "precise", Video: s.planVideoSpec(sc, "precise"), Sources: []editPlanSource{{VideoID: 1, Path: src, Size: size, ModTimeNS: mtime}}, DurationMS: 4000, Segments: []editPlanSegment{{VideoStream: probe.Video.Index, DurMS: 4000}}}
+	plan.Video.Crop = &EditCropRect{X: 32, Y: 8, Width: 256, Height: 224}
+	plan.Video.Width, plan.Video.Height = 256, 224
+	plan.Video.CanvasWidth, plan.Video.CanvasHeight = 320, 240
+	for i, a := range probe.Audio {
+		language := []string{"eng", "jpn"}[i]
+		plan.Audio = append(plan.Audio, editPlanTrack{Channels: a.Channels, Language: language})
+		plan.Segments[0].Audio = append(plan.Segments[0].Audio, editPlanRef{Stream: a.Index})
+	}
+	if err := s.configureFullCrop(&plan, sc); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.sampleFullCrop(ctx, plan, probe); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "output.part")
+	runFixtureCommand(t, ffmpeg, fullCropArgs(plan, target)...)
+	if err := s.verifyEditOutput(ctx, plan, target); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.probeEditSource(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Audio) != 2 || out.Audio[0].Language != "eng" || out.Audio[1].Language != "jpn" ||
+		out.Audio[1].StartSeconds-out.StartSeconds < 1.9 || out.Audio[1].StartSeconds-out.StartSeconds > 2.1 {
+		t.Fatalf("output lost selected tracks, language, or offset: %+v", out.Audio)
 	}
 }
 

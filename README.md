@@ -99,6 +99,8 @@ bash scripts/build_and_install_app.sh -clean
 
 脚本会在安装前关闭正在运行的应用，并在必要时通过 `sudo` 写入 `/Applications`。
 
+关闭旧应用前，脚本还会检查本机语音识别资源和日→中、韩→中、英→中的系统字幕翻译资源。翻译资源缺少时，在 macOS 弹窗中确认下载；模型由系统管理，不打进安装包。下载失败、取消或未核实安装时，旧应用不会被替换。只想跳过翻译资源可用 `--skip-translation-assets`；`--build-only` 不检查或下载任何语言资源。
+
 ### macOS
 构建后的应用位于 `build/bin/析微影策.app`
 

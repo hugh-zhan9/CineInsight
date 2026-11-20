@@ -437,3 +437,50 @@ func TestCropDetectionNotifiesEditOwnerOnlyAfterCommittedNewDraft(t *testing.T) 
 		})
 	}
 }
+
+func TestCropDetectionAlgorithmUpgradePreservesDraftAndRetryPolicy(t *testing.T) {
+	for _, oldStatus := range []string{"detected", "failed", "undetected", "no_borders"} {
+		t.Run(oldStatus, func(t *testing.T) {
+			s, v := cropFixture(t)
+			size, mtime, err := editFileFingerprint(v.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := models.VideoCropDetectionState{VideoID: v.ID, Revision: 1, SourceVersion: editCropSourceVersion(size, mtime), AlgorithmVersion: cropDetectionAlgorithm - 1, Status: oldStatus, ResultJSON: "{}"}
+			// A previously delivered draft may have been deleted; the detection
+			// state alone must stop us from making it again.
+			if err = database.DB.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				if err = s.process(context.Background(), v, false); err != nil {
+					t.Fatal(err)
+				}
+				if oldStatus != "failed" || i != 0 {
+					continue
+				}
+				var before models.VideoCropDetectionState
+				database.DB.First(&before, v.ID)
+				if before.Status != "failed" || before.AlgorithmVersion != row.AlgorithmVersion {
+					t.Fatalf("v1 failure retried automatically: %+v", before)
+				}
+				if err = s.process(context.Background(), v, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var after models.VideoCropDetectionState
+			if err = database.DB.First(&after, v.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			var count int64
+			database.DB.Model(&models.VideoEditProject{}).Count(&count)
+			if oldStatus == "detected" {
+				if count != 0 || after.Revision != 1 || after.AlgorithmVersion != row.AlgorithmVersion {
+					t.Fatalf("old detection was re-delivered: count %d %+v", count, after)
+				}
+			} else if count != 1 || after.Status != "detected" || after.Revision != 2 || after.AlgorithmVersion != cropDetectionAlgorithm {
+				t.Fatalf("old detection was not updated exactly once: count %d %+v", count, after)
+			}
+		})
+	}
+}

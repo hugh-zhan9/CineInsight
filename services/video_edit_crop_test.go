@@ -16,8 +16,8 @@ import (
 
 func TestVideoEditCropAnalysisProvidesCanvasWithoutPreflight(t *testing.T) {
 	for _, tc := range []struct{ status, sample string }{
-		{"detected", "crop=100:180:110:0"},
-		{"no_borders", "crop=320:180:0:0"},
+		{"detected", cropLumaFixture(320, 180, EditCropRect{X: 110, Width: 100, Height: 180}, 0, 100)},
+		{"no_borders", cropLumaFixture(320, 180, EditCropRect{Width: 320, Height: 180}, 0, 100)},
 		{"undetected", ""},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
@@ -26,8 +26,8 @@ func TestVideoEditCropAnalysisProvidesCanvasWithoutPreflight(t *testing.T) {
 			view := mustEditProject(t, s, models.VideoEditKindCrop, v.ID)
 			original := s.runOutput
 			s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
-				if strings.Contains(strings.Join(args, " "), "cropdetect") {
-					return "", tc.sample, nil
+				if strings.Contains(strings.Join(args, " "), "rawvideo") {
+					return cropNeutralSample(tc.sample), "", nil
 				}
 				return original(ctx, name, args)
 			}
@@ -256,7 +256,7 @@ func TestVideoEditCropStructureAndGeometry(t *testing.T) {
 	if *r != (EditCropRect{X: 90, Y: 10, Width: 120, Height: 120}) {
 		t.Fatalf("union: %+v", r)
 	}
-	if parseEditCropSample("crop=0:0:320:180 crop=100:100:900:0", 320, 180) != nil {
+	if editCropWindow("truncated frame", 320, 180) != nil {
 		t.Fatal("invalid sample accepted")
 	}
 }
@@ -270,7 +270,7 @@ func TestVideoEditCropAnalysisFailureAndCancellation(t *testing.T) {
 			original := s.runOutput
 			started := make(chan struct{}, 1)
 			s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
-				if !strings.Contains(strings.Join(args, " "), "cropdetect") {
+				if !strings.Contains(strings.Join(args, " "), "rawvideo") {
 					return original(ctx, name, args)
 				}
 				started <- struct{}{}
@@ -321,8 +321,8 @@ func TestVideoEditCropAnalysisKeepsConfirmedAndDarkFrames(t *testing.T) {
 	})
 	original := s.runOutput
 	s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
-		if strings.Contains(strings.Join(args, " "), "cropdetect") {
-			return "", "crop=0:0:320:180", nil
+		if strings.Contains(strings.Join(args, " "), "rawvideo") {
+			return cropNeutralSample(cropLumaFixture(320, 180, EditCropRect{}, 0, 0)), "", nil
 		}
 		return original(ctx, name, args)
 	}

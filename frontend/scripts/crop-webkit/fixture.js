@@ -1,6 +1,7 @@
 import { createApp, h, nextTick } from 'vue';
 import CropEditor from '../../src/components/video-workbench/CropEditor.vue';
 import CropTimeline from '../../src/components/video-workbench/CropTimeline.vue';
+import VideoWorkbenchPage from '../../src/components/VideoWorkbenchPage.vue';
 import '../../src/styles/tokens.css';
 import '../../src/styles/components.css';
 import '../../src/components/video-workbench/workbench.css';
@@ -16,6 +17,37 @@ const root = createApp({
 }).mount('#app');
 const assert = (value, message) => { if (!value) throw new Error(message); };
 const tick = () => new Promise(resolve => setTimeout(resolve, 30));
+async function checkLongProjectList(width) {
+ const source = { video_id: 1, display_width: 320, display_height: 180, source_version: 'fixture', duration_ms: 2000 };
+ const project = { id: 110, kind: 'crop', title: '裁剪项目', revision: 1, status: 'draft', mode: 'precise',
+  recipe: root.recipe, analysis: { status: 'completed', crops: [source] }, items: [] };
+ window.go = { main: { App: {
+  GetEditProject: async () => project, GetEditCropSource: async () => source, GetVideosByIDs: async () => [],
+  GetVideoEditStatus: async () => ({}),
+  ListEditProjects: async () => Array.from({ length: 50 }, (_, i) => ({ ...project, id: 110 - i })),
+  ListEditProjectsBefore: async () => Array.from({ length: 50 }, (_, i) => ({ ...project, id: 60 - i }))
+ } } };
+ const frame = document.createElement('iframe');
+ frame.style.cssText = `position:absolute;left:-10000px;width:${width}px;height:760px;border:0`;
+ const loaded = new Promise(resolve => { frame.onload = resolve; });
+ frame.srcdoc = `<html><head><link rel="stylesheet" href="${new URL('./fixture.css', location.href).href}"><style>body{margin:0;font-family:system-ui}</style></head><body><div id="list-fixture"></div></body></html>`;
+ document.body.appendChild(frame); await loaded;
+ const doc = frame.contentDocument;
+ const app = createApp({ render: () => h(VideoWorkbenchPage, { openRequest: { projectID: 110 } }) });
+ app.mount(doc.getElementById('list-fixture')); await tick();
+ doc.querySelector('[aria-controls="workbench-edit-projects"]').click(); await nextTick();
+ const list = doc.querySelector('.edit-projects__list');
+ const pager = doc.querySelector('[data-test="edit-projects-more"]');
+ const monitor = doc.querySelector('.crop-monitor');
+ assert(list.scrollHeight > list.clientHeight && pager.getBoundingClientRect().bottom < 760, '50 projects scroll independently; pagination stays in view');
+ assert(monitor.getBoundingClientRect().top < 600, 'expanded project list does not push preview below the fold');
+ const top = monitor.getBoundingClientRect().top;
+ list.scrollTop = list.scrollHeight;
+ assert(list.scrollTop > 0 && monitor.getBoundingClientRect().top === top, 'scrolling projects does not move the preview');
+ pager.click(); await tick();
+ assert(list.children.length === 100 && monitor.getBoundingClientRect().top === top, 'loading more keeps the preview in place');
+ app.unmount(); frame.remove(); delete window.go;
+}
 async function dragHandle(node, dx, dy) {
  node.scrollIntoView({ block: 'center' }); await tick();
  const r = node.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
@@ -109,6 +141,8 @@ window.fixture = { async run() {
  finalEdge.dispatchEvent(new PointerEvent('pointerenter', { clientX: finalBounds.left + 5, clientY: finalBounds.top + 5, pointerId: 10 })); await nextTick();
  const lens = document.querySelector('[data-test="crop-loupe"]');
  assert(lens && lens.getBoundingClientRect().bottom <= innerHeight, 'hover loupe visible without opening result preview');
- window.results = { passed: true, checks: ['image load', 'overlay pixel geometry', 'portrait preview', 'no overflow', 'pixel edit', 'fixed ratio', 'no confirmation gate', 'live preview', 'edge loupe', 'reset'], stage: { width: bounds.width, height: bounds.height } };
+ await checkLongProjectList(1024);
+ await checkLongProjectList(600);
+ window.results = { passed: true, checks: ['image load', 'overlay pixel geometry', 'portrait preview', 'no overflow', 'pixel edit', 'fixed ratio', 'no confirmation gate', 'live preview', 'edge loupe', 'reset', 'bounded project list'], stage: { width: bounds.width, height: bounds.height } };
 } };
 window.ready = true;
