@@ -10,7 +10,7 @@
     @overlay-click="handleOverlayClick"
   >
     <header class="ui-dialog__head">
-      <h2 :id="titleId" class="ui-dialog__title">{{ title }}</h2>
+      <h2 :id="titleId" class="ui-dialog__title" :title="titleTooltip ? title : undefined">{{ title }}</h2>
       <AppSpinner v-if="busy" class="ui-dialog__busy" :size="16" label="正在处理" />
       <button
         type="button"
@@ -49,6 +49,7 @@ export default {
   inheritAttrs: false,
   props: {
     title: { type: String, required: true },
+    titleTooltip: { type: Boolean, default: false },
     size: { type: String, default: 'md', validator: size => DIALOG_SIZES.includes(size) },
     closeOnOverlay: { type: Boolean, default: null },
     busy: { type: Boolean, default: false },

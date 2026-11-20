@@ -708,27 +708,33 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, related *mode
 
 func (s *JellyfinServer) videoQuery(r *http.Request, filter LibraryFilter) (*gorm.DB, error) {
 	// Error SQL would otherwise interpolate private scan roots and search terms.
-	query, err := applyLibraryFilter(database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).WithContext(r.Context()).Model(&models.Video{}), filter, time.Now())
-	if err != nil {
-		return nil, err
-	}
 	// Empty configured roots are not permission to expose historical orphan rows.
-	roots, err := loadScanRootScope()
+	query, err := applyLibraryFilterWithRootPolicy(database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).WithContext(r.Context()).Model(&models.Video{}), filter, time.Now(), true)
 	if err != nil {
 		return nil, err
-	}
-	if len(roots) == 0 {
-		query = query.Where("1 = 0")
 	}
 	return query.Where("videos.is_stale = ?", false), nil
 }
 func (s *JellyfinServer) visibleVideo(r *http.Request, id uint) (*models.Video, error) {
+	return s.loadVisibleVideo(r, id, true)
+}
+
+// Playback authorization uses the same visibility filter as the catalog, but
+// range requests and PlaybackInfo do not use tags.
+func (s *JellyfinServer) visiblePlaybackVideo(r *http.Request, id uint) (*models.Video, error) {
+	return s.loadVisibleVideo(r, id, false)
+}
+
+func (s *JellyfinServer) loadVisibleVideo(r *http.Request, id uint, includeTags bool) (*models.Video, error) {
 	query, err := s.videoQuery(r, LibraryFilter{})
 	if err != nil {
 		return nil, err
 	}
+	if includeTags {
+		query = query.Preload("Tags")
+	}
 	var video models.Video
-	err = query.Preload("Tags").First(&video, id).Error
+	err = query.First(&video, id).Error
 	return &video, err
 }
 

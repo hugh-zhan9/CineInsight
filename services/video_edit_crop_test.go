@@ -500,8 +500,85 @@ func TestVideoEditCropSourceReadOnly(t *testing.T) {
 	s.runOutput = func(context.Context, string, []string) (string, string, error) {
 		return "", "", context.DeadlineExceeded
 	}
+	if _, err := s.CropSource(context.Background(), view.ID, a.ID); VideoEditErrorCode(err) != "crop_source_timeout" || strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("probe timeout should explain how to retry: %v", err)
+	}
+	s.runOutput = func(context.Context, string, []string) (string, string, error) {
+		return "", "", errors.New("invalid container")
+	}
 	if _, err := s.CropSource(context.Background(), view.ID, a.ID); VideoEditErrorCode(err) != "probe_failed" {
-		t.Fatalf("probe failed: %v", err)
+		t.Fatalf("genuine probe failure: %v", err)
+	}
+}
+
+func TestVideoEditCropSourceDoesNotWaitForSharedHeavySlot(t *testing.T) {
+	s, media := newFakeEditService(t)
+	video := media.addFakeSource(t, t.TempDir(), "crop.mkv", 4000)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, video.ID)
+	if err := s.slot.Acquire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer s.slot.Release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	info, err := s.CropSource(ctx, view.ID, video.ID)
+	if err != nil || info.SourceVersion == "" || info.DisplayWidth != 320 {
+		t.Fatalf("interactive sizes should load while an export owns the heavy slot: %+v %v", info, err)
+	}
+}
+
+func TestVideoEditCropSourceRejectsReplacementWithSameFingerprint(t *testing.T) {
+	s, media := newFakeEditService(t)
+	video := media.addFakeSource(t, t.TempDir(), "crop.mkv", 4000)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, video.ID)
+	before, err := os.Stat(video.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := video.Path + ".replacement"
+	if err = os.WriteFile(replacement, make([]byte, before.Size()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chtimes(replacement, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.Stat(replacement); err != nil || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("fixture requires identical mtimes: %+v %v", after, err)
+	}
+	s.runOutput = func(ctx context.Context, name string, args []string) (string, string, error) {
+		out, tail, runErr := media.output(ctx, name, args)
+		if err := os.Remove(video.Path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, video.Path); err != nil {
+			t.Fatal(err)
+		}
+		return out, tail, runErr
+	}
+	if _, err := s.CropSource(context.Background(), view.ID, video.ID); VideoEditErrorCode(err) != "source_changed" {
+		t.Fatalf("pre-replacement geometry must not bind to the new file: %v", err)
+	}
+}
+
+func TestVideoEditCropSourceProbeContentionIsBounded(t *testing.T) {
+	s, media := newFakeEditService(t)
+	video := media.addFakeSource(t, t.TempDir(), "crop.mkv", 4000)
+	view := mustEditProject(t, s, models.VideoEditKindCrop, video.ID)
+	if err := s.cropSourceSlot.Acquire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := s.CropSource(ctx, view.ID, video.ID)
+	s.cropSourceSlot.Release()
+	if VideoEditErrorCode(err) != "crop_source_busy" {
+		t.Fatalf("a busy interactive probe should provide a retryable error: %v", err)
+	}
+	info, err := s.CropSource(context.Background(), view.ID, video.ID)
+	if err != nil || info.DisplayWidth != 320 {
+		t.Fatalf("probe retry should recover after slot release: %+v %v", info, err)
 	}
 }
 

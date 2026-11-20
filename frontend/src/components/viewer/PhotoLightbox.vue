@@ -6,6 +6,7 @@
       class="photo-lightbox"
       size="full"
       :title="image.name || '图片'"
+      title-tooltip
       close-data-test="photo-lightbox-close"
       data-test="photo-lightbox"
       @close="$emit('close')"
@@ -376,6 +377,10 @@ export default {
    （与图片管理查看器同一教训：行高不确定时 max-height: 100% 失效，竖图会撑出视口）。 */
 :deep(.photo-lightbox) { background: var(--bg-color); }
 :deep(.photo-lightbox .ui-dialog__head) { border-bottom: 1px solid var(--hairline-faint); }
+/* The native buttons are above the webview, not affected by DOM z-index or safe-area insets.
+   Keep the clearance through macOS fullscreen too: the native controls can reappear on hover. */
+:global(html[data-window-chrome="mac-inset"] .photo-lightbox .ui-dialog__head) { padding-left: var(--mac-window-controls-clearance); }
+:deep(.photo-lightbox .ui-dialog__title) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :deep(.photo-lightbox .ui-dialog__body) { display: flex; padding: 0; overflow: hidden; }
 .photo-lightbox__layout {
   display: grid;

@@ -66,7 +66,7 @@
 import CropTimeline from './CropTimeline.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
 import { workbenchVideoMixin } from './workbenchVideo.js';
-import { cloneRecipe, editFrameURL, formatEditTime, preflightSource } from '../../utils/videoEdit.js';
+import { cloneRecipe, editErrorText, editFrameURL, formatEditTime, preflightSource } from '../../utils/videoEdit.js';
 import { CROP_RATIOS, cropRatio, cropFromMargins, dragCrop, fitCropRatio, setCropRect, validCrop } from '../../utils/videoCrop.js';
 
 export default {
@@ -180,7 +180,7 @@ export default {
         this.loadedSource = source;
         if (!this.item.rect && this.editable) this.commit({ x: 0, y: 0, width: source.display_width, height: source.display_height });
       } catch (err) {
-        if (sequence === this.sourceSequence) this.sourceError = `读取画面尺寸失败：${String(err?.message || err)}`;
+        if (sequence === this.sourceSequence) this.sourceError = `读取画面尺寸失败：${editErrorText(err)}`;
       } finally { if (sequence === this.sourceSequence) this.sourceLoading = false; }
     },
     edgeHandle(event) {

@@ -371,9 +371,14 @@ func (f mediaProbeFingerprint) matches(other mediaProbeFingerprint) bool {
 	return f.size == other.size && f.modTimeNS == other.modTimeNS
 }
 
+func (f mediaProbeFingerprint) matchesSnapshot(snapshot models.VideoTechnicalMetadata) bool {
+	return snapshot.SuccessfulSourceSize != nil && snapshot.SuccessfulSourceModTimeNS != nil &&
+		*snapshot.SuccessfulSourceSize == f.size && *snapshot.SuccessfulSourceModTimeNS == f.modTimeNS
+}
+
 // Refresh probes one active video and atomically replaces its successful technical snapshot.
 func (s *MediaProbeService) Refresh(ctx context.Context, videoID uint) error {
-	return s.refreshForSource(ctx, videoID, "")
+	return s.refreshForSource(ctx, videoID, "", false)
 }
 
 // RefreshForSource preserves an explicit retry grant across the per-video probe gate.
@@ -381,10 +386,21 @@ func (s *MediaProbeService) RefreshForSource(ctx context.Context, videoID uint, 
 	if expectedSourceVersion == "" {
 		return errors.New("expected probe source is empty")
 	}
-	return s.refreshForSource(ctx, videoID, expectedSourceVersion)
+	return s.refreshForSource(ctx, videoID, expectedSourceVersion, false)
 }
 
-func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, expectedSourceVersion string) error {
+// ensureSnapshotForSource may reuse a probe another caller completed while
+// this request was waiting at the per-video gate. Explicit Refresh still probes.
+func (s *MediaProbeService) ensureSnapshotForSource(ctx context.Context, videoID uint, expectedSourceVersion string) error {
+	if expectedSourceVersion == "" {
+		return errors.New("expected probe source is empty")
+	}
+	return s.refreshForSource(ctx, videoID, expectedSourceVersion, true)
+}
+
+var errMediaProbeSnapshotAlreadyFresh = errors.New("media probe snapshot is already fresh")
+
+func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, expectedSourceVersion string, reuseFresh bool) error {
 	if ctx == nil {
 		return errors.New("media probe context is nil")
 	}
@@ -421,7 +437,10 @@ func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, 
 			}
 			return cancelled
 		}
-		if err := s.refreshFrom(ctx, db, videoID, expectedSourceVersion); err != nil {
+		if err := s.refreshFrom(ctx, db, videoID, expectedSourceVersion, reuseFresh); err != nil {
+			if err == errMediaProbeSnapshotAlreadyFresh {
+				return nil
+			}
 			return err
 		}
 		var metadata models.VideoTechnicalMetadata
@@ -438,7 +457,7 @@ func (s *MediaProbeService) refreshForSource(ctx context.Context, videoID uint, 
 	return err
 }
 
-func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoID uint, expectedSourceVersion string) error {
+func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoID uint, expectedSourceVersion string, reuseFresh bool) error {
 	if expectedSourceVersion != "" {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -455,6 +474,16 @@ func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoI
 	}
 	if err != nil {
 		return s.recordFailureOrJoinFrom(db, video.ID, nil, attemptedAt, err)
+	}
+	if reuseFresh {
+		var snapshot models.VideoTechnicalMetadata
+		err := db.Select("successful_source_size", "successful_source_mod_time_ns").First(&snapshot, "video_id = ?", video.ID).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err == nil && before.matchesSnapshot(snapshot) {
+			return errMediaProbeSnapshotAlreadyFresh
+		}
 	}
 
 	output, stderr, err := s.runner(ctx, video.Path)

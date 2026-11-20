@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 
 	"video-master/models"
@@ -54,7 +56,7 @@ type EditCropResult struct {
 func (s *VideoEditService) CropSource(ctx context.Context, projectID, videoID uint) (*EditPreflightSource, error) {
 	project, err := loadEditProject(ctx, projectID)
 	if err != nil {
-		return nil, err
+		return nil, editCropSourceReadError(err)
 	}
 	recipe, err := parseEditRecipe(project.RecipeJSON)
 	if err != nil {
@@ -72,21 +74,48 @@ func (s *VideoEditService) CropSource(ctx context.Context, projectID, videoID ui
 	if !member {
 		return nil, editError("crop_invalid", "来源不属于当前裁剪项目")
 	}
-	if err := s.slot.Acquire(ctx); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, editCropSourceReadError(err)
+	}
+	// Reading stream metadata is independent of long-running FFmpeg jobs.
+	// Only one interactive metadata probe can run at a time.
+	if err := s.cropSourceSlot.Acquire(ctx); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, editError("crop_source_busy", "另一个素材仍在读取画面尺寸，请稍后重试。")
+		}
 		return nil, err
 	}
-	defer s.slot.Release()
+	defer s.cropSourceSlot.Release()
 	pre := &EditPreflight{}
 	sources, err := s.collectEditSources(ctx, pre, []uint{videoID})
 	if err != nil {
-		return nil, err
+		return nil, editCropSourceReadError(err)
+	}
+	sc := sources[videoID]
+	if errors.Is(sc.probeErr, context.DeadlineExceeded) {
+		return nil, editCropSourceReadError(sc.probeErr)
 	}
 	if len(pre.Errors) > 0 {
 		return nil, editError(pre.Errors[0].Code, "%s", pre.Errors[0].Message)
 	}
-	sc := sources[videoID]
-	size, modified, err := editFileFingerprint(sc.path)
-	if err != nil || size != sc.size || modified != sc.modTimeNS {
+	db, err := editDB(ctx)
+	if err != nil {
+		return nil, editCropSourceReadError(err)
+	}
+	pending, err := editReplacementPathPendingError(db, sc.path)
+	if err != nil {
+		return nil, editCropSourceReadError(err)
+	}
+	if pending {
+		return nil, replacementPending()
+	}
+	// A replacement can preserve size and mtime while switching the file.
+	// Interactive probes don't share the encoder's slot, so verify identity too.
+	current, err := editSourceFileInfo(sc.path)
+	if ctx.Err() != nil {
+		return nil, editCropSourceReadError(ctx.Err())
+	}
+	if err != nil || !os.SameFile(sc.fileInfo, current) || current.Size() != sc.size || current.ModTime().UnixNano() != sc.modTimeNS {
 		return nil, editError("source_changed", "读取期间来源发生变化，请重新读取画面")
 	}
 	info := pre.Sources[0]
@@ -94,6 +123,13 @@ func (s *VideoEditService) CropSource(ctx context.Context, projectID, videoID ui
 		return nil, editError("crop_invalid", "无法确定画面尺寸")
 	}
 	return &info, nil
+}
+
+func editCropSourceReadError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return editError("crop_source_timeout", "素材读取超时。请确认原文件能正常打开；如果在外接硬盘或网络盘上，确认磁盘已连接后重试。")
+	}
+	return err
 }
 
 func validateCropStructure(crop *EditCropRecipe) error {

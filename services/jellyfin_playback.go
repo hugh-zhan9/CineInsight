@@ -78,6 +78,11 @@ func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]ma
 	if err := database.DB.WithContext(r.Context()).Where("video_id = ?", video.ID).Order("stream_index").Find(&rows).Error; err != nil {
 		return nil, jellyfinStreamSummary{}, err
 	}
+	sources, summary := jellyfinMediaSourcesFromStreams(video, rows)
+	return sources, summary, nil
+}
+
+func jellyfinMediaSourcesFromStreams(video models.Video, rows []models.MediaStream) ([]map[string]interface{}, jellyfinStreamSummary) {
 	summary := jellyfinStreamSummary{streams: []map[string]interface{}{}}
 	nextIndex := 0
 	var audioIndex *int
@@ -123,7 +128,7 @@ func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]ma
 	if video.Duration > 0 {
 		source["Bitrate"] = int64(float64(video.Size) * 8 / video.Duration)
 	}
-	return []map[string]interface{}{source}, summary, nil
+	return []map[string]interface{}{source}, summary
 }
 
 func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -144,7 +149,7 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 		jellyfinError(w, 404, "视频不存在")
 		return
 	}
-	video, err := s.visibleVideo(r, id)
+	video, err := s.visiblePlaybackVideo(r, id)
 	if s.libraryError(w, err) {
 		return
 	}
@@ -204,7 +209,8 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			s.libraryError(w, probeErr)
 			return
 		}
-		fresh := probeErr == nil && snapshot.SuccessfulSourceSize != nil && snapshot.SuccessfulSourceModTimeNS != nil && *snapshot.SuccessfulSourceSize == info.Size() && *snapshot.SuccessfulSourceModTimeNS == info.ModTime().UnixNano()
+		source := mediaProbeFingerprint{size: info.Size(), modTimeNS: info.ModTime().UnixNano()}
+		fresh := probeErr == nil && source.matchesSnapshot(snapshot)
 		if !fresh {
 			if s.probe == nil {
 				jellyfinError(w, 503, "视频技术信息不可用")
@@ -212,15 +218,21 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 			defer cancel()
-			if err := s.probe.Refresh(ctx, id); err != nil {
+			sourceVersion := videoSourceVersion(id, source.size, source.modTimeNS)
+			if err := s.probe.ensureSnapshotForSource(ctx, id, sourceVersion); err != nil {
 				jellyfinError(w, 503, "无法读取原片技术信息，请在桌面检查 ffprobe")
 				return
 			}
-			video, err = s.visibleVideo(r, id)
+			video, err = s.visiblePlaybackVideo(r, id)
 			if s.libraryError(w, err) {
 				return
 			}
 			if err := database.DB.WithContext(r.Context()).First(&snapshot, "video_id = ?", id).Error; s.libraryError(w, err) {
+				return
+			}
+			current, err := mediaProbeStat(video.Path)
+			if err != nil || !source.matches(current) || !current.matchesSnapshot(snapshot) {
+				jellyfinError(w, 503, "原片已变化，请重试")
 				return
 			}
 		}
@@ -233,10 +245,7 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			jellyfinNoCompatibleStream(w)
 			return
 		}
-		sources, _, err := s.mediaSources(r, *video)
-		if s.libraryError(w, err) {
-			return
-		}
+		sources, _ := jellyfinMediaSourcesFromStreams(*video, streams)
 		if container := jellyfinProbedLegacyContainer(video.Path, snapshot); container != "" {
 			sources[0]["Container"] = container
 			sources[0]["DirectStreamUrl"] = "/Videos/" + jellyfinID(jellyVideo, id) + "/stream." + container + "?Static=true"

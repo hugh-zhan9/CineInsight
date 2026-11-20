@@ -522,11 +522,17 @@ describe('全窗口层与抽屉开着时全局提示让开它们的控件', () =
   });
 
   it('观看侧看图：提示从标题栏（文件名与 ×）下面开始，下沿在「上一张」之上，够不着信息栏', () => {
-    // 标题栏 = 上内边距 + 一行（× 是紧凑按钮、上下各收 2px）+ 下内边距 + 下边线（53）；文件名折成两行时文字到 61。
+    // 标题栏 = 上内边距 + 一行（× 是紧凑按钮、上下各收 2px）+ 下内边距 + 下边线（53）。
+    // 文件名一行省略；提示仍保留足够缓冲，不移动标题或关闭按钮。
     const head = declarationsOf('components/ui/DialogShell.vue', '.ui-dialog__head');
     expect(head.padding).toBe('var(--space-4) var(--space-4) var(--space-3) var(--space-5)');
     expect(declarationsOf('components/ui/DialogShell.vue', '.ui-dialog__close').margin).toBe('-2px 0');
     expect(read('components/viewer/PhotoLightbox.vue')).toContain(':deep(.photo-lightbox .ui-dialog__head) { border-bottom: 1px solid');
+    const macHead = declarationsOf('components/viewer/PhotoLightbox.vue', ':global(html[data-window-chrome="mac-inset"] .photo-lightbox .ui-dialog__head)');
+    expect(macHead['padding-left']).toBe('var(--mac-window-controls-clearance)');
+    expect(px('var(--mac-window-controls-clearance)', SIZES[0])).toBeGreaterThanOrEqual(82);
+    const title = declarationsOf('components/viewer/PhotoLightbox.vue', ':deep(.photo-lightbox .ui-dialog__title)');
+    expect(title).toMatchObject({ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' });
     expect(read('components/viewer/PhotoLightbox.vue')).toMatch(/<DialogShell[^>]*class="photo-lightbox"[^>]*size="full"/);
     const nav = declarationsOf('components/viewer/PhotoLightbox.vue', '.photo-lightbox__nav');
     expect(nav).toMatchObject({ position: 'absolute', top: '50%', height: '44px', transform: 'translateY(-50%)' });

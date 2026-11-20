@@ -4,7 +4,9 @@
     <div class="workbench-layout">
       <EditProjectList
         v-show="project?.kind !== 'crop' || projectsOpen"
-        :projects="projects"
+        :projects="visibleProjects"
+        :show-completed-crops="showCompletedCrops"
+        :has-hidden-crops="hasHiddenCrops"
         :selected-id="selectedId"
         :busy="busy"
         :error="listError"
@@ -13,6 +15,7 @@
         @select="selectProject"
         @load-more="loadMoreProjects"
         @refresh="refreshAll"
+        @toggle-completed-crops="showCompletedCrops = !showCompletedCrops"
         @cancel="cancelExport"
         @requeue="requeueFromList"
         @delete="deleteProject"
@@ -123,6 +126,19 @@ const LIST_LIMIT = 50;
 function asList(value) {
   return Array.isArray(value) ? value : [];
 }
+
+// "Completed" can also describe a crop whose replacement still needs recovery:
+// hide only fully successful projects, and keep their details available via history.
+function isFinishedCrop(project) {
+  if (project.kind !== 'crop' || project.status !== 'completed' || project.error_code) return false;
+  if (Array.isArray(project.items)) {
+    return project.items.length > 0 && project.items.every(item => item.status === 'completed' && !item.error_code);
+  }
+  return project.item_count > 0 && project.completed_count === project.item_count;
+}
+function replacementNeedsRecovery(project) {
+  return project?.error_code === 'replace_recovery_pending' || asList(project?.items).some(item => item.error_code === 'replace_recovery_pending');
+}
 const LIST_REFRESH_DELAY_MS = 800;
 
 // 视频工作台页（视频编辑合同「界面」）。左栏项目列表，右栏按类型编辑、预检导出与结果。
@@ -142,6 +158,7 @@ export default {
   data() {
     return {
       projects: [],
+      showCompletedCrops: false,
       listError: '',
       // 「加载更多」翻过的页数：之后的刷新按这么多页重读，翻出来的旧项目不会被刷新冲掉。
       listPages: 1,
@@ -170,6 +187,25 @@ export default {
     };
   },
   computed: {
+    projectRows() {
+      // Keep recovery visible and disable deletion even if only one of the detail/list
+      // requests has seen the pending marker so far.
+      if (!replacementNeedsRecovery(this.project)) return this.projects;
+      return this.projects.map(summary => summary.id === this.project.id
+        ? { ...summary, error_code: 'replace_recovery_pending' } : summary);
+    },
+    currentProjects() {
+      // The selected detail may have received the completion event before the throttled
+      // list refresh. Use it for visibility only; never change the raw pagination cursor.
+      return this.projectRows.filter(summary => replacementNeedsRecovery(summary) ||
+        !isFinishedCrop(summary.id === this.project?.id ? this.project : summary));
+    },
+    visibleProjects() {
+      return this.showCompletedCrops ? this.projectRows : this.currentProjects;
+    },
+    hasHiddenCrops() {
+      return !this.showCompletedCrops && this.currentProjects.length < this.projects.length;
+    },
     editorComponent() {
       return EDITORS[this.project?.kind] || 'MergeEditor';
     },

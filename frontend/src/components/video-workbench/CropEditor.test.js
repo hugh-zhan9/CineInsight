@@ -151,10 +151,11 @@ describe('固定黑边裁剪', () => {
     w.unmount();
   });
   it('读取失败明确报错可重读，旧项目的框和指纹不被自动重绑', async () => {
-    const loadSource = vi.fn().mockRejectedValueOnce(new Error('读取超时')).mockResolvedValue({ ...preflight.sources[0], source_version: 'new' });
+    const loadSource = vi.fn().mockRejectedValueOnce(new Error('crop_source_timeout: 素材读取超时。请确认原文件能正常打开。')).mockResolvedValue({ ...preflight.sources[0], source_version: 'new' });
     const w = mount(CropEditor, { props: { ...props(), preflight: null, loadSource } });
     await flushPromises();
-    expect(w.get('[data-test="crop-source-error"]').text()).toContain('读取超时');
+    expect(w.get('[data-test="crop-source-error"]').text()).toContain('素材读取超时。请确认原文件能正常打开。');
+    expect(w.get('[data-test="crop-source-error"]').text()).not.toContain('crop_source_timeout');
     expect(w.emitted('change')).toBeUndefined();
     await w.get('[data-test="crop-read-source"]').trigger('click'); await flushPromises();
     expect(w.text()).toContain('来源已经变化');

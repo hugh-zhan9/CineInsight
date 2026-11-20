@@ -281,3 +281,88 @@ func TestVideoEditDeleteProject(t *testing.T) {
 		t.Fatalf("成品应保留、导出项记录应删除: %v count=%d", err, count)
 	}
 }
+
+func TestVideoEditDeleteDraftDoesNotWaitForLibraryPath(t *testing.T) {
+	service, media := newFakeEditService(t)
+	source := media.addFakeSource(t, t.TempDir(), "source.mkv", 3000)
+	draft := mustEditProject(t, service, models.VideoEditKindCrop, source.ID)
+	libraryPathMutationMu.Lock()
+	defer libraryPathMutationMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.DeleteProject(ctx, draft.ID); err != nil {
+		t.Fatalf("没有导出项的草稿不应等文件路径锁: %v", err)
+	}
+	if _, err := service.GetProject(context.Background(), draft.ID); editErrorCodeOf(err) != "edit_project_not_found" {
+		t.Fatalf("草稿仍存在: %v", err)
+	}
+	if raw, err := os.ReadFile(source.Path); err != nil || string(raw) != "source:source.mkv" {
+		t.Fatalf("删除草稿不能触碰原片: %q %v", raw, err)
+	}
+}
+
+func TestVideoEditDeleteProjectKeepsPendingRecoveryOffline(t *testing.T) {
+	service, media := newFakeEditService(t)
+	source := media.addFakeSource(t, t.TempDir(), "source.mkv", 3000)
+	draft := mustEditProject(t, service, models.VideoEditKindCrop, source.ID)
+	item := models.VideoEditItem{
+		ProjectID: draft.ID, Seq: 1, Status: models.VideoEditStatusInterrupted, Phase: models.VideoEditPhasePublish,
+		WorkDir: filepath.Join(t.TempDir(), editWorkdirPrefix+"1"), ErrorCode: "replace_recovery_pending",
+	}
+	if err := database.DB.Create(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&models.VideoEditProject{}).Where("id = ?", draft.ID).
+		Update("status", models.VideoEditStatusInterrupted).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 有导出项的项目不能绕过路径锁；超时必须留下记录并提示重试。
+	func() {
+		libraryPathMutationMu.Lock()
+		defer libraryPathMutationMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		if err := service.DeleteProject(ctx, draft.ID); editErrorCodeOf(err) != "edit_project_delete_busy" {
+			t.Fatalf("路径锁超时应提示项目未删: %v", err)
+		}
+	}()
+	if err := service.DeleteProject(context.Background(), draft.ID); editErrorCodeOf(err) != "replace_recovery_pending" {
+		t.Fatalf("即使工作目录不可见也必须保留待恢复项目: %v", err)
+	}
+	rows := loadEditItemsForTest(t, draft.ID)
+	if len(rows) != 1 || rows[0].ID != item.ID {
+		t.Fatalf("待恢复的导出项被删除: %+v", rows)
+	}
+}
+
+func TestVideoEditListCompletedCropKeepsRecoveryStatus(t *testing.T) {
+	service, item, plan, staged := replacementFixture(t)
+	ctx := context.Background()
+	service.replacementHook = func(phase string) error {
+		if phase == "cleanup_db_cleared" {
+			return errTestPublish
+		}
+		return nil
+	}
+	err := service.publishEditReplacement(ctx, item, plan, staged)
+	if err == nil || !replacementJournalExists(item.WorkDir) {
+		t.Fatalf("应在数据库完成后保留待恢复的日志: %v", err)
+	}
+	service.finishItem(ctx, item, err)
+	service.finalizeProject(ctx, item.ProjectID)
+	rows, err := service.ListProjects(ctx, 50)
+	if err != nil || len(rows) != 1 || rows[0].Status != models.VideoEditStatusCompleted ||
+		rows[0].CompletedCount != 1 || rows[0].ErrorCode != "replace_recovery_pending" {
+		t.Fatalf("已完成但待恢复的项目不能从待处理列表隐藏: %+v %v", rows, err)
+	}
+	service.replacementHook = nil
+	if _, err := service.RetryReplacementRecovery(ctx, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = service.ListProjects(ctx, 50)
+	if err != nil || len(rows) != 1 || rows[0].Status != models.VideoEditStatusCompleted ||
+		rows[0].ErrorCode != "" || replacementJournalExists(item.WorkDir) {
+		t.Fatalf("恢复完成后应清除提示并保留历史记录: %+v %v", rows, err)
+	}
+}

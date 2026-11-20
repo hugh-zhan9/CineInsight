@@ -244,7 +244,7 @@ func (s *VideoEditService) probeEditSource(ctx context.Context, path string) (ed
 	stdout, stderr, err := s.runOutput(probeCtx, ffprobe, []string{"-v", "error", "-show_streams", "-show_format", "-of", "json", path})
 	if err != nil {
 		// stderr 原样带回（已限 2 KB），由调用方按已知路径擦除。
-		return editProbe{}, fmt.Errorf("%v: %s", err, stderr)
+		return editProbe{}, fmt.Errorf("%w: %s", err, stderr)
 	}
 	return parseEditProbe([]byte(stdout))
 }
@@ -253,14 +253,22 @@ func (s *VideoEditService) probeEditSource(ctx context.Context, path string) (ed
 // 符号链接：指纹取解析后的文件（链接被改指向别的文件时 size/mtime 随之变化，报 source_changed）；
 // 编辑服务从不写来源，所以跟随链接只是读。
 func editFileFingerprint(path string) (int64, int64, error) {
-	info, err := os.Stat(path)
+	info, err := editSourceFileInfo(path)
 	if err != nil {
 		return 0, 0, err
 	}
-	if !info.Mode().IsRegular() {
-		return 0, 0, fmt.Errorf("不是常规文件")
-	}
 	return info.Size(), info.ModTime().UnixNano(), nil
+}
+
+func editSourceFileInfo(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("不是常规文件")
+	}
+	return info, nil
 }
 
 // EditIssue 是预检的一条警告或错误。key 稳定且唯一：排队时 acknowledged_warnings 按 key 确认；
@@ -475,6 +483,8 @@ func editStreamInfos(streams []editStream) []EditStreamInfo {
 // editSourceCtx 是预检阶段一个来源的全部事实。ok=false 时已经写过错误，不再参与计划。
 type editSourceCtx struct {
 	infrastructureErr error
+	probeErr          error
+	fileInfo          os.FileInfo
 	video             models.Video
 	path              string
 	size              int64
@@ -652,7 +662,7 @@ func (s *VideoEditService) inspectEditSource(ctx context.Context, pre *EditPrefl
 		pre.addError("source_missing", fmt.Sprintf("source_missing:%d", id), id, 0, "《%s》已失效，请先在片库纠偏", video.Name)
 		return "来源已失效"
 	}
-	size, modTimeNS, err := editFileFingerprint(video.Path)
+	info, err := editSourceFileInfo(video.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			pre.addError("source_missing", fmt.Sprintf("source_missing:%d", id), id, 0, "《%s》的文件不可访问", video.Name)
@@ -661,7 +671,7 @@ func (s *VideoEditService) inspectEditSource(ctx context.Context, pre *EditPrefl
 		pre.addError("source_missing", fmt.Sprintf("source_missing:%d", id), id, 0, "《%s》不是可读取的普通文件", video.Name)
 		return "来源不是普通文件"
 	}
-	sc.size, sc.modTimeNS = size, modTimeNS
+	sc.fileInfo, sc.size, sc.modTimeNS = info, info.Size(), info.ModTime().UnixNano()
 	probe, err := s.probeEditSource(ctx, video.Path)
 	if err == nil && probe.Video == nil {
 		err = fmt.Errorf("来源没有视频流")
@@ -670,6 +680,7 @@ func (s *VideoEditService) inspectEditSource(ctx context.Context, pre *EditPrefl
 		err = fmt.Errorf("无法读取来源时长")
 	}
 	if err != nil {
+		sc.probeErr = err
 		message := scrubEditPaths(err.Error(), video.Path)
 		pre.addError("probe_failed", fmt.Sprintf("probe_failed:%d", id), id, 0, "《%s》探测失败：%s", video.Name, message)
 		return message

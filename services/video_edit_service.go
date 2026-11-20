@@ -29,7 +29,9 @@ type VideoEditService struct {
 	containerInspector     func(string, string) (string, error)
 	probe                  *MediaProbeService
 	slot                   *MediaWorkSlot
-	dataDir                string
+	// cropSourceSlot bounds interactive metadata probes separately from long-running encodes and scans.
+	cropSourceSlot *MediaWorkSlot
+	dataDir        string
 
 	// 测试接缝：外部命令、编码器探测、磁盘空间、平台、时间源与分析算法。
 	runOutput     videoEditOutputRunner
@@ -103,6 +105,7 @@ func NewVideoEditService(probe *MediaProbeService, slot *MediaWorkSlot, dataDir 
 		replacementRename: replacementNativeRename,
 		probe:             probe,
 		slot:              slot,
+		cropSourceSlot:    NewMediaWorkSlot(),
 		dataDir:           dataDir,
 		runOutput:         runVideoEditOutput,
 		runProgress:       runVideoEditProgress,
@@ -468,7 +471,7 @@ func (s *VideoEditService) ListProjectsBefore(ctx context.Context, beforeID uint
 		ids = append(ids, project.ID)
 	}
 	var items []models.VideoEditItem
-	if err := db.Select("id", "project_id", "status", "progress").Where("project_id IN ?", ids).Find(&items).Error; err != nil {
+	if err := db.Select("id", "project_id", "status", "progress", "error_code", "error_message").Where("project_id IN ?", ids).Find(&items).Error; err != nil {
 		return nil, err
 	}
 	byProject := map[uint][]models.VideoEditItem{}
@@ -478,15 +481,20 @@ func (s *VideoEditService) ListProjectsBefore(ctx context.Context, beforeID uint
 	for _, project := range projects {
 		projectItems := byProject[project.ID]
 		completed := 0
+		errorCode, errorMessage := project.ErrorCode, project.ErrorMessage
 		for _, item := range projectItems {
 			if item.Status == models.VideoEditStatusCompleted {
 				completed++
+			}
+			// 成品已入库不代表原片替换清理已完成，列表仍需保留待恢复项目。
+			if item.ErrorCode == "replace_recovery_pending" {
+				errorCode, errorMessage = item.ErrorCode, item.ErrorMessage
 			}
 		}
 		summaries = append(summaries, EditProjectSummary{
 			ID: project.ID, Kind: project.Kind, Title: project.Title, Status: project.Status,
 			Revision: project.Revision, Mode: project.Mode, ItemCount: len(projectItems), CompletedCount: completed,
-			Progress: editItemsProgress(projectItems), ErrorCode: project.ErrorCode, ErrorMessage: project.ErrorMessage,
+			Progress: editItemsProgress(projectItems), ErrorCode: errorCode, ErrorMessage: errorMessage,
 			CreatedAt: project.CreatedAt, UpdatedAt: project.UpdatedAt, FinishedAt: project.FinishedAt,
 		})
 	}
@@ -560,12 +568,40 @@ func editActiveStatuses() []string {
 
 // DeleteProject 删除非排队/运行/分析中的项目与其导出项记录；从不删除来源或已入库的成品。
 func (s *VideoEditService) DeleteProject(ctx context.Context, projectID uint) error {
+	db, err := editDB(ctx)
+	if err != nil {
+		return err
+	}
+	// 草稿通常只有项目行，不涉及文件。以单条 DELETE 同时检查状态和导出项，
+	// 避免等待其他项目发布时持有的路径锁，也不会和排队事务交错删掉运行项目。
+	noItems := db.Model(&models.VideoEditItem{}).Select("1").Where("project_id = ?", projectID)
+	result := db.Where("id = ? AND status NOT IN ? AND NOT EXISTS (?)", projectID, editActiveStatuses(), noItems).
+		Delete(&models.VideoEditProject{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 0 {
+		s.emit(VideoEditStateEvent{ProjectID: projectID, Status: "deleted"})
+		return nil
+	}
+	project, err := loadEditProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if oneOf(project.Status, editActiveStatuses()...) {
+		return editError("edit_project_conflict", "项目正在排队、运行或分析，不能删除")
+	}
+
+	// 含导出项时仍需与发布/恢复串行：WorkDir 即使已清空，也可能有待恢复的原片。
 	release, lockErr := rLockLibraryPathsContext(ctx)
 	if lockErr != nil {
+		if errors.Is(lockErr, context.DeadlineExceeded) {
+			return editError("edit_project_delete_busy", "片库文件正被其他操作使用，项目未删除，请稍后重试")
+		}
 		return lockErr
 	}
 	defer release()
-	project, err := loadEditProject(ctx, projectID)
+	project, err = loadEditProject(ctx, projectID)
 	if err != nil {
 		return err
 	}
@@ -577,7 +613,7 @@ func (s *VideoEditService) DeleteProject(ctx context.Context, projectID uint) er
 		return err
 	}
 	for _, item := range items {
-		if replacementJournalExists(replacementWorkDir(item)) {
+		if item.ErrorCode == "replace_recovery_pending" || replacementJournalExists(replacementWorkDir(item)) {
 			return replacementPending()
 		}
 	}

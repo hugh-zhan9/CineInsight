@@ -89,6 +89,18 @@ describe('PhotoLightbox 纯函数', () => {
 });
 
 describe('PhotoLightbox 看图', () => {
+  it('keeps the full filename available when the viewer title is visually truncated', async () => {
+    const name = '家庭影像-'.repeat(40) + '.jpg';
+    const wrapper = await mountLightbox({ image: image(1, { name }) });
+    const dialog = wrapper.get('[data-test="photo-lightbox"]');
+    const heading = dialog.get('.ui-dialog__title');
+    expect(heading.text()).toBe(name);
+    expect(heading.attributes('title')).toBe(name);
+    expect(dialog.attributes('aria-labelledby')).toBe(heading.attributes('id'));
+    await dialog.get('[data-test="photo-lightbox-close"]').trigger('click');
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
   it('closes from image margins and stage padding, but keeps controls and information interactive', async () => {
     const w = await mountLightbox();
     await w.get('[data-test="photo-lightbox-toggle-info"]').trigger('click');

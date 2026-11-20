@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -624,7 +625,7 @@ func TestIndexPageCarriesStartupState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: 搭资源服务失败: %v", tc.name, err)
 		}
-		want := `<html data-startup="` + tc.state + `" lang="en">`
+		want := `<html data-startup="` + tc.state + `"` + wantMacInset(runtime.GOOS) + ` lang="en">`
 		for _, path := range []string{"/", "/index.html"} {
 			rec := httptest.NewRecorder()
 			server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -660,7 +661,7 @@ func TestStartupStateMiddlewareOnlyRewritesIndexPage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := rec.Body.String()
-	if !strings.Contains(body, `<HTML data-startup="ready" lang="en">`) {
+	if !strings.Contains(body, `<HTML data-startup="ready"`+wantMacInset(runtime.GOOS)+` lang="en">`) {
 		t.Fatalf("首页 <html> 标签不分大小写都该带上 data-startup，实际:\n%s", body)
 	}
 	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(len(body)) {
@@ -684,6 +685,29 @@ func TestStartupStateMiddlewareOnlyRewritesIndexPage(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusNotModified || strings.Contains(rec.Body.String(), "data-startup") {
 		t.Fatalf("首页不是 200 时应原样转交，实际 %d:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+func wantMacInset(platform string) string {
+	if platform == "darwin" {
+		return ` data-window-chrome="mac-inset"`
+	}
+	return ""
+}
+
+func TestIndexPageMarksOnlyMacInsetTitlebar(t *testing.T) {
+	for _, platform := range []string{"darwin", "windows", "linux"} {
+		t.Run(platform, func(t *testing.T) {
+			handler := startupStateMiddlewareForPlatform(&App{}, platform)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`<html lang="en"><body></body></html>`))
+			}))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+			want := `<html data-startup="ready"` + wantMacInset(platform) + ` lang="en">`
+			if !strings.Contains(rec.Body.String(), want) {
+				t.Fatalf("unexpected %s window chrome marker: %q", platform, rec.Body.String())
+			}
+		})
 	}
 }
 

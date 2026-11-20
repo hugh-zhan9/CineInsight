@@ -1593,7 +1593,7 @@ export default {
 .header {
   height: 52px;
   flex: none;
-  padding: 0 20px 0 82px;
+  padding: 0 20px 0 var(--mac-window-controls-clearance);
   display: flex;
   align-items: center;
   gap: 20px;

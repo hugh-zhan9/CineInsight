@@ -117,6 +117,8 @@
   --space-5: 24px;
   --space-6: 32px;
   --space-7: 48px;
+  /* Wails mac.TitleBarHiddenInset() native traffic lights plus breathing room. */
+  --mac-window-controls-clearance: 82px;
   /* 圆角：6 控件、10 卡片、14 面板与对话框、999 胶囊。--radius-md 是 --radius 的旧名，保留一个版本周期。 */
   --radius-sm: 6px;
   --radius: 10px;

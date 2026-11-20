@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -142,6 +143,10 @@ func newAssetHandler(app *App) http.Handler {
 // 见 startupState），页面第一帧就按它定外壳表面，不必等 GetStartupError（D-UD-02）。启动状态在 wails.Run
 // 之前就定了（数据库在 main 里打开）。其余请求原样交给 next，不缓冲。
 func startupStateMiddleware(app *App) assetserver.Middleware {
+	return startupStateMiddlewareForPlatform(app, runtime.GOOS)
+}
+
+func startupStateMiddlewareForPlatform(app *App, platform string) assetserver.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet || (r.URL.Path != "/" && r.URL.Path != "/index.html") {
@@ -152,7 +157,7 @@ func startupStateMiddleware(app *App) assetserver.Middleware {
 			next.ServeHTTP(page, r)
 			body := page.body.Bytes()
 			if page.code == http.StatusOK {
-				body = withStartupState(body, app.startupState())
+				body = withStartupState(body, app.startupState(), platform == "darwin")
 				w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 			}
 			w.WriteHeader(page.code)
@@ -172,14 +177,18 @@ func (a *App) startupState() string {
 
 var htmlStartTag = regexp.MustCompile(`(?i)<html[\s>]`)
 
-// withStartupState 在首页第一个 <html> 标签上加 data-startup；没有这个标签时原样返回，前端照旧等 GetStartupError。
-func withStartupState(page []byte, state string) []byte {
+// withStartupState 在首页第一个 <html> 标签写启动状态与桌面原生控件布局，供首帧使用。
+func withStartupState(page []byte, state string, macInsetTitlebar bool) []byte {
 	loc := htmlStartTag.FindIndex(page)
 	if loc == nil {
 		return page
 	}
 	at := loc[0] + len("<html")
 	attr := ` data-startup="` + state + `"`
+	// macOS' hidden inset title bar places native traffic lights over content.
+	if macInsetTitlebar {
+		attr += ` data-window-chrome="mac-inset"`
+	}
 	out := make([]byte, 0, len(page)+len(attr))
 	out = append(out, page[:at]...)
 	out = append(out, attr...)

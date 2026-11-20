@@ -14,6 +14,7 @@ import VideoWorkbenchPage from './VideoWorkbenchPage.vue';
 import { feedbackState, resetFeedback, resolveConfirm } from '../utils/feedback.js';
 
 const tracks = () => ({ audio: [], subtitle: [] });
+const runningItem = { id: 7, seq: 1, status: 'running', phase: 'encode', progress: 0.1, output_name: 'out.mkv', output_video_id: null, source_video_ids: [11, 12, 13], error_code: '', error_message: '' };
 
 function mergeProject(overrides = {}) {
   return {
@@ -80,6 +81,82 @@ function toastText() {
 }
 
 describe('视频工作台页（视频编辑合同「界面」）', () => {
+  it('裁剪全部完成后从默认列表退出，但保留当前成品预览和可找回的历史记录', async () => {
+    vi.useFakeTimers();
+    try {
+      const project = mergeProject({ kind: 'crop', status: 'running', recipe: { v: 1, crop: { items: [{ video_id: 21 }] }, tracks: tracks() }, items: [runningItem] });
+      const summary = { id: project.id, kind: 'crop', title: '裁剪', status: 'running', item_count: 1, completed_count: 0 };
+      api.ListEditProjects.mockResolvedValue([summary]);
+      const wrapper = await mountPage(project);
+      await wrapper.get('[aria-controls="workbench-edit-projects"]').trigger('click');
+      expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(true);
+
+      api.ListEditProjects.mockResolvedValue([{ ...summary, status: 'completed', completed_count: 1 }]);
+      api.GetEditProject.mockResolvedValue({ ...project, status: 'completed', items: [{ ...runningItem, status: 'completed', progress: 1, output_video_id: 99 }] });
+      handlers['video-edit-state']({ project_id: 1, status: 'completed', progress: 1 });
+      await flushPromises();
+      expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(false);
+      expect(wrapper.get('[data-test="edit-projects-empty"]').text()).toContain('记录仍保留');
+      await wrapper.get('[data-test="edit-result-preview-7"]').trigger('click');
+      expect(wrapper.emitted('open-video')).toEqual([[99]]);
+      await vi.advanceTimersByTimeAsync(900);
+      expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(false);
+      expect(api.DeleteEditProject).not.toHaveBeenCalled();
+
+      const history = wrapper.get('[data-test="edit-projects-completed-crops"]');
+      await history.trigger('click');
+      expect(history.attributes('aria-pressed')).toBe('true');
+      expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(true);
+      await wrapper.get('[data-test="edit-project-delete-1"]').trigger('click');
+      expect(feedbackState.confirm.title).toBe('删除编辑项目');
+      resolveConfirm(false);
+      await flushPromises();
+      expect(api.DeleteEditProject).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('恢复待处理、部分成功、失败及其他类型的成品项目不会被隐藏', async () => {
+    const crop = (id, status, completed, error_code = '') => ({ id, kind: 'crop', status, item_count: 2, completed_count: completed, error_code });
+    api.ListEditProjects.mockResolvedValue([
+      crop(8, 'completed', 2),
+      crop(7, 'completed', 2, 'replace_recovery_pending'),
+      crop(6, 'partial', 1),
+      crop(5, 'failed', 0),
+      crop(4, 'interrupted', 0),
+      crop(3, 'cancelled', 0),
+      crop(2, 'running', 1),
+      { ...crop(1, 'completed', 2), kind: 'merge' }
+    ]);
+    const wrapper = mount(VideoWorkbenchPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]').map(button => button.attributes('data-test'))).toEqual(
+      [7, 6, 5, 4, 3, 2, 1].map(id => `edit-project-open-${id}`)
+    );
+    expect(wrapper.find('[data-test="edit-project-delete-7"]').exists()).toBe(false);
+  });
+
+  it('当前项目只要列表或详情仍报告原片替换待恢复，就不隐藏记录或提供删除', async () => {
+    const project = mergeProject({ kind: 'crop', status: 'completed', recipe: { v: 1, crop: { items: [{ video_id: 21 }] }, tracks: tracks() },
+      items: [{ ...runningItem, status: 'completed', progress: 1, error_code: 'replace_recovery_pending' }] });
+    const summary = { id: project.id, kind: 'crop', status: 'completed', item_count: 1, completed_count: 1 };
+    api.ListEditProjects.mockResolvedValue([summary]);
+    const wrapper = await mountPage(project);
+    await wrapper.get('[aria-controls="workbench-edit-projects"]').trigger('click');
+    expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="edit-project-delete-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="edit-result-recover-7"]').exists()).toBe(true);
+
+    api.ListEditProjects.mockResolvedValue([{ ...summary, error_code: 'replace_recovery_pending' }]);
+    api.GetEditProject.mockResolvedValue({ ...project, items: [{ ...project.items[0], error_code: '' }] });
+    await wrapper.get('[data-test="edit-projects-refresh"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="edit-project-open-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="edit-project-delete-1"]').exists()).toBe(false);
+  });
+
   it('裁剪时可展开长项目列表，翻页入口不随项目行滚动，收起后保留编辑器', async () => {
     const project = mergeProject({ id: 60, kind: 'crop', recipe: { v: 1, crop: { items: [{ video_id: 21 }] }, tracks: tracks() } });
     api.ListEditProjects.mockResolvedValue(Array.from({ length: 50 }, (_, i) => ({ ...project, id: 60 - i })));
@@ -396,8 +473,6 @@ describe('预检与排队', () => {
 });
 
 describe('事件驱动刷新与列表动作', () => {
-  const runningItem = { id: 7, seq: 1, status: 'running', phase: 'encode', progress: 0.1, output_name: 'out.mkv', output_video_id: null, source_video_ids: [11, 12, 13], error_code: '', error_message: '' };
-
   it('同状态的进度事件就地更新，不重读；状态变化时重读项目', async () => {
     const wrapper = await mountPage(mergeProject({ status: 'running', items: [runningItem] }));
     expect(api.GetEditProject).toHaveBeenCalledTimes(1);
@@ -507,6 +582,21 @@ describe('VideoWorkbenchPage duplicate', () => {
 describe('编辑项目列表翻页', () => {
   const summary = id => ({ id, kind: 'merge', title: `项目 ${id}`, status: 'completed', revision: 1, item_count: 1, completed_count: 1, progress: 1 });
   const range = (from, to) => Array.from({ length: from - to + 1 }, (_, index) => summary(from - index));
+
+  it('整页裁剪成品被隐藏时仍用真实末项翻页，历史开关也能找回隐藏记录', async () => {
+    api.ListEditProjects.mockResolvedValue(range(60, 11).map(p => ({ ...p, kind: 'crop' })));
+    api.ListEditProjectsBefore.mockResolvedValue(range(10, 9));
+    const wrapper = mount(VideoWorkbenchPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(0);
+    await wrapper.get('[data-test="edit-projects-more"]').trigger('click');
+    await flushPromises();
+    expect(api.ListEditProjectsBefore).toHaveBeenCalledWith(11, 50);
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(2);
+    await wrapper.get('[data-test="edit-projects-completed-crops"]').trigger('click');
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]')).toHaveLength(52);
+  });
 
   it('加载更多接上更早的项目，到底后不再显示；刷新时重读已翻过的页', async () => {
     api.ListEditProjects.mockResolvedValue(range(60, 11));

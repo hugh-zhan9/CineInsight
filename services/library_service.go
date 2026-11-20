@@ -370,10 +370,19 @@ func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
 // applyScanScope 是 applyScanRootScope 的实现。includeRoots=false 时只保留黑名单排除、
 // 跳过扫描根裁剪：「路径失效」视图要显示根被移除后落到范围外的记录（D-PC06）。
 func applyScanScope(query *gorm.DB, includeRoots bool) (*gorm.DB, error) {
+	return applyScanScopeWithRootPolicy(query, includeRoots, false)
+}
+
+func applyScanScopeWithRootPolicy(query *gorm.DB, includeRoots, requireRoots bool) (*gorm.DB, error) {
 	// Keep the caller's connection and deadline for scope reads as well.
 	scope, err := loadCleanupPathScopeFrom(query.Session(&gorm.Session{NewDB: true}))
 	if err != nil {
 		return nil, err
+	}
+	// Remote consumers require a configured root. The desktop library keeps
+	// its existing empty-root behavior for already indexed local files.
+	if requireRoots && len(scope.roots) == 0 {
+		return query.Where("1 = 0"), nil
 	}
 	for _, excluded := range scope.excluded {
 		query = query.Where(`NOT (videos.path = ? OR videos.path LIKE ? ESCAPE '\')`, excluded, escapeSQLLikePrefix(scanRootChildPrefix(excluded))+"%")
@@ -399,6 +408,10 @@ func applyScanScope(query *gorm.DB, includeRoots bool) (*gorm.DB, error) {
 }
 
 func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*gorm.DB, error) {
+	return applyLibraryFilterWithRootPolicy(query, filter, now, false)
+}
+
+func applyLibraryFilterWithRootPolicy(query *gorm.DB, filter LibraryFilter, now time.Time, requireRoots bool) (*gorm.DB, error) {
 	query = query.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	normalized, err := normalizeLibraryFilter(filter)
 	if err != nil {
@@ -422,7 +435,7 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	}
 
 	// 失效视图跳过根裁剪（黑名单仍排除）：根被移除后落到范围外的记录正是要在这里找回。
-	query, err = applyScanScope(query, filter.SmartView != LibraryViewStale)
+	query, err = applyScanScopeWithRootPolicy(query, filter.SmartView != LibraryViewStale, requireRoots)
 	if err != nil {
 		return nil, err
 	}
