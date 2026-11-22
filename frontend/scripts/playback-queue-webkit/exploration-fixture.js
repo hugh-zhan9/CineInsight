@@ -47,6 +47,30 @@ const app = createApp({ data: () => ({ active: true }), render() { return h('div
 const assert = (value, label) => { if (!value) throw new Error(label); };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const until = async (test, label) => { window.progress = label; const end = Date.now() + 12000; while (!test() && Date.now() < end) { await pause(20); await nextTick(); } assert(test(), label); };
+const frames = async count => { for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame); };
+const gate = (action, id) => new Promise((resolve, reject) => {
+  const request = new Image();
+  request.onload = resolve;
+  request.onerror = () => reject(new Error(`photo gate ${action} failed for fixture image ${id}`));
+  request.src = `/photo-gate/${action}/${id}`;
+});
+const displayedImage = () => {
+  const stage = document.querySelector('[data-test=photo-lightbox] .image-viewport');
+  if (!stage) return null;
+  const bounds = stage.getBoundingClientRect();
+  const visible = [...stage.querySelectorAll('img')].filter(img => {
+    const style = getComputedStyle(img), box = img.getBoundingClientRect();
+    return img.complete && img.naturalWidth > 0 && style.visibility === 'visible' && style.display !== 'none' && Number(style.opacity) > 0 &&
+      Math.min(box.right, bounds.right, innerWidth) > Math.max(box.left, bounds.left, 0) &&
+      Math.min(box.bottom, bounds.bottom, innerHeight) > Math.max(box.top, bounds.top, 0);
+  });
+  return visible.length === 1 ? visible[0] : null;
+};
+const displays = (kind, id, width) => {
+  const shown = displayedImage();
+  return shown?.naturalWidth === width && new URL(shown.src).pathname === `/preview/${kind}/${id}`;
+};
+const originalWidth = id => id % 2 ? 3000 : 3072;
 const native = (element, phase) => { const rect = element.getBoundingClientRect(); window.webkit.messageHandlers.nativeClick.postMessage({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, ...(phase ? { phase } : {}) }); };
 window.fixture = { async run() {
   const started = performance.now();
@@ -127,7 +151,41 @@ window.fixture = { async run() {
   await until(() => { const tiles = [...document.querySelectorAll('.media-wall .media-tile')]; return tiles.length > 0 && tiles.every(tile => tile.querySelector('img')?.complete && tile.querySelector('img').naturalWidth > 0); }, 'settled wall after resume');
   const wallBeforeDirectory = page.snapshot.entries.map(entry => entry.entry_id).join(',');
   const photoEntry = page.snapshot.entries.find(entry => entry.kind === 'image');
+  const nextPhoto = page.snapshot.entries[photoEntry.slot + 1];
+  assert(nextPhoto?.kind === 'image', 'adjacent Explore photos for scoped navigation');
+  const firstID = photoEntry.media_id, nextID = nextPhoto.media_id;
+  const photoStarted = performance.now();
   await page.openPreview(photoEntry);
+  await gate('started', firstID);
+  await until(() => displays('thumbnail', firstID, 256), 'first scoped photo shows thumbnail while JPEG is held');
+  const firstVisiblePhotoMS = Math.round(performance.now() - photoStarted);
+  const originalNode = document.querySelector('[data-test=photo-lightbox-img]');
+  assert(originalNode && originalNode !== displayedImage(), 'first original is not shown before decode');
+  const originalReleased = performance.now();
+  await gate('release', firstID);
+  await until(() => displayedImage() === originalNode && displays('image', firstID, originalWidth(firstID)), 'same full-size JPEG node is promoted');
+  await frames(2);
+  assert(displays('image', firstID, originalWidth(firstID)) && !document.querySelector('.image-viewport__loading'), 'one full-size frame and no loading indicator');
+  const firstOriginalAfterReleaseMS = Math.round(performance.now() - originalReleased);
+
+  document.querySelector('[data-test=photo-lightbox-next]').click();
+  window.progress = 'switch preserves an image until next scoped thumbnail';
+  const switchDeadline = performance.now() + 12000;
+  do {
+    await frames(1);
+    assert(displays('image', firstID, originalWidth(firstID)) || displays('thumbnail', nextID, 256), 'no empty frame while switching scoped photo');
+  } while (!displays('thumbnail', nextID, 256) && performance.now() < switchDeadline);
+  assert(displays('thumbnail', nextID, 256), 'next thumbnail becomes visible before original');
+  await gate('started', nextID);
+  document.querySelector('[data-test=photo-lightbox-prev]').click();
+  await until(() => displays('image', firstID, originalWidth(firstID)), 'switch back shows first original');
+  await gate('release', nextID);
+  await gate('finished', nextID);
+  for (let i = 0; i < 5; i++) {
+    await frames(1);
+    assert(displays('image', firstID, originalWidth(firstID)), 'late next original cannot steal current frame');
+  }
+
   await until(() => document.querySelectorAll('.photo-directory__tile').length === 3, 'directory thumbnails loaded');
   const originURL = document.querySelector('[data-test=photo-lightbox-img]').getAttribute('src');
   document.querySelectorAll('.photo-directory__tile')[1].click();
@@ -139,6 +197,6 @@ window.fixture = { async run() {
   const directoryRequest = calls.find(call => call.method === 'SearchImagePage').args[0];
   assert(directoryRequest.filter.directory === '/fixture/photos' && directoryRequest.limit === 24, 'bounded exact-directory request');
   frameTimes.sort((a, b) => a - b);
-  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'return-replacement', 'close-replacement', 'delete-replenishment', 'audio-retained', 'gallery-24', 'close-flush', 'directory-list', 'directory-inline-selection', 'directory-origin-return', 'directory-wall-stability'] };
+  window.results = { passed: true, realDecodedMedia: true, sceneItems: 1024, initialDOMTiles: initialTiles, coldFirstFramesMS: Math.round(coldFirstFramesMS), firstPresentedSavedMS: Math.round(firstPresentedSavedMS), firstVisiblePhotoMS, firstOriginalAfterReleaseMS, panFrameP95MS: Math.round(frameTimes[Math.floor(frameTimes.length * .95)]), cases: ['cold-thumbnails', 'bounded-static-wall', 'actual-exposure', 'outer-scroll-no-exposure', 'anchored-zoom', 'control-wheel-zoom', 'gesture-event-zoom', 'stable-slots', 'native-drag-not-click', 'native-click-real-decode', 'single-preview', 'range-stop', 'bounded-seek', 'no-watch-or-proxy-side-effects', 'detail-return', 'return-replacement', 'close-replacement', 'delete-replenishment', 'audio-retained', 'gallery-24', 'close-flush', 'scoped-photo-first-thumbnail', 'scoped-photo-original-promotion', 'scoped-photo-no-empty-switch', 'scoped-photo-stale-original', 'directory-list', 'directory-inline-selection', 'directory-origin-return', 'directory-wall-stability'] };
 } };
 window.ready = true;

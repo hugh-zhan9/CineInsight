@@ -11,6 +11,8 @@ cleanup(){ if [[ -n "$fixture_pid" ]]; then kill "$fixture_pid" 2>/dev/null || t
 trap cleanup EXIT
 nice -n 10 node "$repo_root/frontend/scripts/playback-queue-webkit/build.mjs" "$work_dir/dist" exploration-fixture.js >&2
 ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=s=640x360:r=10' -t 6 -threads 2 -c:v libx264 -pix_fmt yuv420p -an -movflags +faststart "$work_dir/dist/clip.mp4"
+ffmpeg -hide_banner -loglevel error -f lavfi -i 'color=c=red:s=3072x2048' -frames:v 1 -threads 1 -update 1 "$work_dir/dist/photo-even.jpg"
+ffmpeg -hide_banner -loglevel error -f lavfi -i 'color=c=blue:s=3000x2000' -frames:v 1 -threads 1 -update 1 "$work_dir/dist/photo-odd.jpg"
 python3 "$repo_root/frontend/scripts/playback-queue-webkit/exploration-fixture-server.py" "$work_dir/dist" "$work_dir/port" > "$work_dir/server.log" 2>&1 &
 fixture_pid=$!
 for attempt in {1..100}; do [[ -s "$work_dir/port" ]] && break; sleep 0.05; done

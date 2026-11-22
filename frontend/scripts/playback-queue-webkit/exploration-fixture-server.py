@@ -2,17 +2,55 @@
 import http.server
 import pathlib
 import sys
+import threading
 import urllib.parse
 
 root = pathlib.Path(sys.argv[1])
+gate_lock = threading.Lock()
+gates = {}
+
+
+def photo_gate(media_id):
+    with gate_lock:
+        if media_id not in gates:
+            gates[media_id] = {key: threading.Event() for key in ('started', 'release', 'finished')}
+        return gates[media_id]
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
     def do_GET(self):
-        path = urllib.parse.urlsplit(self.path).path
-        if path.startswith('/preview/'):
+        url = urllib.parse.urlsplit(self.path)
+        path = url.path
+        finished = None
+        if path.startswith('/photo-gate/'):
+            _, _, action, media_id = path.split('/')
+            event = photo_gate(int(media_id))[action]
+            if action == 'release':
+                event.set()
+            elif not event.wait(12):
+                self.send_error(504)
+                return
+            # An image request also works from the file:// fixture without fetch permission.
+            body = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/svg+xml')
+            self.send_header('Content-Length', str(len(body)))
+        elif path.startswith('/preview/image/') and 'exploration_scope' in urllib.parse.parse_qs(url.query):
+            media_id = int(path.rsplit('/', 1)[-1])
+            gate = photo_gate(media_id)
+            gate['started'].set()
+            if not gate['release'].wait(20):
+                self.send_error(504)
+                return
+            body = (root / ('photo-odd.jpg' if media_id % 2 else 'photo-even.jpg')).read_bytes()
+            finished = gate['finished']
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(body)))
+        elif path.startswith('/preview/'):
             media_id = int(path.rsplit('/', 1)[-1])
             hue = media_id * 137 % 360
             body = (f'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">'
@@ -42,11 +80,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Cache-Control', 'no-store')
-        self.end_headers()
         try:
+            self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        finally:
+            if finished:
+                finished.set()
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 server.daemon_threads = True
