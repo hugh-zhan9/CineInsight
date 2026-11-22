@@ -1,35 +1,8 @@
 <template>
-  <!-- 自动化设置 -->
-  <div :id="`settings-automation`" class="settings-section">
-    <h3>自动化与扫描</h3>
+  <div :id="`settings-${sectionKey}`" class="settings-section">
+    <h3>{{ sectionTitle }}</h3>
+    <template v-if="part === 'tasks'">
     <div class="setting-item"><label class="switch"><input data-test="auto-crop-detection-toggle" type="checkbox" v-model="form.auto_crop_detection" /><span class="slider"></span><span>自动识别视频黑边</span></label><p class="help-text">检查全库及新增、变更的视频，识别结果加入视频工作台等待处理。不会自动裁剪或导出。</p><p v-if="cropStatus" class="help-text" data-test="crop-detection-status">{{ cropStatus.running ? '正在检查' : '最近检查' }}：已处理 {{ cropStatus.processed || 0 }}，失败 {{ cropStatus.failed || 0 }}</p></div>
-    <div class="setting-item">
-      <label class="switch">
-        <input type="checkbox" v-model="form.auto_scan_on_startup" />
-        <span class="slider"></span>
-        <span>启动时自动增量扫描</span>
-      </label>
-      <p class="help-text">开启后，每次启动应用都会自动同步磁盘文件变动并补全元数据。</p>
-    </div>
-    <div class="setting-item">
-      <label>桌面播放器</label>
-      <select v-model="form.desktop_player" class="select-input"><option value="system">系统默认播放器</option><option value="iina_controlled">IINA 精确同步</option></select>
-      <p class="help-text">精确同步会打开应用管理的独立 IINA 窗口，按实际播放记录进度；不可用时明确提示。队列播放期间请先停止队列。</p>
-      <button type="button" class="btn btn--secondary" @click="stopControlled">停止精确同步播放</button>
-      <p v-if="controlledError" role="alert">{{ controlledError }}</p>
-      <label>点「播放」时的续播口径</label>
-      <select v-model="form.playback_resume_mode" class="select-input" data-test="playback-resume-mode">
-        <option value="resume">接着上次的位置播</option>
-        <option value="restart">总是从头播</option>
-        <option value="restart_watched">已看的从头播，没看完的接着播</option>
-      </select>
-      <!-- 断点互通（D-PC42 / PLAY-06）：片库里的断点来自 IINA、应用内预览和 Jellyfin，以最近一次写入为准。 -->
-      <p class="help-text" data-test="playback-resume-help">
-        片库记着每个视频的断点，来自 IINA、应用内预览和 Jellyfin 客户端，以最近一次写入为准。
-        接着播时，片库里有有效断点就用 iina-cli 从这个位置启动 IINA（已看的视频在看完之后又留下断点时也会续播）；没有断点时交给 IINA 自己决定。
-        选「从头播」时用 iina-cli 启动并显式关掉续播，断点记录仍然保留。没装 IINA 时用系统默认播放器打开，续播与否由那个播放器决定。
-      </p>
-    </div>
 
     <!-- 扫描完成后接着跑的杂活：默认全关，这些都吃 CPU/IO，什么时候跑由用户决定。 -->
     <div class="setting-item">
@@ -130,13 +103,15 @@
       </label>
       <p class="help-text">截取片段识别的前提：按 2 秒一帧算出整部片的画面指纹序列，清理中心才能认出「这一段是从那部片里剪出来的」。要逐帧抽整部片，是最吃 CPU 的一类任务，建议在不用电脑时开着扫描。</p>
     </div>
+    </template>
+    <template v-if="part === 'library'">
     <div class="setting-item">
       <label class="switch">
-        <input data-test="auto-compatibility-proxy-toggle" type="checkbox" v-model="form.auto_compatibility_proxy" />
+        <input type="checkbox" v-model="form.auto_scan_on_startup" />
         <span class="slider"></span>
-        <span>自动为不能内嵌播放、或手机端直连会卡的视频生成播放代理</span>
+        <span>启动时自动增量扫描</span>
       </label>
-      <p class="help-text">扫描后对本次新增的 mkv、avi 这类视频，以及长边超过 1920 或码率超过 8 Mbps 的视频生成一份 ≤1080p 的 mp4 代理；手机端实际播到这类视频而代理还没有时也会自动排队。源文件不会被改写或替换；被体积上限淘汰过的代理不会自动重建。上限与占用在「播放兼容缓存」分区。</p>
+      <p class="help-text">开启后，每次启动应用都会自动同步磁盘文件变动并补全元数据。</p>
     </div>
     <div class="setting-item">
       <label class="switch">
@@ -153,14 +128,6 @@
         <span>本地元数据自动补全</span>
       </label>
       <p class="help-text">控制新视频自动填空与后台补全任务；详情页手工导入仍可使用。</p>
-    </div>
-    <div class="setting-item">
-      <label class="switch">
-        <input data-test="ai-quality-toggle" type="checkbox" v-model="form.ai_quality_enabled" />
-        <span class="slider"></span>
-        <span>显示 AI 质量评估</span>
-      </label>
-      <p class="help-text">只控制质量视图入口；已有归因和审核记录不会删除。</p>
     </div>
     <div class="setting-item scan-blacklist-setting">
       <div class="settings-section-heading">
@@ -190,6 +157,46 @@
       <p v-else class="help-text">未单独设置，沿用上方扫描目录黑名单。</p>
       <p class="help-text">图片专用黑名单：停止收录并隐藏已有图片，不删除记录；移除后恢复显示。单独设置时不影响视频。</p>
     </div>
+    </template>
+    <template v-if="part === 'playback'">
+    <div class="setting-item">
+      <label>桌面播放器</label>
+      <select v-model="form.desktop_player" class="select-input"><option value="system">系统默认播放器</option><option value="iina_controlled">IINA 精确同步</option></select>
+      <p class="help-text">精确同步会打开应用管理的独立 IINA 窗口，按实际播放记录进度；不可用时明确提示。队列播放期间请先停止队列。</p>
+      <button type="button" class="btn btn--secondary" @click="stopControlled">停止精确同步播放</button>
+      <p v-if="controlledError" role="alert">{{ controlledError }}</p>
+      <label>点「播放」时的续播口径</label>
+      <select v-model="form.playback_resume_mode" class="select-input" data-test="playback-resume-mode">
+        <option value="resume">接着上次的位置播</option>
+        <option value="restart">总是从头播</option>
+        <option value="restart_watched">已看的从头播，没看完的接着播</option>
+      </select>
+      <!-- 断点互通（D-PC42 / PLAY-06）：片库里的断点来自 IINA、应用内预览和 Jellyfin，以最近一次写入为准。 -->
+      <p class="help-text" data-test="playback-resume-help">
+        片库记着每个视频的断点，来自 IINA、应用内预览和 Jellyfin 客户端，以最近一次写入为准。
+        接着播时，片库里有有效断点就用 iina-cli 从这个位置启动 IINA（已看的视频在看完之后又留下断点时也会续播）；没有断点时交给 IINA 自己决定。
+        选「从头播」时用 iina-cli 启动并显式关掉续播，断点记录仍然保留。没装 IINA 时用系统默认播放器打开，续播与否由那个播放器决定。
+      </p>
+    </div>
+    <div class="setting-item">
+      <label class="switch">
+        <input data-test="auto-compatibility-proxy-toggle" type="checkbox" v-model="form.auto_compatibility_proxy" />
+        <span class="slider"></span>
+        <span>自动为不能内嵌播放、或手机端直连会卡的视频生成播放代理</span>
+      </label>
+      <p class="help-text">扫描后对本次新增的 mkv、avi 这类视频，以及长边超过 1920 或码率超过 8 Mbps 的视频生成一份 ≤1080p 的 mp4 代理；手机端实际播到这类视频而代理还没有时也会自动排队。源文件不会被改写或替换；被体积上限淘汰过的代理不会自动重建。上限与占用在「播放兼容缓存」分区。</p>
+    </div>
+    </template>
+    <template v-if="part === 'ai'">
+    <div class="setting-item">
+      <label class="switch">
+        <input data-test="ai-quality-toggle" type="checkbox" v-model="form.ai_quality_enabled" />
+        <span class="slider"></span>
+        <span>显示 AI 质量评估</span>
+      </label>
+      <p class="help-text">只控制质量视图入口；已有归因和审核记录不会删除。</p>
+    </div>
+    </template>
   </div>
 </template>
 
@@ -201,14 +208,17 @@ import { SelectDirectory } from '../../../wailsjs/go/main/App';
 // 增删逻辑一起搬过来；选目录失败的提示交回页面顶部的保存状态栏。
 export default {
  data: () => ({controlledError: '', cropStatus: null, cropOff: null}),
- mounted() { this.loadCropStatus(); this.cropOff = window.runtime?.EventsOn?.('crop-detection-state', status => {this.cropStatus=status;}); },
+ mounted() { if (this.part !== 'tasks') return; this.loadCropStatus(); this.cropOff = window.runtime?.EventsOn?.('crop-detection-state', status => {this.cropStatus=status;}); },
  beforeUnmount() { if(typeof this.cropOff==='function')this.cropOff(); },
   name: 'AutomationSection',
   props: {
-    form: { type: Object, required: true }
+    form: { type: Object, required: true },
+    part: { type: String, default: 'tasks' }
   },
   emits: ['error'],
   computed: {
+    sectionKey() { return {tasks: 'automation', library: 'scan-rules', playback: 'desktop-playback', ai: 'ai-quality'}[this.part]; },
+    sectionTitle() { return {tasks: '自动处理与清理', library: '扫描规则', playback: '桌面播放', ai: '质量评估'}[this.part]; },
     scanExcludePaths() {
       return [...new Set(String(this.form.scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean))];
     },

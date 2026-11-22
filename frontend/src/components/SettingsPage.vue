@@ -40,9 +40,11 @@
             @directories-changed="$emit('directories-changed', $event)"
           />
           <RandomAndFormatsSection :form="settingsForm" part="formats" />
+          <AutomationSection part="library" :form="settingsForm" @error="reportSettingsError" />
         </div>
 
         <div v-if="visited.playback" v-show="activeCategory === 'playback'" class="settings-grid-shell" data-test="settings-category-playback">
+          <AutomationSection part="playback" :form="settingsForm" />
           <IINASyncSection />
           <ProxySection :form="settingsForm" />
           <EnhanceSection />
@@ -60,6 +62,7 @@
           <FaceSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
           <SceneSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
           <SubtitleSection :form="settingsForm" />
+          <AutomationSection part="ai" :form="settingsForm" />
         </div>
 
         <div v-if="visited.connections" v-show="activeCategory === 'connections'" class="settings-grid-shell" data-test="settings-category-connections">
