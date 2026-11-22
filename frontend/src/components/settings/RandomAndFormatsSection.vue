@@ -1,6 +1,6 @@
 <template>
   <!-- 智能随机播放设置 -->
-  <div :id="`settings-random`" class="settings-section">
+  <div v-if="part !== 'formats'" :id="`settings-random`" class="settings-section">
     <h3>智能随机播放</h3>
     <div class="setting-item">
       <label>播放权重（1次普通播放 = N次随机播放）</label>
@@ -24,7 +24,7 @@
   </div>
 
   <!-- 视频格式设置 -->
-  <div :id="`settings-video-formats`" class="settings-section">
+  <div v-if="part !== 'random'" :id="`settings-video-formats`" class="settings-section">
     <h3>支持的视频格式</h3>
     <div class="setting-item">
       <textarea
@@ -38,7 +38,7 @@
   </div>
 
   <!-- 图片格式设置 -->
-  <div :id="`settings-image-formats`" class="settings-section">
+  <div v-if="part !== 'random'" :id="`settings-image-formats`" class="settings-section">
     <h3>支持的图片格式</h3>
     <div class="setting-item">
       <textarea
@@ -58,7 +58,8 @@
 export default {
   name: 'RandomAndFormatsSection',
   props: {
-    form: { type: Object, required: true }
+    form: { type: Object, required: true },
+    part: { type: String, default: 'all' }
   }
 };
 </script>

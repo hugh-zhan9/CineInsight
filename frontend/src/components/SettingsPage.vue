@@ -2,86 +2,98 @@
   <div class="page-content settings-page">
     <PageHeader title="设置" subtitle="标着「需保存」的分区改完点底部「保存所有设置」；「即时生效」的分区点了就生效。" />
     <button type="button" class="btn btn--secondary" data-test="settings-capability-setup" @click="$emit('open-setup')">按目标准备</button>
-    <!-- 原型 A10：分区改成左侧锚点导航 + 右侧连续长表单。
-         这是全应用唯一出现侧栏的地方。它是滚动定位的锚点导航（各分区始终都在页面上），不是页签，
-         所以不用 AppTabs（role=tablist 会让读屏以为一次只显示一个分区）；当前分区用 aria-current 标出。 -->
     <div class="settings-shell">
-      <nav class="settings-nav" aria-label="设置分区">
+      <nav class="settings-nav" aria-label="设置类别">
         <button
-          v-for="section in navSections"
-          :key="section.key"
+          v-for="category in categories"
+          :key="category.key"
           type="button"
-          :class="['btn', 'btn--ghost', 'settings-nav__item', { active: activeSection === section.key }]"
-          :aria-current="activeSection === section.key ? 'location' : undefined"
-          @click="scrollToSection(section.key)"
-        >{{ section.label }}</button>
+          :class="['btn', 'btn--ghost', 'settings-nav__item', { active: activeCategory === category.key }]"
+          :aria-current="activeCategory === category.key ? 'true' : undefined"
+          @click="selectCategory(category.key)"
+        >{{ category.label }}</button>
       </nav>
 
       <div class="settings-body" ref="settingsBody">
-    <!-- 分区顺序必须与 SETTINGS_SECTIONS 一致（D-PC58：扫描目录排第 2 位）。 -->
-    <div class="settings-grid-shell">
-    <BasicSection :form="settingsForm" />
+        <h2 class="settings-category-heading">{{ currentCategory.label }}</h2>
+        <nav v-if="currentSections.length > 1" class="settings-section-nav" aria-label="当前类别分区">
+          <button
+            v-for="section in currentSections"
+            :key="section.key"
+            type="button"
+            class="btn btn--ghost settings-section-nav__item"
+            @click="scrollToSection(section.key)"
+          >{{ section.label }}</button>
+        </nav>
 
-    <ScanDirectoriesSection
-      :form="settingsForm"
-      :directories="directories"
-      :watcher-status="watcherStatus"
-      :reload-watcher-status="loadLibraryWatcherStatus"
-      @directories-changed="$emit('directories-changed', $event)"
-    />
+        <!-- First visit mounts a category. Subsequent switches preserve child drafts. -->
+        <div v-if="visited.general" v-show="activeCategory === 'general'" class="settings-grid-shell" data-test="settings-category-general">
+          <BasicSection :form="settingsForm" />
+        </div>
 
-    <AutomationSection :form="settingsForm" @error="reportSettingsError" />
+        <div v-if="visited.library" v-show="activeCategory === 'library'" class="settings-grid-shell" data-test="settings-category-library">
+          <ScanDirectoriesSection
+            :form="settingsForm"
+            :directories="directories"
+            :watcher-status="watcherStatus"
+            :reload-watcher-status="loadLibraryWatcherStatus"
+            @directories-changed="$emit('directories-changed', $event)"
+          />
+          <RandomAndFormatsSection :form="settingsForm" part="formats" />
+        </div>
 
-    <IINASyncSection />
+        <div v-if="visited.playback" v-show="activeCategory === 'playback'" class="settings-grid-shell" data-test="settings-category-playback">
+          <IINASyncSection />
+          <ProxySection :form="settingsForm" />
+          <EnhanceSection />
+          <RandomAndFormatsSection :form="settingsForm" part="random" />
+        </div>
 
-    <IdleSchedulingSection :form="settingsForm" />
-    <AutomaticStructureSection :form="settingsForm" />
+        <div v-if="visited.tasks" v-show="activeCategory === 'tasks'" class="settings-grid-shell" data-test="settings-category-tasks">
+          <AutomationSection :form="settingsForm" @error="reportSettingsError" />
+          <IdleSchedulingSection :form="settingsForm" />
+          <AutomaticStructureSection :form="settingsForm" />
+        </div>
 
-    <ProxySection :form="settingsForm" />
+        <div v-if="visited.ai" v-show="activeCategory === 'ai'" class="settings-grid-shell" data-test="settings-category-ai">
+          <AITagSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
+          <FaceSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
+          <SceneSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
+          <SubtitleSection :form="settingsForm" />
+        </div>
 
-    <EnhanceSection />
+        <div v-if="visited.connections" v-show="activeCategory === 'connections'" class="settings-grid-shell" data-test="settings-category-connections">
+          <MobileSection :form="settingsForm" />
+          <JellyfinSection @update:dirty="jellyfinDirty = $event" />
+          <BTConnectionSection @update:dirty="btDirty = $event" @scan-settings="scrollToSection('scan-dirs')" />
+          <BrowserBridgeSection :form="settingsForm" @error="reportSettingsError" />
+          <OnlineSourceSection :form="settingsForm" />
+          <PhotoMapSection />
+        </div>
 
-    <FaceSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
+        <div v-if="visited.data" v-show="activeCategory === 'data'" class="settings-grid-shell" data-test="settings-category-data">
+          <DatabaseSection
+            :form="settingsForm"
+            :ensure-saved="ensureSavedFor"
+            @relaunch-required="$emit('relaunch-required', $event)"
+          />
+        </div>
 
-    <SceneSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
-    <PhotoMapSection />
-
-    <MobileSection :form="settingsForm" />
-
-    <JellyfinSection />
-
-    <BTConnectionSection @update:dirty="btDirty = $event" @scan-settings="scrollToSection('scan-dirs')" />
-    <BrowserBridgeSection :form="settingsForm" @error="reportSettingsError" />
-
-    <AITagSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
-
-    <OnlineSourceSection :form="settingsForm" />
-
-    <RandomAndFormatsSection :form="settingsForm" />
-
-    <SubtitleSection :form="settingsForm" />
-
-    <DatabaseSection
-      :form="settingsForm"
-      :ensure-saved="ensureSavedFor"
-      @relaunch-required="$emit('relaunch-required', $event)"
-    />
-    </div>
-
-    <div class="settings-actions">
-      <span v-if="dirty && !settingsSaving" class="settings-dirty-hint" data-test="settings-dirty-hint" role="status">有未保存的修改</span>
-      <div
-        v-if="saveMessage"
-        class="settings-save-status"
-        :class="`settings-save-status--${saveState}`"
-        :role="saveState === 'error' ? 'alert' : 'status'"
-      >
-        {{ saveMessage }}
-      </div>
-      <button @click="saveSettings" class="btn btn--primary settings-save-button" :disabled="settingsSaving">
-        {{ settingsSaving ? '正在保存…' : '保存所有设置' }}
-      </button>
-    </div>
+        <div class="settings-actions">
+          <span v-if="dirtyFields.length && !settingsSaving" class="settings-dirty-hint" data-test="settings-dirty-hint" role="status">有未保存的修改</span>
+          <span v-if="connectionDirty" class="settings-dirty-hint" role="status">连接配置需在分区内独立保存</span>
+          <div
+            v-if="saveMessage"
+            class="settings-save-status"
+            :class="`settings-save-status--${saveState}`"
+            :role="saveState === 'error' ? 'alert' : 'status'"
+          >
+            {{ saveMessage }}
+          </div>
+          <button @click="saveSettings" class="btn btn--primary settings-save-button" :disabled="settingsSaving">
+            {{ settingsSaving ? '正在保存…' : '保存所有设置' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -94,40 +106,9 @@ import { normalizeProxyCacheLimitBytes } from '../utils/playbackProxy.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction } from '../utils/feedback.js';
 
-// 左侧锚点导航的分区清单，顺序与模板里的分区顺序一致，是锚点的唯一来源。
-// 命令面板的「设置 · 各分区」动作也读这份清单（D-029），因此导出而不是本地常量。
-//
-// saveMode（D-PC57）决定分区标题旁的标记：
-//   save    表单字段，要点「保存所有设置」才生效；
-//   instant 分区里的操作点了就生效（或只是状态展示），与保存按钮无关；
-//   mixed   两种都有：开关类即时生效，其余字段仍要保存。
-export const SETTINGS_SECTIONS = [
-  { key: 'basic', label: '基本设置', saveMode: 'save' },
-  { key: 'scan-dirs', label: '扫描目录管理', saveMode: 'instant' },
-  { key: 'image-dirs', label: '图片扫描目录', saveMode: 'instant' },
-  { key: 'automation', label: '自动化与扫描', saveMode: 'save' },
-  { key: 'iina-sync', label: 'IINA 进度同步', saveMode: 'instant' },
-  { key: 'idle-scheduling', label: '后台任务调度', saveMode: 'save' },
-  { key: 'automatic-structure', label: '自动分段', saveMode: 'save' },
-  { key: 'playback-proxy', label: '播放兼容缓存', saveMode: 'save' },
-  { key: 'enhance', label: '视频超分', saveMode: 'instant' },
-  { key: 'face', label: '人脸识别', saveMode: 'save' },
-  { key: 'scenes', label: '场景检索', saveMode: 'save' },
-  {key:'photo-map',label:'照片地图',saveMode:'instant'},
-  { key: 'mobile', label: '手机端浏览', saveMode: 'mixed' },
-  { key: 'jellyfin', label: 'Jellyfin 客户端连接', saveMode: 'instant' },
-  { key: 'bt', label: 'Prowlarr 与 qBittorrent', saveMode: 'instant' },
-  { key: 'browser-bridge', label: '浏览器插件', saveMode: 'save' },
-  { key: 'ai-tags', label: 'AI 标签', saveMode: 'save' },
-  { key: 'online-sources', label: '在线资料源', saveMode: 'save' },
-  { key: 'random', label: '智能随机播放', saveMode: 'save' },
-  { key: 'video-formats', label: '支持的视频格式', saveMode: 'save' },
-  { key: 'image-formats', label: '支持的图片格式', saveMode: 'save' },
-  { key: 'subtitle-translate', label: '字幕翻译', saveMode: 'save' },
-  { key: 'subtitle-quality', label: '字幕识别质量', saveMode: 'save' },
-  { key: 'database', label: '数据库', saveMode: 'instant' },
-  { key: 'backup', label: '数据库备份', saveMode: 'save' }
-];
+import { SETTINGS_CATEGORIES, SETTINGS_SECTIONS, settingsSection } from '../utils/settingsSections.js';
+
+export { SETTINGS_SECTIONS };
 
 export const SAVE_MODE_LABELS = {
   save: '需保存',
@@ -321,7 +302,8 @@ export default {
   components: { AutomaticStructureSection, PhotoMapSection, BTConnectionSection, PageHeader, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
-    directories: { type: Array, default: () => [] }
+    directories: { type: Array, default: () => [] },
+    navigationRequest: { type: Object, default: null }
   },
   // update:dirty（布尔）由 App.vue 监听：有未保存修改时切页前先确认（D-PC57 / APP-08）。
   // relaunch-required({ message })：数据库进入「待重启」终态，App 层据此挂全局「立即重启」遮罩
@@ -329,13 +311,16 @@ export default {
   emits: ['settings-saved', 'directories-changed', 'update:dirty', 'relaunch-required', 'open-setup'],
   data() {
     const form = normalizeSettingsForm(this.settings);
+    const requested = settingsSection(this.navigationRequest?.section);
+    const category = requested?.category || SETTINGS_CATEGORIES[0].key;
     return {
-      settingsForm: form, btDirty: false,
+      settingsForm: form, btDirty: false, jellyfinDirty: false,
       // 最近一次读回或保存成功时的表单快照：脏状态以它为基准。
       savedSnapshot: { ...form },
-      navSections: SETTINGS_SECTIONS,
-      activeSection: SETTINGS_SECTIONS[0].key,
-      sectionObserver: null,
+      categories: SETTINGS_CATEGORIES,
+      activeCategory: category,
+      visited: { [category]: true },
+      categoryRequest: 0,
       watcherStatus: null,
       watcherStatusOff: null,
       settingsSaving: false,
@@ -344,14 +329,26 @@ export default {
     };
   },
   computed: {
+    currentCategory() {
+      return this.categories.find(category => category.key === this.activeCategory);
+    },
+    currentSections() {
+      return SETTINGS_SECTIONS.filter(section => section.category === this.activeCategory);
+    },
     dirtyFields() {
       return changedSettingsFields(this.settingsForm, this.savedSnapshot);
     },
+    connectionDirty() {
+      return this.btDirty || this.jellyfinDirty;
+    },
     dirty() {
-      return this.dirtyFields.length > 0 || this.btDirty;
+      return this.dirtyFields.length > 0 || this.connectionDirty;
     }
   },
   watch: {
+    navigationRequest(request) {
+      if (request?.section) this.scrollToSection(request.section);
+    },
     // 父组件换了一份设置（保存后回灌、别的页面改了某一项）时，只接住用户没改过的字段：
     // 用户正在改的字段保留，不被新快照整份盖掉（APP-08）。
     settings: {
@@ -372,9 +369,9 @@ export default {
     }
   },
   mounted() {
-    this.loadLibraryWatcherStatus();
+    this.loadCategoryStatus(this.activeCategory);
     this.applySectionSaveModes();
-    this.observeSections();
+    if (this.navigationRequest?.section) this.scrollToSection(this.navigationRequest.section);
     // 命令面板的本页动作（D-029）：保存设置。分区锚点是全局动作，由 App 注册。
     registerCommands('settings-page', [{
       id: 'action:settings-save',
@@ -384,58 +381,57 @@ export default {
       enabled: () => !this.settingsSaving,
       run: () => this.saveSettings()
     }]);
-    if (window.runtime?.EventsOn) {
-      const off = window.runtime.EventsOn('library-watcher-status', (status) => {
-        this.watcherStatus = status || null;
-      });
-      if (typeof off === 'function') this.watcherStatusOff = off;
-    }
   },
   beforeUnmount() {
+    this.categoryRequest++;
     unregisterCommands('settings-page');
     this.watcherStatusOff?.();
-    this.sectionObserver?.disconnect();
   },
   methods: {
     // 分区标题旁的「即时生效 / 需保存」标记（D-PC57）。分区组件各自渲染标题，这里只按
     // SETTINGS_SECTIONS 给分区根节点打上 data-save-mode，标记由全局样式画在标题后面——
     // 清单是唯一来源，新增分区不用在每个组件里再写一遍。
     applySectionSaveModes() {
-      for (const section of this.navSections) {
+      for (const section of this.currentSections) {
         const element = this.sectionElement(section.key);
         if (!element || !section.saveMode) continue;
         element.dataset.saveMode = section.saveMode;
         element.dataset.saveModeLabel = SAVE_MODE_LABELS[section.saveMode] || '';
       }
     },
-    // 滚动到哪个分区就高亮哪一项。用 IntersectionObserver 而不是监听滚动：
-    // 真正的滚动宿主是外层的 .main-view，这里拿不到它。
-    observeSections() {
-      if (typeof IntersectionObserver !== 'function') return;
-      this.$nextTick(() => {
-        this.sectionObserver?.disconnect();
-        this.sectionObserver = new IntersectionObserver(entries => {
-          const visible = entries
-            .filter(entry => entry.isIntersecting)
-            .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-          if (visible) this.activeSection = visible.target.id.replace('settings-', '');
-        }, { rootMargin: '-52px 0px -60% 0px', threshold: 0 });
-        for (const section of this.navSections) {
-          const element = this.sectionElement(section.key);
-          if (element) this.sectionObserver.observe(element);
-        }
+    loadCategoryStatus(key) {
+      if (key !== 'library') return;
+      this.loadLibraryWatcherStatus();
+      const off = window.runtime?.EventsOn?.('library-watcher-status', (status) => {
+        this.watcherStatus = status || null;
       });
+      if (typeof off === 'function') this.watcherStatusOff = off;
     },
-    // 在组件自己的子树里找，不走 document：设置页是 v-if 挂载的，
-    // 组件树之外的同名 id 不该被误命中。
+    async selectCategory(key, sectionKey = null) {
+      if (!this.categories.some(category => category.key === key)) return;
+      const request = ++this.categoryRequest;
+      const switched = this.activeCategory !== key;
+      this.activeCategory = key;
+      if (!this.visited[key]) {
+        this.visited[key] = true;
+        this.loadCategoryStatus(key);
+      }
+      await this.$nextTick();
+      if (request !== this.categoryRequest) return;
+      this.applySectionSaveModes();
+      if (sectionKey) {
+        this.sectionElement(sectionKey)?.scrollIntoView?.({ block: 'start' });
+      } else if (switched) {
+        const host = this.$refs.settingsBody?.closest('.main-view');
+        if (host) host.scrollTop = 0;
+      }
+    },
     sectionElement(key) {
       return this.$el?.querySelector(`#settings-${key}`) || null;
     },
     scrollToSection(key) {
-      const element = this.sectionElement(key);
-      if (!element) return;
-      this.activeSection = key;
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const section = settingsSection(key);
+      if (section) return this.selectCategory(section.category, section.key);
     },
     // 子分区里做不了的操作（选目录之类）失败时，统一报到顶部的保存状态栏。
     reportSettingsError(message) {
@@ -468,7 +464,7 @@ export default {
         await UpdateSettings(payload);
         this.savedSnapshot = savedForm;
         const aiTriggered = aiChanged ? await TriggerAITagging() : false;
-        await this.loadLibraryWatcherStatus();
+        if (this.visited.library) await this.loadLibraryWatcherStatus();
         this.$emit('settings-saved', { ...savedForm });
         this.saveState = 'success';
         if (!aiChanged) {
@@ -508,7 +504,7 @@ export default {
 <style scoped>
 .settings-shell {
   display: grid;
-  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-columns: 190px minmax(0, 1fr);
   gap: 0;
   align-items: start;
 }
@@ -539,6 +535,9 @@ export default {
 .settings-nav__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
 
 .settings-body { min-width: 0; padding: var(--space-4) 0 0 var(--space-5); }
+.settings-category-heading { margin: 0 0 12px; }
+.settings-section-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+.settings-section-nav__item { min-height: var(--h-compact); font-size: var(--fs-secondary); }
 
 .settings-grid-shell {
   display: grid;
@@ -552,6 +551,7 @@ export default {
   bottom: 0;
   z-index: var(--z-sticky);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -593,7 +593,7 @@ export default {
 }
 
 @media (max-width: 980px) {
-  /* 窄屏把锚点导航收起来：230px 侧栏加长表单在这个宽度下两边都放不下。 */
+  /* 窄屏用同一组选项横向排布，不额外显示未选类别的表单。 */
   .settings-shell {
     grid-template-columns: 1fr;
   }

@@ -248,6 +248,7 @@
         v-if="currentPage === 'settings'"
         :settings="settings"
         :directories="directories"
+        :navigation-request="pageRequests.settings || null"
         @settings-saved="handleSettingsUpdate"
         @open-setup="capabilitySetupOpen = true"
         @directories-changed="handleDirectoriesChanged"
@@ -1012,6 +1013,14 @@ export default {
     // - 人物与作品集的 { tab }（人物 · 作品集 · 人脸审阅，认不出的忽略）。
     applyPageParams(page, params) {
       if (page === 'videos' || page === 'photos' || page === 'downloads' || page === 'discover') this.setPageRequest(page, params);
+      if (page === 'settings') {
+        if (typeof params?.section === 'string') this.setPageRequest(page, { section: params.section });
+        else if (this.currentPage !== page && this.pageRequests.settings) {
+          const next = { ...this.pageRequests };
+          delete next.settings;
+          this.pageRequests = next;
+        }
+      }
       if (page === LISTS_PAGE && typeof params?.query === 'string') this.setPageRequest(page, params);
       if (page === LISTS_PAGE && isListTab(params?.tab)) this.listsTab = params.tab;
       if (page === CLEANUP_PAGE) this.applyCleanupParams(params);

@@ -40,7 +40,8 @@ const api = vi.hoisted(() => Object.fromEntries([
 
 vi.mock('../../wailsjs/go/main/App', () => api);
 
-import SettingsPage, { SETTINGS_SECTIONS } from './SettingsPage.vue';
+import SettingsPage from './SettingsPage.vue';
+import { SETTINGS_CATEGORIES, SETTINGS_SECTIONS } from '../utils/settingsSections.js';
 import { commandList } from '../utils/commandRegistry.js';
 
 // P-002 把设置分区拆成 components/settings/** 的子组件；分区自己持有的状态与方法
@@ -70,7 +71,7 @@ const baseSettings = () => ({
 async function mountPage(status = {
   running: true,
   roots: [{ directory_id: 7, state: 'watching', message: '实时同步中', watch_count: 3 }]
-}, imageTasks = {}) {
+}, imageTasks = {}, options = {}) {
   api.GetShortFeedServerStatus.mockResolvedValue({ running: false });
   if (imageTasks.aiTagLibraryError) {
 	api.GetAITagLibrary.mockRejectedValue(imageTasks.aiTagLibraryError);
@@ -123,10 +124,17 @@ async function mountPage(status = {
   const wrapper = mount(SettingsPage, {
     props: {
       settings: baseSettings(),
-      directories: [{ id: 7, alias: '电影', path: '/media/movies' }]
+      directories: [{ id: 7, alias: '电影', path: '/media/movies' }],
+      navigationRequest: options.navigationRequest
     }
   });
   await flushPromises();
+  if (!options.lazy) {
+    // Older feature tests exercise controls across the whole settings surface.
+    for (const category of SETTINGS_CATEGORIES) await wrapper.vm.selectCategory(category.key);
+    await wrapper.vm.selectCategory('general');
+    await flushPromises();
+  }
   return wrapper;
 }
 
@@ -542,18 +550,18 @@ describe('SettingsPage database backup', () => {
   });
 });
 
-describe('SettingsPage 锚点导航', () => {
+describe('SettingsPage 类别导航', () => {
   // 这条断言必须比对"id 与它下面的标题是否一致"，只查 id 存在是不够的——
   // 最初的实现就是因为 settings-section-heading 的类名以 settings-section 开头
   // 被误匹配，吃掉两个 id 让后面全体错位：点「扫描目录管理」滚到了「字幕翻译」。
   it('每个锚点都落在标题相符的分区上', async () => {
     const wrapper = await mountPage();
-    const keys = wrapper.vm.navSections.map(section => section.key);
-    expect(wrapper.findAll('.settings-nav__item')).toHaveLength(keys.length);
+    expect(wrapper.findAll('.settings-nav__item')).toHaveLength(7);
 
-    for (const section of wrapper.vm.navSections) {
+    for (const section of SETTINGS_SECTIONS) {
       const element = wrapper.find(`#settings-${section.key}`);
       expect(element.exists()).toBe(true);
+      expect(element.element.closest('[data-test^="settings-category-"]').dataset.test).toBe(`settings-category-${section.category}`);
       const heading = element.find('h3');
       expect(heading.exists()).toBe(true);
       expect(heading.text()).toBe(section.label);
@@ -561,13 +569,56 @@ describe('SettingsPage 锚点导航', () => {
     wrapper.unmount();
   });
 
-  it('点击导航项高亮并滚到对应分区', async () => {
-    const wrapper = await mountPage();
+  it('only loads the active category and retains visited content and drafts', async () => {
+    const wrapper = await mountPage(undefined, {}, { lazy: true });
+    expect(wrapper.find('#settings-basic').exists()).toBe(true);
+    expect(wrapper.find('#settings-database').exists()).toBe(false);
+    expect(api.GetBackupStatus).not.toHaveBeenCalled();
+    expect(api.GetLibraryWatcherStatus).not.toHaveBeenCalled();
+    wrapper.vm.settingsForm.theme = 'dark';
+    await wrapper.findAll('.settings-nav__item')[1].trigger('click');
+    await flushPromises();
+    expect(wrapper.find('#settings-basic').isVisible()).toBe(false);
+    expect(wrapper.find('#settings-scan-dirs').isVisible()).toBe(true);
+    expect(api.GetLibraryWatcherStatus).toHaveBeenCalledTimes(1);
+    expect(api.GetBackupStatus).not.toHaveBeenCalled();
+    await wrapper.vm.selectCategory('general');
+    expect(wrapper.vm.settingsForm.theme).toBe('dark');
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([true]);
+    await wrapper.vm.selectCategory('library');
+    expect(api.GetLibraryWatcherStatus).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('opens the requested category on cold mount and scrolls on later requests', async () => {
+    const wrapper = await mountPage(undefined, {}, { lazy: true, navigationRequest: { section: 'backup', token: 1 } });
+    expect(wrapper.vm.activeCategory).toBe('data');
+    expect(wrapper.find('#settings-backup').exists()).toBe(true);
+    expect(wrapper.find('#settings-basic').exists()).toBe(false);
+    expect(api.GetBackupStatus).toHaveBeenCalledTimes(1);
+    await wrapper.vm.selectCategory('library');
     const target = wrapper.find('#settings-scan-dirs').element;
     target.scrollIntoView = vi.fn();
-    wrapper.vm.scrollToSection('scan-dirs');
-    expect(wrapper.vm.activeSection).toBe('scan-dirs');
+    await wrapper.vm.selectCategory('data');
+    await wrapper.setProps({ navigationRequest: { section: 'scan-dirs', token: 2 } });
+    await flushPromises();
+    expect(wrapper.vm.activeCategory).toBe('library');
     expect(target.scrollIntoView).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('retains independently saved connection drafts across category switches and global save', async () => {
+    const wrapper = await mountPage(undefined, {}, { lazy: true });
+    await wrapper.vm.selectCategory('connections');
+    await flushPromises();
+    await wrapper.get('#jellyfin-port').setValue(19096);
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([true]);
+    await wrapper.vm.selectCategory('general');
+    await wrapper.vm.saveSettings();
+    expect(api.ConfigureJellyfin).not.toHaveBeenCalled();
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([true]);
+    await wrapper.vm.selectCategory('connections');
+    expect(wrapper.get('#jellyfin-port').element.value).toBe('19096');
     wrapper.unmount();
   });
 });

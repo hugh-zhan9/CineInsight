@@ -747,6 +747,7 @@ describe('设置页离开确认（APP-08）', () => {
     const wrapper = await mountApp();
     await enterManage(wrapper);
     await wrapper.get('[data-test="nav-settings"]').trigger('click');
+    await vi.dynamicImportSettled();
     wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', true);
     await flushPromises();
     return wrapper;
@@ -799,6 +800,7 @@ describe('设置页离开确认（APP-08）', () => {
     const wrapper = await mountApp();
     await enterManage(wrapper);
     await wrapper.get('[data-test="nav-settings"]').trigger('click');
+    await vi.dynamicImportSettled();
     wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', false);
 
     await wrapper.get('[data-test="nav-library-manage"]').trigger('click');
@@ -1181,6 +1183,7 @@ describe('「待重启」遮罩与启动错误页', () => {
   it('APP-02 设置页上报 relaunch-required 同样弹出遮罩；自动重启失败时说明原因且按钮可再次点击', async () => {
     const wrapper = await mountApp();
     await wrapper.setData({ currentPage: 'settings' });
+    await vi.dynamicImportSettled();
     wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('relaunch-required', { message: '已切回之前的后端，重启后生效' });
     await flushPromises();
     expect(wrapper.get('[data-test="relaunch-overlay"]').text()).toContain('已切回之前的后端，重启后生效');
@@ -2998,10 +3001,24 @@ describe('「视频」海报墙的接线（D-P2-01）', () => {
     expect(browse().props('navigationRequest')).toEqual({ watch: 'favorites', token: 2 });
   });
 
+  it('设置分区命令在组件冷加载后仍交接具体目标，同页可重复交接', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.vm.openSettingsSectionFromCommand('database')).toBe(true);
+    await vi.dynamicImportSettled();
+    await flushPromises();
+    const settings = wrapper.findComponent({ name: 'SettingsPage' });
+    expect(settings.props('navigationRequest')).toEqual({ section: 'database', token: 1 });
+    expect(wrapper.vm.openSettingsSectionFromCommand('backup')).toBe(true);
+    await flushPromises();
+    expect(settings.props('navigationRequest')).toEqual({ section: 'backup', token: 2 });
+    expect(wrapper.vm.openSettingsSectionFromCommand('unknown')).toBe(false);
+  });
+
   it('设置页有未保存修改时参数等确认后才交过去；选「继续编辑」什么也不交', async () => {
     const wrapper = await mountApp();
     await enterManage(wrapper);
     await wrapper.get('[data-test="nav-settings"]').trigger('click');
+    await vi.dynamicImportSettled();
     wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', true);
     await flushPromises();
 

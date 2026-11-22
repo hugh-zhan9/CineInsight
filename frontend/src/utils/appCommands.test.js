@@ -23,7 +23,7 @@ import {
 } from './appCommands.js';
 import { commandList, findCommand, registerCommands, unregisterCommands } from './commandRegistry.js';
 import { confirmAction, feedbackState, resetFeedback, resolveConfirm } from './feedback.js';
-import { SETTINGS_SECTIONS } from '../components/SettingsPage.vue';
+import { SETTINGS_SECTIONS } from './settingsSections.js';
 import CommandPalette from '../components/CommandPalette.vue';
 import BaseModal from '../components/ui/BaseModal.vue';
 
@@ -367,8 +367,10 @@ describe('应用级命令注册', () => {
       expect(commandByID(`action:settings:${section.key}`), section.key).not.toBeNull();
     }
 
+    const navigate = vi.spyOn(wrapper.vm, 'navigateTo');
     await commandByID('action:settings:database').run();
     expect(wrapper.vm.currentPage).toBe('settings');
+    expect(navigate).toHaveBeenCalledWith('settings', { section: 'database' });
   });
 
   it('立即备份调用 CreateDatabaseBackup', () => {

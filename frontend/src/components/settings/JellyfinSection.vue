@@ -64,6 +64,7 @@ function formatTime(value) {
 
 export default {
   name: 'JellyfinSection',
+  emits: ['update:dirty'],
   data() {
     return {
       status: null, loaded: false, busy: false, error: '', enabled: false, username: '', password: '', port: 8096,
@@ -71,6 +72,11 @@ export default {
     };
   },
   computed: {
+    dirty() {
+      if (!this.status) return false;
+      return this.enabled !== this.status.enabled || this.username !== (this.status.username || '') ||
+        this.port !== (this.status.port || 8096) || this.password !== '';
+    },
     statusText() {
       if (!this.status) return '未加载';
       if (this.status.running) return `运行中（端口 ${this.status.port}）`;
@@ -90,6 +96,9 @@ export default {
       const parts = [at, failure.route_shape, failure.status ? `HTTP ${failure.status}` : ''].filter(Boolean);
       return `最近失败：${parts.join(' · ')}`;
     }
+  },
+  watch: {
+    dirty(value) { this.$emit('update:dirty', value); }
   },
   mounted() { this.load(); },
   methods: {

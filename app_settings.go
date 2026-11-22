@@ -200,8 +200,10 @@ func (a *App) UpdateSettings(input models.Settings) error {
 		a.idleGate.InvalidateSettings()
 		a.setLogEnabled(input.LogEnabled)
 		a.configureLocalMetadata(input.LocalMetadataEnabled)
-		if watchErr := a.configureLibraryWatcher(input.LibraryWatchEnabled); watchErr != nil {
-			log.Printf("Library watcher settings apply failed err=%v", watchErr)
+		if bridgeErr != nil || bridgeBefore == nil || bridgeBefore.LibraryWatchEnabled != input.LibraryWatchEnabled || bridgeBefore.ScanExcludePaths != input.ScanExcludePaths {
+			if watchErr := a.configureLibraryWatcher(input.LibraryWatchEnabled); watchErr != nil {
+				log.Printf("Library watcher settings apply failed err=%v", watchErr)
+			}
 		}
 		// 桥接开关或下载目录改了要立刻生效：关掉之后端口必须马上不再监听，
 		// 开启之后不该等到下次重启应用才能配对。

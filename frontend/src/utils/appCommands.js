@@ -19,7 +19,7 @@ import {
   CreateDatabaseBackup, GetBackgroundTasks, GetIdleSchedulerStatus, ListCollections, ListPeople, ListSavedLibraryViews,
   SyncImageDirectories
 } from '../../wailsjs/go/main/App';
-import { SETTINGS_SECTIONS } from '../components/SettingsPage.vue';
+import { SETTINGS_SECTIONS, settingsSection } from './settingsSections.js';
 import { findCommand, isCommandEnabled, registerCommands, unregisterCommands } from './commandRegistry.js';
 import { feedbackState, notifyError } from '../utils/feedback.js';
 import { buildTaskCommands } from './taskCommands.js';
@@ -676,10 +676,8 @@ export const appCommandsMixin = {
       return this.openVideo(video, { from: COMMAND_PALETTE_SOURCE });
     },
     openSettingsSectionFromCommand(key) {
-      return whenNavigated(this.navigateTo('settings'), async () => {
-        await this.$nextTick();
-        this.$refs.settingsPage?.scrollToSection(key);
-      });
+      if (!settingsSection(key)) return false;
+      return this.navigateTo('settings', { section: key });
     },
     // 命令面板、首页、整页详情、回顾打开人物 / 作品集：进观看侧的人物 / 作品集页并打开这一个（D-P2-06）。
     openEntityFromCommand(type, id, name) {
