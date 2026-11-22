@@ -1,5 +1,6 @@
 <template>
   <PhotoLightboxCore v-bind="$props" :image="currentImage" :asset-url="selected ? '' : assetUrl"
+    :progressive="!selected && progressive" :thumbnail-asset-url="selected ? '' : thumbnailAssetUrl"
     :allow-remove="!selected && allowRemove" :mixed-media="!selected && mixedMedia"
     :neighbors="selected ? items : neighbors" :has-prev="canPrev" :has-next="canNext"
     :loading-next="selected ? loading : loadingNext" :next-error="selected ? '' : nextError"

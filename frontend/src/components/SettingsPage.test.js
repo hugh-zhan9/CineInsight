@@ -40,7 +40,7 @@ const api = vi.hoisted(() => Object.fromEntries([
 
 vi.mock('../../wailsjs/go/main/App', () => api);
 
-import SettingsPage from './SettingsPage.vue';
+import SettingsPage, { buildSettingsPayload, normalizeSettingsForm } from './SettingsPage.vue';
 import { SETTINGS_CATEGORIES, SETTINGS_SECTIONS } from '../utils/settingsSections.js';
 import { commandList } from '../utils/commandRegistry.js';
 
@@ -144,6 +144,40 @@ beforeEach(() => {
 });
 
 describe('SettingsPage library watcher', () => {
+  it('persists the two log switches independently and defaults missing values to true', () => {
+    expect(buildSettingsPayload(normalizeSettingsForm({}))).toEqual(expect.objectContaining({
+      log_enabled: true, perf_log_enabled: true
+    }));
+    expect(buildSettingsPayload(normalizeSettingsForm({ log_enabled: false, perf_log_enabled: true }))).toEqual(expect.objectContaining({
+      log_enabled: false, perf_log_enabled: true
+    }));
+    expect(buildSettingsPayload(normalizeSettingsForm({ log_enabled: true, perf_log_enabled: false }))).toEqual(expect.objectContaining({
+      log_enabled: true, perf_log_enabled: false
+    }));
+    expect(buildSettingsPayload(normalizeSettingsForm({ log_enabled: false }))).toEqual(expect.objectContaining({
+      log_enabled: false, perf_log_enabled: true
+    }));
+  });
+
+  it('shows the Discover batch default and saves the bounded video count', async () => {
+    const wrapper = await mountPage(undefined, {}, { lazy: true });
+    await wrapper.vm.selectCategory('playback');
+    const input = wrapper.get('[data-test="discover-video-count"]');
+    expect(input.element.value).toBe('12');
+    expect(input.attributes('min')).toBe('1');
+    expect(input.attributes('max')).toBe('36');
+    await input.setValue(26);
+    await wrapper.vm.saveSettings();
+    expect(api.UpdateSettings.mock.calls.at(-1)[0].discover_video_count).toBe(26);
+    await input.setValue(100);
+    await wrapper.vm.saveSettings();
+    expect(input.element.value).toBe('36');
+    expect(wrapper.emitted('settings-saved').at(-1)[0].discover_video_count).toBe(36);
+    expect(buildSettingsPayload(normalizeSettingsForm({ discover_video_count: 100 })).discover_video_count).toBe(36);
+    expect(buildSettingsPayload(normalizeSettingsForm({ discover_video_count: 0 })).discover_video_count).toBe(12);
+    wrapper.unmount();
+  });
+
   it('saves settings independently of the AI tag library', async () => {
 	  const wrapper = await mountPage(undefined, { aiTagLibraryError: 'database unavailable' });
 

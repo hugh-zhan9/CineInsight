@@ -3,12 +3,22 @@
     tabindex="0" :aria-label="`${name}，滚轮缩放，拖动查看，双击切换原始尺寸`"
     @wheel.prevent="wheel" @dblclick.prevent="toggleNatural" @pointerdown="startDrag"
     @pointermove="moveDrag" @pointerup="finishDrag" @pointercancel="endDrag" @lostpointercapture="endDrag">
-    <img v-if="!imageReady && thumbnailSrc && !thumbnailFailed" class="image-viewport__thumbnail" :src="thumbnailSrc" alt="" :style="imageStyle" @error="thumbnailFailed = true" />
-    <span v-if="!imageReady" class="image-viewport__loading" role="status">正在加载原图…</span>
-    <img :key="src" :src="src" :alt="name" :data-test="imageDataTest || undefined" :style="[imageStyle, { visibility: imageReady ? 'visible' : 'hidden' }]"
-      draggable="false" @load="loaded" @error="$emit('error')" />
-    <span v-if="showScale" class="image-viewport__scale" aria-live="polite">{{ previewLimited ? '预览 ' : '' }}{{ Math.round(geometry.scale * 100) }}%</span>
-    <span v-if="previewLimited" class="image-viewport__notice">当前为 {{ naturalWidth }} × {{ naturalHeight }} 预览，登记源图尺寸 {{ imageWidth }} × {{ imageHeight }}</span>
+    <template v-if="progressive">
+      <img v-for="layer in progressiveLayers" :key="layer.key" :src="layer.url" :alt="layer === shownLayer && layer === pendingLayer ? name : ''"
+        :data-test="layer === pendingLayer ? imageDataTest || undefined : undefined"
+        class="image-viewport__progressive" :style="[imageReady ? imageStyle : null, { visibility: layer === shownLayer ? 'visible' : 'hidden' }]"
+        :aria-hidden="layer !== shownLayer || layer !== pendingLayer ? 'true' : undefined"
+        draggable="false" @load="loadLayer(layer, $event)" @error="failLayer(layer)" />
+      <span v-if="!imageReady" class="image-viewport__loading" role="status">{{ originalFailed ? (shownLayer === thumbnailLayer ? '原图读取失败，当前显示缩略图' : '原图读取失败，正在加载缩略图…') : '正在加载原图…' }}</span>
+    </template>
+    <template v-else>
+      <img v-if="!imageReady && thumbnailSrc && !thumbnailFailed" class="image-viewport__thumbnail" :src="thumbnailSrc" alt="" :style="imageStyle" @error="thumbnailFailed = true" />
+      <span v-if="!imageReady" class="image-viewport__loading" role="status">正在加载原图…</span>
+      <img :key="src" :src="src" :alt="name" :data-test="imageDataTest || undefined" :style="[imageStyle, { visibility: imageReady ? 'visible' : 'hidden' }]"
+        draggable="false" @load="loaded" @error="$emit('error')" />
+    </template>
+    <span v-if="showScale && (!progressive || imageReady)" class="image-viewport__scale" aria-live="polite">{{ previewLimited ? '预览 ' : '' }}{{ Math.round(geometry.scale * 100) }}%</span>
+    <span v-if="previewLimited && (!progressive || imageReady)" class="image-viewport__notice">当前为 {{ naturalWidth }} × {{ naturalHeight }} 预览，登记源图尺寸 {{ imageWidth }} × {{ imageHeight }}</span>
     <slot />
   </div>
 </template>
@@ -19,6 +29,7 @@ import { imageGeometry, initialImageView, naturalImageView, panImage, zoomImageA
 export default {
   name: 'ImageViewport',
   props: {
+    progressive: { type: Boolean, default: false },
     thumbnailSrc: { type: String, default: '' },
     src: { type: String, required: true }, name: { type: String, default: '图片' },
     imageWidth: { type: Number, default: 1 }, imageHeight: { type: Number, default: 1 },
@@ -26,23 +37,65 @@ export default {
     showScale: { type: Boolean, default: true }, maxScale: { type: Number, default: 1 }
   },
   emits: ['update:modelValue', 'load', 'error', 'background-click'],
-  data: () => ({ imageReady: false, thumbnailFailed: false, width: 1, height: 1, naturalWidth: 0, naturalHeight: 0, localView: initialImageView(), drag: null, temporaryView: null }),
+  data: () => ({ shownLayer: null, pendingLayer: null, thumbnailLayer: null, layerSequence: 0, originalFailed: false, imageReady: false, thumbnailFailed: false, width: 1, height: 1, naturalWidth: 0, naturalHeight: 0, localView: initialImageView(), drag: null, temporaryView: null }),
   computed: {
+    progressiveKey() { return JSON.stringify([this.src, this.thumbnailSrc]); },
+    progressiveLayers() {
+      if (!this.progressive) return [];
+      return [...new Map([this.shownLayer, this.thumbnailLayer, this.pendingLayer].filter(Boolean).map(layer => [layer.key, layer])).values()];
+    },
     size() { return { width: this.width, height: this.height, imageWidth: this.naturalWidth || this.imageWidth, imageHeight: this.naturalHeight || this.imageHeight, maxScale: this.maxScale }; },
     view() { return this.modelValue || this.localView; },
     geometry() { return imageGeometry(this.size, this.view); },
     previewLimited() { return this.naturalWidth > 0 && Math.max(this.imageWidth, this.imageHeight) > Math.max(this.naturalWidth, this.naturalHeight) + 1; },
     imageStyle() { const g = this.geometry; return { width: `${g.width}px`, height: `${g.height}px`, transform: `translate(${g.left}px, ${g.top}px)` }; }
   },
-  watch: { src() { this.imageReady = false; this.thumbnailFailed = false; this.naturalWidth = 0; this.naturalHeight = 0; this.drag = null; this.temporaryView = null; this.reset(); } },
+  watch: {
+    progressiveKey: { immediate: true, handler() { if (this.progressive) this.startProgressive(); } },
+    src() { if (this.progressive) return; this.imageReady = false; this.thumbnailFailed = false; this.naturalWidth = 0; this.naturalHeight = 0; this.drag = null; this.temporaryView = null; this.reset(); }
+  },
   mounted() {
     this.measure();
     if (typeof ResizeObserver === 'function') { this._resize = new ResizeObserver(() => this.measure()); this._resize.observe(this.$refs.stage); }
     window.addEventListener('resize', this.measure);
     window.addEventListener('blur', this.restoreTemporary);
   },
-  beforeUnmount() { this._resize?.disconnect(); window.removeEventListener('resize', this.measure); window.removeEventListener('blur', this.restoreTemporary); this.drag = null; },
+  beforeUnmount() { this._resize?.disconnect(); window.removeEventListener('resize', this.measure); window.removeEventListener('blur', this.restoreTemporary); this.drag = null; this.pendingLayer = this.thumbnailLayer = null; },
   methods: {
+    startProgressive() {
+      const ticket = ++this.layerSequence;
+      this.imageReady = false;
+      this.originalFailed = false;
+      this.pendingLayer = this.src ? { key: `original-${ticket}`, url: this.src, original: true } : null;
+      this.thumbnailLayer = this.thumbnailSrc ? { key: `thumbnail-${ticket}`, url: this.thumbnailSrc, original: false } : null;
+    },
+    currentLayer(layer) { return layer === this.pendingLayer || layer === this.thumbnailLayer; },
+    async loadLayer(layer, event) {
+      if (!this.currentLayer(layer)) return;
+      const image = event.target;
+      try { if (typeof image.decode === 'function') await image.decode(); }
+      catch {
+        // Animated/legacy WebView images may reject decode() despite a valid load.
+        if (!image.naturalWidth) { this.failLayer(layer); return; }
+      }
+      if (!this.currentLayer(layer)) return;
+      layer.width = image.naturalWidth; layer.height = image.naturalHeight;
+      this.shownLayer = layer;
+      if (layer.original) {
+        this.thumbnailLayer = null;
+        this.drag = null; this.temporaryView = null; this.reset();
+        this.loaded(event);
+      }
+    },
+    failLayer(layer) {
+      if (!this.currentLayer(layer)) return;
+      if (layer.original) { this.pendingLayer = null; this.originalFailed = true; }
+      else { this.thumbnailLayer = null; }
+      if (this.originalFailed && !this.thumbnailLayer) {
+        this.shownLayer = null;
+        this.$emit('error');
+      }
+    },
     measure() { const rect = this.$refs.stage?.getBoundingClientRect(); if (rect?.width > 0 && rect?.height > 0) { this.width = rect.width; this.height = rect.height; } },
     loaded(event) { this.imageReady = true; this.naturalWidth = event.target.naturalWidth; this.naturalHeight = event.target.naturalHeight; this.measure(); this.$emit('load', event); },
     publish(view) { this.localView = view; this.$emit('update:modelValue', view); },
@@ -57,7 +110,13 @@ export default {
       this.$refs.stage.setPointerCapture(event.pointerId); event.preventDefault();
     },
     isBackground(event) {
-      const { x, y } = this.point(event), g = this.geometry;
+      const { x, y } = this.point(event);
+      let g = this.geometry;
+      if (this.progressive && !this.imageReady && this.shownLayer?.width && this.shownLayer?.height) {
+        const scale = Math.min(this.width / this.shownLayer.width, this.height / this.shownLayer.height);
+        const width = this.shownLayer.width * scale, height = this.shownLayer.height * scale;
+        g = { width, height, left: (this.width - width) / 2, top: (this.height - height) / 2 };
+      }
       return x >= 0 && y >= 0 && x <= this.width && y <= this.height &&
         (x < g.left || x > g.left + g.width || y < g.top || y > g.top + g.height);
     },
@@ -87,6 +146,7 @@ export default {
 .image-viewport { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; touch-action: none; cursor: grab; outline-offset: -3px; }
 .image-viewport--dragging { cursor: grabbing; }
 .image-viewport > img { position: absolute; top: 0; left: 0; max-width: none; max-height: none; object-fit: contain; user-select: none; pointer-events: none; }
+.image-viewport > .image-viewport__progressive { width: 100%; height: 100%; }
 .image-viewport__scale { position: absolute; right: 12px; bottom: 12px; padding: 3px 8px; border-radius: var(--radius-sm); background: var(--overlay-strong); color: var(--recap-hero-fg); font-size: var(--fs-caption); pointer-events: none; }
 .image-viewport__notice { position: absolute; top: 12px; left: 12px; max-width: calc(100% - 24px); padding: 4px 8px; border-radius: var(--radius-sm); background: var(--overlay-strong); color: var(--recap-hero-fg); font-size: var(--fs-caption); pointer-events: none; }
 .image-viewport__loading { position: absolute; z-index: 1; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 6px 12px; border-radius: var(--radius-sm); background: var(--overlay-strong); color: var(--recap-hero-fg); pointer-events: none; }

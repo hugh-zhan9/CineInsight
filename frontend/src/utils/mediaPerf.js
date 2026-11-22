@@ -33,7 +33,7 @@ export function observeMediaLoad(win, enabled, log) {
     const elapsed = Math.round(now - entry.startTime);
     if (elapsed < 150) return;
     last.set(kind, now);
-    log(`perf component=webview_media stage=${kind}_load_observed duration_ms=${elapsed} status=ok`);
+    log(`${kind}_load_observed`, elapsed);
   }
   win.addEventListener('load', onLoad, true);
   return () => win.removeEventListener('load', onLoad, true);

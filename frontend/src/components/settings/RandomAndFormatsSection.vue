@@ -21,6 +21,12 @@
       <input type="number" v-model.number="form.random_half_life_days" min="0" max="3650" step="1" class="number-input" />
       <p class="help-text">默认 90 天；久未播放的视频会逐渐回到随机池。设为 0 时关闭衰减并完全使用原算法。</p>
     </div>
+    <div class="setting-item">
+      <label for="discover-video-count">发现页每批视频数</label>
+      <input id="discover-video-count" data-test="discover-video-count" type="number" v-model.number="form.discover_video_count"
+        :min="minDiscoverCount" :max="maxDiscoverCount" step="1" class="number-input" />
+      <p class="help-text">默认 {{ defaultDiscoverCount }} 部，适用于「发现」页，不改变观看首页的推荐数量。</p>
+    </div>
   </div>
 
   <!-- 视频格式设置 -->
@@ -54,12 +60,21 @@
 </template>
 
 <script>
+import { DEFAULT_DISCOVER_VIDEO_COUNT, MAX_DISCOVER_VIDEO_COUNT, MIN_DISCOVER_VIDEO_COUNT } from '../../utils/discoverSettings.js';
+
 // 智能随机播放与视频/图片格式三个分区：纯表单字段。
 export default {
   name: 'RandomAndFormatsSection',
   props: {
     form: { type: Object, required: true },
     part: { type: String, default: 'all' }
+  },
+  data() {
+    return {
+      minDiscoverCount: MIN_DISCOVER_VIDEO_COUNT,
+      maxDiscoverCount: MAX_DISCOVER_VIDEO_COUNT,
+      defaultDiscoverCount: DEFAULT_DISCOVER_VIDEO_COUNT
+    };
   }
 };
 </script>

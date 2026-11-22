@@ -637,7 +637,7 @@ func ApplySchema(db *gorm.DB) error {
 			AIQualityEnabled:             true,
 			ShortFeedMaxDurationMinutes:  5,
 			ShortFeedFeedbackSyncEnabled: true,
-			LogEnabled:                   false,
+			LogEnabled:                   true,
 			SubtitleTranslationProvider:  "deepl",
 			SubtitleWhisperXModel:        "medium",
 			SubtitleWhisperXBatchSize:    8,

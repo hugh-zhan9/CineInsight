@@ -244,3 +244,28 @@ it('automatically reconciles an unavailable item and explains an exhausted repla
     expect(wrapper.vm.error).toBe('');
   } finally { vi.useRealTimers(); }
 });
+
+it('keeps the same photo modal between Explore photos and binds both assets to each entry', async () => {
+  const api = fixture(2);
+  const open = api.open.getMockImplementation();
+  api.open.mockImplementation(async () => {
+    const snapshot = await open();
+    snapshot.entries.forEach(entry => { entry.kind = 'image'; });
+    return snapshot;
+  });
+  api.items.mockImplementation(async r => ({ items: r.entry_ids.map(id => ({
+    entry_id: id, media_id: id, kind: 'image', title: `图片 ${id}`,
+    thumbnail_url: `/preview/image-thumbnail/${id}?exploration_scope=all&exploration_epoch=db&exploration_scene=scene&exploration_entry=${id}`
+  })) }));
+  const wrapper = await page(api);
+  await wrapper.vm.openPreview(wrapper.vm.snapshot.entries[0]);
+  const initial = wrapper.get('photo-lightbox-stub');
+  expect(initial.attributes('asseturl')).toContain('exploration_entry=1');
+  expect(initial.attributes('thumbnailasseturl')).toContain('exploration_entry=1');
+  await wrapper.vm.stepPreview(1);
+  const next = wrapper.get('photo-lightbox-stub');
+  expect(next.element).toBe(initial.element);
+  expect(next.attributes('asseturl')).toContain('exploration_entry=2');
+  expect(next.attributes('thumbnailasseturl')).toContain('exploration_entry=2');
+  expect(wrapper.vm.preview.image.id).toBe(2);
+});

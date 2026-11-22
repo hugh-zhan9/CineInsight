@@ -62,3 +62,59 @@ describe('ImageViewport background activation', () => {
     expect(w.emitted('background-click')).toBeUndefined();
   });
 });
+
+describe('Explore progressive photo display', () => {
+  const deferred = () => {
+    let done;
+    const promise = new Promise(resolve => { done = resolve; });
+    return { done, promise };
+  };
+  const photo = (w, name) => w.get(`img[src="/${name}.jpg"]`);
+  const shown = w => w.findAll('img').filter(img => img.element.style.visibility === 'visible').map(img => img.attributes('src'));
+  const settle = async () => { await Promise.resolve(); await nextTick(); };
+
+  it('keeps the previous decoded node, then the target thumbnail, then swaps to the same decoded original node', async () => {
+    const w = viewport({ props: { progressive: true, src: '/first.jpg' } });
+    await photo(w, 'first').trigger('load');
+    await settle();
+    expect(shown(w)).toEqual(['/first.jpg']);
+
+    await w.setProps({ src: '/second.jpg', thumbnailSrc: '/thumb.jpg' });
+    expect(shown(w)).toEqual(['/first.jpg']);
+    expect(photo(w, 'first').attributes('aria-hidden')).toBe('true');
+    await photo(w, 'thumb').trigger('load');
+    await settle();
+    expect(shown(w)).toEqual(['/thumb.jpg']);
+
+    const original = photo(w, 'second'), decode = deferred();
+    original.element.decode = vi.fn(() => decode.promise);
+    await original.trigger('load');
+    expect(shown(w)).toEqual(['/thumb.jpg']);
+    decode.done();
+    await settle();
+    expect(shown(w)).toEqual(['/second.jpg']);
+    expect(photo(w, 'second').element).toBe(original.element);
+    expect(w.emitted('load')).toHaveLength(2);
+  });
+
+  it('ignores a superseded original and retains the target thumbnail on original failure', async () => {
+    const w = viewport({ props: { progressive: true, src: '/first.jpg' } });
+    await photo(w, 'first').trigger('load');
+    await settle();
+    await w.setProps({ src: '/second.jpg' });
+    const staleDecode = deferred();
+    photo(w, 'second').element.decode = () => staleDecode.promise;
+    await photo(w, 'second').trigger('load');
+    await w.setProps({ src: '/third.jpg', thumbnailSrc: '/third-thumb.jpg' });
+    await photo(w, 'third-thumb').trigger('load');
+    await settle();
+    staleDecode.done();
+    await settle();
+    expect(shown(w)).toEqual(['/third-thumb.jpg']);
+    await photo(w, 'third').trigger('error');
+    expect(shown(w)).toEqual(['/third-thumb.jpg']);
+    expect(w.text()).toContain('原图读取失败，当前显示缩略图');
+    expect(w.emitted('load')).toHaveLength(1);
+    expect(w.emitted('error')).toBeUndefined();
+  });
+});

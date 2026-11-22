@@ -4,35 +4,44 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"video-master/internal/perfdiag"
 )
 
-func TestStartupPerfTraceWritesOnceOnly(t *testing.T) {
-	var out bytes.Buffer
+func TestPerformanceLogRoutingAndBridgePrivacy(t *testing.T) {
+	var system bytes.Buffer
 	old := log.Writer()
-	log.SetOutput(&out)
-	t.Cleanup(func() { log.SetOutput(old) })
-	trace := startupPerfTrace{started: time.Now(), newApp: 2 * time.Millisecond, database: 6 * time.Millisecond, recovery: 4 * time.Millisecond, toWindow: 12 * time.Millisecond}
-	trace.flush()
-	trace.flush()
-	if text := out.String(); strings.Count(text, "perf component=startup") != 1 || !strings.Contains(text, "database_ms=6 recovery_ms=4") {
-		t.Fatalf("unexpected trace: %s", text)
+	log.SetOutput(&system)
+	t.Cleanup(func() { log.SetOutput(old); _ = perfdiag.Close() })
+	path := filepath.Join(t.TempDir(), "perf.log")
+	if err := perfdiag.Configure(path, true); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestPerfLocalDoesNotLogInputErrorText(t *testing.T) {
-	var out bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&out)
-	t.Cleanup(func() { log.SetOutput(old) })
+	trace := startupPerfTrace{started: time.Now(), newApp: 2 * time.Millisecond, database: 6 * time.Millisecond, recovery: 4 * time.Millisecond}
+	trace.flush() // startup has not finished: do not burn the once guard
+	trace.toWindow = 12 * time.Millisecond
+	trace.flush()
+	trace.flush()
 	perfLocal("photo_library", "next_page", time.Now(), nil)
-	if out.Len() != 0 {
-		t.Fatal("fast background request was logged")
-	}
 	perfLocal("photo_library", "next_page", time.Now(), errors.New("private path and credential"))
-	if text := out.String(); !strings.Contains(text, "status=error") || strings.Contains(text, "private path") {
-		t.Fatalf("unexpected trace: %s", text)
+	recordFrontendMediaPerf("photo_view_load_observed 300")
+	for _, rejected := range []string{"photo_view_load_observed 401\nsecret", "evil_stage 500", "photo_view_load_observed -1", "poster_load_observed 900001", "poster_load_observed 20", "poster_load_observed +160"} {
+		recordFrontendMediaPerf(rejected)
+	}
+	if err := perfdiag.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Count(text, "perf component=") != 3 || !strings.Contains(text, "database_ms=6 recovery_ms=4") ||
+		!strings.Contains(text, "status=error") || !strings.Contains(text, "photo_view_load_observed duration_ms=300") || strings.Contains(text, "private path") || system.Len() != 0 {
+		t.Fatalf("unexpected file %q; system output %q", text, system.String())
 	}
 }

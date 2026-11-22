@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"video-master/internal/appdata"
+	"video-master/internal/perfdiag"
 	"video-master/models"
 	"video-master/services"
 
@@ -138,6 +139,7 @@ type App struct {
 	browserDownloads       *services.BrowserDownloadService
 	browserBridge          *services.BrowserBridgeServer
 	startupError           string
+	logMu                  sync.Mutex
 	logFile                *os.File // 保持日志文件句柄引用，防止泄漏
 	backupCancel           context.CancelFunc
 	backupWG               sync.WaitGroup
@@ -534,6 +536,7 @@ func (a *App) startup(ctx context.Context) {
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
 		a.setLogEnabled(settings.LogEnabled)
+		a.setPerformanceLogEnabled(settings.PerformanceLogsEnabled())
 		if err := a.configureLibraryWatcher(settings.LibraryWatchEnabled); err != nil {
 			log.Printf("App startup library watcher configuration failed err=%v", err)
 		}
@@ -867,7 +870,8 @@ func (a *App) shutdown(ctx context.Context) {
 		// 会和进程退出赛跑，输给它就在下载目录里留下垃圾。
 		a.browserDownloads.Wait()
 	}
-	a.closeLogFile()
+	a.setLogEnabled(false)
+	_ = perfdiag.Close()
 	services.SetSubtitleChangedListener(nil)
 	if a.videoService != nil {
 		a.videoService.SetControlledPlaybackListener(nil)
@@ -949,6 +953,12 @@ func (a *App) LogFrontend(level string, source string, message string) {
 		level = "INFO"
 	}
 	source = strings.TrimSpace(source)
+	if level == "PERF" || source == "media-perf" {
+		if level == "PERF" && source == "media-perf" {
+			recordFrontendMediaPerf(message)
+		}
+		return
+	}
 	if source == "" {
 		source = "frontend"
 	}
@@ -969,9 +979,14 @@ func (a *App) closeLogFile() {
 }
 
 func (a *App) setLogEnabled(enabled bool) {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
 	if !enabled {
 		log.SetOutput(io.Discard)
 		a.closeLogFile()
+		return
+	}
+	if a.logFile != nil {
 		return
 	}
 	// dataDir 已经在 NewApp 中计算过，但这里再次获取也没问题
@@ -981,13 +996,29 @@ func (a *App) setLogEnabled(enabled bool) {
 		}
 		logPath := filepath.Join(dataDir, "app.log")
 		rotateLogIfNeeded(logPath)
-		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); err == nil {
 			a.closeLogFile() // 先关闭旧句柄
 			a.logFile = f
 			log.SetOutput(f)
-			a.startupPerf.flush()
 		}
 	}
+}
+
+func (a *App) setPerformanceLogEnabled(enabled bool) {
+	if !enabled {
+		_ = perfdiag.Close()
+		return
+	}
+	dataDir, err := appdata.Resolve()
+	if err != nil {
+		log.Print("Performance log directory is unavailable")
+		return
+	}
+	if err := perfdiag.Configure(filepath.Join(dataDir, "perf.log"), true); err != nil {
+		log.Print("Could not open performance log")
+		return
+	}
+	a.startupPerf.flush()
 }
 
 func redactSensitiveLogMessage(message string) string {

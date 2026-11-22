@@ -17,10 +17,19 @@
     </div>
     <div class="setting-item">
       <label class="switch">
-        <input type="checkbox" v-model="form.log_enabled" />
+        <input data-test="system-log-toggle" type="checkbox" v-model="form.log_enabled" />
         <span class="slider"></span>
-        <span>启用日志记录</span>
+        <span>系统日志</span>
       </label>
+      <p class="help-text">在本机记录应用运行和错误信息，用于排查问题。默认开启。</p>
+    </div>
+    <div class="setting-item">
+      <label class="switch">
+        <input data-test="performance-log-toggle" type="checkbox" v-model="form.perf_log_enabled" />
+        <span class="slider"></span>
+        <span>性能日志</span>
+      </label>
+      <p class="help-text">在本机记录加载阶段和耗时，不记录媒体路径、文件名或凭据。默认开启，可独立关闭。</p>
     </div>
     <div class="setting-item">
       <label class="switch">

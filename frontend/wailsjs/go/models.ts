@@ -1029,6 +1029,8 @@ export namespace models {
 	    short_feed_feedback_sync_enabled: boolean;
 	    theme: string;
 	    log_enabled: boolean;
+	    perf_log_enabled: boolean;
+	    discover_video_count: number;
 	    bilingual_enabled: boolean;
 	    bilingual_lang: string;
 	    query_parse_enabled: boolean;
@@ -1111,6 +1113,8 @@ export namespace models {
 	        this.short_feed_feedback_sync_enabled = source["short_feed_feedback_sync_enabled"];
 	        this.theme = source["theme"];
 	        this.log_enabled = source["log_enabled"];
+	        this.perf_log_enabled = source["perf_log_enabled"];
+	        this.discover_video_count = source["discover_video_count"];
 	        this.bilingual_enabled = source["bilingual_enabled"];
 	        this.bilingual_lang = source["bilingual_lang"];
 	        this.query_parse_enabled = source["query_parse_enabled"];

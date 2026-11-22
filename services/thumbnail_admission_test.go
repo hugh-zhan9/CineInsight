@@ -1,15 +1,19 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"video-master/database"
+	"video-master/internal/perfdiag"
 	"video-master/models"
 )
 
@@ -181,5 +185,39 @@ func TestThumbnailExplorationLeavesForegroundSlot(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("first exploration work did not cancel")
+	}
+}
+
+func TestThumbnailPerfSink(t *testing.T) {
+	s, id := timeoutThumbnailFixture(t)
+	s.runFFmpeg = func(_ context.Context, _, _, path string, _ float64) error {
+		return os.WriteFile(path, []byte("synthetic poster"), 0600)
+	}
+	file := filepath.Join(t.TempDir(), "perf.log")
+	if err := perfdiag.Configure(file, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = perfdiag.Close() })
+	var ordinary bytes.Buffer
+	priorWriter := log.Writer()
+	log.SetOutput(&ordinary)
+	t.Cleanup(func() { log.SetOutput(priorWriter) })
+
+	if _, err := s.ResolveThumbnail(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "perf component=poster stage=generate success=true elapsed_ms=") ||
+		!strings.Contains(got, "perf component=poster stage=resolve exploration=false outcome=cold cache_check_ms=") ||
+		!strings.Contains(got, "queue_ms=") || !strings.Contains(got, "cold_work_ms=") ||
+		strings.Contains(got, "clip.mp4") || strings.Contains(got, s.cacheDir) {
+		t.Fatalf("expected both sanitized poster diagnostics; got %q", got)
+	}
+	if strings.Contains(ordinary.String(), "perf component=poster") {
+		t.Fatalf("poster diagnostics leaked to ordinary logs: %s", ordinary.String())
 	}
 }

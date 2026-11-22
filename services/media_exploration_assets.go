@@ -220,7 +220,14 @@ func (s *MediaExplorationService) resolveAssetUnderAdmission(ctx context.Context
 	if currentPath != path {
 		return nil, ErrBookmarkSourceChanged
 	}
-	guard := &explorationAssetReader{reader: reader, ctx: ctx, source: source, sourcePath: path, sourceInfo: info, delivery: delivery, deliveryInfo: delivered}
+	guardDelivery := delivery
+	if asset == "image" && delivery == source {
+		// Ordinary originals reuse the same descriptor. The source guard
+		// still checks both the path and descriptor on every read; do not
+		// stat that same descriptor a second time as a delivery artifact.
+		guardDelivery = nil
+	}
+	guard := &explorationAssetReader{reader: reader, ctx: ctx, source: source, sourcePath: path, sourceInfo: info, delivery: guardDelivery, deliveryInfo: delivered}
 	if err := guard.check(); err != nil {
 		return nil, err
 	}

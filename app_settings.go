@@ -154,9 +154,6 @@ func (a *App) SelectDirectory() (string, error) {
 // GetSettings 获取设置
 func (a *App) GetSettings() (*models.Settings, error) {
 	settings, err := a.settingsService.GetSettings()
-	if err == nil {
-		a.setLogEnabled(settings.LogEnabled)
-	}
 	log.Printf("API GetSettings err=%v value=%s", err, summarizeSettings(settings))
 	return settings, err
 }
@@ -199,6 +196,10 @@ func (a *App) UpdateSettings(input models.Settings) error {
 		// 不该还对着一个"仍在等空闲"的任务干等。
 		a.idleGate.InvalidateSettings()
 		a.setLogEnabled(input.LogEnabled)
+		// Omitted by older clients: keep the independently persisted preference.
+		if input.PerfLogEnabled != nil {
+			a.setPerformanceLogEnabled(input.PerformanceLogsEnabled())
+		}
 		a.configureLocalMetadata(input.LocalMetadataEnabled)
 		if bridgeErr != nil || bridgeBefore == nil || bridgeBefore.LibraryWatchEnabled != input.LibraryWatchEnabled || bridgeBefore.ScanExcludePaths != input.ScanExcludePaths {
 			if watchErr := a.configureLibraryWatcher(input.LibraryWatchEnabled); watchErr != nil {

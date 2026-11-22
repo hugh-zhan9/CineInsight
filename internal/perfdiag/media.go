@@ -1,15 +1,13 @@
 package perfdiag
 
 import (
-	"io"
-	"log"
 	"sync/atomic"
 	"time"
 )
 
-// Start uses the same local log toggle as the rest of the app.
+// Start measures only while the independent local performance sink is enabled.
 func Start() time.Time {
-	if log.Writer() == io.Discard {
+	if !Enabled() {
 		return time.Time{}
 	}
 	return time.Now()
@@ -29,7 +27,7 @@ var epoch = time.Now()
 // Record never receives paths, URLs, IDs, or errors. Slow=0 allows milestone
 // sampling where the caller already bounds the number of records.
 func (s *Stage) Record(start, end time.Time, failed bool) {
-	if start.IsZero() {
+	if start.IsZero() || !Enabled() {
 		return
 	}
 	elapsed := end.Sub(start)
@@ -52,7 +50,7 @@ func (s *Stage) Record(start, end time.Time, failed bool) {
 	if failed {
 		outcome = "error"
 	}
-	log.Printf("perf component=%s stage=%s duration_ms=%d status=%s", s.Component, s.Name, elapsed.Milliseconds(), outcome)
+	Printf("perf component=%s stage=%s duration_ms=%d status=%s", s.Component, s.Name, elapsed.Milliseconds(), outcome)
 }
 
 func (s *Stage) End(start time.Time, failed bool) {

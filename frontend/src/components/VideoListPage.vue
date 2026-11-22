@@ -2425,7 +2425,8 @@ export default {
           video_extensions: this.settings.video_extensions || '',
           play_weight: this.settings.play_weight || 2.0,
           auto_scan_on_startup: this.settings.auto_scan_on_startup || false,
-          log_enabled: this.settings.log_enabled || false
+          log_enabled: this.settings.log_enabled !== false,
+          perf_log_enabled: this.settings.perf_log_enabled !== false
         });
         this.$emit('update-settings', {
           ...this.settings,

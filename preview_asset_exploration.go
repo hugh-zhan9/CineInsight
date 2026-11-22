@@ -6,7 +6,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+	"video-master/internal/perfdiag"
 	"video-master/services"
+)
+
+var (
+	explorePhotoResolveStage = perfdiag.Stage{Component: "explore_photo", Name: "view_resolve", Slow: 80 * time.Millisecond, Cooldown: 5 * time.Second}
+	explorePhotoReadStage    = perfdiag.Stage{Component: "explore_photo", Name: "view_file_read", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
 )
 
 func (a *App) serveExplorationAsset(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +71,12 @@ func (a *App) serveExplorationAsset(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	stop := context.AfterFunc(r.Context(), cancel)
 	defer stop()
+	var perfStart time.Time
+	if asset == "image" {
+		perfStart = perfdiag.Start()
+	}
 	media, err := a.mediaExploration.ResolveAsset(ctx, request, kind, id, asset, edge, ms, a.thumbnailService, a.imageThumbnail, a.videoService)
+	explorePhotoResolveStage.End(perfStart, err != nil)
 	if err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, services.ErrExplorationInvalid) {
@@ -78,5 +90,15 @@ func (a *App) serveExplorationAsset(w http.ResponseWriter, r *http.Request) {
 	defer media.Close()
 	w.Header().Set("Content-Type", media.MIME)
 	w.Header().Set("Cache-Control", "no-store")
+	if asset == "image" {
+		if started := perfdiag.Start(); !started.IsZero() {
+			read := &photoAssetRead{ReadSeeker: media.Reader}
+			http.ServeContent(w, r, "exploration-media", media.ModTime, read)
+			if read.didRead {
+				explorePhotoReadStage.Record(started, started.Add(read.elapsed), read.failed)
+			}
+			return
+		}
+	}
 	http.ServeContent(w, r, "exploration-media", media.ModTime, media.Reader)
 }

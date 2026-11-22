@@ -68,8 +68,19 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.AIQualityEnabled = input.AIQualityEnabled
 		settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)
 		settings.ShortFeedFeedbackSyncEnabled = input.ShortFeedFeedbackSyncEnabled
+		if input.DiscoverVideoCount != 0 {
+			if input.DiscoverVideoCount < 1 || input.DiscoverVideoCount > DiscoverVideoCountMax {
+				return fmt.Errorf("发现页视频数量必须在 1–%d 之间", DiscoverVideoCountMax)
+			}
+			settings.DiscoverVideoCount = input.DiscoverVideoCount
+		}
 		settings.Theme = input.Theme
 		settings.LogEnabled = input.LogEnabled
+		// Older clients may omit this independent switch. Only an explicit
+		// choice may replace the persisted preference.
+		if input.PerfLogEnabled != nil {
+			settings.PerfLogEnabled = input.PerfLogEnabled
+		}
 		settings.BilingualEnabled = input.BilingualEnabled
 		settings.BilingualLang = input.BilingualLang
 		// Retired subtitle provider fields remain in historical storage, never drive execution.

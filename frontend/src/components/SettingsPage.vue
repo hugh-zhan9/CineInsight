@@ -108,6 +108,7 @@ import { normalizeIdleThresholdMinutes, normalizeIdleWindowBound } from '../util
 import { normalizeProxyCacheLimitBytes } from '../utils/playbackProxy.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction } from '../utils/feedback.js';
+import { normalizeDiscoverVideoCount } from '../utils/discoverSettings.js';
 
 import { SETTINGS_CATEGORIES, SETTINGS_SECTIONS, settingsSection } from '../utils/settingsSections.js';
 
@@ -141,6 +142,9 @@ function normalizeSceneIntervalSeconds(value) {
 
 export function normalizeSettingsForm(settings) {
   const form = { ...(settings || {}) };
+  form.log_enabled = form.log_enabled !== false;
+  form.perf_log_enabled = form.perf_log_enabled !== false;
+  form.discover_video_count = normalizeDiscoverVideoCount(form.discover_video_count);
   form.desktop_player = form.desktop_player || 'system';
   if (!form.video_extensions || String(form.video_extensions).trim() === '') {
     form.video_extensions = DEFAULT_VIDEO_EXTENSIONS;
@@ -239,7 +243,9 @@ export function buildSettingsPayload(form) {
     short_feed_max_duration_minutes: form.short_feed_max_duration_minutes || 5,
     short_feed_feedback_sync_enabled: form.short_feed_feedback_sync_enabled !== false,
     theme: form.theme,
-    log_enabled: form.log_enabled,
+    log_enabled: form.log_enabled !== false,
+    perf_log_enabled: form.perf_log_enabled !== false,
+    discover_video_count: normalizeDiscoverVideoCount(form.discover_video_count),
     bilingual_enabled: form.bilingual_enabled || false,
     bilingual_lang: form.bilingual_lang || 'zh',
     query_parse_enabled: Boolean(form.query_parse_enabled),
@@ -459,6 +465,7 @@ export default {
       this.saveState = 'saving';
       this.saveMessage = '正在保存设置…';
       const payload = buildSettingsPayload(this.settingsForm);
+      this.settingsForm.discover_video_count = payload.discover_video_count;
       const previous = buildSettingsPayload(this.savedSnapshot);
       const aiChanged = Object.keys(payload)
         .some(key => key.startsWith(AI_TAGGING_FIELD_PREFIX) && !sameValue(payload[key], previous[key]));

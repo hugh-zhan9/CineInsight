@@ -37,3 +37,18 @@ describe('DiscoverPage', () => {
     await w.get('form').trigger('submit'); await flushPromises(); expect(w.text()).toContain('Video 4');
   });
 });
+
+it('uses saved count, refreshes on a new count and ignores the previous pending batch', async () => {
+  let finish;
+  api.SuggestTonightVideos.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const w = await page({ videoCount: 24 });
+  expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 24);
+  await w.setProps({ videoCount: 7 }); await flushPromises();
+  expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 7);
+  finish(rows([99])); await flushPromises();
+  expect(w.text()).not.toContain('Video 99');
+  await w.setProps({ pageActive: false }); await w.setProps({ videoCount: 36 });
+  expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(2);
+  await w.setProps({ pageActive: true }); await flushPromises();
+  expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.any(Object), 36);
+});

@@ -180,17 +180,19 @@ type Settings struct {
 	AIQualityEnabled             bool       `json:"ai_quality_enabled"` // 显示 AI 质量评估入口
 	ShortFeedMaxDurationMinutes  int        `gorm:"default:5" json:"short_feed_max_duration_minutes"`
 	ShortFeedFeedbackSyncEnabled bool       `gorm:"not null;default:true" json:"short_feed_feedback_sync_enabled"`
-	Theme                        string     `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
-	LogEnabled                   bool       `json:"log_enabled"`                        // 是否启用日志
-	BilingualEnabled             bool       `json:"bilingual_enabled"`                  // 是否开启双语字幕
-	BilingualLang                string     `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
-	DeepLApiKey                  string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
-	SubtitleTranslationProvider  string     `gorm:"default:'deepl'" json:"-"`           // Retired subtitle setting retained for historical database compatibility.
-	SubtitleTranslationBaseURL   string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
-	SubtitleTranslationAPIKey    string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
-	SubtitleTranslationModel     string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
-	SubtitleWhisperXModel        string     `gorm:"default:'medium'" json:"-"`          // Retired subtitle setting retained for historical database compatibility.
-	SubtitleWhisperXBatchSize    int        `gorm:"default:8" json:"-"`                 // Retired subtitle setting retained for historical database compatibility.
+	Theme                        string     `gorm:"default:'system'" json:"theme"` // 主题模式: light, dark, system
+	LogEnabled                   bool       `json:"log_enabled"`                   // 是否启用日志
+	DiscoverVideoCount           int        `gorm:"not null;default:12" json:"discover_video_count"`
+	PerfLogEnabled               *bool      `gorm:"not null;default:true" json:"perf_log_enabled"` // 性能诊断日志；nil 表示旧输入没有设置此字段
+	BilingualEnabled             bool       `json:"bilingual_enabled"`                             // 是否开启双语字幕
+	BilingualLang                string     `gorm:"default:'zh'" json:"bilingual_lang"`            // 双语目标语言代码 (zh/ja/ko/fr/de/es)
+	DeepLApiKey                  string     `json:"-"`                                             // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationProvider  string     `gorm:"default:'deepl'" json:"-"`                      // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationBaseURL   string     `json:"-"`                                             // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationAPIKey    string     `json:"-"`                                             // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationModel     string     `json:"-"`                                             // Retired subtitle setting retained for historical database compatibility.
+	SubtitleWhisperXModel        string     `gorm:"default:'medium'" json:"-"`                     // Retired subtitle setting retained for historical database compatibility.
+	SubtitleWhisperXBatchSize    int        `gorm:"default:8" json:"-"`                            // Retired subtitle setting retained for historical database compatibility.
 	QueryParseEnabled            bool       `gorm:"not null;default:false" json:"query_parse_enabled"`
 	ChapterSummaryEnabled        bool       `gorm:"not null;default:false" json:"chapter_summary_enabled"`
 	AITaggingBaseURL             string     `json:"ai_tagging_base_url"` // OpenAI 兼容接口地址
@@ -323,6 +325,11 @@ type Settings struct {
 	FavoritesUnifiedAt *time.Time `json:"-"`
 
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
+}
+
+// PerformanceLogsEnabled supplies the product default when an older caller omitted the field.
+func (s Settings) PerformanceLogsEnabled() bool {
+	return s.PerfLogEnabled == nil || *s.PerfLogEnabled
 }
 
 // ScanDirectory 扫描目录配置

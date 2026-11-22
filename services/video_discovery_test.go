@@ -164,7 +164,7 @@ func TestTonightRejectsInvalidAndCancelledRequests(t *testing.T) {
 			t.Fatalf("accepted invalid %+v", request)
 		}
 	}
-	for _, limit := range []int{-1, 13} {
+	for _, limit := range []int{-1, DiscoverVideoCountMax + 1} {
 		if _, err := (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{}, limit); err == nil {
 			t.Fatalf("accepted invalid limit %d", limit)
 		}

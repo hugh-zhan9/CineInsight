@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// 「今晚看什么」单次候选数：请求 0 取默认 6 条，最多 12 条，越界明确报错。
+// 「今晚看什么」单次候选数：请求 0 取默认 6 条，最多 36 条，越界明确报错。
 const (
-	tonightDefaultLimit = 6
-	tonightMaxLimit     = 12
+	tonightDefaultLimit   = 6
+	DiscoverVideoCountMax = 36
 )
 
 type TonightSuggestion struct {
@@ -24,8 +24,8 @@ type TonightSuggestion struct {
 // 与随机播放共用候选边界（片库筛选、观看状态、仅收藏、时长上限、最近随机排除），
 // 但只读：不启动播放、不写计数或事件。整个读取在维护闸门内、带调用方的 context。
 func (s *VideoService) SuggestTonight(ctx context.Context, request RandomPlayRequest, limit int) ([]TonightSuggestion, error) {
-	if limit < 0 || limit > tonightMaxLimit {
-		return nil, fmt.Errorf("推荐数量必须在 1–%d 之间", tonightMaxLimit)
+	if limit < 0 || limit > DiscoverVideoCountMax {
+		return nil, fmt.Errorf("推荐数量必须在 1–%d 之间", DiscoverVideoCountMax)
 	}
 	if limit == 0 {
 		limit = tonightDefaultLimit

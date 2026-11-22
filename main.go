@@ -4,8 +4,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
+	"os"
 	"time"
 	"video-master/database"
 
@@ -16,6 +18,7 @@ import (
 )
 
 func main() {
+	log.SetOutput(io.Discard)
 	started := time.Now()
 	// Create an instance of the app structure
 	app := NewApp()
@@ -28,10 +31,14 @@ func main() {
 	app.startupPerf.database = time.Since(dbAt)
 	recoveryAt := time.Now()
 	if err := dbErr; err != nil {
-		log.Printf("数据库初始化失败: %v", err)
+		fmt.Fprintln(os.Stderr, "数据库初始化失败:", err)
 		app.setStartupError(err)
 	} else {
 		defer database.Close()
+		if settings, err := app.settingsService.GetSettings(); err == nil {
+			app.setLogEnabled(settings.LogEnabled)
+			app.setPerformanceLogEnabled(settings.PerformanceLogsEnabled())
+		}
 		// 在 wails.Run 之前：darwin 上 OnStartup 与页面加载并发，前端一加载就会查询中断的字幕任务。
 		app.recoverVideoEditBeforeBindings(context.Background())
 		app.markInterruptedSubtitleJobs()
@@ -45,8 +52,7 @@ func main() {
 
 	app.startupPerf.recovery = time.Since(recoveryAt)
 	app.startupPerf.toWindow = time.Since(started)
-	// 默认禁用日志，设置页开启后再写入
-	log.SetOutput(io.Discard)
+	app.startupPerf.flush()
 
 	// Create application with options
 	err := wails.Run(&options.App{

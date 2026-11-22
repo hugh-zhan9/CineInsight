@@ -38,7 +38,7 @@
       <p v-if="remainingFailed" class="explore-status">剩余内容暂时无法预览，可重试当前内容或重新洗牌。</p>
     </template>
 
-    <PhotoLightbox v-if="pageActive && preview?.entry.kind === 'image'" :key="preview.entry.entry_id" :image="preview.image" :asset-url="photoAssetURL" :allow-remove="false" mixed-media :has-prev="previewIndex > 0" :has-next="previewIndex < snapshot.entries.length - 1" @close="closePreview" @prev="stepPreview(-1)" @next="stepPreview(1)" @patch="patchImage" @open-person="openPerson" @open-in-manage="openImageManage" @open-cleanup="closePreview(); $emit('open-cleanup')" />
+    <PhotoLightbox v-if="pageActive && preview?.entry.kind === 'image'" :image="preview.image" :asset-url="photoAssetURL" :thumbnail-asset-url="preview.card.thumbnail_url || ''" progressive :allow-remove="false" mixed-media :has-prev="previewIndex > 0" :has-next="previewIndex < snapshot.entries.length - 1" @close="closePreview" @prev="stepPreview(-1)" @next="stepPreview(1)" @patch="patchImage" @open-person="openPerson" @open-in-manage="openImageManage" @open-cleanup="closePreview(); $emit('open-cleanup')" />
     <Teleport v-if="pageActive && preview?.entry.kind === 'video'" to="body">
       <DialogShell :title="preview.card.title || '视频预览'" size="xl" data-test="explore-preview" @close="closePreview">
         <AppBanner v-if="previewError" tone="danger" :title="previewError" />
@@ -224,8 +224,8 @@ export default {
       if (!await confirmAction({ title: '刷新探索场景', message: '将放弃尚未确认保存的浏览记录和视口，读取已保存的场景。', confirmLabel: '刷新场景' })) return;
       await this.run(async () => { await this._controller.reloadDiscardingPending(); this._tracker.reset(); this.invalidateCards(); this.notice = '已读取保存的场景；未确认的浏览记录已放弃。'; });
     },
-    async openPreview(entry) {
-      if (this.locked || !this.pageActive) return;
+    async openPreview(entry, replacingPhoto = false) {
+      if (!this.pageActive || (this.locked && !(replacingPhoto && !this.busy && !this.loading && !this.frozen && this.preview?.entry.kind === 'image' && entry.kind === 'image'))) return;
       const ticket = ++this.previewGeneration; this.select(entry.entry_id);
       let card;
       try {
@@ -262,7 +262,13 @@ export default {
     },
     closePreview(refill = true) { this.previewGeneration++; this.$refs.previewPlayer?.pause(); this.preview = null; this.previewSession = null; this.previewBusy = false; this.$nextTick(() => { if (this.pageActive && !this.frozen) this.$refs.wall?.focus(); }); if (refill) this.scheduleRefill(); },
     previewImageFailed(event) { if (this.preview && event.target.getAttribute('src') === this.previewFrameURL) this.previewError = '画面暂时无法读取，可换个画面或打开详情。'; },
-    async stepPreview(delta) { const entry = this.snapshot.entries[this.previewIndex + delta]; if (!entry) return; this.closePreview(false); await this.openPreview(entry); },
+    async stepPreview(delta) {
+      const entry = this.snapshot.entries[this.previewIndex + delta];
+      if (!entry) return;
+      if (this.preview?.entry.kind === 'image' && entry.kind === 'image') { await this.openPreview(entry, true); return; }
+      this.closePreview(false);
+      await this.openPreview(entry);
+    },
     async openDetail() { const id = this.preview?.entry.media_id; if (!id) return; this.closePreview(false); await this.run(async () => { await this.flush(); if (this.pageActive) this.$emit('open-video', id); }); },
     patchImage(fields) { if (this.preview?.entry.kind === 'image' && fields.id === this.preview.entry.media_id) this.preview.image = { ...this.preview.image, ...fields }; },
     openPerson(person) { this.closePreview(); this.$emit('open-person', person); },

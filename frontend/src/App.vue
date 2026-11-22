@@ -336,7 +336,7 @@
 	    @navigate="navigateTo"
 	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
-      <DiscoverPage ref="discoverPage" v-if="discoverMounted" v-show="currentPage === 'discover'" :page-active="currentPage === 'discover' && appReady && !relaunchRequired" :initial-request="pageRequests.discover || null" @open-video="openVideoByID($event, { from: 'discover' })" />
+      <DiscoverPage ref="discoverPage" v-if="discoverMounted" v-show="currentPage === 'discover'" :page-active="currentPage === 'discover' && appReady && !relaunchRequired" :initial-request="pageRequests.discover || null" :video-count="settings.discover_video_count" @open-video="openVideoByID($event, { from: 'discover' })" />
       <ExplorePage v-if="exploreMounted" v-show="currentPage === 'explore'" ref="explorePage" :images-version="photoImagesVersion" :page-active="currentPage === 'explore' && appReady && !relaunchRequired" @open-video="openVideoByID($event, { from: 'explore' })" @open-person="openRecapEntity({ type: 'person', ...$event })" @open-in-manage="openImageInManage" @open-cleanup="openCleanupCenter({ tab: 'image', open: true })" />
 	  <SearchResultsPage v-if="searchResultsMounted" v-show="currentPage === 'search-results'" :page-active="currentPage === 'search-results'" :initial-request="searchResultsRequest" :watch-whole-video="watchQueueWholeVideo" @open-video="openVideo($event, { from: 'search-results' })" @open-entity="openRecapEntity" />
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" :watch-whole-video="watchQueueWholeVideo" @open-video-at="openVideoAt($event, { from: 'scenes' })" />
@@ -499,6 +499,8 @@ import { SUBTITLE_TOOL_REQUEST } from './utils/subtitleNavigation.js';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { observeMediaLoad } from './utils/mediaPerf.js';
+import { LogFrontend } from '../wailsjs/go/main/App';
+import { DEFAULT_DISCOVER_VIDEO_COUNT, normalizeDiscoverVideoCount } from './utils/discoverSettings.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import {
   appCommandsMixin, CLEANUP_BUSY_NOTICE, CLEANUP_PAGE, cleanupParamsChangePage, DEFAULT_CLEANUP_TAB, DEFAULT_LIST_TAB,
@@ -650,7 +652,9 @@ export default {
         play_weight: 2.0,
         auto_scan_on_startup: false,
         theme: 'system',
-        log_enabled: false
+        log_enabled: false,
+        perf_log_enabled: false,
+        discover_video_count: DEFAULT_DISCOVER_VIDEO_COUNT
       }
     };
   },
@@ -665,8 +669,8 @@ export default {
     // 前后台上报（D-013）：后端据此决定长任务终态要不要发系统通知。
     // 放在最前面，数据库连不上时也要报——通知开关与库无关。
     this.attachForegroundReporting();
-    this._stopMediaPerf = observeMediaLoad(window, () => Boolean(this.settings.log_enabled),
-      line => logFrontend('media-perf', line));
+    this._stopMediaPerf = observeMediaLoad(window, () => this.settings.perf_log_enabled === true,
+      (stage, durationMS) => void Promise.resolve().then(() => LogFrontend('perf', 'media-perf', `${stage} ${durationMS}`)).catch(() => {}));
     try {
       this.startupError = await GetStartupError();
     } finally {
@@ -1530,7 +1534,13 @@ export default {
     },
     async loadSettings() {
       try {
-        this.settings = await GetSettings();
+        const settings = await GetSettings();
+        this.settings = {
+          ...settings,
+          log_enabled: settings?.log_enabled !== false,
+          perf_log_enabled: settings?.perf_log_enabled !== false,
+          discover_video_count: normalizeDiscoverVideoCount(settings?.discover_video_count)
+        };
         this.debugLog('loadSettings resolved', {
           id: this.settings?.id,
           theme: this.settings?.theme,

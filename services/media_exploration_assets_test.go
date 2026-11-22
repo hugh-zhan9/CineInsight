@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -92,5 +93,45 @@ func TestMediaExplorationAssetRejectsForgedSceneAndCancelledRead(t *testing.T) {
 	cancel()
 	if _, err := asset.Reader.Read(make([]byte, 10)); !errors.Is(err, context.Canceled) {
 		t.Fatal("late image read after cancellation", err)
+	}
+}
+
+func TestMediaExplorationAssetOriginalPhotoRetainsExactBytesAndSourceGuard(t *testing.T) {
+	setupImageServiceTestDB(t)
+	path := explorationJPEG(t)
+	expected, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	photo := models.Image{Name: "photo", Path: path, Directory: filepath.Dir(path), Format: "jpg"}
+	if err := database.DB.Create(&photo).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewMediaExplorationService()
+	state, err := service.Open(context.Background(), "image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := ExplorationAssetContext{ExplorationContext: state.ExplorationContext, EntryID: state.Entries[0].EntryID}
+	asset, err := service.ResolveAsset(context.Background(), r, "image", photo.ID, "image", 0, 0, nil, NewImageThumbnailService(t.TempDir()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(asset.Close)
+	bytesRead, err := io.ReadAll(asset.Reader)
+	if err != nil || !bytes.Equal(bytesRead, expected) {
+		t.Fatalf("image did not use original bytes (err=%v)", err)
+	}
+	if err := os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, expected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asset.Reader.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asset.Reader.Read(make([]byte, 4)); !errors.Is(err, ErrBookmarkSourceChanged) {
+		t.Fatalf("source replacement was not rejected: %v", err)
 	}
 }

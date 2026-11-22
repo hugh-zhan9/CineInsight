@@ -15,9 +15,11 @@
         <div class="photo-lightbox__stage" @click.self="$emit('close')">
           <ImageViewport
             v-if="!imageFailed"
+            :key="progressive ? 'scoped' : 'default'"
             ref="viewport"
             :src="originalURL"
-            :thumbnail-src="`/preview/image-thumbnail/${Number(image.id)}`"
+            :progressive="progressive"
+            :thumbnail-src="progressive ? thumbnailAssetUrl : `/preview/image-thumbnail/${Number(image.id)}`"
             @load="imageLoaded = true; scheduleViewRecord(Number(image.id))"
             :name="image.name"
             :image-width="Number(image.width) || 1"
@@ -195,6 +197,8 @@ export default {
   props: {
     image: { type: Object, required: true },
     assetUrl: { type: String, default: '' },
+    thumbnailAssetUrl: { type: String, default: '' },
+    progressive: { type: Boolean, default: false },
     allowRemove: { type: Boolean, default: true },
     mixedMedia: { type: Boolean, default: false },
     hasPrev: { type: Boolean, default: false },

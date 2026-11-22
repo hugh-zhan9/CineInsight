@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"video-master/internal/perfdiag"
 )
 
 const (
@@ -154,10 +155,10 @@ func resolveBoundedPoster[T any](ctx context.Context, s *ThumbnailService, explo
 	cold := false
 	start := time.Now()
 	defer func() {
-		// No log spam for normal warm loads. This follows the existing local
-		// app logging setting; deliberately omit all identifiers and errors.
-		if (cold || lookup >= 50*time.Millisecond) && s.allowPosterTimingLog() {
-			log.Printf("perf component=poster stage=resolve exploration=%t outcome=%s cache_check_ms=%d queue_ms=%d cold_work_ms=%d",
+		// No log spam for normal warm loads. Use only the opt-in perf sink
+		// and deliberately omit all identifiers and errors.
+		if perfdiag.Enabled() && (cold || lookup >= 50*time.Millisecond) && s.allowPosterTimingLog() {
+			perfdiag.Printf("perf component=poster stage=resolve exploration=%t outcome=%s cache_check_ms=%d queue_ms=%d cold_work_ms=%d",
 				exploration, outcome, lookup.Milliseconds(), queue.Milliseconds(), work.Milliseconds())
 		}
 	}()
@@ -279,8 +280,8 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 	seekSeconds := thumbnailSeekSeconds(video.Duration)
 	generateStart := time.Now()
 	err = s.runFFmpeg(ctx, ffmpegPath, video.Path, tempPath, seekSeconds)
-	if s.allowPosterTimingLog() {
-		log.Printf("perf component=poster stage=generate success=%t elapsed_ms=%d", err == nil, time.Since(generateStart).Milliseconds())
+	if perfdiag.Enabled() && s.allowPosterTimingLog() {
+		perfdiag.Printf("perf component=poster stage=generate success=%t elapsed_ms=%d", err == nil, time.Since(generateStart).Milliseconds())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("生成缩略图失败: %w", err)

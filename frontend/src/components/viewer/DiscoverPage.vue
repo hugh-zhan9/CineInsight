@@ -23,16 +23,26 @@ import { SuggestTonightVideos } from '../../../wailsjs/go/main/App';
 import PageHeader from '../ui/PageHeader.vue';
 import RecapMediaCard from '../recap/RecapMediaCard.vue';
 import { createDiscoverySession, resetDiscoverySession, fetchDiscoveryBatch, observeDiscoveryExposure } from '../../utils/discoverySession.js';
+import { DEFAULT_DISCOVER_VIDEO_COUNT, normalizeDiscoverVideoCount } from '../../utils/discoverSettings.js';
 import { translateBackendError } from '../../utils/feedback.js';
 export default {
   name: 'DiscoverPage', components: { PageHeader, RecapMediaCard },
   inject: { discoverySession: { default: createDiscoverySession } },
-  props: { pageActive: { type: Boolean, default: true }, initialRequest: { type: Object, default: null } },
+  props: { pageActive: { type: Boolean, default: true }, initialRequest: { type: Object, default: null }, videoCount: { type: Number, default: DEFAULT_DISCOVER_VIDEO_COUNT } },
   emits: ['open-video'],
   data: () => ({ items: [], filter: {}, watchState: 'any', minutes: 0, favoritesOnly: false, loading: false, error: '', notice: '', generation: 0 }),
-  computed: { hasFilter() { return Object.keys(this.filter).length > 0; } },
+  computed: {
+    hasFilter() { return Object.keys(this.filter).length > 0; },
+    batchLimit() { return normalizeDiscoverVideoCount(this.videoCount); }
+  },
   watch: {
     'initialRequest.token'() { this.applyRequest(); },
+    batchLimit() {
+      this.generation++;
+      this.items = [];
+      this.loading = false;
+      if (this.pageActive) this.load();
+    },
     pageActive(active) {
       if (!active) { this.generation++; this.loading = false; this._observer?.disconnect(); }
       else if (!this.items.length) this.load();
@@ -64,7 +74,7 @@ export default {
       try {
         const result = await fetchDiscoveryBatch(SuggestTonightVideos, this.discoverySession,
           { filter: this.filter, watch_state: this.watchState, favorites_only: this.favoritesOnly, max_duration_seconds: this.minutes * 60 },
-          12, reroll ? this.items.map(item => item.video.id) : [], () => generation === this.generation && this.pageActive);
+          this.batchLimit, reroll ? this.items.map(item => item.video.id) : [], () => generation === this.generation && this.pageActive);
         if (!result) return;
         if (result.items.length || !reroll) this.items = result.items;
         this.notice = !result.items.length && reroll ? '符合条件的内容都在这里了，暂时没有新的候选。' : result.newRound ? '开始新一轮发现' : '';

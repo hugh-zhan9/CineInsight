@@ -21,7 +21,7 @@ it('measures only slow local media, limits repeats, and never forwards identifyi
   expect(lookup).not.toHaveBeenCalled();
   emit('wails://wails/preview/image-thumbnail/123?secret=path');
   emit('wails://wails/preview/image-thumbnail/456');
-  expect(log).toHaveBeenCalledExactlyOnceWith('perf component=webview_media stage=photo_thumbnail_load_observed duration_ms=300 status=ok');
+  expect(log).toHaveBeenCalledExactlyOnceWith('photo_thumbnail_load_observed', 300);
   lookup.mockReturnValue([]);
   emit('wails://wails/preview/image/234');
   expect(log).toHaveBeenCalledTimes(1);
