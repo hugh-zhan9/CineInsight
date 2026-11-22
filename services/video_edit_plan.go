@@ -71,12 +71,13 @@ type editPlanVideo struct {
 }
 
 type editPlanTrack struct {
-	Language string `json:"language"`
-	Title    string `json:"title"`
-	Codec    string `json:"codec"`
-	Channels int    `json:"channels"`
-	Layout   string `json:"layout"`
-	Image    bool   `json:"image"`
+	Language  string `json:"language"`
+	Title     string `json:"title"`
+	Codec     string `json:"codec"`
+	Channels  int    `json:"channels"`
+	Layout    string `json:"layout"`
+	Image     bool   `json:"image"`
+	CopyAudio bool   `json:"copy_audio,omitempty"`
 }
 
 type editPlanAttachment struct {

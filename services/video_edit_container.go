@@ -67,6 +67,72 @@ func fullCropContainerProfile(path, format string) (*editContainerProfile, error
 	return p, nil
 }
 
+// fullCropMayCopyAudio lists native audio codecs in the export compatibility
+// profiles. An input accepted by a demuxer is not necessarily suitable for
+// the corresponding output profile. For example, AVI AAC is readable by
+// FFmpeg, but is outside the legacy AVI playback profile.
+func fullCropMayCopyAudio(p *editContainerProfile, stream editStream) bool {
+	if stream.Channels < 1 || stream.Channels > 8 {
+		return false
+	}
+	codec := stream.Codec
+	if codec == p.AudioCodec {
+		return true
+	}
+	switch p.Muxer {
+	case "mp4":
+		return oneOf(codec, "mp3", "ac3", "eac3", "alac")
+	case "mov":
+		return oneOf(codec, "mp3", "ac3", "eac3", "alac", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "adpcm_ima_qt")
+	case "matroska":
+		return oneOf(codec, "mp2", "mp3", "ac3", "eac3", "dts", "truehd", "flac", "alac", "opus", "vorbis", "wavpack", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f64le")
+	case "avi":
+		return oneOf(codec, "mp2", "ac3", "pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le")
+	case "asf":
+		return oneOf(codec, "wmav1", "wmapro", "wmalossless", "mp3")
+	case "flv":
+		return codec == "aac"
+	case "webm":
+		return codec == "vorbis"
+	case "mpegts":
+		return oneOf(codec, "mp2", "mp3", "ac3", "eac3", "aac_latm")
+	case "3gp":
+		return oneOf(codec, "amr_nb", "amr_wb")
+	case "vob":
+		return oneOf(codec, "ac3", "pcm_dvd")
+	}
+	return false
+}
+
+func fullCropAudioSupported(p *editContainerProfile, source editStream) bool {
+	return source.Channels >= 1 && source.Channels <= 8 &&
+		(fullCropMayCopyAudio(p, source) || source.Channels <= 2 || !oneOf(p.AudioEncoder, "libmp3lame", "wmav2", "mp2"))
+}
+
+// fullCropCopiedAudioBitRate uses the reported rate or a PCM rate
+// derived from its stored sample width. Unknown compressed rates are handled
+// as a source-wide size bound by configureFullCrop.
+func fullCropCopiedAudioBitRate(stream editStream) int64 {
+	rate := stream.BitRate
+	if stream.SampleRate <= 0 || stream.Channels <= 0 {
+		return rate
+	}
+	width := 0
+	switch {
+	case stream.Codec == "pcm_u8":
+		width = 8
+	case strings.HasPrefix(stream.Codec, "pcm_s16"):
+		width = 16
+	case strings.HasPrefix(stream.Codec, "pcm_s24"):
+		width = 24
+	case strings.HasPrefix(stream.Codec, "pcm_s32"), strings.HasPrefix(stream.Codec, "pcm_f32"):
+		width = 32
+	case strings.HasPrefix(stream.Codec, "pcm_f64"):
+		width = 64
+	}
+	return max(rate, int64(stream.SampleRate)*int64(stream.Channels)*int64(width))
+}
+
 func (s *VideoEditService) configureFullCrop(plan *editPlan, sc *editSourceCtx) error {
 	profile, err := fullCropContainerProfile(sc.path, sc.probe.FormatName)
 	if err != nil {
@@ -122,9 +188,34 @@ func (s *VideoEditService) configureFullCrop(plan *editPlan, sc *editSourceCtx) 
 			return editError("container_profile_incompatible", "原容器编码方案无法保留选定字幕，请明确调整字幕轨道")
 		}
 	}
-	for _, track := range plan.Audio {
-		if track.Channels < 1 || track.Channels > 2 && oneOf(profile.AudioEncoder, "libmp3lame", "wmav2", "mp2") {
-			return editError("container_profile_incompatible", "原容器的音频编码器不支持选定声道数")
+	audioBits := float64(0)
+	unknownCopiedAudio := false
+	if len(plan.Audio) > 0 {
+		if len(plan.Segments) != 1 || len(plan.Segments[0].Audio) != len(plan.Audio) {
+			return editError("container_profile_incompatible", "原容器的音轨映射不完整")
+		}
+		sourceAudio := make(map[int]editStream, len(sc.probe.Audio))
+		for _, stream := range sc.probe.Audio {
+			sourceAudio[stream.Index] = stream
+		}
+		for i, ref := range plan.Segments[0].Audio {
+			source := sourceAudio[ref.Stream]
+			if ref.Fill != "" || ref.Source != plan.Segments[0].VideoSource || !fullCropAudioSupported(profile, source) {
+				return editError("container_profile_incompatible", "原容器无法保留第%d条选定音轨的声道数", i+1)
+			}
+			track := &plan.Audio[i]
+			track.CopyAudio = fullCropMayCopyAudio(profile, source)
+			track.Codec = profile.AudioCodec
+			if track.CopyAudio {
+				track.Codec = source.Codec
+				if rate := fullCropCopiedAudioBitRate(source); rate > 0 {
+					audioBits += float64(rate)
+				} else {
+					unknownCopiedAudio = true
+				}
+			} else {
+				audioBits += float64(profile.AudioBitRate)
+			}
 		}
 	}
 	for i := range plan.Sources {
@@ -146,6 +237,14 @@ func (s *VideoEditService) configureFullCrop(plan *editPlan, sc *editSourceCtx) 
 	plan.OutputBase = strings.TrimSuffix(filepath.Base(sc.path), plan.OutputExt)
 	plan.OutputDir = filepath.Dir(sc.path)
 	plan.Sidecar = editPlanSidecar{Mode: "none", CopySource: -1}
+	seconds := float64(plan.DurationMS) / 1000
+	estimated := (float64(plan.Video.BitRate) + audioBits) / 8 * seconds
+	if unknownCopiedAudio {
+		// These full-file tracks together cannot exceed the original file.
+		// Use a single source-wide allowance, not an assumed AAC bitrate.
+		estimated += max(float64(sc.size), float64(sc.probe.BitRate)/8*seconds)
+	}
+	plan.EstimatedBytes = int64(estimated*1.05) + 1<<20
 	plan.WorkBytes = plan.EstimatedBytes
 	return nil
 }
@@ -172,12 +271,15 @@ func fullCropArgs(plan editPlan, target string) []string {
 	if profile.VideoCodec == "hevc" && oneOf(profile.Muxer, "mov", "mp4") {
 		args = append(args, "-tag:v", "hvc1")
 	}
-	if len(plan.Audio) > 0 {
-		args = append(args, "-c:a", profile.AudioEncoder, "-ar", strconv.Itoa(profile.SampleRate), "-b:a", strconv.Itoa(profile.AudioBitRate))
-		for i, track := range plan.Audio {
-			args = append(args, fmt.Sprintf("-ac:a:%d", i), strconv.Itoa(track.Channels))
-			args = append(args, editStreamMetadata("a", i, track)...)
+	for i, track := range plan.Audio {
+		codec := fmt.Sprintf("-c:a:%d", i)
+		if track.CopyAudio {
+			args = append(args, codec, "copy")
+		} else {
+			args = append(args, codec, profile.AudioEncoder, fmt.Sprintf("-ar:a:%d", i), strconv.Itoa(profile.SampleRate),
+				fmt.Sprintf("-b:a:%d", i), strconv.Itoa(profile.AudioBitRate), fmt.Sprintf("-ac:a:%d", i), strconv.Itoa(track.Channels))
 		}
+		args = append(args, editStreamMetadata("a", i, track)...)
 	}
 	for i, track := range plan.Subtitles {
 		codec := track.Codec
@@ -283,9 +385,20 @@ func (s *VideoEditService) verifyFullCropProfile(plan editPlan, probe editProbe,
 	if max(probe.Video.BitDepth, editPixelDepth(probe.Video.PixFmt)) < editPixelDepth(plan.Video.PixFmt) {
 		return editError("verify_failed", "成品位深低于冻结计划")
 	}
-	for _, track := range probe.Audio {
-		if track.Codec != p.AudioCodec {
-			return editError("verify_failed", "成品音频编码与冻结计划不一致")
+	for i, track := range probe.Audio {
+		if i >= len(plan.Audio) {
+			break // stream count is verified by verifyEditOutput
+		}
+		planned := plan.Audio[i]
+		expected := p.AudioCodec // 旧计划的 Codec 不是原容器实际输出的编码。
+		if planned.CopyAudio {
+			expected = planned.Codec
+		}
+		if track.Codec != expected {
+			return editError("verify_failed", "成品第%d条音轨编码与冻结计划不一致", i+1)
+		}
+		if planned.Channels > 0 && track.Channels != planned.Channels {
+			return editError("verify_failed", "成品第%d条音轨声道数与冻结计划不一致", i+1)
 		}
 	}
 	return nil
@@ -310,7 +423,7 @@ func (s *VideoEditService) fullCropTrackConflicts(pre *EditPreflight, plan editP
 	}
 	for _, k := range audio.kept {
 		track := audio.reference[k]
-		if track.Channels < 1 || track.Channels > 8 || track.Channels > 2 && oneOf(p.AudioEncoder, "libmp3lame", "wmav2", "mp2") {
+		if !fullCropAudioSupported(p, track) {
 			conflict(editTrackAudio, k, "声道数不受原容器编码器支持，请明确选择整轨不导出")
 		}
 	}

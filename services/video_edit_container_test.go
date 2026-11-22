@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -124,6 +125,106 @@ func TestVideoEditFullCropContainerProfilesReal(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestVideoEditFullCropAudioDiskEstimate(t *testing.T) {
+	s := NewVideoEditService(nil, NewMediaWorkSlot(), t.TempDir())
+	s.goos = "linux"
+	s.containerInspector = func(string, string) (string, error) { return "matroska", nil }
+	probe := editProbe{FormatName: "matroska,webm", Video: &editStream{Codec: "h264"}, Audio: []editStream{
+		{Index: 1, Codec: "pcm_s24le", SampleRate: 96000, Channels: 6},
+		{Index: 2, Codec: "truehd", Channels: 6},
+		{Index: 3, Codec: "unknown", Channels: 2},
+	}}
+	sc := &editSourceCtx{path: "/sample.mkv", size: 20000000, probe: probe}
+	plan := editPlan{DurationMS: 10000, Video: editPlanVideo{BitRate: 1000000}, Audio: []editPlanTrack{{Channels: 6}, {Channels: 6}, {Channels: 2}},
+		Segments: []editPlanSegment{{Audio: []editPlanRef{{Stream: 1}, {Stream: 2}, {Stream: 3}}}}}
+	if err := s.configureFullCrop(&plan, sc); err != nil {
+		t.Fatal(err)
+	}
+	const knownBits = 1000000 + 96000*6*24 + 192000
+	rawBytes := float64(knownBits)/8*10 + float64(sc.size)
+	want := int64(rawBytes*1.05) + 1<<20
+	if plan.WorkBytes != want || plan.EstimatedBytes != want || !plan.Audio[0].CopyAudio || !plan.Audio[1].CopyAudio || plan.Audio[2].CopyAudio {
+		t.Fatalf("incorrect disk estimate/track plan: got size=%d work=%d want=%d tracks=%+v", plan.EstimatedBytes, plan.WorkBytes, want, plan.Audio)
+	}
+}
+
+// AVI can carry AAC from some writers, but the export compatibility profile
+// keeps native MP3 unchanged and supplies legacy-compatible MP3 for that track.
+func TestVideoEditFullCropMixedAudioReal(t *testing.T) {
+	ffmpeg, ffprobe := requireEditFFmpeg(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "mixed.avi")
+	runFixtureCommand(t, ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=25:d=2",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=2",
+		"-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=2",
+		"-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "mpeg4", "-threads", "2",
+		"-c:a:0", "libmp3lame", "-c:a:1", "aac", "-f", "avi", src)
+
+	s := NewVideoEditService(nil, NewMediaWorkSlot(), dir)
+	s.goos = "linux"
+	s.findFFmpeg = func() (string, error) { return ffmpeg, nil }
+	s.findFFprobe = func() (string, error) { return ffprobe, nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	probe, err := s.probeEditSource(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.Audio) != 2 || probe.Audio[0].Codec != "mp3" || probe.Audio[1].Codec != "aac" {
+		t.Fatalf("unexpected input tracks: %+v", probe.Audio)
+	}
+	size, mtime, err := editFileFingerprint(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := &editSourceCtx{path: src, size: size, modTimeNS: mtime, probe: probe, video: models.Video{ID: 1, Path: src}, ok: true}
+	plan := editPlan{Kind: "crop", Mode: "precise", Video: s.planVideoSpec(sc, "precise"), Sources: []editPlanSource{{VideoID: 1, Path: src, Size: size, ModTimeNS: mtime}}, DurationMS: 2000, Segments: []editPlanSegment{{VideoStream: probe.Video.Index, DurMS: 2000}}}
+	plan.Video.Crop = &EditCropRect{X: 32, Y: 8, Width: 256, Height: 224}
+	plan.Video.Width, plan.Video.Height = 256, 224
+	plan.Video.CanvasWidth, plan.Video.CanvasHeight = 320, 240
+	for _, a := range probe.Audio {
+		plan.Audio = append(plan.Audio, editPlanTrack{Channels: a.Channels})
+		plan.Segments[0].Audio = append(plan.Segments[0].Audio, editPlanRef{Stream: a.Index})
+	}
+	if err := s.configureFullCrop(&plan, sc); err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Audio[0].CopyAudio || plan.Audio[1].CopyAudio || plan.Audio[1].Codec != "mp3" {
+		t.Fatalf("incorrect frozen track plan: %+v", plan.Audio)
+	}
+	if err := s.sampleFullCrop(ctx, plan, probe); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "cropped.part")
+	args := fullCropArgs(plan, target)
+	cmdline := strings.Join(args, " ")
+	if !strings.Contains(cmdline, "-c:a:0 copy") || strings.Contains(cmdline, "-ar:a:0") ||
+		!strings.Contains(cmdline, "-c:a:1 libmp3lame -ar:a:1 48000") {
+		t.Fatalf("unexpected FFmpeg arguments: %s", cmdline)
+	}
+	runFixtureCommand(t, ffmpeg, args...)
+	if err := s.verifyEditOutput(ctx, plan, target); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.probeEditSource(ctx, target)
+	if err != nil || len(got.Audio) != 2 || got.Audio[0].SampleRate != 44100 || got.Audio[1].SampleRate != 48000 {
+		t.Fatalf("unexpected output tracks: %+v %v", got.Audio, err)
+	}
+	packetHashes := func(path string) string {
+		t.Helper()
+		raw, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-select_streams", "a:0",
+			"-read_intervals", "%+#20", "-show_packets", "-show_entries", "packet=data_hash",
+			"-show_data_hash", "sha256", "-of", "csv=p=0", path).Output()
+		if err != nil || !strings.Contains(string(raw), "SHA256:") {
+			t.Fatalf("packet hashes unavailable: %s %v", raw, err)
+		}
+		return string(raw)
+	}
+	if packetHashes(src) != packetHashes(target) {
+		t.Fatal("copied MP3 packet bytes changed")
 	}
 }
 
