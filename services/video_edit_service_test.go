@@ -133,18 +133,24 @@ func (f *fakeEditMedia) progress(ctx context.Context, name string, args []string
 		_ = json.Unmarshal([]byte(source), &payload)
 		streams, _ := payload["streams"].([]any)
 		var selected []any
-		mapped := map[int]bool{}
+		mapped := make([]int, 0, len(streams))
 		for i := 0; i < len(args)-1; i++ {
 			if args[i] == "-map" {
 				var index int
 				if _, err := fmt.Sscanf(args[i+1], "0:%d", &index); err == nil {
-					mapped[index] = true
+					mapped = append(mapped, index)
 				}
 			}
 		}
+		sourceStreams := make(map[int]map[string]any, len(streams))
 		for _, raw := range streams {
 			stream := raw.(map[string]any)
-			if !mapped[int(stream["index"].(float64))] {
+			sourceStreams[int(stream["index"].(float64))] = stream
+		}
+		audioIndex := 0
+		for _, index := range mapped {
+			stream, ok := sourceStreams[index]
+			if !ok {
 				continue
 			}
 			switch stream["codec_type"] {
@@ -165,7 +171,14 @@ func (f *fakeEditMedia) progress(ctx context.Context, name string, args []string
 				}
 				stream["codec_name"] = codec
 			case "audio":
-				codec := value("-c:a")
+				codec := value(fmt.Sprintf("-c:a:%d", audioIndex))
+				audioIndex++
+				if codec == "" {
+					codec = value("-c:a")
+				}
+				if codec == "copy" || codec == "" {
+					break
+				}
 				if codec == "libmp3lame" {
 					codec = "mp3"
 				}

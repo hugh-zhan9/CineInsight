@@ -500,3 +500,23 @@ func TestVideoEditFullCropVP9HDRSummary(t *testing.T) {
 		t.Fatalf("VP9 HDR mislabeled: %+v", pre)
 	}
 }
+
+func TestVideoEditFullCropAudioPreflightDisplay(t *testing.T) {
+	dir := t.TempDir()
+	s := NewVideoEditService(nil, NewMediaWorkSlot(), dir)
+	s.diskFree = func(string) (uint64, error) { return 1 << 40, nil }
+	pre := &EditPreflight{trackOutputs: map[int][2][]EditOutputTrack{1: {
+		{{Codec: "original-aac", Dropped: true}, {Codec: "original-flac"}, {Codec: "original-unknown"}}, nil,
+	}}}
+	plan := editPlan{Seq: 1, PublishMode: "replace_source", OutputDir: dir, Sources: []editPlanSource{{Path: filepath.Join(dir, "source.mkv")}},
+		ContainerProfile: &editContainerProfile{AudioCodec: "aac"}, Audio: []editPlanTrack{{Codec: "flac", CopyAudio: true}, {Codec: "aac"}}}
+	s.finishEditOutputs(context.Background(), pre, []editPlan{plan})
+	if len(pre.Errors) > 0 || len(pre.Outputs) != 1 {
+		t.Fatalf("unexpected errors: %+v", pre)
+	}
+	out := pre.Outputs[0]
+	if out.AudioCodec != "flac / aac" || len(out.AudioTracks) != 3 || out.AudioTracks[0].Codec != "original-aac" ||
+		out.AudioTracks[1].Codec != "flac" || out.AudioTracks[2].Codec != "aac" {
+		t.Fatalf("preflight did not show exact output codecs: %+v", out)
+	}
+}

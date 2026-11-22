@@ -813,8 +813,22 @@ func (s *VideoEditService) finishEditOutputs(ctx context.Context, pre *EditPrefl
 			Attachments: len(plan.Attachments), Sidecar: plan.Sidecar.Mode, DurationMS: plan.DurationMS,
 			EstimatedBytes: plan.EstimatedBytes, WorkBytes: plan.WorkBytes, Segments: []EditOutputSegment{},
 		}
+		fullCropAudioCodecs := make([]string, 0, len(plan.Audio))
 		if plan.ContainerProfile != nil {
-			output.AudioCodec = plan.ContainerProfile.AudioCodec
+			for _, track := range plan.Audio {
+				codec := plan.ContainerProfile.AudioCodec
+				if track.CopyAudio {
+					codec = track.Codec
+				}
+				fullCropAudioCodecs = append(fullCropAudioCodecs, codec)
+			}
+			codecs := make([]string, 0, len(fullCropAudioCodecs))
+			for _, codec := range fullCropAudioCodecs {
+				if !oneOf(codec, codecs...) {
+					codecs = append(codecs, codec)
+				}
+			}
+			output.AudioCodec = strings.Join(codecs, " / ")
 		}
 		if plan.Mode == "fast" {
 			output.AudioCodec = "copy"
@@ -824,9 +838,10 @@ func (s *VideoEditService) finishEditOutputs(ctx context.Context, pre *EditPrefl
 			if plan.ContainerProfile != nil {
 				output.AudioTracks = append([]EditOutputTrack(nil), output.AudioTracks...)
 				output.SubtitleTracks = append([]EditOutputTrack(nil), output.SubtitleTracks...)
-				for i := range output.AudioTracks {
-					if !output.AudioTracks[i].Dropped {
-						output.AudioTracks[i].Codec = plan.ContainerProfile.AudioCodec
+				for i, j := 0, 0; i < len(output.AudioTracks); i++ {
+					if !output.AudioTracks[i].Dropped && j < len(fullCropAudioCodecs) {
+						output.AudioTracks[i].Codec = fullCropAudioCodecs[j]
+						j++
 					}
 				}
 				for i, j := 0, 0; i < len(output.SubtitleTracks); i++ {
