@@ -17,7 +17,10 @@ func (a *App) SuggestTonightVideos(request services.RandomPlayRequest, limit int
 	}
 	ctx, cancel := context.WithTimeout(a.backgroundContext(), 30*time.Second)
 	defer cancel()
-	return a.videoService.SuggestTonight(ctx, request, limit)
+	started := time.Now()
+	suggestions, err := a.videoService.SuggestTonight(ctx, request, limit)
+	perfLocal("home", "suggestions", started, err)
+	return suggestions, err
 }
 
 // ResolveVisibleVideoForPlayback checks a recommendation before its detail navigation.

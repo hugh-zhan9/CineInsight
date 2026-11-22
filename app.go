@@ -32,6 +32,7 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
+	startupPerf                    startupPerfTrace
 	nativeMutationMu               sync.Mutex
 	nativeMutationRelease          func()
 	nativePlayback                 *services.NativePlaybackService
@@ -984,6 +985,7 @@ func (a *App) setLogEnabled(enabled bool) {
 			a.closeLogFile() // 先关闭旧句柄
 			a.logFile = f
 			log.SetOutput(f)
+			a.startupPerf.flush()
 		}
 	}
 }

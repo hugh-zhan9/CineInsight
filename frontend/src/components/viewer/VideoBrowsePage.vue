@@ -590,6 +590,8 @@ export default {
     // 视口还在墙上面（没有锚点）时原样放回离开时的位置。回来后重取的「追到哪了」结果出来再变高变矮，由 aboveWallState 侦听接着放回。
     pageActive(active) {
       if (!active) {
+        this._tokens.count += 1;
+        this._countListToken = null;
         this.closeMenu();
         this.cancelScrollRestore();
         this.savedScrollTop = this.scrollOwner()?.scrollTop || 0;
@@ -597,6 +599,7 @@ export default {
         return;
       }
       this.loadProgress();
+      if (this.totalCount === null) this.loadCountAfterFirstPage(this._tokens.list);
       this.$nextTick(() => {
         const owner = this.scrollOwner();
         if (!owner) return;
@@ -749,7 +752,9 @@ export default {
       this._focusedVideoID = null;
       this.list = { ...emptyList(), loading: true };
       this.versionGroups = {};
-      this.loadCount();
+      this._tokens.count += 1;
+      this._countListToken = null;
+      this.totalCount = null;
       return this.fetchPage(token, null);
     },
     loadMore() {
@@ -791,6 +796,7 @@ export default {
         };
         // 哨兵仍在可视区附近（一屏放得下这一批）时接着取，不等用户再滚。
         this.$nextTick(() => {
+          if (first) this.loadCountAfterFirstPage(token);
           if (this._sentinelVisible && this.pageActive) this.loadMore();
         });
       } catch (err) {
@@ -800,6 +806,12 @@ export default {
           ? { ...this.list, loading: false, loaded: true, error: message }
           : { ...this.list, loadingMore: false, moreError: message };
       }
+    },
+    loadCountAfterFirstPage(listToken) {
+      if (!this.pageActive || listToken !== this._tokens.list || !this.list.loaded || this.list.error ||
+          this._countListToken === listToken) return;
+      this._countListToken = listToken;
+      return this.loadCount();
     },
     async loadCount() {
       const token = ++this._tokens.count;

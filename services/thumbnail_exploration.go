@@ -32,14 +32,20 @@ type explorationThumbnailCache struct {
 
 // ResolveExplorationThumbnail adds small size tiers without changing old routes.
 func (s *ThumbnailService) ResolveExplorationThumbnail(ctx context.Context, kind string, id uint, edge int, images *ImageThumbnailService) (*ThumbnailMedia, error) {
-	release, err := rLockLibraryPathsContext(ctx)
-	if err != nil {
-		return nil, err
+	attempt := func(ctx context.Context, admitted bool) (*ThumbnailMedia, error) {
+		release, err := rLockLibraryPathsContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		return s.resolveExplorationThumbnailUnderPathRead(ctx, kind, id, edge, images, admitted)
 	}
-	defer release()
-	return s.resolveExplorationThumbnailUnderPathRead(ctx, kind, id, edge, images)
+	if kind == "video" {
+		return resolveBoundedPoster(ctx, s, true, attempt)
+	}
+	return attempt(ctx, false)
 }
-func (s *ThumbnailService) resolveExplorationThumbnailUnderPathRead(ctx context.Context, kind string, id uint, edge int, images *ImageThumbnailService) (*ThumbnailMedia, error) {
+func (s *ThumbnailService) resolveExplorationThumbnailUnderPathRead(ctx context.Context, kind string, id uint, edge int, images *ImageThumbnailService, admitted bool) (*ThumbnailMedia, error) {
 	if edge != 96 && edge != 256 || id == 0 {
 		return nil, ErrExplorationInvalid
 	}
@@ -53,7 +59,7 @@ func (s *ThumbnailService) resolveExplorationThumbnailUnderPathRead(ctx context.
 		}
 		sourcePath = video.Path
 		load = func() (string, error) {
-			media, err := s.resolveThumbnailUnderPathRead(ctx, id)
+			media, err := s.resolveThumbnailUnderPathRead(ctx, id, admitted)
 			if err != nil {
 				return "", err
 			}

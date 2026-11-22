@@ -392,7 +392,10 @@ export default {
     pageActive(active) {
       if (!active) {
         this.captureViewAnchor();
-        this._tokens.tonightBlock = (this._tokens.tonightBlock || 0) + 1;
+        this.cancelDeferredHome();
+        for (const name of ['continueBlock', 'tonightBlock', 'recentBlock', 'progressBlock', 'watchlistBlock', 'recapBlock']) {
+          this._tokens[name] = (this._tokens[name] || 0) + 1;
+        }
         this._exposure?.disconnect();
         this.detachScrollWatch();
         return;
@@ -413,11 +416,14 @@ export default {
     this._openedTonight = new Set();
   },
   mounted() {
-    if (this.pageActive) this.attachScrollWatch();
-    this.load();
+    if (this.pageActive) {
+      this.attachScrollWatch();
+      this.load();
+    }
   },
   beforeUnmount() {
     this._disposed = true;
+    this.cancelDeferredHome();
     this.detachScrollWatch();
     this._exposure?.disconnect();
     for (const key of Object.keys(this._tokens)) this._tokens[key]++;
@@ -455,13 +461,33 @@ export default {
     skeletonVisible(block, items = block.items) {
       return Boolean(block.loading && !block.loaded && !items?.length);
     },
-    // 挂载时各块的请求同时发出，互不等待。
-    load() {
-      return Promise.all([this.loadContinue(), this.loadProgress(), this.loadTonight(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
-    },
+    load() { return this.loadHomeBlocks(false); },
     // 回到首页保留锚点，重取动态区块并轮换少量推荐。
-    refresh() {
-      return Promise.all([this.loadContinue(), this.loadProgress(), this.rotateTonight(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
+    refresh() { return this.loadHomeBlocks(true); },
+    cancelDeferredHome() {
+      const waiting = this._deferredHome;
+      if (!waiting) return;
+      this._deferredHome = null;
+      clearTimeout(waiting.timer);
+      waiting.release();
+    },
+    async loadHomeBlocks(refresh) {
+      if (!this.pageActive || this._disposed) return;
+      this.cancelDeferredHome();
+      const primary = [this.loadContinue(), refresh ? this.rotateTonight() : this.loadTonight()];
+      const waiting = {};
+      const deadline = new Promise(resolve => {
+        waiting.release = resolve;
+        waiting.timer = setTimeout(resolve, 160);
+      });
+      this._deferredHome = waiting;
+      // Give the hero requests the first slot, without starving other blocks
+      // if both are slow. Keep existing data/order and independent results.
+      await Promise.race([...primary, deadline]);
+      await this.$nextTick();
+      if (this._deferredHome !== waiting || !this.pageActive || this._disposed) return;
+      this.cancelDeferredHome();
+      return Promise.all([...primary, this.loadProgress(), this.loadRecent(), this.loadWatchlist(), this.loadRecap()]);
     },
     loadContinue() {
       return this.runBlock('continueBlock', '继续观看', async () =>

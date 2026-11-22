@@ -95,6 +95,15 @@ func (s *MediaExplorationService) ResolveAsset(ctx context.Context, r Exploratio
 	if kind == "image" && (asset == "frame" || asset == "media") || kind == "video" && asset == "image" {
 		return nil, ErrExplorationInvalid
 	}
+	if kind == "video" && asset == "thumbnail" && thumbs != nil {
+		return resolveBoundedPoster(ctx, thumbs, true, func(ctx context.Context, admitted bool) (*ExplorationAsset, error) {
+			return s.resolveAssetUnderAdmission(ctx, r, kind, id, asset, edge, ms, thumbs, images, videos, admitted)
+		})
+	}
+	return s.resolveAssetUnderAdmission(ctx, r, kind, id, asset, edge, ms, thumbs, images, videos, false)
+}
+
+func (s *MediaExplorationService) resolveAssetUnderAdmission(ctx context.Context, r ExplorationAssetContext, kind string, id uint, asset string, edge int, ms int64, thumbs *ThumbnailService, images *ImageThumbnailService, videos *VideoService, admitted bool) (*ExplorationAsset, error) {
 	unlock, err := rLockLibraryPathsContext(ctx)
 	if err != nil {
 		return nil, err
@@ -134,7 +143,7 @@ func (s *MediaExplorationService) ResolveAsset(ctx context.Context, r Exploratio
 	var delivered os.FileInfo
 	switch asset {
 	case "thumbnail":
-		media, err := thumbs.resolveExplorationThumbnailUnderPathRead(ctx, kind, id, edge, images)
+		media, err := thumbs.resolveExplorationThumbnailUnderPathRead(ctx, kind, id, edge, images, admitted)
 		if err != nil {
 			return nil, err
 		}

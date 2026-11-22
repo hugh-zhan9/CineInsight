@@ -258,12 +258,13 @@ func (a *App) SyncImageDirectories() (*services.ImageScanResult, error) {
 
 // SearchImagePage 照片页游标分页查询。
 func (a *App) SearchImagePage(request services.ImagePageRequest) (*services.ImagePage, error) {
+	started := time.Now()
 	page, err := a.imageLibraryService.SearchImagePage(request)
-	if page != nil {
-		log.Printf("API SearchImagePage sort=%s result=%d hasNext=%v err=%v", request.Filter.SortMode, len(page.Images), page.NextCursor != nil, err)
-	} else {
-		log.Printf("API SearchImagePage sort=%s result=nil err=%v", request.Filter.SortMode, err)
+	stage := "next_page"
+	if request.Cursor == nil {
+		stage = "first_page"
 	}
+	perfLocal("photo_library", stage, started, err)
 	return page, err
 }
 

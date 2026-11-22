@@ -10,6 +10,7 @@ import (
 func (s *NativePlaybackService) runSession(ctx context.Context, n *nativeSession) {
 	started := time.Now()
 	lastVerify := time.Time{}
+	sampledDecoded, sampledVisible := false, false
 	defer func() {
 		n.mu.Lock()
 		n.closing = true
@@ -42,6 +43,10 @@ func (s *NativePlaybackService) runSession(ctx context.Context, n *nativeSession
 		n.mu.Lock()
 		capturedCommand, capturedViewport := n.commandSeq, n.viewport.Revision
 		raw, err := n.player.Snapshot()
+		var observed time.Time
+		if !n.perfStart.IsZero() && (!sampledDecoded && raw.DecodedFrames > 0 || !sampledVisible && raw.Frames > 0) {
+			observed = time.Now()
+		}
 		needVerify := time.Since(lastVerify) > time.Second || (!n.initialized && raw.Width > 0) || raw.Ended
 		n.mu.Unlock()
 		if err != nil {
@@ -64,6 +69,19 @@ func (s *NativePlaybackService) runSession(ctx context.Context, n *nativeSession
 		if raw.Error < 0 || !finiteNative(raw.Position) || !finiteNative(raw.Duration) || raw.Duration > 9007199254740 {
 			s.failNative(n, "native_decode_failed", "本机播放器无法解码此文件")
 			return
+		}
+		// Bridge counters are observations, not presentation timestamps. The
+		// decoded counter includes offscreen renders; Frames requires a visible
+		// render target whose swap buffer has been flushed by the bridge.
+		if !observed.IsZero() {
+			if !sampledDecoded && raw.DecodedFrames > 0 {
+				sampledDecoded = true
+				nativeFirstFrameStage.Record(n.perfStart, observed, false)
+			}
+			if !sampledVisible && raw.Frames > 0 {
+				sampledVisible = true
+				nativeFirstVisibleFrameStage.Record(n.perfStart, observed, false)
+			}
 		}
 		n.mu.Lock()
 		if ctx.Err() != nil {

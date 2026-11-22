@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	cryptorand "crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"gorm.io/gorm"
@@ -138,11 +137,11 @@ func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPl
 		}
 	}
 	var pool *randomCandidatePool
-	err = db.Transaction(func(tx *gorm.DB) error {
+	err = withRandomReadSnapshot(db, func(tx *gorm.DB) error {
 		var collectErr error
 		pool, collectErr = s.collectRandomWorks(tx, request, time.Now())
 		return collectErr
-	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	})
 	return pool, err
 }
 

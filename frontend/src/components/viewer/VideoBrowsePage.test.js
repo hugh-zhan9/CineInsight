@@ -291,6 +291,21 @@ describe('VideoBrowsePage list', () => {
     expect(lastRequest()).toEqual({ filter: DEFAULT_FILTER, limit: 60 });
   });
 
+  it('waits for first-page data and visibility before issuing the exact count', async () => {
+    let resolvePage;
+    api.SearchLibraryVideoPage.mockReturnValueOnce(new Promise(resolve => { resolvePage = resolve; }));
+    const wrapper = await mountPage();
+    expect(api.CountLibraryVideos).not.toHaveBeenCalled();
+    await wrapper.setProps({pageActive: false});
+    resolvePage({videos: [], next_cursor: null});
+    await flushPromises();
+    expect(api.CountLibraryVideos).not.toHaveBeenCalled();
+    await wrapper.setProps({pageActive: true});
+    await flushPromises();
+    expect(api.CountLibraryVideos).toHaveBeenCalledTimes(1);
+    expect(api.CountLibraryVideos).toHaveBeenCalledWith(DEFAULT_FILTER);
+  });
+
   it('hides the count when counting fails, without touching the list', async () => {
     api.CountLibraryVideos.mockRejectedValue('失败');
     const wrapper = await mountPage();

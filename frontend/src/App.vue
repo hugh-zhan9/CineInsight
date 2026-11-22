@@ -498,6 +498,7 @@ import CapabilitySetup from './components/CapabilitySetup.vue';
 import { SUBTITLE_TOOL_REQUEST } from './utils/subtitleNavigation.js';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
+import { observeMediaLoad } from './utils/mediaPerf.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import {
   appCommandsMixin, CLEANUP_BUSY_NOTICE, CLEANUP_PAGE, cleanupParamsChangePage, DEFAULT_CLEANUP_TAB, DEFAULT_LIST_TAB,
@@ -664,6 +665,8 @@ export default {
     // 前后台上报（D-013）：后端据此决定长任务终态要不要发系统通知。
     // 放在最前面，数据库连不上时也要报——通知开关与库无关。
     this.attachForegroundReporting();
+    this._stopMediaPerf = observeMediaLoad(window, () => Boolean(this.settings.log_enabled),
+      line => logFrontend('media-perf', line));
     try {
       this.startupError = await GetStartupError();
     } finally {
@@ -738,6 +741,7 @@ export default {
   beforeUnmount() {
     window.removeEventListener(SUBTITLE_TOOL_REQUEST, this._subtitleToolListener);
     this.detachForegroundReporting();
+    this._stopMediaPerf?.();
     clearInterval(this._pendingWorkTimer);
     document.body.classList.remove('surface-cinema');
   },

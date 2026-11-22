@@ -57,6 +57,29 @@ async function mountPage(props = {}) {
 const heroBackdrop = wrapper => wrapper.findAllComponents(RecapBackdrop).find(item => item.attributes('data-test') === 'home-hero');
 
 describe('HomePage blocks', () => {
+  it('gives the hero requests a head start and cancels undispatched secondary blocks when hidden', async () => {
+    let resolveContinue;
+    api.ListContinueWatchingWithFilter.mockReturnValueOnce(new Promise(resolve => { resolveContinue = resolve; }));
+    api.SuggestTonightVideos.mockReturnValueOnce(new Promise(() => {}));
+    const wrapper = mount(HomePage, { props: {pageActive: true} });
+    try {
+      expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledTimes(1);
+      expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+      expect(api.GetRecap).not.toHaveBeenCalled();
+      expect(api.ListCollectionProgress).not.toHaveBeenCalled();
+      await wrapper.setProps({pageActive: false});
+      resolveContinue({videos: [video(99)]});
+      await flushPromises();
+      expect(api.GetRecap).not.toHaveBeenCalled();
+      expect(api.ListCollectionProgress).not.toHaveBeenCalled();
+      await wrapper.setProps({pageActive: true});
+      await flushPromises();
+      expect(api.GetRecap).toHaveBeenCalledTimes(1);
+      expect(api.ListCollectionProgress).toHaveBeenCalledTimes(1);
+      expect(wrapper.get('[data-test="home-hero-title"]').text()).not.toBe('影片99');
+    } finally { wrapper.unmount(); }
+  });
+
   it('loads every block from its existing API with the documented arguments', async () => {
     const wrapper = await mountPage();
     expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledWith({}, '', 0, 11); // 多取一条判断有没有放全

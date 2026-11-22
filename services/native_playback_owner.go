@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"video-master/internal/perfdiag"
 	"video-master/native/playback"
 )
 
@@ -102,7 +103,16 @@ type nativeSession struct {
 	initialized      bool
 	closing          bool
 	lastEmit         time.Time
+	perfStart        time.Time
 }
+
+var (
+	nativeSourceOpenStage        = perfdiag.Stage{Component: "native_playback", Name: "source_open", Slow: 25 * time.Millisecond}
+	nativePlayerInitStage        = perfdiag.Stage{Component: "native_playback", Name: "player_init", Slow: 25 * time.Millisecond}
+	nativeLoadCommandStage       = perfdiag.Stage{Component: "native_playback", Name: "load_command", Slow: 25 * time.Millisecond}
+	nativeFirstFrameStage        = perfdiag.Stage{Component: "native_playback", Name: "first_decoded_render_observed"}
+	nativeFirstVisibleFrameStage = perfdiag.Stage{Component: "native_playback", Name: "first_visible_render_observed"}
+)
 
 // NativePlaybackService owns ephemeral decoder resources. Viewing facts remain
 // with InlineVideoPlayer and PlaybackQueueService.
@@ -343,7 +353,9 @@ func (s *NativePlaybackService) Open(ctx context.Context, r NativePlaybackOpenRe
 			return NativePlaybackState{}, err
 		}
 	}
+	perfStart := perfdiag.Start()
 	source, err = s.resolve(pending, r)
+	nativeSourceOpenStage.End(perfStart, err != nil)
 	if err != nil {
 		return NativePlaybackState{}, err
 	}
@@ -358,11 +370,16 @@ func (s *NativePlaybackService) Open(ctx context.Context, r NativePlaybackOpenRe
 		err = errors.New("native_invalid_request: 起播位置超出片长")
 		return NativePlaybackState{}, err
 	}
+	initStarted := perfdiag.Start()
 	player, err = s.factory(library)
+	nativePlayerInitStage.End(initStarted, err != nil)
 	if err != nil {
 		return NativePlaybackState{}, err
 	}
-	if err = player.LoadFileAt(source.file, r.StartMS); err != nil {
+	loadStarted := perfdiag.Start()
+	err = player.LoadFileAt(source.file, r.StartMS)
+	nativeLoadCommandStage.End(loadStarted, err != nil)
+	if err != nil {
 		return NativePlaybackState{}, err
 	}
 	muted := true
@@ -398,7 +415,7 @@ func (s *NativePlaybackService) Open(ctx context.Context, r NativePlaybackOpenRe
 		return NativePlaybackState{}, err
 	}
 	run, cancelRun := context.WithCancel(s.ctx)
-	session := &nativeSession{ctx: run, id: id, owner: owner, source: source, player: player, cancel: cancelRun, done: make(chan struct{}), request: r, desiredPaused: r.Paused, state: NativePlaybackState{SessionID: id, VideoID: r.VideoID, SourceVersion: r.SourceVersion, State: "opening", Paused: true, Muted: muted, Volume: volume, Rate: 1}}
+	session := &nativeSession{ctx: run, id: id, owner: owner, source: source, player: player, cancel: cancelRun, done: make(chan struct{}), request: r, desiredPaused: r.Paused, perfStart: perfStart, state: NativePlaybackState{SessionID: id, VideoID: r.VideoID, SourceVersion: r.SourceVersion, State: "opening", Paused: true, Muted: muted, Volume: volume, Rate: 1}}
 	owner.current = session
 	record.session = session
 	record.result = session.state

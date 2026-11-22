@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 	"video-master/database"
+	"video-master/internal/perfdiag"
 	"video-master/models"
 
 	"gorm.io/gorm"
@@ -29,7 +30,25 @@ const (
 	imageViewMaxEdge                = 2560
 	imageThumbnailCacheLimit  int64 = 256 << 20
 	imageDecodeTimeout              = 30 * time.Second
+	imageJPEGConcurrency            = 3
 )
+
+var (
+	photoSourceStatStage     = perfdiag.Stage{Component: "photo", Name: "source_stat", Slow: 80 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoThumbnailHitStage   = perfdiag.Stage{Component: "photo", Name: "thumbnail_cache_hit", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoThumbnailMissStage  = perfdiag.Stage{Component: "photo", Name: "thumbnail_cache_generate", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoThumbnailQueueStage = perfdiag.Stage{Component: "photo", Name: "thumbnail_generate_queue", Slow: 80 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoViewQueueStage      = perfdiag.Stage{Component: "photo", Name: "view_generate_queue", Slow: 80 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoViewHitStage        = perfdiag.Stage{Component: "photo", Name: "view_cache_hit", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoViewMissStage       = perfdiag.Stage{Component: "photo", Name: "view_cache_generate", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
+)
+
+func statPhotoSource(path string) (os.FileInfo, error) {
+	start := perfdiag.Start()
+	info, err := os.Stat(path)
+	photoSourceStatStage.End(start, err != nil)
+	return info, err
+}
 
 // ErrImageDecodeUnsupported 表示当前平台/格式没有可用的图片解码器（D-006：
 // HEIC/RAW 仅 darwin 支持，其他平台占位降级为 404）。
@@ -100,15 +119,17 @@ func mimeByImageFormatAndPath(format, path string) string {
 // ImageThumbnailService 管理可重建的本地图片缩略图/查看大图缓存
 // （独立目录 <dataDir>/image-thumbnails/，与视频 thumbnails/ 零交叉）。
 type ImageThumbnailService struct {
-	cacheDir      string
-	maxCacheBytes int64
-	findFFmpeg    func() (string, error)
-	runFFmpeg     func(ctx context.Context, binary, sourcePath, destinationPath string, maxEdge int) error
-	probeFFprobe  func(ctx context.Context, sourcePath string) (width, height int, err error)
-	convertJPEG   func(ctx context.Context, sourcePath, destinationPath string, maxEdge int) error
-	probeSips     func(ctx context.Context, sourcePath string) (width, height int, err error)
-	locks         sync.Map
-	cacheMu       sync.Mutex
+	cacheDir       string
+	maxCacheBytes  int64
+	findFFmpeg     func() (string, error)
+	runFFmpeg      func(ctx context.Context, binary, sourcePath, destinationPath string, maxEdge int) error
+	probeFFprobe   func(ctx context.Context, sourcePath string) (width, height int, err error)
+	convertJPEG    func(ctx context.Context, sourcePath, destinationPath string, maxEdge int) error
+	probeSips      func(ctx context.Context, sourcePath string) (width, height int, err error)
+	locks          sync.Map
+	jpegSlots      chan struct{}
+	thumbnailSlots chan struct{}
+	cacheMu        sync.Mutex
 	// cacheSizes / cacheBytes 是缓存目录里各 <id>.jpg、<id>.view.jpg 的大小与总量账（cacheMu 保护）。
 	// nil 表示尚未建账：第一次淘汰检查整目录扫描一次建账，之后生成时增量记账，
 	// 账面超过上限才再整目录扫描（同时以磁盘实况重建账面）并按原规则淘汰。
@@ -119,13 +140,15 @@ type ImageThumbnailService struct {
 // NewImageThumbnailService 创建图片缩略图服务，缓存根为 <dataDir>/image-thumbnails/。
 func NewImageThumbnailService(dataDir string) *ImageThumbnailService {
 	return &ImageThumbnailService{
-		cacheDir:      filepath.Join(dataDir, "image-thumbnails"),
-		maxCacheBytes: imageThumbnailCacheLimit,
-		findFFmpeg:    findThumbnailFFmpeg,
-		runFFmpeg:     runImageThumbnailFFmpeg,
-		probeFFprobe:  probeImageDimensionsFFprobe,
-		convertJPEG:   sipsConvertJPEG,
-		probeSips:     sipsProbeDimensions,
+		cacheDir:       filepath.Join(dataDir, "image-thumbnails"),
+		maxCacheBytes:  imageThumbnailCacheLimit,
+		findFFmpeg:     findThumbnailFFmpeg,
+		runFFmpeg:      runImageThumbnailFFmpeg,
+		probeFFprobe:   probeImageDimensionsFFprobe,
+		convertJPEG:    sipsConvertJPEG,
+		probeSips:      sipsProbeDimensions,
+		jpegSlots:      make(chan struct{}, imageJPEGConcurrency),
+		thumbnailSlots: make(chan struct{}, imageJPEGConcurrency-1),
 	}
 }
 
@@ -179,7 +202,7 @@ func (s *ImageThumbnailService) ResolveImageThumbnail(ctx context.Context, image
 	if decoder == imageDecoderUnsupported {
 		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
 	}
-	sourceInfo, err := os.Stat(img.Path)
+	sourceInfo, err := statPhotoSource(img.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -190,25 +213,30 @@ func (s *ImageThumbnailService) ResolveImageThumbnail(ctx context.Context, image
 		return nil, fmt.Errorf("创建图片缩略图缓存目录失败: %w", err)
 	}
 
-	lockValue, _ := s.locks.LoadOrStore(imageID, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	lock.Lock()
-	defer lock.Unlock()
-
+	cacheStart := perfdiag.Start()
 	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(imageID), 10)+".jpg")
+	unlock, err := s.lockImageCache(ctx, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
 		s.backfillImageMetadata(ctx, img, decoder, sourceInfo, cachePath)
+		photoThumbnailHitStage.End(cacheStart, false)
 		return &ImageMedia{Path: media.Path, ModTime: media.ModTime, MIME: "image/jpeg"}, nil
 	}
 
 	if err := s.generateJPEGCache(ctx, img, decoder, cachePath, imageThumbnailMaxEdge, sourceInfo); err != nil {
+		photoThumbnailMissStage.End(cacheStart, true)
 		return nil, err
 	}
 	cacheInfo, err := os.Stat(cachePath)
 	if err != nil {
+		photoThumbnailMissStage.End(cacheStart, true)
 		return nil, err
 	}
 	s.backfillImageMetadata(ctx, img, decoder, sourceInfo, cachePath)
+	photoThumbnailMissStage.End(cacheStart, false)
 	return &ImageMedia{Path: cachePath, ModTime: cacheInfo.ModTime(), MIME: "image/jpeg"}, nil
 }
 
@@ -223,7 +251,7 @@ func (s *ImageThumbnailService) ResolveImageView(ctx context.Context, imageID ui
 	if decoder == imageDecoderUnsupported {
 		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
 	}
-	sourceInfo, err := os.Stat(img.Path)
+	sourceInfo, err := statPhotoSource(img.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +277,7 @@ func (s *ImageThumbnailService) ResolveImageFeedView(ctx context.Context, imageI
 	if decoder == imageDecoderUnsupported {
 		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
 	}
-	sourceInfo, err := os.Stat(img.Path)
+	sourceInfo, err := statPhotoSource(img.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -282,29 +310,98 @@ func (s *ImageThumbnailService) resolveViewCache(ctx context.Context, img *model
 		return nil, fmt.Errorf("创建图片缩略图缓存目录失败: %w", err)
 	}
 
-	lockValue, _ := s.locks.LoadOrStore(img.ID, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	lock.Lock()
-	defer lock.Unlock()
-
+	cacheStart := perfdiag.Start()
 	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(img.ID), 10)+".view.jpg")
+	unlock, err := s.lockImageCache(ctx, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
+		photoViewHitStage.End(cacheStart, false)
 		return &ImageMedia{Path: media.Path, ModTime: media.ModTime, MIME: "image/jpeg"}, nil
 	}
 
 	if err := s.generateJPEGCache(ctx, img, decoder, cachePath, imageViewMaxEdge, sourceInfo); err != nil {
+		photoViewMissStage.End(cacheStart, true)
 		return nil, err
 	}
 	cacheInfo, err := os.Stat(cachePath)
+	photoViewMissStage.End(cacheStart, err != nil)
 	if err != nil {
 		return nil, err
 	}
 	return &ImageMedia{Path: cachePath, ModTime: cacheInfo.ModTime(), MIME: "image/jpeg"}, nil
 }
 
+// lockImageCache serializes writes to one cache artifact. View and thumbnail
+// artifacts have independent names so a queued thumbnail cannot block a view
+// of the same image. A canceled duplicate request need not wait for its writer.
+func (s *ImageThumbnailService) lockImageCache(ctx context.Context, cachePath string) (func(), error) {
+	lock, _ := s.locks.LoadOrStore(cachePath, make(chan struct{}, 1))
+	return acquireImageJPEGSlot(ctx, lock.(chan struct{}))
+}
+
+func acquireImageJPEGSlot(ctx context.Context, slots chan struct{}) (func(), error) {
+	select {
+	case slots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-slots
+			return nil, err
+		}
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// acquireJPEGGeneration is only used after a cache miss. At most two thumbnails
+// may use (or wait for) shared slots, reserving capacity for opened photos.
+func (s *ImageThumbnailService) acquireJPEGGeneration(ctx context.Context, thumbnail bool) (func(), error) {
+	if !thumbnail {
+		return acquireImageJPEGSlot(ctx, s.jpegSlots)
+	}
+	releaseThumbnail, err := acquireImageJPEGSlot(ctx, s.thumbnailSlots)
+	if err != nil {
+		return nil, err
+	}
+	releaseJPEG, err := acquireImageJPEGSlot(ctx, s.jpegSlots)
+	if err != nil {
+		releaseThumbnail()
+		return nil, err
+	}
+	return func() {
+		releaseJPEG()
+		releaseThumbnail()
+	}, nil
+}
+
 // generateJPEGCache 按解码矩阵生成 JPEG 到 cachePath：临时文件 + os.Rename 原子
-// 发布，成功后执行统一 LRU 淘汰。调用方须已持有该图片的 per-ID 锁。
+// 发布，成功后执行统一 LRU 淘汰。调用方须已持有该缓存文件的锁。
 func (s *ImageThumbnailService) generateJPEGCache(ctx context.Context, img *models.Image, decoder imageDecoderKind, cachePath string, maxEdge int, sourceInfo os.FileInfo) error {
+	queueStart := perfdiag.Start()
+	isThumbnail := maxEdge == imageThumbnailMaxEdge
+	release, err := s.acquireJPEGGeneration(ctx, isThumbnail)
+	if isThumbnail {
+		photoThumbnailQueueStage.End(queueStart, err != nil)
+	} else {
+		photoViewQueueStage.End(queueStart, err != nil)
+	}
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	currentSource, err := statPhotoSource(img.Path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(sourceInfo, currentSource) ||
+		sourceInfo.Size() != currentSource.Size() ||
+		!sourceInfo.ModTime().Equal(currentSource.ModTime()) {
+		return fmt.Errorf("图片源文件在等待转码时已更改")
+	}
+
 	tempFile, err := os.CreateTemp(s.cacheDir, fmt.Sprintf(".%d-*.jpg", img.ID))
 	if err != nil {
 		return fmt.Errorf("创建图片缩略图临时文件失败: %w", err)

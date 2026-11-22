@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"time"
 	"video-master/database"
 
 	"github.com/wailsapp/wails/v2"
@@ -15,11 +16,18 @@ import (
 )
 
 func main() {
+	started := time.Now()
 	// Create an instance of the app structure
 	app := NewApp()
+	app.startupPerf.started = started
+	app.startupPerf.newApp = time.Since(started)
 
 	// 初始化数据库
-	if err := database.Init(); err != nil {
+	dbAt := time.Now()
+	dbErr := database.Init()
+	app.startupPerf.database = time.Since(dbAt)
+	recoveryAt := time.Now()
+	if err := dbErr; err != nil {
 		log.Printf("数据库初始化失败: %v", err)
 		app.setStartupError(err)
 	} else {
@@ -35,6 +43,8 @@ func main() {
 		}
 	}
 
+	app.startupPerf.recovery = time.Since(recoveryAt)
+	app.startupPerf.toWindow = time.Since(started)
 	// 默认禁用日志，设置页开启后再写入
 	log.SetOutput(io.Discard)
 

@@ -25,7 +25,14 @@ func (a *App) GetLibrarySubtitleHits(keyword string, videoIDs []uint) ([]service
 }
 
 func (a *App) SearchLibraryVideoPage(request services.LibraryVideoPageRequest) (*services.LibraryVideoPage, error) {
-	return a.videoService.SearchLibraryVideoPage(request.Filter, request.Cursor, request.Limit)
+	started := time.Now()
+	page, err := a.videoService.SearchLibraryVideoPage(request.Filter, request.Cursor, request.Limit)
+	stage := "next_page"
+	if request.Cursor == nil {
+		stage = "first_page"
+	}
+	perfLocal("video_library", stage, started, err)
+	return page, err
 }
 
 // GetAutomaticOverrideKinds 批量返回视频的「手动」角标数据（D-PC36），键为视频 ID。
@@ -36,7 +43,10 @@ func (a *App) GetAutomaticOverrideKinds(videoIDs []uint) (map[uint][]string, err
 
 // CountLibraryVideos 返回当前筛选命中的视频条数，供片库结果条回显。
 func (a *App) CountLibraryVideos(filter services.LibraryFilter) (int64, error) {
-	return a.videoService.CountLibraryVideos(filter)
+	started := time.Now()
+	count, err := a.videoService.CountLibraryVideos(filter)
+	perfLocal("video_library", "exact_count", started, err)
+	return count, err
 }
 
 // GetLibraryCounts 返回应用头部展示的视频与图片总数。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -16,15 +17,17 @@ import (
 )
 
 const (
-	thumbnailRoutePrefix           = "/preview/thumbnail/"
-	thumbnailTimeout               = 10 * time.Second
-	seekSpriteRoutePrefix          = "/preview/seek-sprite/"
-	seekSpriteFrameWidth           = 160
-	seekSpriteFrameHeight          = 90
-	seekSpriteMaxColumns           = 10
-	seekSpriteMaxFrames            = 100
-	seekSpriteTargetInterval       = 10.0
-	seekSpriteCacheLimit     int64 = 256 << 20
+	thumbnailRoutePrefix            = "/preview/thumbnail/"
+	thumbnailTimeout                = 10 * time.Second
+	posterConcurrency               = 2
+	posterTimingLogsPerSecond       = 10
+	seekSpriteRoutePrefix           = "/preview/seek-sprite/"
+	seekSpriteFrameWidth            = 160
+	seekSpriteFrameHeight           = 90
+	seekSpriteMaxColumns            = 10
+	seekSpriteMaxFrames             = 100
+	seekSpriteTargetInterval        = 10.0
+	seekSpriteCacheLimit      int64 = 256 << 20
 )
 
 // ThumbnailMedia 描述可由 HTTP 资源处理器返回的缩略图。
@@ -50,6 +53,8 @@ type SeekSpriteDescriptor struct {
 // ErrSeekSpriteNotReady 表示 sprite 尚未生成完成，后台任务已经排队。
 var ErrSeekSpriteNotReady = errors.New("seek sprite 尚未生成")
 
+var errPosterCold = errors.New("poster cache miss")
+
 // ThumbnailService 管理可重建的本地视频缩略图缓存。
 type ThumbnailService struct {
 	videoService            *VideoService
@@ -60,6 +65,11 @@ type ThumbnailService struct {
 	runFrameAt              frameAtRunner
 	frameCache              *frameAtCache
 	frameSem                chan struct{}
+	posterSem               chan struct{}
+	posterExplorationSem    chan struct{}
+	posterTimingMu          sync.Mutex
+	posterTimingWindow      time.Time
+	posterTimingCount       int
 	maxSeekSpriteCacheBytes int64
 	locks                   sync.Map
 	spriteLocks             sync.Map
@@ -81,6 +91,8 @@ func NewThumbnailService(videoService *VideoService, dataDir string) *ThumbnailS
 		runFrameAt:              runFrameAtFFmpeg,
 		frameCache:              newFrameAtCache(frameAtCacheEntries),
 		frameSem:                make(chan struct{}, frameAtConcurrency),
+		posterSem:               make(chan struct{}, posterConcurrency),
+		posterExplorationSem:    make(chan struct{}, posterConcurrency-1),
 		maxSeekSpriteCacheBytes: seekSpriteCacheLimit,
 		spriteSem:               make(chan struct{}, 1),
 	}
@@ -120,19 +132,91 @@ func SeekSpriteIndex(videoID uint, durationSeconds float64) *SeekSpriteDescripto
 
 // ResolveThumbnail 返回有效缓存，必要时按源视频生成。
 func (s *ThumbnailService) ResolveThumbnail(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
-	release, err := rLockLibraryPathsContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	return s.resolveThumbnailUnderPathRead(ctx, videoID)
+	return resolveBoundedPoster(ctx, s, false, func(ctx context.Context, admitted bool) (*ThumbnailMedia, error) {
+		release, err := rLockLibraryPathsContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		return s.resolveThumbnailUnderPathRead(ctx, videoID, admitted)
+	})
 }
-func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, videoID uint) (*ThumbnailMedia, error) {
-	// One-frame extraction must not indefinitely hold the library read lock and
-	// block export publication. Share the budget with same-video queue waiting;
-	// exploration also reaches this helper while holding its own path read lock.
+
+// resolveBoundedPoster performs the read-only cache attempt before admission.
+// The callback releases all library read locks before retrying cold work, so
+// queued posters cannot delay deletion/moves/exports. The retry must repeat
+// source and authorization validation under a fresh path read lock.
+func resolveBoundedPoster[T any](ctx context.Context, s *ThumbnailService, exploration bool, attempt func(context.Context, bool) (*T, error)) (*T, error) {
 	ctx, cancel := context.WithTimeout(ctx, thumbnailTimeout)
 	defer cancel()
+	var lookup, queue, work time.Duration
+	outcome := "lookup"
+	cold := false
+	start := time.Now()
+	defer func() {
+		// No log spam for normal warm loads. This follows the existing local
+		// app logging setting; deliberately omit all identifiers and errors.
+		if (cold || lookup >= 50*time.Millisecond) && s.allowPosterTimingLog() {
+			log.Printf("perf component=poster stage=resolve exploration=%t outcome=%s cache_check_ms=%d queue_ms=%d cold_work_ms=%d",
+				exploration, outcome, lookup.Milliseconds(), queue.Milliseconds(), work.Milliseconds())
+		}
+	}()
+	result, err := attempt(ctx, false)
+	lookup = time.Since(start)
+	if !errors.Is(err, errPosterCold) {
+		if err != nil {
+			outcome = "unavailable"
+		}
+		return result, err
+	}
+	cold = true
+	start = time.Now()
+	if exploration {
+		select {
+		case s.posterExplorationSem <- struct{}{}:
+			defer func() { <-s.posterExplorationSem }()
+		case <-ctx.Done():
+			queue, outcome = time.Since(start), "queue_cancelled"
+			return nil, ctx.Err()
+		}
+	}
+	select {
+	case s.posterSem <- struct{}{}:
+		defer func() { <-s.posterSem }()
+	case <-ctx.Done():
+		queue, outcome = time.Since(start), "queue_cancelled"
+		return nil, ctx.Err()
+	}
+	queue = time.Since(start)
+	if err := ctx.Err(); err != nil {
+		outcome = "queue_cancelled"
+		return nil, err
+	}
+	start = time.Now()
+	result, err = attempt(ctx, true)
+	work = time.Since(start)
+	outcome = "cold"
+	if err != nil {
+		outcome = "cold_failed"
+	}
+	return result, err
+}
+
+func (s *ThumbnailService) allowPosterTimingLog() bool {
+	s.posterTimingMu.Lock()
+	defer s.posterTimingMu.Unlock()
+	now := time.Now()
+	if s.posterTimingWindow.IsZero() || now.Sub(s.posterTimingWindow) >= time.Second {
+		s.posterTimingWindow, s.posterTimingCount = now, 0
+	}
+	if s.posterTimingCount >= posterTimingLogsPerSecond {
+		return false
+	}
+	s.posterTimingCount++
+	return true
+}
+
+func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, videoID uint, admitted bool) (*ThumbnailMedia, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
@@ -146,6 +230,13 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 	}
 	if sourceInfo.IsDir() {
 		return nil, fmt.Errorf("缩略图源路径不是文件")
+	}
+	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(videoID), 10)+".jpg")
+	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
+		return media, nil
+	}
+	if !admitted {
+		return nil, errPosterCold
 	}
 	if err := os.MkdirAll(s.cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建缩略图缓存目录失败: %w", err)
@@ -163,7 +254,6 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 		return nil, err
 	}
 
-	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(videoID), 10)+".jpg")
 	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
 		return media, nil
 	}
@@ -187,7 +277,12 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 	defer os.Remove(tempPath)
 
 	seekSeconds := thumbnailSeekSeconds(video.Duration)
-	if err := s.runFFmpeg(ctx, ffmpegPath, video.Path, tempPath, seekSeconds); err != nil {
+	generateStart := time.Now()
+	err = s.runFFmpeg(ctx, ffmpegPath, video.Path, tempPath, seekSeconds)
+	if s.allowPosterTimingLog() {
+		log.Printf("perf component=poster stage=generate success=%t elapsed_ms=%d", err == nil, time.Since(generateStart).Milliseconds())
+	}
+	if err != nil {
 		return nil, fmt.Errorf("生成缩略图失败: %w", err)
 	}
 	if err := ctx.Err(); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"video-master/internal/perfdiag"
 	"video-master/services"
 
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -564,6 +566,45 @@ func (a *App) serveFaceCrop(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filepath.Base(asset.Path), asset.ModTime, file)
 }
 
+var (
+	photoThumbnailOpenStage = perfdiag.Stage{Component: "photo", Name: "thumbnail_file_open", Slow: 80 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoViewOpenStage      = perfdiag.Stage{Component: "photo", Name: "view_file_open", Slow: 80 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoThumbnailReadStage = perfdiag.Stage{Component: "photo", Name: "thumbnail_file_read", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
+	photoViewReadStage      = perfdiag.Stage{Component: "photo", Name: "view_file_read", Slow: 120 * time.Millisecond, Cooldown: 5 * time.Second}
+)
+
+// photoAssetRead measures cumulative local reads only, not response writes or
+// browser decode. The wrapper is not used when diagnostics are disabled.
+type photoAssetRead struct {
+	io.ReadSeeker
+	elapsed time.Duration
+	didRead bool
+	failed  bool
+}
+
+func (r *photoAssetRead) Read(p []byte) (int, error) {
+	start := time.Now()
+	n, err := r.ReadSeeker.Read(p)
+	r.elapsed += time.Since(start)
+	r.didRead = true
+	r.failed = r.failed || (err != nil && !errors.Is(err, io.EOF))
+	return n, err
+}
+
+func servePhotoAsset(w http.ResponseWriter, r *http.Request, media *services.ImageMedia, file *os.File, stage *perfdiag.Stage) {
+	name := filepath.Base(media.Path)
+	start := perfdiag.Start()
+	if start.IsZero() {
+		http.ServeContent(w, r, name, media.ModTime, file)
+		return
+	}
+	read := &photoAssetRead{ReadSeeker: file}
+	http.ServeContent(w, r, name, media.ModTime, read)
+	if read.didRead {
+		stage.Record(start, start.Add(read.elapsed), read.failed)
+	}
+}
+
 func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {
 	imageID, err := assetVideoIDFromPath(r.URL.Path, "/preview/image-thumbnail/")
 	if err != nil {
@@ -579,7 +620,9 @@ func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("image thumbnail unavailable: %v", err), http.StatusInternalServerError)
 		return
 	}
+	openStart := perfdiag.Start()
 	file, err := os.Open(media.Path)
+	photoThumbnailOpenStage.End(openStart, err != nil)
 	if err != nil {
 		http.Error(w, "image thumbnail not found", http.StatusNotFound)
 		return
@@ -587,7 +630,7 @@ func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+	servePhotoAsset(w, r, media, file, &photoThumbnailReadStage)
 }
 
 func (a *App) serveImageView(w http.ResponseWriter, r *http.Request) {
@@ -605,7 +648,9 @@ func (a *App) serveImageView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("image unavailable: %v", err), http.StatusInternalServerError)
 		return
 	}
+	openStart := perfdiag.Start()
 	file, err := os.Open(media.Path)
+	photoViewOpenStage.End(openStart, err != nil)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			http.Error(w, "image not found", http.StatusNotFound)
@@ -618,7 +663,7 @@ func (a *App) serveImageView(w http.ResponseWriter, r *http.Request) {
 	if media.MIME != "" {
 		w.Header().Set("Content-Type", media.MIME)
 	}
-	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+	servePhotoAsset(w, r, media, file, &photoViewReadStage)
 }
 
 func (a *App) servePreviewMedia(w http.ResponseWriter, r *http.Request) {
