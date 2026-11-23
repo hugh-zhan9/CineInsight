@@ -1724,6 +1724,43 @@ export default {
   .header .header-tool-btn { padding: 0 8px; }
 }
 
+/* 观看侧影院顶栏：半透明磨砂 + 胶囊导航，营造私人影院沉浸感；管理侧保持不透明发丝线。 */
+.surface-cinema .header {
+  background: var(--cinema-header-bg);
+  border-bottom-color: var(--cinema-card-ring);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+.surface-cinema .header h1 {
+  letter-spacing: 0.04em;
+}
+.surface-cinema .header .nav-btn {
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+}
+.surface-cinema .header .nav-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--cinema-glass-chip);
+}
+.surface-cinema .header .nav-btn.active,
+.surface-cinema .header .nav-btn.active:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--cinema-glass-chip-hover);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-ring);
+}
+.surface-cinema .header .header-tool-btn {
+  border-radius: var(--radius-pill);
+  background: var(--cinema-glass-chip);
+  border-color: var(--cinema-card-ring);
+}
+.surface-cinema .header .header-tool-btn:hover:not(:disabled) {
+  background: var(--cinema-glass-chip-hover);
+  border-color: var(--cinema-card-hover-ring);
+}
+.surface-cinema .header-nav__divider {
+  background: var(--cinema-card-ring);
+}
+
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .relaunch-overlay {
   position: fixed;

@@ -28,9 +28,9 @@ const (
 	imageViewRoutePrefix            = "/preview/image/"
 	imageThumbnailMaxEdge           = 480
 	imageViewMaxEdge                = 2560
-	imageThumbnailCacheLimit  int64 = 256 << 20
+	imageThumbnailCacheLimit  int64 = 512 << 20
 	imageDecodeTimeout              = 30 * time.Second
-	imageJPEGConcurrency            = 3
+	imageJPEGConcurrency            = 6
 )
 
 var (
@@ -133,22 +133,25 @@ type ImageThumbnailService struct {
 	// cacheSizes / cacheBytes 是缓存目录里各 <id>.jpg、<id>.view.jpg 的大小与总量账（cacheMu 保护）。
 	// nil 表示尚未建账：第一次淘汰检查整目录扫描一次建账，之后生成时增量记账，
 	// 账面超过上限才再整目录扫描（同时以磁盘实况重建账面）并按原规则淘汰。
-	cacheSizes map[string]int64
-	cacheBytes int64
+	cacheSizes            map[string]int64
+	cacheBytes            int64
+	externalRevalidateSem chan struct{}
+	externalRevalidateAt  sync.Map
 }
 
 // NewImageThumbnailService 创建图片缩略图服务，缓存根为 <dataDir>/image-thumbnails/。
 func NewImageThumbnailService(dataDir string) *ImageThumbnailService {
 	return &ImageThumbnailService{
-		cacheDir:       filepath.Join(dataDir, "image-thumbnails"),
-		maxCacheBytes:  imageThumbnailCacheLimit,
-		findFFmpeg:     findThumbnailFFmpeg,
-		runFFmpeg:      runImageThumbnailFFmpeg,
-		probeFFprobe:   probeImageDimensionsFFprobe,
-		convertJPEG:    sipsConvertJPEG,
-		probeSips:      sipsProbeDimensions,
-		jpegSlots:      make(chan struct{}, imageJPEGConcurrency),
-		thumbnailSlots: make(chan struct{}, imageJPEGConcurrency-1),
+		cacheDir:              filepath.Join(dataDir, "image-thumbnails"),
+		maxCacheBytes:         imageThumbnailCacheLimit,
+		findFFmpeg:            findThumbnailFFmpeg,
+		runFFmpeg:             runImageThumbnailFFmpeg,
+		probeFFprobe:          probeImageDimensionsFFprobe,
+		convertJPEG:           sipsConvertJPEG,
+		probeSips:             sipsProbeDimensions,
+		jpegSlots:             make(chan struct{}, imageJPEGConcurrency),
+		thumbnailSlots:        make(chan struct{}, imageJPEGConcurrency-1),
+		externalRevalidateSem: make(chan struct{}, 1),
 	}
 }
 
@@ -202,6 +205,13 @@ func (s *ImageThumbnailService) ResolveImageThumbnail(ctx context.Context, image
 	if decoder == imageDecoderUnsupported {
 		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
 	}
+	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(imageID), 10)+".jpg")
+	if IsExternalOrRemotePath(img.Path) {
+		if media, ok := existingThumbnailCache(cachePath); ok {
+			s.revalidateExternalImageThumbnailAsync(imageID, img.Path, cachePath, media.ModTime)
+			return &ImageMedia{Path: media.Path, ModTime: media.ModTime, MIME: "image/jpeg"}, nil
+		}
+	}
 	sourceInfo, err := statPhotoSource(img.Path)
 	if err != nil {
 		return nil, err
@@ -214,7 +224,6 @@ func (s *ImageThumbnailService) ResolveImageThumbnail(ctx context.Context, image
 	}
 
 	cacheStart := perfdiag.Start()
-	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(imageID), 10)+".jpg")
 	unlock, err := s.lockImageCache(ctx, cachePath)
 	if err != nil {
 		return nil, err
@@ -238,6 +247,42 @@ func (s *ImageThumbnailService) ResolveImageThumbnail(ctx context.Context, image
 	s.backfillImageMetadata(ctx, img, decoder, sourceInfo, cachePath)
 	photoThumbnailMissStage.End(cacheStart, false)
 	return &ImageMedia{Path: cachePath, ModTime: cacheInfo.ModTime(), MIME: "image/jpeg"}, nil
+}
+
+func (s *ImageThumbnailService) revalidateExternalImageThumbnailAsync(imageID uint, sourcePath, cachePath string, cacheModTime time.Time) {
+	if s.externalRevalidateSem == nil {
+		return
+	}
+	now := time.Now()
+	if prev, ok := s.externalRevalidateAt.Load(imageID); ok {
+		if ts, ok := prev.(time.Time); ok && now.Sub(ts) < externalVolumeRevalidateInterval {
+			return
+		}
+	}
+	select {
+	case s.externalRevalidateSem <- struct{}{}:
+	default:
+		return
+	}
+	s.externalRevalidateAt.Store(imageID, now)
+	go func() {
+		defer func() { <-s.externalRevalidateSem }()
+		done := make(chan os.FileInfo, 1)
+		go func() {
+			if info, err := os.Stat(sourcePath); err == nil && !info.IsDir() {
+				done <- info
+				return
+			}
+			done <- nil
+		}()
+		select {
+		case info := <-done:
+			if info != nil && info.ModTime().After(cacheModTime) {
+				_ = os.Remove(cachePath)
+			}
+		case <-time.After(externalVolumeRevalidateTimeout):
+		}
+	}()
 }
 
 // ResolveImageView 返回查看大图：常规格式原文件直出；HEIC/RAW 在 darwin 转码为
@@ -600,8 +645,11 @@ func imageThumbnailDHash(thumbnailPath string) (uint64, error) {
 	return differenceHash(decoded, decoded.Bounds()), nil
 }
 
-// runImageThumbnailFFmpeg 用 ffmpeg 生成静态图片缩略图（无 -ss，设计 4.2.2）。
+// runImageThumbnailFFmpeg 在 macOS 上优先走进程内 ImageIO 硬件加速缩图，失败或非 darwin 回退 ffmpeg。
 func runImageThumbnailFFmpeg(ctx context.Context, binary, sourcePath, destinationPath string, maxEdge int) error {
+	if err := nativeFastImageThumbnail(ctx, sourcePath, destinationPath, maxEdge); err == nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, imageDecodeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary,
@@ -618,8 +666,11 @@ func runImageThumbnailFFmpeg(ctx context.Context, binary, sourcePath, destinatio
 	return nil
 }
 
-// probeImageDimensionsFFprobe 用 ffprobe 读取常规图片的像素宽高。
+// probeImageDimensionsFFprobe 在 macOS 上优先走进程内 ImageIO 读文件头，失败或非 darwin 回退 ffprobe。
 func probeImageDimensionsFFprobe(ctx context.Context, sourcePath string) (int, int, error) {
+	if w, h, err := nativeFastImageProbe(ctx, sourcePath); err == nil {
+		return w, h, nil
+	}
 	binary, err := findFFProbeBinary()
 	if err != nil {
 		return 0, 0, err

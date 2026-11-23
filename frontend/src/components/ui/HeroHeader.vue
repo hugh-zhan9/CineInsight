@@ -34,12 +34,19 @@ export default {
 .ui-hero-header__eyebrow {
   display: inline-flex;
   align-items: center;
+  justify-self: start;
   gap: var(--space-2);
   margin: 0;
-  color: var(--recap-hero-muted);
-  font-size: var(--fs-secondary);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--recap-hero-chip-border);
+  background: var(--recap-hero-chip);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: var(--recap-hero-fg);
+  font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
 }
 .ui-hero-header__title {
   display: -webkit-box;
@@ -49,11 +56,27 @@ export default {
   -webkit-box-orient: vertical;
   font-size: var(--fs-hero);
   font-weight: var(--fw-bold);
-  line-height: 1.12;
-  letter-spacing: -0.02em;
-  text-shadow: 0 2px 24px var(--recap-scrim);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  text-shadow: 0 4px 28px var(--recap-scrim);
 }
 .ui-hero-header--quiet .ui-hero-header__title { font-size: var(--fs-display); }
-.ui-hero-header__meta { margin: 0; color: var(--recap-hero-muted); font-size: var(--fs-body); }
-.ui-hero-header__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-1); }
+.ui-hero-header__meta { margin: 0; color: var(--recap-hero-muted); font-size: var(--fs-body); line-height: 1.5; }
+.ui-hero-header__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-2); }
+.ui-hero-header__actions :deep(.btn--primary) {
+  min-height: var(--h-touch);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--cinema-card-shadow);
+}
+.ui-hero-header__actions :deep(.btn--secondary) {
+  min-height: var(--h-touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--recap-hero-chip);
+  border-color: var(--recap-hero-chip-border);
+  color: var(--recap-hero-fg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
 </style>

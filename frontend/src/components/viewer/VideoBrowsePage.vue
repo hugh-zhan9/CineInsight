@@ -195,6 +195,9 @@
               <span v-else class="video-browse__poster-fallback"><AppIcon name="videos" :size="24" /></span>
               <span v-if="cardMark(video)" :class="['video-browse__mark', `video-browse__mark--${cardMark(video).kind}`]" data-test="browse-card-mark">{{ cardMark(video).label }}</span>
               <span v-if="versionCount(video) > 1" class="video-browse__versions">{{ versionCount(video) }} 个版本</span>
+              <span v-if="cardProgressPercent(video) > 0" class="video-browse__progress" aria-hidden="true">
+                <span class="video-browse__progress-fill" :style="{ width: `${cardProgressPercent(video)}%` }"></span>
+              </span>
             </span>
             <span class="video-browse__card-text">
               <strong>{{ cardTitle(video) }}</strong>
@@ -1107,6 +1110,12 @@ export default {
       this.tonightOpen = false;
       return this.playRandom();
     },
+    cardProgressPercent(video) {
+      const pos = Number(video?.watch_position_seconds || 0);
+      const dur = Number(video?.duration || 0);
+      if (!Number.isFinite(pos) || !Number.isFinite(dur) || pos <= 0 || dur <= 0) return 0;
+      return Math.min(100, Math.max(2, Math.round((pos / dur) * 100)));
+    },
     // ⌘F 聚焦搜索框（与片库页同一快捷键）；本页不可见或有对话框开着时不接。
     handleShortcut(event) {
       if (!this.pageActive || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
@@ -1184,14 +1193,18 @@ export default {
   width: 100%;
   aspect-ratio: 2 / 3;
   overflow: hidden;
-  border: 1px solid var(--hairline);
+  border: 0;
   border-radius: var(--radius);
   background: var(--thumb-bg);
-  transition: border-color var(--transition);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-ring), var(--cinema-card-shadow);
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.video-browse__poster img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 400ms ease; }
-.video-browse__card:hover .video-browse__poster { border-color: var(--accent-border); }
-.video-browse__card:hover .video-browse__poster img { transform: scale(1.04); }
+.video-browse__poster img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1); }
+.video-browse__card:hover .video-browse__poster {
+  transform: translateY(-4px);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-hover-ring), var(--cinema-card-hover-shadow);
+}
+.video-browse__card:hover .video-browse__poster img { transform: scale(1.045); }
 .video-browse__poster-fallback {
   display: flex;
   align-items: center;
@@ -1208,12 +1221,29 @@ export default {
   border-radius: var(--radius-pill);
   background: var(--media-badge-bg);
   color: var(--media-badge-fg);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-ring);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
 }
 .video-browse__mark { top: var(--space-2); right: var(--space-2); }
 .video-browse__mark--progress { background: var(--accent-color); color: var(--accent-on); }
 .video-browse__versions { left: var(--space-2); bottom: var(--space-2); }
+.video-browse__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--media-progress-track);
+}
+.video-browse__progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-color);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
 .video-browse__card-text { display: grid; gap: 2px; min-width: 0; }
 .video-browse__card-text strong { overflow: hidden; font-size: var(--fs-secondary); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .video-browse__card-text small { color: var(--text-muted); font-size: var(--fs-caption); }

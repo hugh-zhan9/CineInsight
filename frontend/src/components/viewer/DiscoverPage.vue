@@ -85,8 +85,27 @@ export default {
 };
 </script>
 <style scoped>
-.discover-page__filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); margin-bottom: var(--space-4); }
-.discover-page__filters label { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-secondary); }
-.discover-page__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-4); }
+.discover-page {
+  display: grid;
+  gap: var(--space-5);
+  align-content: start;
+  padding-bottom: var(--space-7);
+  background:
+    radial-gradient(1100px 360px at 84% -80px, var(--cinema-ambient-primary), transparent 68%),
+    radial-gradient(800px 300px at 10% -60px, var(--cinema-ambient-warm), transparent 68%);
+}
+.discover-page__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--cinema-card-ring);
+  background: var(--panel-bg);
+  box-shadow: var(--cinema-card-shadow);
+}
+.discover-page__filters label { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: var(--fs-secondary); }
+.discover-page__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-5) var(--space-4); }
 .discover-page__error { color: var(--danger-text); }
 </style>

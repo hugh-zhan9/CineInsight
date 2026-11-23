@@ -10,9 +10,11 @@ import (
 	"strings"
 )
 
-// sipsConvertJPEG 用系统 sips 把 HEIC/RAW 转为 JPEG，长边不超过 maxEdge
-// （设计 4.2.2 D-006，darwin 专属；超时 30s、输出有界截断）。
+// sipsConvertJPEG 优先用进程内 ImageIO 硬件加速缩图，失败时回退到系统 sips 命令。
 func sipsConvertJPEG(ctx context.Context, sourcePath, destinationPath string, maxEdge int) error {
+	if err := nativeFastImageThumbnail(ctx, sourcePath, destinationPath, maxEdge); err == nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, imageDecodeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sips",
@@ -27,8 +29,11 @@ func sipsConvertJPEG(ctx context.Context, sourcePath, destinationPath string, ma
 	return nil
 }
 
-// sipsProbeDimensions 用 `sips -g pixelWidth -g pixelHeight` 读取像素尺寸。
+// sipsProbeDimensions 优先用进程内 ImageIO 读文件头尺寸，失败时回退到 sips。
 func sipsProbeDimensions(ctx context.Context, sourcePath string) (int, int, error) {
+	if w, h, err := nativeFastImageProbe(ctx, sourcePath); err == nil {
+		return w, h, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, imageDecodeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sips", "-g", "pixelWidth", "-g", "pixelHeight", sourcePath)

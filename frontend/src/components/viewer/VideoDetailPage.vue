@@ -739,26 +739,26 @@ export default {
 <style scoped>
 .viewer-detail {
   display: grid;
-  gap: 26px;
+  gap: var(--space-6);
   align-content: start;
-  padding-bottom: 56px;
+  padding-bottom: var(--space-7);
 }
 .viewer-detail__nav { display: flex; align-items: center; gap: 12px; }
 .viewer-detail__error { margin: 0; color: var(--danger-text); font-size: var(--fs-secondary); }
-.viewer-detail__hero { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 8px 28px; align-items: end; padding: 32px 0 0 40px; }
+.viewer-detail__hero { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 8px 32px; align-items: end; padding: 36px 0 0 44px; }
 .viewer-detail__hero--playing { grid-template-columns: minmax(0, 1fr); padding: 24px 24px 0; }
 .viewer-detail__poster {
   display: grid;
   place-items: center;
   align-self: end;
   aspect-ratio: 2 / 3;
-  margin-bottom: 32px;
+  margin-bottom: 36px;
   overflow: hidden;
   border-radius: var(--radius-lg);
   background: var(--player-bg);
   color: var(--recap-hero-muted);
   font-size: var(--fs-display);
-  box-shadow: 0 18px 40px var(--recap-scrim);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-ring), var(--cinema-hero-glow);
 }
 .viewer-detail__poster img { width: 100%; height: 100%; object-fit: cover; }
 .viewer-detail__body { padding-left: 0; }

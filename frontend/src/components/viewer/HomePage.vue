@@ -43,6 +43,7 @@
           :id="video.id"
           :title="videoTitle(video)"
           :subtitle="progressText(video)"
+          :progress="progressRatio(video)"
           @open="openVideo(video)"
         />
       </MediaRail>
@@ -676,6 +677,12 @@ export default {
     },
     initial(name) {
       return String(name || '?').trim().slice(0, 1) || '?';
+    },
+    progressRatio(video) {
+      const pos = Number(video?.watch_position_seconds || 0);
+      const dur = Number(video?.duration || 0);
+      if (!Number.isFinite(pos) || !Number.isFinite(dur) || pos <= 0 || dur <= 0) return 0;
+      return Math.min(1, pos / dur);
     }
   }
 };
@@ -685,13 +692,13 @@ export default {
 /* 不参与浏览器的滚动锚定：回到首页时各块变高变矮由脚本按视口顶部那一块放回（keepViewAnchor），两边都挪会挪两次。 */
 .viewer-home {
   display: grid;
-  gap: 26px;
+  gap: var(--space-6);
   align-content: start;
-  padding-bottom: 56px;
+  padding-bottom: var(--space-7);
   overflow-anchor: none;
   background:
-    radial-gradient(1100px 360px at 88% -80px, color-mix(in srgb, var(--accent-color) 13%, transparent), transparent 70%),
-    radial-gradient(800px 300px at 2% -60px, color-mix(in srgb, var(--warning-color) 9%, transparent), transparent 70%);
+    radial-gradient(1200px 420px at 86% -90px, var(--cinema-ambient-primary), transparent 68%),
+    radial-gradient(900px 340px at 8% -70px, var(--cinema-ambient-warm), transparent 68%);
 }
 .viewer-home__error { margin: 0; color: var(--danger-text); font-size: var(--fs-secondary); }
 .viewer-home__skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }

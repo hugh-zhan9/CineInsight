@@ -795,7 +795,7 @@ input:checked + .slider::before {
 /* 观看侧共享样式（D-UI-08）：原先只在观看回顾页生效的区块标题、面板、横向条带、大幅背景里的文字与人物头像，
    提升为全局，供回顾页与观看首页共用。统计卡是组件 ui/StatTile.vue，各页自己排网格。 */
 .recap-muted { margin: 0; color: var(--text-muted); font-size: var(--fs-secondary); }
-.recap-hero__body { display: grid; gap: 12px; max-width: 760px; min-width: 0; padding: 32px 40px; }
+.recap-hero__body { display: grid; gap: 14px; max-width: 760px; min-width: 0; padding: 40px 44px; }
 .recap-hero__eyebrow {
   display: inline-flex;
   align-items: center;
@@ -814,17 +814,17 @@ input:checked + .slider::before {
   -webkit-box-orient: vertical;
   font-size: var(--fs-hero);
   font-weight: var(--fw-bold);
-  line-height: 1.12;
-  letter-spacing: -0.02em;
-  text-shadow: 0 2px 24px var(--recap-scrim);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  text-shadow: 0 4px 28px var(--recap-scrim);
 }
 .recap-hero__title--quiet { font-size: var(--fs-display); }
 .recap-hero__meta { margin: 0; color: var(--recap-hero-muted); font-size: var(--fs-body); }
-.recap-hero__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 4px; }
+.recap-hero__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 6px; }
 .recap-hero__note { color: var(--recap-hero-muted); font-size: var(--fs-secondary); }
-.recap-section { display: grid; gap: 14px; }
-.recap-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.recap-section__head h3 { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); }
+.recap-section { display: grid; gap: 16px; }
+.recap-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.recap-section__head h3 { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-section); font-weight: var(--fw-bold); letter-spacing: -0.01em; }
 .recap-section__head h3 .recap-icon { color: var(--accent-text); }
 .recap-section__head small { color: var(--text-muted); font-size: var(--fs-caption); }
 .recap-section__head--sub { margin-top: 6px; }
@@ -834,10 +834,11 @@ input:checked + .slider::before {
   align-content: start;
   gap: 14px;
   min-width: 0;
-  padding: 18px;
-  border: 1px solid var(--hairline);
+  padding: 20px;
+  border: 1px solid var(--cinema-card-ring);
   border-radius: var(--radius-lg);
   background: var(--panel-bg);
+  box-shadow: var(--cinema-card-shadow);
 }
 .recap-strip { --rail-card-width: 220px; }
 .recap-strip--compact { --rail-card-width: 180px; }

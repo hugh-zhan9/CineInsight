@@ -8,10 +8,23 @@
     @click="$emit('open')"
   >
     <span class="recap-card__media" :style="aspectStyle">
-      <img v-if="src && !failed" :src="src" alt="" loading="lazy" decoding="async" @error="failed = true" />
+      <img
+        v-if="src && !failed"
+        ref="img"
+        :src="src"
+        :class="{ 'is-loaded': loaded }"
+        alt=""
+        loading="lazy"
+        decoding="async"
+        @load="loaded = true"
+        @error="failed = true"
+      />
       <span v-else class="recap-card__fallback"><RecapIcon :name="kind === 'image' ? 'images' : 'plays'" /></span>
       <span v-if="rank" class="recap-card__rank">{{ rank }}</span>
       <span v-if="badge" class="recap-card__badge">{{ badge }}</span>
+      <span v-if="progressPercent > 0" class="recap-card__progress" aria-hidden="true">
+        <span class="recap-card__progress-fill" :style="{ width: `${progressPercent}%` }"></span>
+      </span>
     </span>
     <span v-if="variant !== 'tile'" class="recap-card__text">
       <strong>{{ title }}</strong>
@@ -42,14 +55,21 @@ export default {
     cover: { type: String, default: '' },
     // 图片按原始宽高比展示（马赛克墙），视频统一 16:9。
     width: { type: Number, default: 0 },
-    height: { type: Number, default: 0 }
+    height: { type: Number, default: 0 },
+    // 观看进度（0..1），大于 0 时在封面底部渲染细影院进度条。
+    progress: { type: Number, default: 0 }
   },
   emits: ['open'],
   data() {
-    return { failed: false };
+    return { failed: false, loaded: false };
   },
   computed: {
     src() { return this.cover || (this.kind === 'image' ? imageThumbnail(this.id) : videoThumbnail(this.id)); },
+    progressPercent() {
+      const value = Number(this.progress || 0);
+      if (!Number.isFinite(value) || value <= 0) return 0;
+      return Math.min(100, Math.max(2, Math.round(value * 100)));
+    },
     aspectStyle() {
       if (this.kind === 'image' && this.width > 0 && this.height > 0) {
         return { aspectRatio: `${this.width} / ${Math.min(this.height, this.width * 2.2)}` };
@@ -57,8 +77,14 @@ export default {
       return {};
     }
   },
+  mounted() {
+    if (this.$refs.img?.complete && this.$refs.img.naturalWidth > 0) this.loaded = true;
+  },
   watch: {
-    src() { this.failed = false; }
+    src() {
+      this.failed = false;
+      this.loaded = false;
+    }
   }
 };
 </script>
@@ -67,7 +93,7 @@ export default {
 .recap-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   min-width: 0;
   padding: 0;
@@ -85,9 +111,10 @@ export default {
   aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: var(--radius-md);
-  border: 1px solid var(--hairline);
+  border: 0;
   background: var(--thumb-bg);
-  transition: transform 260ms ease, box-shadow 260ms ease;
+  box-shadow: inset 0 0 0 1px var(--cinema-card-ring), var(--cinema-card-shadow);
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .recap-card--image .recap-card__media { aspect-ratio: 4 / 3; }
 .recap-card--poster .recap-card__media { aspect-ratio: 2 / 3; }
@@ -96,10 +123,15 @@ export default {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 500ms ease;
+  opacity: 0;
+  transition: opacity 240ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.recap-card:not(:disabled):hover .recap-card__media { transform: translateY(-4px); box-shadow: var(--shadow-popover); }
-.recap-card:not(:disabled):hover .recap-card__media img { transform: scale(1.06); }
+.recap-card__media img.is-loaded { opacity: 1; }
+.recap-card:not(:disabled):hover .recap-card__media {
+  transform: translateY(-4px);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-hover-ring), var(--cinema-card-hover-shadow);
+}
+.recap-card:not(:disabled):hover .recap-card__media img { transform: scale(1.045); }
 .recap-card:focus-visible .recap-card__media { outline: 2px solid var(--accent-color); outline-offset: 2px; }
 .recap-card--unavailable .recap-card__media { filter: grayscale(1); opacity: 0.55; }
 .recap-card__fallback {
@@ -131,15 +163,33 @@ export default {
   border-radius: var(--radius-pill);
   background: var(--media-badge-bg);
   color: var(--media-badge-fg);
+  box-shadow: inset 0 0 0 1px var(--cinema-card-ring);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
 }
-.recap-card__text { display: grid; gap: 2px; min-width: 0; }
-.recap-card__text strong { overflow: hidden; font-size: var(--fs-secondary); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.recap-card__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--media-progress-track);
+}
+.recap-card__progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-color);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+.recap-card__text { display: grid; gap: 3px; min-width: 0; padding: 0 2px; }
+.recap-card__text strong { overflow: hidden; font-size: var(--fs-secondary); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.005em; }
 .recap-card__text small { color: var(--text-secondary); font-size: var(--fs-caption); }
 .recap-card--tile .recap-card__media { border-radius: var(--radius); }
 @media (prefers-reduced-motion: reduce) {
   .recap-card__media, .recap-card__media img { transition: none; }
+  .recap-card__media img { opacity: 1; }
   .recap-card:not(:disabled):hover .recap-card__media, .recap-card:not(:disabled):hover .recap-card__media img { transform: none; }
 }
 </style>

@@ -140,16 +140,28 @@
   --z-modal: 300;
   --z-toast: 400;
   --z-critical: 500;
-  /* 影院表面（D-UD-02）：观看侧不论系统主题都用这套深色，经下方 .surface-cinema 映射到通用变量。 */
-  --cinema-bg: #0d1213;
-  --cinema-panel: #172022;
-  --cinema-panel-strong: #1d2829;
-  --cinema-text: #e6eef0;
-  --cinema-text-secondary: #a9b8bb;
-  --cinema-text-muted: #7f9194;
-  --cinema-border: #2b3a3d;
-  --cinema-accent: #5fd3c4;
-  --cinema-accent-on: #04211e;
+  /* 影院表面（D-UD-02）：观看侧不论系统主题都用这套深邃黑曜石影院色板，经下方 .surface-cinema 映射到通用变量。 */
+  --cinema-bg: #08090c;
+  --cinema-panel: #111318;
+  --cinema-panel-strong: #191d25;
+  --cinema-text: #f2f4f8;
+  --cinema-text-secondary: #9fa8b8;
+  --cinema-text-muted: #6e7688;
+  --cinema-border: rgba(255, 255, 255, 0.08);
+  --cinema-accent: #4fd1c5;
+  --cinema-accent-on: #041c1a;
+  /* 影院光影与立体层次令牌：三套主题均定义，观看侧呈消费级影院质感，管理侧保持克制扁平。 */
+  --cinema-header-bg: var(--header-bg);
+  --cinema-glass-chip: rgba(16, 22, 23, 0.06);
+  --cinema-glass-chip-hover: rgba(16, 22, 23, 0.11);
+  --cinema-card-ring: rgba(16, 22, 23, 0.08);
+  --cinema-card-hover-ring: rgba(15, 143, 130, 0.45);
+  --cinema-card-shadow: 0 2px 8px rgba(10, 25, 28, 0.06);
+  --cinema-card-hover-shadow: 0 14px 32px rgba(10, 25, 28, 0.16);
+  --cinema-hero-glow: 0 20px 56px rgba(10, 25, 28, 0.18);
+  --cinema-scrim-edge: rgba(6, 10, 14, 0.94);
+  --cinema-ambient-primary: rgba(15, 143, 130, 0.08);
+  --cinema-ambient-warm: rgba(217, 119, 6, 0.06);
   /* 旧名补定义（原先用了却没定义）：指向现有面板变量。 */
   --bg-secondary: var(--panel-subtle-bg);
   --surface-muted: var(--panel-muted-bg);
@@ -245,6 +257,17 @@
   --recap-hero-muted: rgba(255, 255, 255, 0.72);
   --recap-hero-chip: rgba(255, 255, 255, 0.12);
   --recap-hero-chip-border: rgba(255, 255, 255, 0.24);
+  --cinema-header-bg: var(--header-bg);
+  --cinema-glass-chip: rgba(255, 255, 255, 0.08);
+  --cinema-glass-chip-hover: rgba(255, 255, 255, 0.15);
+  --cinema-card-ring: rgba(255, 255, 255, 0.08);
+  --cinema-card-hover-ring: rgba(95, 208, 194, 0.52);
+  --cinema-card-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+  --cinema-card-hover-shadow: 0 20px 44px rgba(0, 0, 0, 0.56);
+  --cinema-hero-glow: 0 24px 68px rgba(0, 0, 0, 0.54);
+  --cinema-scrim-edge: rgba(8, 10, 13, 0.95);
+  --cinema-ambient-primary: rgba(35, 169, 155, 0.11);
+  --cinema-ambient-warm: rgba(240, 161, 58, 0.07);
 }
 
 /* 影院表面（D-UD-02）：观看侧页面根节点加 .surface-cinema，子树里的通用颜色变量换成影院变量，
@@ -333,12 +356,23 @@
   --confidence-unknown-text: #a3b1b3;
   --confidence-unknown-bg: #232b2c;
   --confidence-unknown-border: #2a3234;
-  --recap-scrim: rgba(3, 7, 8, 0.9);
-  --recap-scrim-mid: rgba(3, 7, 8, 0.5);
+  --recap-scrim: rgba(6, 8, 12, 0.88);
+  --recap-scrim-mid: rgba(6, 8, 12, 0.44);
   --recap-hero-fg: #ffffff;
-  --recap-hero-muted: rgba(255, 255, 255, 0.72);
-  --recap-hero-chip: rgba(255, 255, 255, 0.12);
-  --recap-hero-chip-border: rgba(255, 255, 255, 0.24);
+  --recap-hero-muted: rgba(242, 244, 248, 0.78);
+  --recap-hero-chip: rgba(255, 255, 255, 0.11);
+  --recap-hero-chip-border: rgba(255, 255, 255, 0.22);
+  --cinema-header-bg: rgba(8, 9, 12, 0.78);
+  --cinema-glass-chip: rgba(255, 255, 255, 0.08);
+  --cinema-glass-chip-hover: rgba(255, 255, 255, 0.16);
+  --cinema-card-ring: rgba(255, 255, 255, 0.09);
+  --cinema-card-hover-ring: rgba(255, 255, 255, 0.28);
+  --cinema-card-shadow: 0 12px 30px rgba(0, 0, 0, 0.46);
+  --cinema-card-hover-shadow: 0 24px 54px rgba(0, 0, 0, 0.74);
+  --cinema-hero-glow: 0 32px 84px rgba(0, 0, 0, 0.72);
+  --cinema-scrim-edge: rgba(8, 9, 12, 0.98);
+  --cinema-ambient-primary: rgba(79, 209, 197, 0.11);
+  --cinema-ambient-warm: rgba(240, 161, 58, 0.07);
   --bg-secondary: var(--panel-subtle-bg);
   --surface-muted: var(--panel-muted-bg);
   --surface-color: var(--panel-bg);

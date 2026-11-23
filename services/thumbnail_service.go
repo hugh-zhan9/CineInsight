@@ -20,7 +20,7 @@ import (
 const (
 	thumbnailRoutePrefix            = "/preview/thumbnail/"
 	thumbnailTimeout                = 10 * time.Second
-	posterConcurrency               = 2
+	posterConcurrency               = 4
 	posterTimingLogsPerSecond       = 10
 	seekSpriteRoutePrefix           = "/preview/seek-sprite/"
 	seekSpriteFrameWidth            = 160
@@ -79,6 +79,8 @@ type ThumbnailService struct {
 	cacheMu                 sync.Mutex
 	explorationOnce         sync.Once
 	explorationCache        *explorationThumbnailCache
+	externalRevalidateSem   chan struct{}
+	externalRevalidateAt    sync.Map
 }
 
 // NewThumbnailService 创建缩略图服务。
@@ -93,9 +95,10 @@ func NewThumbnailService(videoService *VideoService, dataDir string) *ThumbnailS
 		frameCache:              newFrameAtCache(frameAtCacheEntries),
 		frameSem:                make(chan struct{}, frameAtConcurrency),
 		posterSem:               make(chan struct{}, posterConcurrency),
-		posterExplorationSem:    make(chan struct{}, posterConcurrency-1),
+		posterExplorationSem:    make(chan struct{}, 1),
 		maxSeekSpriteCacheBytes: seekSpriteCacheLimit,
 		spriteSem:               make(chan struct{}, 1),
+		externalRevalidateSem:   make(chan struct{}, 1),
 	}
 }
 
@@ -225,6 +228,13 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 	if err != nil {
 		return nil, err
 	}
+	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(videoID), 10)+".jpg")
+	if !admitted && IsExternalOrRemotePath(video.Path) {
+		if media, ok := existingThumbnailCache(cachePath); ok {
+			s.revalidateExternalThumbnailAsync(videoID, video.Path, cachePath, media.ModTime)
+			return media, nil
+		}
+	}
 	sourceInfo, err := os.Stat(video.Path)
 	if err != nil {
 		return nil, err
@@ -232,7 +242,6 @@ func (s *ThumbnailService) resolveThumbnailUnderPathRead(ctx context.Context, vi
 	if sourceInfo.IsDir() {
 		return nil, fmt.Errorf("缩略图源路径不是文件")
 	}
-	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(videoID), 10)+".jpg")
 	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
 		return media, nil
 	}
@@ -476,6 +485,50 @@ func validThumbnailCache(path string, sourceModTime time.Time) (*ThumbnailMedia,
 		return nil, false
 	}
 	return &ThumbnailMedia{Path: path, ModTime: info.ModTime()}, true
+}
+
+func existingThumbnailCache(path string) (*ThumbnailMedia, bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		return nil, false
+	}
+	return &ThumbnailMedia{Path: path, ModTime: info.ModTime()}, true
+}
+
+func (s *ThumbnailService) revalidateExternalThumbnailAsync(videoID uint, sourcePath, cachePath string, cacheModTime time.Time) {
+	if s.externalRevalidateSem == nil {
+		return
+	}
+	now := time.Now()
+	if prev, ok := s.externalRevalidateAt.Load(videoID); ok {
+		if ts, ok := prev.(time.Time); ok && now.Sub(ts) < externalVolumeRevalidateInterval {
+			return
+		}
+	}
+	select {
+	case s.externalRevalidateSem <- struct{}{}:
+	default:
+		return
+	}
+	s.externalRevalidateAt.Store(videoID, now)
+	go func() {
+		defer func() { <-s.externalRevalidateSem }()
+		done := make(chan os.FileInfo, 1)
+		go func() {
+			if info, err := os.Stat(sourcePath); err == nil && !info.IsDir() {
+				done <- info
+				return
+			}
+			done <- nil
+		}()
+		select {
+		case info := <-done:
+			if info != nil && info.ModTime().After(cacheModTime) {
+				_ = os.Remove(cachePath)
+			}
+		case <-time.After(externalVolumeRevalidateTimeout):
+		}
+	}()
 }
 
 func thumbnailSeekSeconds(duration float64) float64 {

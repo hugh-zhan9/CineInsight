@@ -98,10 +98,11 @@ export default {
   border-radius: var(--radius-lg);
   background: var(--player-bg);
   color: var(--recap-hero-fg);
+  box-shadow: inset 0 1px 0 var(--cinema-card-ring), var(--cinema-hero-glow);
 }
-.recap-backdrop--large { min-height: 420px; }
-.recap-backdrop--medium { min-height: 300px; }
-.recap-backdrop--small { min-height: 200px; }
+.recap-backdrop--large { min-height: 460px; }
+.recap-backdrop--medium { min-height: 320px; }
+.recap-backdrop--small { min-height: 210px; }
 /* 画面层与压暗层同在 -1（同层按文档顺序，压暗层在后、盖在画面上），文字层在它们之上；isolation 把这些局部叠放关在本组件里。 */
 .recap-backdrop__stage { position: absolute; inset: 0; z-index: -1; }
 .recap-backdrop__frame {
@@ -130,8 +131,9 @@ export default {
   inset: 0;
   z-index: -1;
   background:
-    linear-gradient(90deg, var(--recap-scrim) 0%, var(--recap-scrim-mid) 48%, transparent 82%),
-    linear-gradient(0deg, var(--recap-scrim) 0%, transparent 55%);
+    linear-gradient(90deg, var(--cinema-scrim-edge) 0%, var(--recap-scrim-mid) 46%, transparent 80%),
+    linear-gradient(0deg, var(--cinema-scrim-edge) 0%, var(--recap-scrim-mid) 30%, transparent 65%),
+    linear-gradient(180deg, var(--recap-scrim-mid) 0%, transparent 24%);
 }
 .recap-backdrop__content { position: relative; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
 @keyframes recap-kenburns-a { from { transform: scale(1.02) translate(0, 0); } to { transform: scale(1.12) translate(-2%, -1.5%); } }

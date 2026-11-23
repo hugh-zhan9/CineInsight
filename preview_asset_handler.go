@@ -431,15 +431,9 @@ func (a *App) serveVideoArtwork(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	file, err := os.Open(asset.Path)
-	if err != nil {
+	if err := a.hotAssetCache.serveFile(w, r, asset.Path, asset.DisplayName, asset.ModTime, asset.MIME, "private, max-age=300"); err != nil {
 		http.Error(w, "artwork not found", http.StatusNotFound)
-		return
 	}
-	defer file.Close()
-	w.Header().Set("Content-Type", asset.MIME)
-	w.Header().Set("Cache-Control", "private, max-age=300")
-	http.ServeContent(w, r, asset.DisplayName, asset.ModTime, file)
 }
 
 // writeVideoThumbnail 是缩略图路由的发送部分，海报回落也走这里，两条路由发出的是同一张图。
@@ -453,15 +447,9 @@ func (a *App) writeVideoThumbnail(w http.ResponseWriter, r *http.Request, videoI
 		http.Error(w, fmt.Sprintf("thumbnail unavailable: %v", err), http.StatusInternalServerError)
 		return
 	}
-	file, err := os.Open(media.Path)
-	if err != nil {
+	if err := a.hotAssetCache.serveFile(w, r, media.Path, filepath.Base(media.Path), media.ModTime, "image/jpeg", "private, max-age=300"); err != nil {
 		http.Error(w, "thumbnail not found", http.StatusNotFound)
-		return
 	}
-	defer file.Close()
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "private, max-age=300")
-	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
 }
 
 func (a *App) serveSeekSprite(w http.ResponseWriter, r *http.Request) {
@@ -620,6 +608,12 @@ func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("image thumbnail unavailable: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if data, ok := a.hotAssetCache.Get(media.Path, media.ModTime); ok {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, bytes.NewReader(data))
+		return
+	}
 	openStart := perfdiag.Start()
 	file, err := os.Open(media.Path)
 	photoThumbnailOpenStage.End(openStart, err != nil)
@@ -628,6 +622,19 @@ func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	if info, statErr := file.Stat(); statErr == nil && info.Size() > 0 && info.Size() <= maxHotAssetEntryBytes {
+		readStart := perfdiag.Start()
+		data, readErr := io.ReadAll(io.LimitReader(file, maxHotAssetEntryBytes+1))
+		photoThumbnailReadStage.End(readStart, readErr != nil)
+		if readErr == nil && len(data) > 0 && int64(len(data)) <= maxHotAssetEntryBytes {
+			a.hotAssetCache.Put(media.Path, media.ModTime, data)
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Header().Set("Cache-Control", "private, max-age=300")
+			http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, bytes.NewReader(data))
+			return
+		}
+		_, _ = file.Seek(0, io.SeekStart)
+	}
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	servePhotoAsset(w, r, media, file, &photoThumbnailReadStage)

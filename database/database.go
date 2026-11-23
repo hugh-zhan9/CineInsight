@@ -96,6 +96,12 @@ func openBackend(backend Backend, dataDir string) (*gorm.DB, error) {
 		if err != nil {
 			return nil, fmt.Errorf("打开 SQLite 数据库失败 path=%s: %w", path, err)
 		}
+		// WAL 模式下 synchronous=NORMAL 兼顾安全与吞吐；32MiB 页缓存与 256MiB mmap
+		// 让常规片库的热元数据索引常驻内存，减少主线程读写等待。
+		_ = db.Exec("PRAGMA synchronous = NORMAL").Error
+		_ = db.Exec("PRAGMA temp_store = MEMORY").Error
+		_ = db.Exec("PRAGMA cache_size = -32768").Error
+		_ = db.Exec("PRAGMA mmap_size = 268435456").Error
 		return db, nil
 	case BackendPostgres:
 		dsn, err := postgresDSNFromEnv()

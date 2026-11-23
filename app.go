@@ -73,6 +73,7 @@ type App struct {
 	libraryQueries                 *services.LibraryQueryService
 	videoService                   *services.VideoService
 	thumbnailService               *services.ThumbnailService
+	hotAssetCache                  *hotAssetByteCache
 	tagService                     *services.TagService
 	settingsService                *services.SettingsService
 	backupService                  *services.BackupService
@@ -201,6 +202,7 @@ func NewApp() *App {
 	app := &App{
 		videoService:          videoService,
 		thumbnailService:      services.NewThumbnailService(videoService, dataDir),
+		hotAssetCache:         newHotAssetByteCache(defaultHotAssetCacheBytes),
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
 		backupService:         services.NewBackupService(dataDir),
