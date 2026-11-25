@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 	"video-master/database"
 	"video-master/models"
@@ -129,7 +130,7 @@ func createJellyfinSession(key [32]byte, deviceID, client string, now time.Time)
 	if err != nil {
 		return jellyfinSession{}, nil, err
 	}
-	return jellyfinSession{expires: row.ExpiresAt, seen: row.LastSeenAt, id: hexSessionID(key)}, revoked, nil
+	return jellyfinSession{expires: row.ExpiresAt, seen: row.LastSeenAt, id: hexSessionID(key), client: row.Client}, revoked, nil
 }
 
 // loadJellyfinSession 按令牌哈希取未过期的会话。
@@ -141,20 +142,23 @@ func loadJellyfinSession(key [32]byte, now time.Time) (jellyfinSession, bool, er
 	if len(rows) == 0 {
 		return jellyfinSession{}, false, nil
 	}
-	return jellyfinSession{expires: rows[0].ExpiresAt, seen: rows[0].LastSeenAt, id: hexSessionID(key)}, true, nil
+	row := rows[0]
+	return jellyfinSession{expires: row.ExpiresAt, seen: row.LastSeenAt, id: hexSessionID(key), client: row.Client}, true, nil
 }
 
 // touchJellyfinSession 顺延一个仍有效的会话；行已被删除或已过期时返回 false。
 func touchJellyfinSession(key [32]byte, now time.Time) (jellyfinSession, bool, error) {
 	now = now.UTC()
 	expires := now.Add(jellyfinSessionTTL)
-	result := jellyfinSessionDB().Model(&models.JellyfinSession{}).
+	var row models.JellyfinSession
+	result := jellyfinSessionDB().Model(&row).
+		Clauses(clause.Returning{Columns: []clause.Column{{Name: "client"}}}).
 		Where("token_hash = ? AND expires_at > ?", jellyfinTokenHash(key), now).
 		Updates(map[string]interface{}{"last_seen_at": now, "expires_at": expires})
 	if result.Error != nil {
 		return jellyfinSession{}, false, result.Error
 	}
-	return jellyfinSession{expires: expires, seen: now, id: hexSessionID(key)}, result.RowsAffected == 1, nil
+	return jellyfinSession{expires: expires, seen: now, id: hexSessionID(key), client: row.Client}, result.RowsAffected == 1, nil
 }
 
 func deleteJellyfinSession(key [32]byte) error {
@@ -206,6 +210,12 @@ func (s *JellyfinServer) authenticate(identity jellyfinIdentity) (jellyfinAuthOu
 	}
 	s.sessions[identity.token] = session
 	return jellyfinAuthAccepted, nil
+}
+
+func (s *JellyfinServer) sessionClient(identity jellyfinIdentity) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessions[identity.token].client
 }
 
 // lookupSession 取令牌的会话：先看内存副本，没有再查表；需要刷新时顺延。found=false 表示表里

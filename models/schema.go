@@ -140,5 +140,6 @@ func AllModels() []interface{} {
 		&EpisodeAcquisitionOrigin{},
 		&VideoStructureState{},
 		&VideoStructureSegment{},
+		&JellyfinRecommendationHistory{},
 	}
 }

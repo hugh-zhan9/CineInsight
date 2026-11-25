@@ -10,7 +10,9 @@
 
 字幕保存视图只读现有字幕索引，索引补全仍从桌面发起。标签及作品集既可作为文件夹逐层浏览，客户端请求 Recursive 时也直接列出其中全部视频；列表每页默认 100，最多 200，支持分页、名称搜索、标签、收藏、已看与可续播筛选。常见客户端附带的投影和范围参数（Fields、ExcludeLocationTypes、CollapseBoxSetItems、MediaTypes、IsMissing 等）按 Jellyfin 语义处理，本应用没有对应数据的排序键（ProductionYear、IsFolder 等）被忽略；其余未知参数仍返回 400，避免给出错误范围的结果。Fileball 首页会请求的「接下来看」「推荐」「工作室」返回空结果，详情页会请求的「特别收录」「预告片」「片头」同样返回空集而不是 404；显示偏好不保存，重新登录后回到默认排序；下载接口返回原片。搜索走 Jellyfin 的 `Search/Hints`（也可直接用列表接口的 `SearchTerm`），关键词不区分大小写地匹配显示标题、原始标题、文件名与路径；`IsMovie`/`IsSeries` 一类的类型开关与 `NameStartsWith` 一类的字母索引参数按 Jellyfin 语义生效。条目详情带完整的流信息（每条流的 `DisplayTitle`，如「1080p HEVC SDR」「AAC - Stereo - Default」，以及容器、宽高、是否高清、是否有字幕），没有技术快照的视频这些字段为空，播放一次或在桌面端探测后即补齐。
 
-AVI/DivX、ASF/WMV、MPEG-PS（`.mpg`/`.mpeg`）在 ffprobe 确认实际容器后，可用容器别名协商原片直放；流和下载保留正确的 MIME 类型及 Range 行为。不转码，不绕过客户端明确的容器、编码或码率限制。
+AVI/DivX、ASF/WMV、MPEG-PS（`.mpg`/`.mpeg`）在 ffprobe 确认实际容器后，可用容器别名协商原片直放（支持 `xvid`/`divx` 与 `wav`/`pcm_*` 等常见编码别名）；流和下载保留正确的 MIME 类型及 Range 行为。对 Fileball/Filebar/Filebox 客户端，即使其 `DeviceProfile` 仅声明 `mov,mp4,mkv,webm`，只要未关闭直放、未超码率上限且未显式排除对应旧容器，也会直接返回原片直放，由客户端内置播放器（如 MPV/VLC）解码。不转码，非 Fileball 客户端仍严格按其提交的容器、编码和码率限制校验。
+
+搜索推荐（带 `SortBy=Random` 或 `SortBy=IsFavoriteOrLiked,Random` 的首页/搜索随机列表）按当前范围持久化无放回推送：推荐过一次的视频默认不再重复出现，直到当前范围内没有未推荐视频时才自动重置该范围历史并开启新一轮（不足一页时先推完剩余未推荐项再从新一轮补足，单批不重复）。
 
 同目录视频通过 Jellyfin 的相关视频接口（`Similar`）返回，默认排在其他相关视频之前，只包含片库内可见、与当前项目录完全相同的其他视频，不扫描文件系统，也不把它们当作影片分段。是否有独立的「同目录文件」区块由 Filebar/Fileball 客户端决定。
 

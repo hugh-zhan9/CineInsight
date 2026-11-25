@@ -55,13 +55,15 @@ type jellyfinSession struct {
 	expires time.Time
 	seen    time.Time
 	id      string
+	client  string
 }
 
 // JellyfinServer owns only protocol authentication and the HTTP listener.
 type JellyfinServer struct {
-	lifecycle sync.Mutex
-	mu        sync.Mutex
-	writes    sync.Mutex
+	lifecycle   sync.Mutex
+	mu          sync.Mutex
+	writes      sync.Mutex
+	recommendMu sync.Mutex
 	// sessionIO serializes writing lookup results back into sessions with logouts and evictions;
 	// the lookups themselves run outside it (B-m3).
 	sessionIO     sync.Mutex

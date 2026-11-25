@@ -668,25 +668,35 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, related *mode
 		return nil, 0, start, err
 	}
 	items := []map[string]interface{}{}
-	query, err = s.orderVideos(query, q, filter, kind, id)
-	if err != nil {
-		return nil, 0, start, err
-	}
-	if related != nil && jellyfinParam(q, "SortBy") == "" {
-		if related.Directory != "" {
-			query = query.Clauses(clause.OrderBy{Expression: clause.Expr{
-				SQL: "CASE WHEN videos.directory = ? THEN 0 ELSE 1 END, videos.id DESC", Vars: []interface{}{related.Directory},
-			}})
-		} else {
-			query = query.Clauses(clause.OrderBy{Columns: []clause.OrderByColumn{{Column: clause.Column{Name: "videos.id"}, Desc: true, Reorder: true}}})
-		}
-	}
-	if limit == 0 {
-		return items, total, start, nil
-	}
 	var videos []models.Video
-	if err := query.Preload("Tags").Offset(start).Limit(limit).Find(&videos).Error; err != nil {
-		return nil, 0, start, err
+	if related == nil && start == 0 && limit > 0 && jellyfinSortHasRandom(q) && jellyfinParam(q, "SearchTerm") == "" && jellyfinParam(q, "Ids") == "" {
+		if _, err := jellyfinSortOrders(q); err != nil {
+			return nil, 0, start, err
+		}
+		videos, err = s.selectRandomRecommendationVideos(r, query, total, limit)
+		if err != nil {
+			return nil, 0, start, err
+		}
+	} else {
+		query, err = s.orderVideos(query, q, filter, kind, id)
+		if err != nil {
+			return nil, 0, start, err
+		}
+		if related != nil && jellyfinParam(q, "SortBy") == "" {
+			if related.Directory != "" {
+				query = query.Clauses(clause.OrderBy{Expression: clause.Expr{
+					SQL: "CASE WHEN videos.directory = ? THEN 0 ELSE 1 END, videos.id DESC", Vars: []interface{}{related.Directory},
+				}})
+			} else {
+				query = query.Clauses(clause.OrderBy{Columns: []clause.OrderByColumn{{Column: clause.Column{Name: "videos.id"}, Desc: true, Reorder: true}}})
+			}
+		}
+		if limit == 0 {
+			return items, total, start, nil
+		}
+		if err := query.Preload("Tags").Offset(start).Limit(limit).Find(&videos).Error; err != nil {
+			return nil, 0, start, err
+		}
 	}
 	pageIDs := make([]uint, 0, len(videos))
 	for _, video := range videos {
