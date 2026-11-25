@@ -22,7 +22,7 @@ func TestJellyfinLegacyAVIDirectPlayAndRange(t *testing.T) {
 	}
 }
 
-func jellyfinLegacyAVIFixture(t *testing.T, ext, videoCodec, audioCodec string) (*JellyfinServer, string, models.Video, []byte) {
+func jellyfinOriginalFixture(t *testing.T, ext, format, videoCodec, audioCodec string) (*JellyfinServer, string, models.Video, []byte) {
 	t.Helper()
 	ffmpeg, _ := requireEditFFmpeg(t)
 	server, token, item, _ := jellyfinLibraryFixture(t)
@@ -30,7 +30,7 @@ func jellyfinLegacyAVIFixture(t *testing.T, ext, videoCodec, audioCodec string) 
 	item.Path = filepath.Join(item.Directory, "original"+ext)
 	item.Name = filepath.Base(item.Path)
 	runFixtureCommand(t, ffmpeg, "-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=1",
-		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1", "-c:v", videoCodec, "-threads", "2", "-c:a", audioCodec, "-f", "avi", item.Path)
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1", "-c:v", videoCodec, "-threads", "2", "-c:a", audioCodec, "-f", format, item.Path)
 	original, err := os.ReadFile(item.Path)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func jellyfinLegacyAVIFixture(t *testing.T, ext, videoCodec, audioCodec string) 
 
 func testJellyfinAVIDirectPlayAndRange(t *testing.T, ext string) {
 	t.Helper()
-	server, token, item, original := jellyfinLegacyAVIFixture(t, ext, "mpeg4", "pcm_s16le")
+	server, token, item, original := jellyfinOriginalFixture(t, ext, "avi", "mpeg4", "pcm_s16le")
 	itemID := jellyfinID(jellyVideo, item.ID)
 	infoPath := "/Items/" + itemID + "/PlaybackInfo"
 	profile := func(container, videoCodec string) string {
@@ -121,7 +121,7 @@ func TestJellyfinFileballLegacyAVIDirectPlay(t *testing.T) {
 	const widthLimit = `"Conditions":[{"Condition":"LessThanEqual","Property":"Width","Value":"64"}]`
 	for _, fixture := range []struct{ videoCodec, audioCodec string }{{"mpeg4", "pcm_s16le"}, {"msmpeg4", "mp2"}} {
 		t.Run(fixture.videoCodec+"+"+fixture.audioCodec, func(t *testing.T) {
-			server, token, item, original := jellyfinLegacyAVIFixture(t, ".avi", fixture.videoCodec, fixture.audioCodec)
+			server, token, item, original := jellyfinOriginalFixture(t, ".avi", "avi", fixture.videoCodec, fixture.audioCodec)
 			itemID := jellyfinID(jellyVideo, item.ID)
 			infoPath := "/Items/" + itemID + "/PlaybackInfo"
 			wantURL := "/Videos/" + itemID + "/stream.avi?Static=true"
@@ -214,5 +214,148 @@ func TestJellyfinFileballLegacyAVIDirectPlay(t *testing.T) {
 				assertPlayback(t, jellyfinRequest(server, "POST", infoPath, token, body), token, true)
 			})
 		})
+	}
+}
+
+func TestJellyfinFileballOriginalDirectPlay(t *testing.T) {
+	const defaultProfile = `{"DeviceProfile":{"DirectPlayProfiles":[{"Type":"Video","Container":"mov,mp4,mkv,webm","VideoCodec":"h264,hevc,dvhe,dvh1,hev1,mpeg4,vp9","AudioCodec":"aac,mp3,wav,ac3,eac3,flac,truehd,dts,dca,opus"}]}}`
+	const widthLimit = `"Conditions":[{"Condition":"LessThanEqual","Property":"Width","Value":"64"}]`
+	for _, fixture := range []struct {
+		ext, format, videoCodec, audioCodec, container, stream string
+	}{
+		{".mov", "mov", "prores", "pcm_s16le", "mov", "stream.mov"},
+		{".qt", "mov", "mjpeg", "pcm_s16be", "mov", "stream.mov"},
+		{".flv", "flv", "flv", "aac", "flv", "stream.flv"},
+		{".m4v", "mp4", "mpeg4", "alac", "m4v", "stream.m4v"},
+		{".mkv", "matroska", "mjpeg", "pcm_s16le", "mkv", "stream"},
+	} {
+		t.Run(fixture.ext, func(t *testing.T) {
+			server, token, item, original := jellyfinOriginalFixture(t, fixture.ext, fixture.format, fixture.videoCodec, fixture.audioCodec)
+			id := jellyfinID(jellyVideo, item.ID)
+			streamPath := "/Videos/" + id + "/"
+			assertPlayback := func(t *testing.T, client, body, query string, wantDirect bool) {
+				t.Helper()
+				r := httptest.NewRequest("POST", "/Items/"+id+"/PlaybackInfo"+query, strings.NewReader(body))
+				r.RemoteAddr = "127.0.0.1:2"
+				r.Header.Set("X-Emby-Token", token)
+				r.Header.Set("X-Emby-Client", client)
+				w := httptest.NewRecorder()
+				server.Handler().ServeHTTP(w, r)
+				info := jellyfinObject(t, w)
+				sources := info["MediaSources"].([]interface{})
+				if !wantDirect {
+					if len(sources) != 0 || info["ErrorCode"] != "NoCompatibleStream" {
+						t.Fatalf("expected NoCompatibleStream: %s", w.Body)
+					}
+					return
+				}
+				if len(sources) != 1 || info["ErrorCode"] != nil {
+					t.Fatalf("expected original direct play: %s", w.Body)
+				}
+				source := sources[0].(map[string]interface{})
+				if source["Container"] != fixture.container || source["DirectStreamUrl"] != streamPath+fixture.stream+"?Static=true" ||
+					source["SupportsDirectPlay"] != true || source["SupportsDirectStream"] != false || source["SupportsTranscoding"] != false {
+					t.Fatalf("incorrect original source: %s", w.Body)
+				}
+			}
+			for _, client := range []string{"Filebar", "Fileball"} {
+				assertPlayback(t, client, defaultProfile, "", true)
+			}
+			assertPlayback(t, "Jellyfin", defaultProfile, "", false)
+			if fixture.ext == ".flv" {
+				if w := jellyfinRequest(server, "GET", streamPath+"stream.f4v?Static=true", token, ""); w.Code != http.StatusBadRequest {
+					t.Fatalf("FLV must not be treated as F4V: %d", w.Code)
+				}
+			}
+			if fixture.container != "mov" {
+				return
+			}
+			strictProfile := fmt.Sprintf(`{"DeviceProfile":{"DirectPlayProfiles":[{"Type":"Video","Container":"mov","VideoCodec":%q,"AudioCodec":"lpcm"}]}}`, fixture.videoCodec)
+			assertPlayback(t, "Jellyfin", strictProfile, "", true)
+			for _, test := range []struct{ name, body, query string }{
+				{"disabled by body", `{"EnableDirectPlay":false,` + defaultProfile[1:], ""},
+				{"disabled by query", defaultProfile, "?EnableDirectPlay=false"},
+				{"bitrate limit", defaultProfile, "?MaxStreamingBitrate=1"},
+				{"mov exclusion", strings.Replace(strictProfile, `"Container":"mov"`, `"Container":"-mov"`, 1), ""},
+				{"qt exclusion alongside positive profile", strings.Replace(strictProfile, `"}]`, `"},{"Type":"Video","Container":"-qt"}]`, 1), ""},
+				{"targeted codec condition", strings.Replace(defaultProfile, `]}}`, `],"CodecProfiles":[{"Type":"Video","Container":"qt",`+widthLimit+`}]}}`, 1), ""},
+				{"targeted container condition", strings.Replace(defaultProfile, `]}}`, `],"ContainerProfiles":[{"Type":"Video","Container":"mov",`+widthLimit+`}]}}`, 1), ""},
+			} {
+				t.Run(test.name, func(t *testing.T) { assertPlayback(t, "Filebar", test.body, test.query, false) })
+			}
+			for _, route := range []string{streamPath + "stream.mov?Static=true", streamPath + "stream.qt?Static=true", "/Items/" + id + "/Download"} {
+				w := jellyfinRequest(server, "GET", route, token, "")
+				if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "video/quicktime" || !bytes.Equal(w.Body.Bytes(), original) {
+					t.Fatalf("not original QuickTime bytes at %s: %d %v", route, w.Code, w.Header())
+				}
+				r := httptest.NewRequest("GET", route, nil)
+				r.RemoteAddr = "127.0.0.1:2"
+				r.Header.Set("X-Emby-Token", token)
+				r.Header.Set("Range", "bytes=0-31")
+				w = httptest.NewRecorder()
+				server.Handler().ServeHTTP(w, r)
+				if w.Code != http.StatusPartialContent || w.Header().Get("Content-Type") != "video/quicktime" ||
+					w.Header().Get("Content-Range") != fmt.Sprintf("bytes 0-31/%d", len(original)) || !bytes.Equal(w.Body.Bytes(), original[:32]) {
+					t.Fatalf("not original QuickTime range at %s: %d %v", route, w.Code, w.Header())
+				}
+				w = jellyfinRequest(server, "HEAD", route, token, "")
+				if w.Code != http.StatusOK || w.Body.Len() != 0 || w.Header().Get("Content-Type") != "video/quicktime" || w.Header().Get("Content-Length") != fmt.Sprint(len(original)) {
+					t.Fatalf("bad QuickTime HEAD at %s: %d %v", route, w.Code, w.Header())
+				}
+			}
+			if w := jellyfinRequest(server, "GET", streamPath+"stream.mp4?Static=true", token, ""); w.Code != http.StatusBadRequest {
+				t.Fatalf("wrong container accepted: %d", w.Code)
+			}
+			if fixture.ext == ".qt" {
+				if err := database.DB.Model(&models.VideoTechnicalMetadata{}).Where("video_id = ?", item.ID).Update("format_name", "matroska").Error; err != nil {
+					t.Fatal(err)
+				}
+				assertPlayback(t, "Jellyfin", strictProfile, "", false)
+			}
+			if err := database.DB.Model(&models.MediaStream{}).Where("video_id = ? AND stream_type = ?", item.ID, "video").Update("is_attached_pic", true).Error; err != nil {
+				t.Fatal(err)
+			}
+			assertPlayback(t, "Filebar", defaultProfile, "", false)
+		})
+	}
+}
+
+func TestJellyfinOriginalContentTypesAndAppleCodecAliases(t *testing.T) {
+	for ext, want := range map[string]string{
+		"mov": "video/quicktime", "qt": "video/quicktime", "mp4": "video/mp4", "f4v": "video/mp4",
+		"m4v": "video/x-m4v", "mkv": "video/x-matroska", "webm": "video/webm",
+		"avi": "video/x-msvideo", "divx": "video/x-msvideo", "wmv": "video/x-ms-wmv", "asf": "video/x-ms-asf",
+		"mpg": "video/mpeg", "mpeg": "video/mpeg", "vob": "video/mpeg", "flv": "video/x-flv",
+		"ts": "video/mp2t", "m2ts": "video/mp2t", "mts": "video/mp2t", "3gp": "video/3gpp",
+		"rm": "application/vnd.rn-realmedia", "rmvb": "application/vnd.rn-realmedia-vbr",
+		"unknown-cineinsight": "application/octet-stream",
+	} {
+		if got := jellyfinOriginalContentType("original." + strings.ToUpper(ext)); got != want {
+			t.Errorf(".%s: MIME %q, want %q", ext, got, want)
+		}
+	}
+	for alias, want := range map[string]string{
+		"avc1": "h264", "h265": "hevc", "hev1": "hevc", "hvc1": "hevc",
+		"mp4a": "aac", "twos": "pcm", "sowt": "pcm", "lpcm": "pcm",
+	} {
+		if got := jellyfinCodecName(alias); got != want {
+			t.Errorf("%s: codec %q, want %q", alias, got, want)
+		}
+	}
+}
+
+func TestJellyfinFileballDirectContainer(t *testing.T) {
+	for _, test := range []struct{ path, format, want string }{
+		{"clip.qt", "mov,mp4,m4a,3gp,3g2,mj2", "mov"},
+		{"clip.wmv", "", "asf"},
+		{"clip.mts", "mpegts", "mts"},
+		{"clip.f4v", "flv", "f4v"},
+		{"clip.unknown", "unknown, MPEGTS ", "ts"},
+		{"clip.unknown", "matroska,webm", "mkv"},
+		{"clip.unknown", "unknown", ""},
+	} {
+		if got := jellyfinFileballDirectContainer(test.path, models.VideoTechnicalMetadata{FormatName: test.format}); got != test.want {
+			t.Errorf("%s (%s): got %q, want %q", test.path, test.format, got, test.want)
+		}
 	}
 }

@@ -262,9 +262,8 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 		jellyfinJSON(w, item)
 		return
 	}
-	// Detail screens ask for extras this library does not model; Jellyfin answers these with
-	// empty collections for any visible item, never 404, so the client keeps rendering the item.
-	// Similar videos are the exception: they validate filters and read existing relationships.
+	// Detail extras default to empty for visible items. Similar reads existing relationships;
+	// Filebar uses SpecialFeatures instead to show videos from the same directory.
 	if len(parts) == 3 && (parts[0] == "items" || parts[0] == "movies" || parts[0] == "shows") {
 		switch parts[2] {
 		case "specialfeatures", "localtrailers", "additionalparts", "themesongs", "themevideos", "similar", "intros":
@@ -287,6 +286,16 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 					jellyfinJSON(w, jellyfinResult(items, total, start))
 				}
 				return
+			}
+			if parts[2] == "specialfeatures" && kind == jellyVideo {
+				identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
+				if jellyfinIsFileballClient(r, s.sessionClient(identity)) {
+					items, err := s.sameDirectoryVideos(r, source, 50)
+					if !s.libraryError(w, err) {
+						jellyfinJSON(w, items)
+					}
+					return
+				}
 			}
 			if parts[2] == "similar" || parts[2] == "intros" {
 				jellyfinJSON(w, jellyfinResult([]map[string]interface{}{}, 0, 0))

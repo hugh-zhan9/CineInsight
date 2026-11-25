@@ -2,9 +2,12 @@ package services
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"gorm.io/gorm/logger"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -309,5 +312,93 @@ func TestJellyfinSimilarPrioritizesIndexedDirectorySiblings(t *testing.T) {
 	}
 	if w := jellyfinRequest(s, "GET", base+"/Similar", "", ""); w.Code != 401 {
 		t.Fatalf("unauthenticated directory request returned %d", w.Code)
+	}
+}
+
+func TestJellyfinFilebarSpecialFeaturesShowsDirectorySiblings(t *testing.T) {
+	s, token, source, sibling := jellyfinLibraryFixture(t)
+	add := func(directory, name, title string, stale bool) models.Video {
+		t.Helper()
+		video := models.Video{Directory: directory, Name: name, Path: filepath.Join(directory, name), DisplayTitle: title, IsStale: stale}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+		return video
+	}
+	first := add(source.Directory, "z.mp4", "Alpha", false)
+	tied := add(source.Directory, "a.mp4", "alpha", false)
+	stale := add(source.Directory, "stale.mp4", "", true)
+	deleted := add(source.Directory, "deleted.mp4", "", false)
+	if err := database.DB.Delete(&deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := add(filepath.Join(source.Directory, "child"), "child.mp4", "", false)
+	outside := add(t.TempDir(), "outside.mp4", "", false)
+	blockedDirectory := filepath.Join(source.Directory, "blocked")
+	blocked := add(blockedDirectory, "blocked.mp4", "", false)
+	blockedSibling := add(source.Directory, "blocked-sibling.mp4", "", false)
+	var settings models.Settings
+	if err := database.DB.First(&settings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&settings).Update("scan_exclude_paths", blockedDirectory+"\n"+blockedSibling.Path).Error; err != nil {
+		t.Fatal(err)
+	}
+	tag := models.Tag{Name: "Extras"}
+	if err := database.DB.Model(&first).Association("Tags").Append(&tag); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.SubtitleIndexState{VideoID: first.ID, HasSidecar: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	path := func(video models.Video) string {
+		return "/Items/" + jellyfinID(jellyVideo, video.ID) + "/SpecialFeatures"
+	}
+	for _, client := range []string{"Filebar", "Fileball"} {
+		t.Run(client, func(t *testing.T) {
+			login := httptest.NewRequest("POST", "/Users/AuthenticateByName", strings.NewReader(`{"Username":"viewer","Pw":"test-password"}`))
+			login.RemoteAddr = "127.0.0.1:2"
+			login.Header.Set("Authorization", fmt.Sprintf(`MediaBrowser Client=%q`, client))
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, login)
+			sessionToken, _ := jellyfinObject(t, w)["AccessToken"].(string)
+			if sessionToken == "" {
+				t.Fatal("missing session token")
+			}
+			for _, prefix := range []string{"/Users/" + jellyfinUserID, ""} {
+				w := jellyfinRequest(s, "GET", prefix+path(source), sessionToken, "")
+				var items []struct {
+					Id, Name     string
+					Tags         []string
+					HasSubtitles bool
+				}
+				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &items) != nil || len(items) != 3 {
+					t.Fatalf("expected three visible siblings: %d %s", w.Code, w.Body)
+				}
+				for i, want := range []models.Video{first, tied, sibling} {
+					if items[i].Id != jellyfinID(jellyVideo, want.ID) {
+						t.Fatalf("wrong sibling order: %+v", items)
+					}
+				}
+				if items[0].Name != "Alpha" || len(items[0].Tags) != 1 || items[0].Tags[0] != "Extras" || !items[0].HasSubtitles {
+					t.Fatalf("incomplete sibling DTO: %+v", items[0])
+				}
+			}
+			if w := jellyfinRequest(s, "GET", path(child), sessionToken, ""); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+				t.Fatalf("expected an empty array for a single video directory: %d %s", w.Code, w.Body)
+			}
+			for _, hidden := range []models.Video{stale, deleted, outside, blocked, blockedSibling} {
+				if w := jellyfinRequest(s, "GET", path(hidden), sessionToken, ""); w.Code != http.StatusNotFound {
+					t.Fatalf("invisible source returned %d", w.Code)
+				}
+			}
+		})
+	}
+	if w := jellyfinRequest(s, "GET", path(source), token, ""); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("non-Filebar client should receive an empty array: %d %s", w.Code, w.Body)
+	}
+	if w := jellyfinRequest(s, "GET", path(source), "", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated SpecialFeatures returned %d", w.Code)
 	}
 }

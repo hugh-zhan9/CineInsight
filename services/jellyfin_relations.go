@@ -130,6 +130,38 @@ func (s *JellyfinServer) containingCollections(r *http.Request, q url.Values, st
 	return s.listFolders(r, q, 1, start, limit)
 }
 
+func (s *JellyfinServer) sameDirectoryVideos(r *http.Request, source *models.Video, limit int) ([]map[string]interface{}, error) {
+	if source == nil || source.Directory == "" {
+		return []map[string]interface{}{}, nil
+	}
+	query, err := s.videoQuery(r, LibraryFilter{})
+	if err != nil {
+		return nil, err
+	}
+	var videos []models.Video
+	if err := query.Where("videos.id <> ? AND videos.directory = ?", source.ID, source.Directory).
+		Order(jellyfinSortNameExpr + " ASC").Order("videos.id ASC").Preload("Tags").Limit(limit).Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	pageIDs := make([]uint, 0, len(videos))
+	for _, video := range videos {
+		pageIDs = append(pageIDs, video.ID)
+	}
+	indexedSubtitles, err := jellyfinIndexedSubtitles(r, pageIDs)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]interface{}, 0, len(videos))
+	for _, video := range videos {
+		item, err := s.videoDTO(r, video, indexedSubtitles)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 // relatedVideoQuery reads indexed same-directory videos and existing relationships.
 // The caller owns library visibility, filtering, and paging.
 func (s *JellyfinServer) relatedVideoQuery(query *gorm.DB, sourceID uint, directory string) *gorm.DB {

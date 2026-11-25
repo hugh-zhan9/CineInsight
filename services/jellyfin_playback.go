@@ -22,9 +22,9 @@ func jellyfinSubtitlePath(video models.Video) string {
 	return strings.TrimSuffix(video.Path, filepath.Ext(video.Path)) + ".srt"
 }
 
-// Legacy container aliases describe the same original bytes, not another output format.
+// Container aliases describe the same original bytes, not another output format.
 // Keep this list narrow; e.g. MPEG-TS is not MPEG-PS, and FLV is not F4V.
-func jellyfinLegacyContainer(ext string) (container, contentType string) {
+func jellyfinContainerFamily(ext string) (container, contentType string) {
 	switch ext {
 	case "avi", "divx":
 		return "avi", "video/x-msvideo"
@@ -32,6 +32,8 @@ func jellyfinLegacyContainer(ext string) (container, contentType string) {
 		return "asf", "video/x-ms-asf"
 	case "mpg", "mpeg":
 		return "mpeg", "video/mpeg"
+	case "mov", "qt":
+		return "mov", "video/quicktime"
 	}
 	return "", ""
 }
@@ -41,11 +43,32 @@ func jellyfinFileContainer(path string) string {
 }
 
 func jellyfinOriginalContentType(path string) string {
-	if _, contentType := jellyfinLegacyContainer(jellyfinFileContainer(path)); contentType != "" {
-		// WMV has its own established MIME type even though its container is ASF.
-		if jellyfinFileContainer(path) == "wmv" {
-			return "video/x-ms-wmv"
-		}
+	ext := jellyfinFileContainer(path)
+	switch ext {
+	case "mp4", "f4v":
+		return "video/mp4"
+	case "m4v":
+		return "video/x-m4v"
+	case "mkv":
+		return "video/x-matroska"
+	case "webm":
+		return "video/webm"
+	case "wmv":
+		return "video/x-ms-wmv"
+	case "vob":
+		return "video/mpeg"
+	case "flv":
+		return "video/x-flv"
+	case "ts", "m2ts", "mts":
+		return "video/mp2t"
+	case "3gp":
+		return "video/3gpp"
+	case "rm":
+		return "application/vnd.rn-realmedia"
+	case "rmvb":
+		return "application/vnd.rn-realmedia-vbr"
+	}
+	if _, contentType := jellyfinContainerFamily(ext); contentType != "" {
 		return contentType
 	}
 	if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path))); contentType != "" {
@@ -57,7 +80,7 @@ func jellyfinOriginalContentType(path string) string {
 // A suffix alone cannot establish that a differently named codec/container profile is supported.
 // ffprobe's fresh snapshot must confirm provenance before using an alias in negotiation.
 func jellyfinProbedLegacyContainer(path string, snapshot models.VideoTechnicalMetadata) string {
-	container, _ := jellyfinLegacyContainer(jellyfinFileContainer(path))
+	container, _ := jellyfinContainerFamily(jellyfinFileContainer(path))
 	if container != "" {
 		for _, part := range strings.Split(snapshot.FormatName, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), container) {
@@ -125,7 +148,9 @@ func jellyfinMediaSourcesFromStreams(video models.Video, rows []models.MediaStre
 	}
 	container := jellyfinFileContainer(video.Path)
 	streamPath := "/Videos/" + id + "/stream"
-	if legacy, _ := jellyfinLegacyContainer(container); legacy != "" {
+	switch container {
+	case "", "mp4", "mkv", "webm":
+	default:
 		streamPath += "." + container
 	}
 	source := map[string]interface{}{"Id": id, "Name": video.Name, "Path": video.Name, "Protocol": "File", "Type": "Default", "Container": container, "Size": video.Size, "RunTimeTicks": int64(video.Duration * 1e7), "SupportsDirectPlay": true, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsRemote": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": summary.streams, "DirectStreamUrl": streamPath + "?Static=true", "DefaultAudioStreamIndex": audioIndex}
@@ -244,13 +269,12 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 		if err := database.DB.WithContext(r.Context()).Where("video_id = ?", id).Order("stream_index").Find(&streams).Error; s.libraryError(w, err) {
 			return
 		}
-		ok, reason := jellyfinCanDirectPlay(*video, snapshot, streams, input.DeviceProfile, input.MaxStreamingBitrate)
-		if !ok {
-			identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
-			if jellyfinIsFileballClient(r, s.sessionClient(identity)) && jellyfinCanFileballDirectPlayLegacy(*video, snapshot, streams, input.DeviceProfile, input.MaxStreamingBitrate) {
-				ok = true
-			}
+		checkDirectPlay := jellyfinCanDirectPlay
+		identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
+		if jellyfinIsFileballClient(r, s.sessionClient(identity)) {
+			checkDirectPlay = jellyfinCanFileballDirectPlay
 		}
+		ok, reason := checkDirectPlay(*video, snapshot, streams, input.DeviceProfile, input.MaxStreamingBitrate)
 		if !ok {
 			log.Printf("[Jellyfin] PlaybackInfo 视频 %d 不可直放：%s", id, jellyfinLogSafe(reason, 240))
 			jellyfinNoCompatibleStream(w)
@@ -295,10 +319,10 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 	if parts[0] == "videos" && len(parts) == 3 && (parts[2] == "stream" || strings.HasPrefix(parts[2], "stream.")) {
 		original := jellyfinFileContainer(video.Path)
 		requested := strings.TrimPrefix(parts[2], "stream.")
-		originalFamily, _ := jellyfinLegacyContainer(original)
-		requestedFamily, _ := jellyfinLegacyContainer(requested)
-		sameLegacyFamily := originalFamily != "" && originalFamily == requestedFamily
-		if parts[2] != "stream" && (requested == "" || requested != original && !sameLegacyFamily) {
+		originalFamily, _ := jellyfinContainerFamily(original)
+		requestedFamily, _ := jellyfinContainerFamily(requested)
+		sameFamily := originalFamily != "" && originalFamily == requestedFamily
+		if parts[2] != "stream" && (requested == "" || requested != original && !sameFamily) {
 			jellyfinError(w, 400, "此服务不提供转封装或转码")
 			return
 		}
@@ -483,15 +507,19 @@ func jellyfinNoCompatibleStream(w http.ResponseWriter) {
 func jellyfinCodecName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	switch name {
-	case "h265":
+	case "avc1":
+		return "h264"
+	case "h265", "hev1", "hvc1":
 		return "hevc"
+	case "mp4a":
+		return "aac"
 	case "xvid", "divx", "dx50", "mp4v":
 		return "mpeg4"
 	case "ac-3":
 		return "ac3"
 	case "e-ac-3":
 		return "eac3"
-	case "wav", "pcm", "pcm_s16le", "pcm_s16be", "pcm_u8", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f32be", "pcm_alaw", "pcm_mulaw":
+	case "wav", "twos", "sowt", "lpcm", "pcm", "pcm_s16le", "pcm_s16be", "pcm_u8", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f32be", "pcm_alaw", "pcm_mulaw":
 		return "pcm"
 	}
 	return name
@@ -536,26 +564,38 @@ func jellyfinIsFileballClient(r *http.Request, sessionClient string) bool {
 	return false
 }
 
-func jellyfinCanFileballDirectPlayLegacy(video models.Video, snapshot models.VideoTechnicalMetadata, streams []models.MediaStream, profile *jellyfinDeviceProfile, maxBitrate *int64) bool {
-	legacy, _ := jellyfinLegacyContainer(jellyfinFileContainer(video.Path))
-	if legacy == "" {
-		for _, part := range strings.Split(snapshot.FormatName, ",") {
-			if strings.EqualFold(strings.TrimSpace(part), "avi") {
-				legacy = "avi"
-				break
-			}
-		}
-		if legacy == "" {
-			return false
+func jellyfinFileballDirectContainer(path string, snapshot models.VideoTechnicalMetadata) string {
+	if container := jellyfinProbedLegacyContainer(path, snapshot); container != "" {
+		return container
+	}
+	ext := jellyfinFileContainer(path)
+	if container, _ := jellyfinContainerFamily(ext); container != "" {
+		return container
+	}
+	switch ext {
+	case "mp4", "mkv", "webm", "m4v", "flv", "f4v", "ts", "m2ts", "mts", "3gp", "vob", "rm", "rmvb", "ogv", "ogg":
+		return ext
+	}
+	for _, part := range strings.Split(snapshot.FormatName, ",") {
+		switch name := strings.ToLower(strings.TrimSpace(part)); name {
+		case "avi", "mov", "asf", "mpeg", "mp4", "flv", "webm", "rm", "ogg":
+			return name
+		case "mpegts":
+			return "ts"
+		case "matroska":
+			return "mkv"
 		}
 	}
-	ok, _ := jellyfinCheckDirectPlay(video, snapshot, streams, profile, maxBitrate, legacy)
-	return ok
+	return ""
 }
 
-// Fileball's generic profile can omit legacy containers and codecs its player can open.
-// Only the legacy exception skips the allowlist and ignores generic profile conditions.
-func jellyfinCheckDirectPlay(video models.Video, snapshot models.VideoTechnicalMetadata, streams []models.MediaStream, profile *jellyfinDeviceProfile, maxBitrate *int64, fileballLegacy string) (bool, string) {
+func jellyfinCanFileballDirectPlay(video models.Video, snapshot models.VideoTechnicalMetadata, streams []models.MediaStream, profile *jellyfinDeviceProfile, maxBitrate *int64) (bool, string) {
+	return jellyfinCheckDirectPlay(video, snapshot, streams, profile, maxBitrate, jellyfinFileballDirectContainer(video.Path, snapshot))
+}
+
+// Fileball's generic profile can omit containers and codecs its player can open.
+// For recognized containers, skip the allowlist and generic profile conditions.
+func jellyfinCheckDirectPlay(video models.Video, snapshot models.VideoTechnicalMetadata, streams []models.MediaStream, profile *jellyfinDeviceProfile, maxBitrate *int64, fileballContainer string) (bool, string) {
 	var mainVideo, mainAudio *models.MediaStream
 	for i := range streams {
 		stream := &streams[i]
@@ -590,13 +630,13 @@ func jellyfinCheckDirectPlay(video models.Video, snapshot models.VideoTechnicalM
 	}
 	container := jellyfinFileContainer(video.Path)
 	verifiedFamily := jellyfinProbedLegacyContainer(video.Path, snapshot)
-	if fileballLegacy != "" {
-		container, verifiedFamily = fileballLegacy, fileballLegacy
+	if fileballContainer != "" {
+		container, verifiedFamily = fileballContainer, fileballContainer
 	}
 	containerMatches := func(list string) bool {
 		return jellyfinProfileNameMatches(list, container, func(name string) string {
 			name = strings.ToLower(strings.TrimSpace(name))
-			if family, _ := jellyfinLegacyContainer(name); verifiedFamily != "" && family == verifiedFamily {
+			if family, _ := jellyfinContainerFamily(name); verifiedFamily != "" && family == verifiedFamily {
 				return family
 			}
 			return name
@@ -606,12 +646,12 @@ func jellyfinCheckDirectPlay(video models.Video, snapshot models.VideoTechnicalM
 	if mainAudio != nil {
 		audioCodec = mainAudio.CodecName
 	}
-	matched := fileballLegacy != ""
+	matched := fileballContainer != ""
 	for _, direct := range profile.DirectPlayProfiles {
 		if !strings.EqualFold(direct.Type, "Video") {
 			continue
 		}
-		if fileballLegacy != "" {
+		if fileballContainer != "" {
 			if strings.HasPrefix(direct.Container, "-") && !containerMatches(direct.Container) {
 				return false, fmt.Sprintf("DirectPlayProfiles 排除了 container=%s", container)
 			}
@@ -630,7 +670,7 @@ func jellyfinCheckDirectPlay(video models.Video, snapshot models.VideoTechnicalM
 		return false, fmt.Sprintf("DirectPlayProfiles 不含 container=%s video=%s audio=%s", container, mainVideo.CodecName, audioCodec)
 	}
 	for _, restriction := range append(append([]jellyfinCodecProfile{}, profile.CodecProfiles...), profile.ContainerProfiles...) {
-		if (fileballLegacy != "" && restriction.Container == "") || !containerMatches(restriction.Container) {
+		if (fileballContainer != "" && restriction.Container == "") || !containerMatches(restriction.Container) {
 			continue
 		}
 		// Jellyfin consults only Video and VideoAudio profiles for video items; SubContainer only
