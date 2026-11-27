@@ -1,6 +1,6 @@
 <template>
   <section class="page-content workbench-page" :class="{ 'workbench-page--crop': project?.kind === 'crop', 'workbench-page--projects': projectsOpen }" data-test="workbench-page">
-    <PageHeader title="视频工作台" subtitle="顺序合并、批量去片头、高清替换与画面裁剪。整片裁剪可按项目设置替换原文件，其他编辑成品另存入库。" />
+    <PageHeader title="视频工作台" :subtitle="project?.kind === 'crop' ? '调整裁剪画面与导出范围。' : '顺序合并、批量去片头、高清替换与画面裁剪。整片裁剪可按项目设置替换原文件，其他编辑成品另存入库。'" />
     <div class="workbench-layout">
       <EditProjectList
         v-show="project?.kind !== 'crop' || projectsOpen"
@@ -25,17 +25,36 @@
         <div v-else-if="!project" class="workbench-loading" role="status" aria-label="正在读取项目"><SkeletonBlock :lines="4" /></div>
         <template v-else>
           <header class="workbench-project" data-test="workbench-project">
-            <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm" aria-controls="workbench-edit-projects" :aria-expanded="projectsOpen" @click="projectsOpen = !projectsOpen">编辑项目</button>
-            <div>
-              <h3>{{ project.title || '未命名项目' }}</h3>
-              <span class="help-text">{{ kindLabel(project.kind) }} · {{ statusLabel(project.status) }} · 版本 {{ project.revision }}</span>
+            <div class="workbench-project__identity">
+              <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm workbench-project__toggle" aria-controls="workbench-edit-projects" :aria-expanded="projectsOpen" @click="projectsOpen = !projectsOpen">
+                <AppIcon name="folder" />
+                编辑项目
+                <AppBadge :count="visibleProjects.length" :title="`${visibleProjects.length} 个可见项目`" />
+              </button>
+              <div v-if="visibleProjects.length > 1 && visibleProjectIndex !== -1" class="workbench-project__nav" role="group" aria-label="切换编辑项目">
+                <button type="button" class="btn-icon btn--sm" aria-label="上一项" title="上一项" data-test="workbench-prev-project" :disabled="visibleProjectIndex === 0" @click="selectProject(visibleProjects[visibleProjectIndex - 1].id)">
+                  <AppIcon name="chevron-left" />
+                </button>
+                <button type="button" class="btn-icon btn--sm" aria-label="下一项" title="下一项" data-test="workbench-next-project" :disabled="visibleProjectIndex === visibleProjects.length - 1" @click="selectProject(visibleProjects[visibleProjectIndex + 1].id)">
+                  <AppIcon name="chevron-right" />
+                </button>
+              </div>
+              <div class="workbench-project__summary">
+                <h3 :title="project.title || '未命名项目'">{{ project.title || '未命名项目' }}</h3>
+                <div class="workbench-project__meta">
+                  <AppBadge>{{ kindLabel(project.kind) }}</AppBadge>
+                  <AppBadge :tone="statusTone(projectDisplayStatus)">{{ projectDisplayStatus === 'replace_recovery_pending' ? '待恢复' : statusLabel(projectDisplayStatus) }}</AppBadge>
+                  <span class="workbench-project__revision">版本 {{ project.revision }}</span>
+                </div>
+              </div>
             </div>
-            <span class="edit-list__spacer"></span>
-            <span v-if="saving" class="help-text" data-test="workbench-saving">正在保存…</span>
-            <button v-if="cancellable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
-            <button v-if="duplicable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
-            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--secondary btn--sm" :aria-expanded="exportOpen" data-test="crop-open-export" @click="exportOpen = !exportOpen">导出设置</button>
-            <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :disabled="queueBusy || saving || cropInteracting || (editable && !cropReady)" data-test="crop-export" @click="queue([])">{{ queueBusy ? '正在检查并导出…' : (requeueable ? '继续未完成项' : (recipe.crop?.publish_policy === 'replace_full' ? '导出（整片替换原文件）' : '导出')) }}</button>
+            <div class="workbench-project__actions">
+              <span v-if="saving" class="help-text" data-test="workbench-saving">正在保存…</span>
+              <button v-if="cancellable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-cancel-export" @click="cancelExport(project)">取消导出</button>
+              <button v-if="duplicable" type="button" class="btn btn--secondary btn--sm" data-test="workbench-duplicate" :disabled="Boolean(busy[project.id])" @click="duplicateProject(project)">复制为新草稿</button>
+              <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--secondary btn--sm" aria-controls="workbench-export-settings" :aria-expanded="exportOpen" data-test="crop-open-export" @click="exportOpen = !exportOpen" @keydown.esc.stop="exportOpen = false">导出设置</button>
+              <button v-if="project.kind === 'crop' && showExport" type="button" class="btn btn--primary btn--sm" :disabled="queueBusy || saving || cropInteracting || (editable && !cropReady)" data-test="crop-export" @click="queue([])">{{ queueBusy ? '正在检查并导出…' : (requeueable ? '继续未完成项' : (recipe.crop?.publish_policy === 'replace_full' ? '导出（整片替换原文件）' : '导出')) }}</button>
+            </div>
           </header>
           <p v-if="project.error_message && project.status !== 'completed'" class="edit-error" data-test="workbench-project-error">{{ project.error_message }}</p>
           <p v-if="!editable && project.status !== 'analyzing'" class="help-text" data-test="workbench-readonly">项目已排队或已导出，配方只读。</p>
@@ -62,25 +81,31 @@
             @interacting="cropInteracting = $event"
           />
 
-          <aside v-if="showExport" v-show="project.kind !== 'crop' || exportOpen" :class="{ 'workbench-export-drawer': project.kind === 'crop' }" aria-label="导出设置" @keydown.esc.stop="exportOpen = false">
-          <button v-if="project.kind === 'crop'" type="button" class="btn btn--secondary btn--sm workbench-export-close" @click="exportOpen = false">收起导出设置</button>
-          <EditExportPanel
-            :key="`export-${project.id}`"
-            :project="project"
-            :recipe="recipe"
-            :preflight="preflight"
-            :loading="preflightLoading"
-            :error="preflightError"
-            :editable="editable && !queueBusy"
-            :requeue="requeueable"
-            :busy="queueBusy || saving || (project.kind === 'crop' && (cropInteracting || (editable && !cropReady)))"
-            :missing-keys="missingKeys"
-            :videos="videos"
-            @run-preflight="runPreflight"
-            @set-mode="setMode"
-            @change="onRecipeChange"
-            @queue="queue"
-          />
+          <div v-if="project.kind === 'crop' && showExport && exportOpen" class="workbench-drawer-backdrop" @click="exportOpen = false"></div>
+          <aside v-if="showExport" v-show="project.kind !== 'crop' || exportOpen" id="workbench-export-settings" :class="{ 'workbench-export-drawer': project.kind === 'crop' }" aria-label="导出设置" @keydown.esc.stop="exportOpen = false">
+            <header v-if="project.kind === 'crop'" class="workbench-export-drawer__header">
+              <h3>导出设置</h3>
+              <button type="button" class="btn-icon btn--sm workbench-export-close" data-test="workbench-export-close" aria-label="收起导出设置" title="收起导出设置" @click="exportOpen = false">
+                <AppIcon name="close" />
+              </button>
+            </header>
+            <EditExportPanel
+              :key="`export-${project.id}`"
+              :project="project"
+              :recipe="recipe"
+              :preflight="preflight"
+              :loading="preflightLoading"
+              :error="preflightError"
+              :editable="editable && !queueBusy"
+              :requeue="requeueable"
+              :busy="queueBusy || saving || (project.kind === 'crop' && (cropInteracting || (editable && !cropReady)))"
+              :missing-keys="missingKeys"
+              :videos="videos"
+              @run-preflight="runPreflight"
+              @set-mode="setMode"
+              @change="onRecipeChange"
+              @queue="queue"
+            />
           </aside>
 
           <EditResults
@@ -103,12 +128,14 @@ import {
   ListEditProjects, ListEditProjectsBefore, PreflightEditProject, QueueEditProject, RequeueEditProject, UpdateEditRecipe
 } from '../../wailsjs/go/main/App';
 import EditExportPanel from './video-workbench/EditExportPanel.vue';
-import EditProjectList from './video-workbench/EditProjectList.vue';
+import EditProjectList, { editProjectStatusTone } from './video-workbench/EditProjectList.vue';
 import EditResults from './video-workbench/EditResults.vue';
 import HDReplaceEditor from './video-workbench/HDReplaceEditor.vue';
 import MergeEditor from './video-workbench/MergeEditor.vue';
 import CropEditor from './video-workbench/CropEditor.vue';
 import TrimIntroEditor from './video-workbench/TrimIntroEditor.vue';
+import AppBadge from './ui/AppBadge.vue';
+import AppIcon from './ui/AppIcon.vue';
 import EmptyState from './ui/EmptyState.vue';
 import PageHeader from './ui/PageHeader.vue';
 import SkeletonBlock from './ui/SkeletonBlock.vue';
@@ -147,7 +174,7 @@ const LIST_REFRESH_DELAY_MS = 800;
 // 进度与状态跟 video-edit-state 事件走：同状态的进度事件就地更新，状态变化时重读。
 export default {
   name: 'VideoWorkbenchPage',
-  components: { EditExportPanel, EditProjectList, EditResults, EmptyState, HDReplaceEditor, MergeEditor, CropEditor, PageHeader, SkeletonBlock, TrimIntroEditor },
+  components: { AppBadge, AppIcon, EditExportPanel, EditProjectList, EditResults, EmptyState, HDReplaceEditor, MergeEditor, CropEditor, PageHeader, SkeletonBlock, TrimIntroEditor },
   mixins: [runtimeEventsMixin],
   props: {
     pageActive: { type: Boolean, default: true },
@@ -202,6 +229,13 @@ export default {
     },
     visibleProjects() {
       return this.showCompletedCrops ? this.projectRows : this.currentProjects;
+    },
+    visibleProjectIndex() {
+      return this.visibleProjects.findIndex(project => project.id === this.selectedId);
+    },
+    projectDisplayStatus() {
+      const summary = this.projects.find(project => project.id === this.selectedId);
+      return replacementNeedsRecovery(this.project) || replacementNeedsRecovery(summary) ? 'replace_recovery_pending' : this.project.status;
     },
     hasHiddenCrops() {
       return !this.showCompletedCrops && this.currentProjects.length < this.projects.length;
@@ -275,6 +309,7 @@ export default {
     },
     kindLabel: editKindLabel,
     statusLabel: editStatusLabel,
+    statusTone: editProjectStatusTone,
     async loadList() {
       const generation = this.listGeneration.next();
       try {
@@ -645,19 +680,35 @@ export default {
 </script>
 
 <style scoped>
-.workbench-page { display: grid; gap: 14px; align-content: start; padding: 14px 18px 32px; }
+.workbench-page { display: grid; gap: var(--space-3); align-content: start; padding: var(--space-4) var(--space-5) var(--space-6); }
 .workbench-page > :deep(.ui-page-header) { margin-bottom: 0; }
-.workbench-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.workbench-page--crop { gap: var(--space-2); padding-block-start: var(--space-2); }
+.workbench-page--crop :deep(.ui-page-header__text) { display: flex; align-items: baseline; gap: var(--space-3); }
+.workbench-page--crop :deep(.ui-page-header__title) { font-size: var(--fs-section); }
+.workbench-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 .workbench-main { min-width: 0; display: grid; gap: var(--space-3); }
+.workbench-page--crop .workbench-main { gap: var(--space-2); }
 .workbench-loading { padding: var(--space-5); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
-.workbench-project { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
-.workbench-project h3 { margin: 0 0 2px; font-size: var(--fs-section); }
+.workbench-project { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel-bg); }
+.workbench-project__identity { display: flex; flex: 1 1 264px; flex-wrap: wrap; align-items: center; min-width: 0; gap: var(--space-2); }
+.workbench-project__summary { display: grid; flex: 1 1 128px; min-width: 0; gap: var(--space-1); }
+.workbench-project__summary h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-section); }
+.workbench-project__meta, .workbench-project__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.workbench-project__revision { color: var(--text-secondary); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.workbench-project__actions { margin-inline-start: auto; justify-content: flex-end; gap: var(--space-2); }
+.workbench-project__actions:empty { display: none; }
+.workbench-project__nav { display: flex; flex: none; align-items: center; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--panel-subtle-bg); }
+.workbench-project__toggle[aria-expanded="true"] { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); }
 .workbench-page--crop:not(.workbench-page--projects) .workbench-layout { grid-template-columns: minmax(0, 1fr); }
-.workbench-page--crop .workbench-project { flex-wrap: wrap; }
-.workbench-export-drawer { position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); box-sizing: border-box; padding: var(--space-3); overflow: auto; background: var(--panel-bg); box-shadow: var(--shadow-drawer); border-left: 1px solid var(--hairline); z-index: var(--z-drawer); }
-.workbench-export-close { margin-bottom: var(--space-3); }
+.workbench-drawer-backdrop { position: fixed; inset: 0; z-index: var(--z-drawer); background: var(--overlay-bg); }
+.workbench-export-drawer { position: fixed; inset: 0 0 0 auto; z-index: var(--z-drawer); width: min(420px, 100vw - var(--space-5)); padding: 0 var(--space-3) var(--space-3); overflow: auto; overscroll-behavior: contain; background: var(--panel-bg); box-shadow: var(--shadow-drawer); border-left: 1px solid var(--hairline); }
+.workbench-export-drawer__header { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--hairline); background: var(--panel-bg); }
+.workbench-export-drawer__header h3 { font-size: var(--fs-section); }
 @media (max-width: 760px) {
   .workbench-page { padding: var(--space-3); }
+  .workbench-page--crop { padding-block-start: var(--space-2); }
+  .workbench-page--crop :deep(.ui-page-header__subtitle) { display: none; }
   .workbench-layout { grid-template-columns: minmax(0, 1fr); }
+  .workbench-page--crop .workbench-layout { row-gap: var(--space-2); }
 }
 </style>

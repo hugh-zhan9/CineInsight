@@ -1,56 +1,90 @@
 <template>
   <section class="edit-section" data-test="hd-editor">
-    <h3>来源</h3>
-    <dl class="edit-sources">
-      <dt>长版（主时间线、音轨与字幕默认来源）</dt>
-      <dd data-test="hd-long">{{ videoName(hd.long_video_id) }} <span class="help-text">{{ durationText(hd.long_video_id) }}</span></dd>
-      <dt>高清版</dt>
-      <dd data-test="hd-high">{{ videoName(hd.hd_video_id) }} <span class="help-text">{{ durationText(hd.hd_video_id) }}</span></dd>
+    <header class="edit-inline edit-inline--spread hd-heading">
+      <h3>来源对比</h3>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="hd-swap" @click="swapSources"><AppIcon name="transcode" />互换长版与高清版</button>
+    </header>
+    <dl class="hd-sources">
+      <div class="hd-source">
+        <dt><AppBadge tone="accent">长版（主时间线）</AppBadge></dt>
+        <dd data-test="hd-long">
+          <span class="edit-list__name" :title="videoName(hd.long_video_id)">{{ videoName(hd.long_video_id) }}</span>
+          <span class="help-text">{{ durationText(hd.long_video_id) }}</span>
+        </dd>
+        <dd class="help-text">音轨与字幕的默认来源</dd>
+      </div>
+      <div class="hd-source">
+        <dt><AppBadge>高清版</AppBadge></dt>
+        <dd data-test="hd-high">
+          <span class="edit-list__name" :title="videoName(hd.hd_video_id)">{{ videoName(hd.hd_video_id) }}</span>
+          <span class="help-text">{{ durationText(hd.hd_video_id) }}</span>
+        </dd>
+      </div>
     </dl>
-    <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="hd-swap" @click="swapSources">互换长版与高清版</button>
 
-    <h3>自动对齐</h3>
-    <div class="edit-inline">
-      <button v-if="!analyzing" type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="hd-analyze" @click="$emit('analyze', 0)">自动对齐</button>
-      <template v-else>
-        <ProgressBar class="edit-progress" :value="percent / 100" label="正在对齐" data-test="hd-analysis-progress" />
-        <button type="button" class="btn btn--secondary btn--sm" data-test="hd-cancel-analysis" @click="$emit('cancel-analysis')">取消对齐</button>
-      </template>
-      <span class="help-text">已确认的段保留；变速、镜像、裁剪的画面不做匹配。</span>
+    <div class="edit-inline edit-inline--spread hd-align">
+      <div>
+        <h3>自动对齐</h3>
+        <p class="help-text">已确认的段保留；变速、镜像、裁剪的画面不做匹配。</p>
+      </div>
+      <div class="edit-inline">
+        <button v-if="!analyzing" type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="hd-analyze" @click="$emit('analyze', 0)">自动对齐</button>
+        <template v-else>
+          <ProgressBar class="edit-progress" :value="percent / 100" label="正在对齐" data-test="hd-analysis-progress" />
+          <button type="button" class="btn btn--secondary btn--sm" data-test="hd-cancel-analysis" @click="$emit('cancel-analysis')">取消对齐</button>
+        </template>
+      </div>
     </div>
-    <p v-if="analysisText" class="help-text" data-test="hd-analysis-result">{{ analysisText }}</p>
+    <p v-if="analysisText" class="hd-analysis" data-test="hd-analysis-result"><AppIcon name="info" />{{ analysisText }}</p>
 
-    <div class="edit-inline edit-inline--spread">
-      <h3>替换段（已确认 {{ confirmedCount }}/{{ segments.length }}）</h3>
+    <div class="edit-inline edit-inline--spread hd-heading">
+      <div class="edit-inline">
+        <h3>替换段</h3>
+        <AppBadge :tone="segments.length && confirmedCount === segments.length ? 'success' : 'neutral'">已确认 {{ confirmedCount }}/{{ segments.length }}</AppBadge>
+      </div>
       <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || !canAdd" data-test="hd-add-segment" @click="$emit('change', addSegment())">添加替换段</button>
     </div>
     <p v-if="!segments.length" class="help-text" data-test="hd-empty">还没有替换段：先「自动对齐」，或手动添加。</p>
     <ol class="edit-list">
-      <li v-for="(segment, index) in segments" :key="index" :class="['edit-list__item', { 'edit-list__item--flagged': segment.status === 'conflict' }]" :data-test="`hd-segment-${index}`">
+      <li v-for="(segment, index) in segments" :key="index" :class="['edit-list__item', 'hd-segment', { 'edit-list__item--flagged': segment.status === 'conflict' }]" :data-test="`hd-segment-${index}`">
         <div class="edit-list__row">
-          <span class="edit-list__index">{{ index + 1 }}</span>
-          <span>长版 {{ time(segment.long_start_ms) }} – {{ time(segment.long_end_ms) }} ↔ 高清 {{ time(segment.hd_start_ms) }} – {{ time(segment.hd_end_ms) }}</span>
-          <span class="edit-badge">{{ segment.origin === 'detected' ? `自动对齐 ${Math.round(segment.match_rate * 100)}%` : '手动' }}</span>
+          <AppBadge class="hd-time">{{ index + 1 }}</AppBadge>
+          <span class="hd-segment__summary">
+            <span>长版 <span class="hd-time">{{ time(segment.long_start_ms) }} – {{ time(segment.long_end_ms) }}</span></span>
+            <span aria-hidden="true">↔</span>
+            <span>高清 <span class="hd-time">{{ time(segment.hd_start_ms) }} – {{ time(segment.hd_end_ms) }}</span></span>
+          </span>
+          <AppBadge :tone="segment.status === 'conflict' ? 'warning' : segment.origin === 'detected' ? 'accent' : 'neutral'">{{ segment.origin === 'detected' ? `自动对齐 ${Math.round(segment.match_rate * 100)}%` : '手动' }}</AppBadge>
           <span class="edit-list__spacer"></span>
           <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" :data-test="`hd-remove-${index}`" @click="$emit('change', removeAt(index))">删除</button>
         </div>
         <p v-if="segment.status === 'conflict'" class="edit-flag">与另一段在长版上冲突（匹配率较低的一段），请调整或删除。</p>
-        <div v-for="edge in edges" :key="edge.key" class="edit-inline">
-          <span class="edit-inline__label">{{ edge.label }}</span>
-          <input type="number" min="0" step="1" class="text-input edit-ms" :value="segment[`long_${edge.key}_ms`]" :disabled="!editable" :aria-label="`${edge.label}（毫秒）`" :data-test="`hd-${edge.key}-ms-${index}`" @change="setEdge(index, edge.key, $event.target.value)" />
-          <span class="help-text">毫秒</span>
-          <button v-for="step in steps" :key="step.label" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || stepDelta(segment[`long_${edge.key}_ms`], step, longFps) === null" :data-test="`hd-${edge.key}-${step.key}-${index}`" @click="shiftEdge(index, edge.key, segment[`long_${edge.key}_ms`], step)">{{ step.label }}</button>
-        </div>
-        <div class="edit-inline">
-          <span class="edit-inline__label">高清对应起点</span>
-          <input type="number" min="0" step="1" class="text-input edit-ms" :value="segment.hd_start_ms" :disabled="!editable" aria-label="高清对应起点（毫秒）" :data-test="`hd-hdstart-ms-${index}`" @change="setHDStart(index, $event.target.value)" />
-          <span class="help-text">毫秒</span>
-          <button v-for="step in steps" :key="step.label" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || stepDelta(segment.hd_start_ms, step, hdFps) === null" :data-test="`hd-hdstart-${step.key}-${index}`" @click="shiftHD(index, segment.hd_start_ms, step)">{{ step.label }}</button>
+        <div class="hd-endpoints">
+          <div v-for="edge in edges" :key="edge.key" class="hd-endpoint">
+            <span>{{ edge.label }}</span>
+            <div class="hd-milliseconds">
+              <input type="number" min="0" step="1" class="text-input edit-ms hd-time" :value="segment[`long_${edge.key}_ms`]" :disabled="!editable" :aria-label="`${edge.label}（毫秒）`" :data-test="`hd-${edge.key}-ms-${index}`" @change="setEdge(index, edge.key, $event.target.value)" />
+              <span class="help-text">毫秒</span>
+            </div>
+            <div class="hd-steps" role="group" :aria-label="`${edge.label}微调`">
+              <button v-for="step in steps" :key="step.label" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || stepDelta(segment[`long_${edge.key}_ms`], step, longFps) === null" :data-test="`hd-${edge.key}-${step.key}-${index}`" @click="shiftEdge(index, edge.key, segment[`long_${edge.key}_ms`], step)">{{ step.label }}</button>
+            </div>
+          </div>
+          <div class="hd-endpoint">
+            <span>高清对应起点</span>
+            <div class="hd-milliseconds">
+              <input type="number" min="0" step="1" class="text-input edit-ms hd-time" :value="segment.hd_start_ms" :disabled="!editable" aria-label="高清对应起点（毫秒）" :data-test="`hd-hdstart-ms-${index}`" @change="setHDStart(index, $event.target.value)" />
+              <span class="help-text">毫秒</span>
+            </div>
+            <div class="hd-steps" role="group" aria-label="高清对应起点微调">
+              <button v-for="step in steps" :key="step.label" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || stepDelta(segment.hd_start_ms, step, hdFps) === null" :data-test="`hd-hdstart-${step.key}-${index}`" @click="shiftHD(index, segment.hd_start_ms, step)">{{ step.label }}</button>
+            </div>
+          </div>
         </div>
         <EditFrameStrip title="段起点：长版接到高清" :frames="startFrames(segment)" :actual-ms="fastActual(hd.hd_video_id, segment.hd_start_ms)" />
         <EditFrameStrip title="段终点：高清接回长版" :frames="endFrames(segment)" :actual-ms="fastActual(hd.long_video_id, segment.long_end_ms)" />
-        <div class="edit-inline">
-          <label>音频来源
+        <div class="edit-inline edit-inline--spread hd-controls">
+          <label class="edit-inline">音频来源
             <select class="select-input edit-select" :value="segment.audio_source || 'long'" :disabled="!editable" :data-test="`hd-audio-${index}`" @change="$emit('change', setAudio(index, $event.target.value))">
               <option value="long">长版音轨</option>
               <option value="hd">高清版音轨</option>
@@ -65,8 +99,8 @@
     </ol>
 
     <h3>保留长版的区间</h3>
-    <ul class="edit-unmatched" data-test="hd-unmatched">
-      <li v-for="range in unmatched" :key="range.start_ms">保留长版：{{ time(range.start_ms) }} – {{ time(range.end_ms) }}</li>
+    <ul class="hd-unmatched" data-test="hd-unmatched">
+      <li v-for="range in unmatched" :key="range.start_ms"><AppBadge>保留长版：<span class="hd-time">{{ time(range.start_ms) }} – {{ time(range.end_ms) }}</span></AppBadge></li>
       <li v-if="!unmatched.length" class="help-text">长版全部被替换段覆盖。</li>
     </ul>
     <p class="help-text">字幕始终沿长版时间线。</p>
@@ -74,6 +108,8 @@
 </template>
 
 <script>
+import AppBadge from '../ui/AppBadge.vue';
+import AppIcon from '../ui/AppIcon.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
 import EditFrameStrip from './EditFrameStrip.vue';
 import { workbenchVideoMixin } from './workbenchVideo.js';
@@ -94,7 +130,7 @@ const STEPS = [
 // （长版与高清两侧时长始终相等）、选音频来源并确认；未被覆盖的长版区间明确显示为「保留长版」。
 export default {
   name: 'HDReplaceEditor',
-  components: { EditFrameStrip, ProgressBar },
+  components: { AppBadge, AppIcon, EditFrameStrip, ProgressBar },
   mixins: [workbenchVideoMixin],
   props: {
     recipe: { type: Object, required: true },
@@ -226,3 +262,59 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.hd-heading h3 { margin: 0; font-size: var(--fs-section); }
+.hd-sources { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.hd-source, .hd-align, .hd-analysis, .hd-endpoints {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-subtle-bg);
+}
+.hd-source, .hd-source dd { display: grid; align-content: start; gap: var(--space-1); min-width: 0; }
+.hd-source { padding: var(--space-3); }
+.hd-align h3 { margin: 0 0 var(--space-1); }
+.hd-analysis {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-secondary);
+}
+.hd-segment {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--panel-bg);
+}
+.hd-segment__summary, .hd-unmatched { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.hd-segment__summary > span { white-space: nowrap; }
+.hd-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.hd-endpoints {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  overflow-x: auto;
+}
+.hd-endpoint {
+  display: grid;
+  grid-template-columns: 7em 9em max-content;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
+}
+.hd-milliseconds { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); }
+.hd-milliseconds .edit-ms { width: 100%; height: var(--h-compact); padding-inline: var(--space-1); }
+.hd-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; }
+.hd-steps .btn { padding-inline: var(--space-2); border-radius: 0; }
+.hd-steps .btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.hd-steps .btn:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.hd-controls { border-top: 1px solid var(--hairline); padding-top: var(--space-2); }
+.hd-controls input[type="checkbox"] { accent-color: var(--accent-color); }
+.hd-unmatched { list-style: none; }
+</style>

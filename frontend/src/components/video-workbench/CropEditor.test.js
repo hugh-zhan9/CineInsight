@@ -235,4 +235,33 @@ describe('固定黑边裁剪', () => {
     w.unmount();
   });
 
+  it('支持参考线开关与快捷键（逐帧、预览切换、出入点与重置），输入框内按键不误触发', async () => {
+    const navigateFrame = vi.fn().mockResolvedValue({ at_ms: 290 });
+    const w = mount(CropEditor, { props: { ...props(), navigateFrame } });
+    const editor = w.get('[data-test="crop-editor"]');
+    expect(w.find('.crop-grid').exists()).toBe(true);
+    await editor.trigger('keydown', { key: 'g' });
+    expect(w.find('.crop-grid').exists()).toBe(false);
+    expect(w.get('[data-test="crop-grid-toggle"]').attributes('aria-pressed')).toBe('false');
+
+    await editor.trigger('keydown', { key: 'v' });
+    expect(w.vm.previewMode).toBe('result');
+    await editor.trigger('keydown', { key: 'v' });
+    expect(w.vm.previewMode).toBe('source');
+
+    await editor.trigger('keydown', { key: '.' });
+    expect(navigateFrame).toHaveBeenCalledWith({ video_id: 1, source_version: '12:34', at_ms: 250, direction: 1 });
+
+    await editor.trigger('keydown', { key: '[' });
+    expect(w.emitted('change').at(-1)[0].crop.items[0].range).toEqual({ start_ms: 290, end_ms: 2000 });
+
+    const marginInput = w.get('[data-test="crop-margin-left"]');
+    await marginInput.trigger('keydown', { key: 'r' });
+    expect(w.emitted('change')).toHaveLength(1);
+
+    await editor.trigger('keydown', { key: 'r' });
+    expect(w.emitted('change').at(-1)[0].crop.items[0].rect).toEqual({ x: 0, y: 0, width: 320, height: 180 });
+    w.unmount();
+  });
+
 });

@@ -1,15 +1,18 @@
 <template>
   <section class="edit-section" data-test="edit-results">
-    <h3>导出结果</h3>
+    <h3 class="results-heading">导出结果</h3>
     <ol class="edit-list">
-      <li v-for="item in items" :key="item.id" class="edit-list__item" :data-test="`edit-result-${item.id}`">
+      <li v-for="item in items" :key="item.id" class="edit-list__item result-item" :data-test="`edit-result-${item.id}`">
         <div class="edit-list__row">
-          <span class="edit-list__index">{{ item.seq }}</span>
+          <AppBadge class="result-index">{{ item.seq }}</AppBadge>
           <span class="edit-list__name" :title="item.output_name">{{ item.output_name || `第 ${item.seq} 项` }}</span>
-          <AppBadge class="edit-badge">{{ statusText(item) }}</AppBadge>
-          <ProgressBar v-if="item.status === 'running'" class="edit-progress" :value="percent(item) / 100" :label="phaseText(item)" />
+          <AppBadge :tone="statusTone(item.status)">{{ statusText(item) }}</AppBadge>
         </div>
-        <button v-if="item.error_code === 'replace_recovery_pending'" type="button" class="btn btn--secondary" :data-test="`edit-result-recover-${item.id}`" @click="$emit('recover-replacement', item.id)">磁盘恢复后重试恢复</button>
+        <ProgressBar v-if="item.status === 'running'" class="result-progress" :value="percent(item) / 100" :label="phaseText(item)" />
+        <div v-if="item.error_code === 'replace_recovery_pending'" class="edit-inline edit-inline--spread result-recovery">
+          <span><AppIcon name="warning" />原文件替换待恢复</span>
+          <button type="button" class="btn btn--secondary btn--sm" :data-test="`edit-result-recover-${item.id}`" @click="$emit('recover-replacement', item.id)">磁盘恢复后重试恢复</button>
+        </div>
         <p v-if="failureText(item)" class="edit-error" :data-test="`edit-result-error-${item.id}`">{{ failureText(item) }}</p>
         <p v-if="item.status === 'completed' && item.error_message" class="help-text">提示：{{ item.error_message }}</p>
         <p
@@ -17,28 +20,30 @@
           class="help-text"
           :data-test="`edit-result-missing-${item.id}`"
         >成品已不在片库</p>
-        <div v-if="item.status === 'completed' && item.output_video_id && outputState[item.output_video_id] === 'present'" class="edit-inline">
-          <button type="button" class="btn btn--secondary btn--sm" :data-test="`edit-result-preview-${item.id}`" @click="$emit('open-video', item.output_video_id)">预览成品</button>
-          <span v-if="item.publish_mode === 'replace_source'" class="help-text">原文件已替换</span>
-          <label v-else class="edit-check">
-            <input type="checkbox" :checked="Boolean(verified[item.id])" :data-test="`edit-result-confirm-${item.id}`" @change="setVerified(item.id, $event.target.checked)" />
-            确认成品无误
-          </label>
-          <button
-            v-if="verified[item.id] && item.publish_mode !== 'replace_source'"
-            type="button"
-            class="btn btn--danger btn--sm"
-            :data-test="`edit-result-cleanup-${item.id}`"
-            @click="$emit('cleanup-sources', [...(item.source_video_ids || [])])"
-          >清理原片…</button>
-          <button
-            v-if="canLinkVersion && item.publish_mode !== 'replace_source'"
-            type="button"
-            class="btn btn--secondary btn--sm"
-            :disabled="linking"
-            :data-test="`edit-result-version-${item.id}`"
-            @click="linkVersion(item)"
-          >与原片建立版本组</button>
+        <div v-if="item.status === 'completed' && item.output_video_id && outputState[item.output_video_id] === 'present'" class="edit-inline result-actions">
+          <button type="button" class="btn btn--secondary btn--sm" :data-test="`edit-result-preview-${item.id}`" @click="$emit('open-video', item.output_video_id)"><AppIcon name="play" />预览成品</button>
+          <AppBadge v-if="item.publish_mode === 'replace_source'" tone="success">原文件已替换</AppBadge>
+          <div v-else class="edit-inline">
+            <label class="edit-check">
+              <input type="checkbox" :checked="Boolean(verified[item.id])" :data-test="`edit-result-confirm-${item.id}`" @change="setVerified(item.id, $event.target.checked)" />
+              确认成品无误
+            </label>
+            <button
+              v-if="verified[item.id]"
+              type="button"
+              class="btn btn--danger btn--sm"
+              :data-test="`edit-result-cleanup-${item.id}`"
+              @click="$emit('cleanup-sources', [...(item.source_video_ids || [])])"
+            >清理原片…</button>
+            <button
+              v-if="canLinkVersion"
+              type="button"
+              class="btn btn--secondary btn--sm"
+              :disabled="linking"
+              :data-test="`edit-result-version-${item.id}`"
+              @click="linkVersion(item)"
+            >与原片建立版本组</button>
+          </div>
         </div>
       </li>
     </ol>
@@ -51,7 +56,10 @@ import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/f
 import { parseVersionMemberConflict, versionGroupErrorText } from '../../utils/versionGroups.js';
 import { EDIT_ITEM_ERROR_LABELS, EDIT_PHASE_LABELS, editStatusLabel } from '../../utils/videoEdit.js';
 import AppBadge from '../ui/AppBadge.vue';
+import AppIcon from '../ui/AppIcon.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
+
+const STATUS_TONES = { completed: 'success', running: 'accent', queued: 'accent', failed: 'danger', cancelled: 'warning', interrupted: 'warning' };
 
 // 导出结果（Q4、TC-23）：成品「预览成品」交给宿主打开详情抽屉；勾选「确认成品无误」之后才出现
 // 「清理原片…」，它只把来源 ID 交给宿主走片库既有的删除确认与废纸篓流程——这里从不直接删除。
@@ -60,7 +68,7 @@ import ProgressBar from '../ui/ProgressBar.vue';
 // 否则只提示「成品已不在片库」——不能让用户在没有成品的情况下去清理原片。
 export default {
   name: 'EditResults',
-  components: { AppBadge, ProgressBar },
+  components: { AppBadge, AppIcon, ProgressBar },
   props: {
     project: { type: Object, required: true }
   },
@@ -104,6 +112,9 @@ export default {
     },
     statusText(item) {
       return editStatusLabel(item.status);
+    },
+    statusTone(status) {
+      return STATUS_TONES[status] || 'neutral';
     },
     phaseText(item) {
       return EDIT_PHASE_LABELS[item.phase] || '';
@@ -170,3 +181,36 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.edit-section .results-heading { margin: 0; font-size: var(--fs-section); }
+.result-item {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--panel-subtle-bg);
+}
+.result-index { font-family: var(--font-mono); }
+.result-progress {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg);
+}
+.result-recovery {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warning-border);
+  border-inline-start: 3px solid var(--warning-color);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+.result-recovery span { display: inline-flex; align-items: center; gap: var(--space-2); font-weight: var(--fw-semibold); }
+.result-actions {
+  gap: var(--space-2) var(--space-4);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline);
+}
+.result-actions input { accent-color: var(--accent-color); }
+</style>

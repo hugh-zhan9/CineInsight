@@ -1,50 +1,60 @@
 <template>
   <section class="edit-section" data-test="trim-editor">
-    <h3>统一时间</h3>
-    <div class="edit-inline">
-      <span>移除</span>
-      <EditTimeField :model-value="uniformStart" label="统一移除开始" :disabled="!editable" data-test="trim-uniform-start" @commit="uniformStart = $event" />
-      <span>至</span>
-      <EditTimeField :model-value="uniformEnd" label="统一移除结束" :disabled="!editable" data-test="trim-uniform-end" @commit="uniformEnd = $event" />
-      <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || uniformEnd <= uniformStart" data-test="trim-apply-uniform" @click="applyUniform">应用到全部</button>
+    <div class="trim-tools">
+      <div class="trim-tool">
+        <h3>统一时间</h3>
+        <div class="trim-range">
+          <span>移除</span>
+          <EditTimeField :model-value="uniformStart" label="统一移除开始" :disabled="!editable" data-test="trim-uniform-start" @commit="uniformStart = $event" />
+          <span>至</span>
+          <EditTimeField :model-value="uniformEnd" label="统一移除结束" :disabled="!editable" data-test="trim-uniform-end" @commit="uniformEnd = $event" />
+        </div>
+        <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || uniformEnd <= uniformStart" data-test="trim-apply-uniform" @click="applyUniform">应用到全部</button>
+      </div>
+      <div class="trim-tool">
+        <h3>自动识别片头</h3>
+        <label class="edit-inline">分析每部开头
+          <select v-model.number="windowMinutes" class="select-input edit-select" :disabled="!editable || analyzing" data-test="trim-window">
+            <option v-for="minutes in windowOptions" :key="minutes" :value="minutes">{{ minutes }} 分钟</option>
+          </select>
+        </label>
+        <div class="edit-inline">
+          <button v-if="!analyzing" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || items.length < 2" data-test="trim-analyze" @click="$emit('analyze', windowMinutes * 60000)">自动识别片头</button>
+          <template v-else>
+            <ProgressBar class="edit-progress" :value="percent / 100" label="正在识别" data-test="trim-analysis-progress" />
+            <button type="button" class="btn btn--secondary btn--sm" data-test="trim-cancel-analysis" @click="$emit('cancel-analysis')">取消识别</button>
+          </template>
+          <span v-if="items.length < 2" class="help-text">至少两项才能比对重复片头。</span>
+        </div>
+      </div>
     </div>
+    <p v-if="analysisText" class="trim-analysis" data-test="trim-analysis-result"><AppIcon name="info" />{{ analysisText }}</p>
 
-    <h3>自动识别片头</h3>
-    <div class="edit-inline">
-      <label>分析每部开头
-        <select v-model.number="windowMinutes" class="select-input edit-select" :disabled="!editable || analyzing" data-test="trim-window">
-          <option v-for="minutes in windowOptions" :key="minutes" :value="minutes">{{ minutes }} 分钟</option>
-        </select>
-      </label>
-      <button v-if="!analyzing" type="button" class="btn btn--secondary btn--sm" :disabled="!editable || items.length < 2" data-test="trim-analyze" @click="$emit('analyze', windowMinutes * 60000)">自动识别片头</button>
-      <template v-else>
-        <ProgressBar class="edit-progress" :value="percent / 100" label="正在识别" data-test="trim-analysis-progress" />
-        <button type="button" class="btn btn--secondary btn--sm" data-test="trim-cancel-analysis" @click="$emit('cancel-analysis')">取消识别</button>
-      </template>
-      <span v-if="items.length < 2" class="help-text">至少两项才能比对重复片头。</span>
-    </div>
-    <p v-if="analysisText" class="help-text" data-test="trim-analysis-result">{{ analysisText }}</p>
-
-    <div class="edit-inline edit-inline--spread">
-      <h3>逐项区间（已确认 {{ confirmedCount }}/{{ items.length }}）</h3>
+    <div class="edit-inline edit-inline--spread trim-heading">
+      <div class="edit-inline">
+        <h3>逐项区间</h3>
+        <AppBadge :tone="items.length && confirmedCount === items.length ? 'success' : 'neutral'">已确认 {{ confirmedCount }}/{{ items.length }}</AppBadge>
+      </div>
       <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable" data-test="trim-confirm-all" @click="confirmAll">全部确认</button>
     </div>
     <ol class="edit-list">
-      <li v-for="(item, index) in items" :key="item.video_id" :class="['edit-list__item', { 'edit-list__item--flagged': flag(item) }]" :data-test="`trim-item-${item.video_id}`">
+      <li v-for="(item, index) in items" :key="item.video_id" :class="['edit-list__item', 'trim-item', { 'trim-item--confirmed': item.confirmed, 'trim-item--flagged': flag(item) }]" :data-test="`trim-item-${item.video_id}`">
         <div class="edit-list__row">
-          <span class="edit-list__index">{{ index + 1 }}</span>
+          <AppBadge class="trim-index">{{ index + 1 }}</AppBadge>
           <span class="edit-list__name" :title="videoName(item.video_id)">{{ videoName(item.video_id) }}</span>
-          <span class="edit-badge">{{ originLabel(item) }}</span>
+          <AppBadge :tone="item.origin === 'detected' ? 'accent' : 'neutral'">{{ originLabel(item) }}</AppBadge>
           <span class="help-text">{{ durationText(item.video_id) }}</span>
           <span class="edit-list__spacer"></span>
           <button type="button" class="btn btn--secondary btn--sm" :disabled="!editable || items.length <= 1" :data-test="`trim-remove-${item.video_id}`" @click="$emit('change', removeItem(index))">移出</button>
         </div>
         <p v-if="flag(item)" class="edit-flag" :data-test="`trim-flag-${item.video_id}`">{{ flag(item) }}</p>
-        <div class="edit-inline">
-          <span>移除</span>
-          <EditTimeField :model-value="item.remove_start_ms" label="移除开始" :disabled="!editable" :data-test="`trim-start-${item.video_id}`" @commit="setRange(index, $event, item.remove_end_ms)" />
-          <span>至</span>
-          <EditTimeField :model-value="item.remove_end_ms" label="移除结束" :disabled="!editable" :data-test="`trim-end-${item.video_id}`" @commit="setRange(index, item.remove_start_ms, $event)" />
+        <div class="edit-inline trim-controls">
+          <div class="trim-range">
+            <span>移除</span>
+            <EditTimeField :model-value="item.remove_start_ms" label="移除开始" :disabled="!editable" :data-test="`trim-start-${item.video_id}`" @commit="setRange(index, $event, item.remove_end_ms)" />
+            <span>至</span>
+            <EditTimeField :model-value="item.remove_end_ms" label="移除结束" :disabled="!editable" :data-test="`trim-end-${item.video_id}`" @commit="setRange(index, item.remove_start_ms, $event)" />
+          </div>
           <label class="edit-check">
             <input type="checkbox" :checked="item.confirmed" :disabled="!editable || !rangeValid(item)" :data-test="`trim-confirm-${item.video_id}`" @change="setConfirmed(index, $event.target.checked)" />
             确认
@@ -60,6 +70,8 @@
 </template>
 
 <script>
+import AppBadge from '../ui/AppBadge.vue';
+import AppIcon from '../ui/AppIcon.vue';
 import ProgressBar from '../ui/ProgressBar.vue';
 import EditFrameStrip from './EditFrameStrip.vue';
 import EditTimeField from './EditTimeField.vue';
@@ -76,7 +88,7 @@ const ORIGIN_LABELS = { uniform: '统一时间', manual: '手动', detected: '�
 // 接事件）；未识别/有歧义的项明确标出；逐项或全部确认。fastPreflight 只在快速模式且预检有效时给出。
 export default {
   name: 'TrimIntroEditor',
-  components: { EditFrameStrip, EditTimeField, ProgressBar },
+  components: { AppBadge, AppIcon, EditFrameStrip, EditTimeField, ProgressBar },
   mixins: [workbenchVideoMixin],
   props: {
     recipe: { type: Object, required: true },
@@ -163,3 +175,55 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.trim-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--space-3);
+}
+.trim-tool, .trim-item {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-subtle-bg);
+}
+.trim-tool { justify-items: start; }
+.trim-tool h3, .trim-heading h3 { margin: 0; font-size: var(--fs-section); }
+.trim-heading { padding-top: var(--space-2); }
+.trim-range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 116px) auto minmax(0, 116px);
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
+}
+.trim-range .edit-time { width: 100%; min-width: 0; font-family: var(--font-mono); }
+.trim-analysis {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-secondary);
+}
+.trim-item { border-inline-start-width: 3px; background: var(--panel-bg); }
+.trim-item--confirmed { border-inline-start-color: var(--success-color); }
+.trim-item--flagged { border-color: var(--warning-color); }
+.trim-index { font-family: var(--font-mono); }
+.trim-controls {
+  gap: var(--space-2) var(--space-4);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline-soft);
+}
+.trim-controls input[type="checkbox"] { accent-color: var(--accent-color); }
+</style>

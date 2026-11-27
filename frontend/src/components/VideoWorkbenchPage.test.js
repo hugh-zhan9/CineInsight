@@ -629,4 +629,38 @@ describe('编辑项目列表翻页', () => {
     expect(wrapper.find('[data-test="edit-projects-more"]').exists()).toBe(false);
     expect(api.ListEditProjectsBefore).not.toHaveBeenCalled();
   });
+
+  it('项目列表支持按类型/标题筛选，顶部支持上一项下一项连续切换，导出抽屉遮罩可关闭', async () => {
+    const first = mergeProject({ id: 10, kind: 'crop', title: '黑边识别 · Alpha.mp4', recipe: { v: 1, crop: { items: [{ video_id: 21 }] }, tracks: tracks() } });
+    const second = mergeProject({ id: 9, kind: 'merge', title: '合并 · Beta.mp4' });
+    const list = [
+      { id: 10, kind: 'crop', title: first.title, status: 'draft', item_count: 1, completed_count: 0 },
+      { id: 9, kind: 'merge', title: second.title, status: 'draft', item_count: 2, completed_count: 0 },
+      ...Array.from({ length: 5 }, (_, i) => ({ id: 8 - i, kind: 'crop', title: `黑边识别 · Clip${i}.mp4`, status: 'draft', item_count: 1, completed_count: 0 }))
+    ];
+    api.ListEditProjects.mockResolvedValue(list);
+    api.GetEditProject.mockImplementation(async id => (id === 10 ? first : second));
+    api.PreflightEditProject.mockImplementation(async id => preflightFor(id === 10 ? first : second));
+    const wrapper = mount(VideoWorkbenchPage, { props: { openRequest: { projectID: 10, token: 1 } } });
+    wrappers.push(wrapper);
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="workbench-prev-project"]').element.disabled).toBe(true);
+    expect(wrapper.get('[data-test="workbench-next-project"]').element.disabled).toBe(false);
+    await wrapper.get('[data-test="crop-open-export"]').trigger('click');
+    expect(wrapper.find('.workbench-drawer-backdrop').exists()).toBe(true);
+    await wrapper.get('.workbench-drawer-backdrop').trigger('click');
+    expect(wrapper.vm.exportOpen).toBe(false);
+
+    await wrapper.get('[aria-controls="workbench-edit-projects"]').trigger('click');
+    await wrapper.get('[data-test="edit-projects-filter-merge"]').trigger('click');
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]').map(node => node.attributes('data-test'))).toEqual(['edit-project-open-9']);
+    await wrapper.get('[data-test="edit-projects-filter-all"]').trigger('click');
+    await wrapper.get('[data-test="edit-projects-search"]').setValue('Alpha');
+    expect(wrapper.findAll('[data-test^="edit-project-open-"]').map(node => node.attributes('data-test'))).toEqual(['edit-project-open-10']);
+
+    await wrapper.get('[data-test="workbench-next-project"]').trigger('click');
+    await flushPromises();
+    expect(api.GetEditProject).toHaveBeenCalledWith(9);
+  });
 });
