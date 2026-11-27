@@ -252,11 +252,7 @@ func TestVideoEditCropStructureAndGeometry(t *testing.T) {
 			t.Fatalf("display %v: %dx%d", tc, w, h)
 		}
 	}
-	r := editCropUnion([]EditCropRect{{X: 100, Y: 20, Width: 100, Height: 100}, {X: 90, Y: 10, Width: 120, Height: 120}})
-	if *r != (EditCropRect{X: 90, Y: 10, Width: 120, Height: 120}) {
-		t.Fatalf("union: %+v", r)
-	}
-	if editCropWindow("truncated frame", 320, 180) != nil {
+	if editCropWindowObs("truncated frame", 320, 180) != nil {
 		t.Fatal("invalid sample accepted")
 	}
 }
@@ -376,7 +372,8 @@ func TestVideoEditCropEndToEnd(t *testing.T) {
 			}
 			expected := EditCropRect{X: 112, Y: 10, Width: 96, Height: 160}
 			if variant == "sar" {
-				expected = EditCropRect{X: 224, Y: 10, Width: 192, Height: 160}
+				// v3 retains the blended SAR boundary columns, then rounds outward.
+				expected = EditCropRect{X: 222, Y: 10, Width: 196, Height: 160}
 			}
 			if variant == "rotated" {
 				expected = EditCropRect{X: 10, Y: 112, Width: 160, Height: 96}

@@ -95,6 +95,14 @@ func detectedLanguage(_ candidates: [Candidate], calibrated: Bool) -> String? {
     return first.language
 }
 
+/// Whether the ranked candidates have a calibrated winner: an uncalibrated loser far behind
+/// does not invalidate a calibrated clear winner.
+func detectionCalibration(_ scored: [(candidate: Candidate, calibrated: Bool)]) -> Bool {
+    let ordered = scored.sorted { $0.candidate.confidence > $1.candidate.confidence }
+    guard let first = ordered.first, first.calibrated else { return false }
+    return ordered.count == 1 || ordered[1].calibrated || first.candidate.confidence - ordered[1].candidate.confidence >= 0.1
+}
+
 /// Word timings across chunks for the Go side, which groups them into subtitle lines. Words stay ordered and
 /// non-overlapping with a usable duration; text with unusable timing joins a neighbouring word. Confidence is
 /// the duration-weighted mean over words that report one, nil when none does.

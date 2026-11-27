@@ -23,6 +23,28 @@ type SubtitleTranslator interface {
 	Translate(context.Context, []string, string, string) ([]string, error)
 }
 
+type subtitleSourceLanguageDetector interface {
+	DetectSourceLanguage(ctx context.Context, texts []string) (string, error)
+}
+
+func sampleSubtitleTexts(entries []SRTEntry) []string {
+	const limit = 120
+	texts := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Text != "" {
+			texts = append(texts, entry.Text)
+		}
+	}
+	if len(texts) <= limit {
+		return texts
+	}
+	sampled := make([]string, limit)
+	for i := range sampled {
+		sampled[i] = texts[i*(len(texts)-1)/(limit-1)]
+	}
+	return sampled
+}
+
 const subtitleTranslationRequestTimeout = 5 * time.Minute
 
 type appleSubtitleTranslator struct{ run appleAIRunner }
@@ -33,6 +55,21 @@ func (s *SubtitleService) subtitleTranslator(_ SubtitleTranslationProvider, conf
 	}
 	return &appleSubtitleTranslator{run: s.callAppleAI}, nil
 }
+
+func (t *appleSubtitleTranslator) DetectSourceLanguage(ctx context.Context, texts []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, subtitleTranslationRequestTimeout)
+	defer cancel()
+	response, err := t.run(ctx, appleAIRequest{Operation: "detect_text_language", Texts: texts})
+	if err != nil {
+		return "", err
+	}
+	language := strings.TrimSpace(response.Language)
+	if language == "" {
+		return "", appleAIError("apple_language_uncertain")
+	}
+	return language, nil
+}
+
 func (t *appleSubtitleTranslator) Translate(ctx context.Context, texts []string, source, target string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

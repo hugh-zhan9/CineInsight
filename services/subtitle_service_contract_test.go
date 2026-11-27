@@ -32,6 +32,46 @@ func TestValidateSRTReturnsTypedValidationError(t *testing.T) {
 	}
 }
 
+func TestValidateSRTRepeatThresholds(t *testing.T) {
+	svc := NewSubtitleService(t.TempDir())
+	for _, tc := range []struct {
+		name     string
+		lines    []string
+		periodic bool
+	}{
+		{"one line", []string{"A"}, false},
+		{"two repeated lines", []string{"A", "A"}, false},
+		{"three repeated lines", []string{"A", "A", "A"}, false},
+		{"seven alternating lines", []string{"A", "B", "A", "B", "A", "B", "A"}, false},
+		{"eight alternating lines", []string{"A", "B", "A", "B", "A", "B", "A", "B"}, true},
+		{"nine alternating lines", []string{"A", "B", "A", "B", "A", "B", "A", "B", "A"}, true},
+		{"two other lines", []string{"A", "B", "A", "B", "A", "B", "A", "B", "C", "D"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var content strings.Builder
+			for i, line := range tc.lines {
+				fmt.Fprintf(&content, "%d\n00:00:%02d,000 --> 00:00:%02d,000\n%s\n\n", i+1, i, i+1, line)
+			}
+			path := filepath.Join(t.TempDir(), "repeat.srt")
+			if err := os.WriteFile(path, []byte(content.String()), 0644); err != nil {
+				t.Fatal(err)
+			}
+			err := svc.validateSRT(path)
+			if !tc.periodic {
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+				return
+			}
+			var validationErr *SubtitleValidationError
+			if !errors.As(err, &validationErr) || validationErr.Code != SubtitleValidationCodeHallucinationDetected ||
+				!validationErr.ForceEligible || !strings.Contains(validationErr.Message, "周期重复") {
+				t.Fatalf("expected force-eligible periodic repetition error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateSRTKeepsRejectedFileForForceGenerate(t *testing.T) {
 	svc := NewSubtitleService(t.TempDir())
 	srtPath := filepath.Join(t.TempDir(), "force-eligible.srt")

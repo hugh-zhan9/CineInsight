@@ -66,6 +66,94 @@ func TestAppleSubtitleTranslatorEmptyAndCancelledRequestsDoNotRun(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+func TestAppleSubtitleTranslatorDetectSourceLanguage(t *testing.T) {
+	s := NewSubtitleService(t.TempDir())
+	texts := []string{"Hello", "Goodbye"}
+	s.appleRunner = func(_ context.Context, request appleAIRequest) (appleAIResponse, error) {
+		want := appleAIRequest{Operation: "detect_text_language", Texts: texts}
+		if !reflect.DeepEqual(request, want) {
+			t.Fatalf("unexpected language detection request: %+v", request)
+		}
+		return appleAIResponse{Language: " en \n"}, nil
+	}
+	translator := &appleSubtitleTranslator{run: s.callAppleAI}
+	if language, err := translator.DetectSourceLanguage(context.Background(), texts); err != nil || language != "en" {
+		t.Fatalf("detected language: %q, %v", language, err)
+	}
+}
+
+func TestAppleLanguageProbeOffsets(t *testing.T) {
+	for _, tc := range []struct {
+		duration float64
+		want     [3]float64
+	}{
+		{45.5, [3]float64{6.825, 20.475, 33.5}},
+		{120, [3]float64{18, 54, 90}},
+	} {
+		got := appleLanguageProbeOffsets(tc.duration)
+		for i := range got {
+			if math.Abs(got[i]-tc.want[i]) > 1e-9 {
+				t.Fatalf("duration %g: got %v, want %v", tc.duration, got, tc.want)
+			}
+		}
+		if got[0]+12 > got[1] || got[1]+12 > got[2] || got[2]+12 > tc.duration {
+			t.Fatalf("duration %g: samples overlap or exceed duration: %v", tc.duration, got)
+		}
+	}
+}
+
+func TestAppleTranslateSRTDetectsSourceOnce(t *testing.T) {
+	for _, source := range []string{"", "auto", "en"} {
+		t.Run("source="+source, func(t *testing.T) {
+			s := NewSubtitleService(t.TempDir())
+			var requests []appleAIRequest
+			s.appleRunner = func(_ context.Context, request appleAIRequest) (appleAIResponse, error) {
+				requests = append(requests, request)
+				switch request.Operation {
+				case "detect_text_language":
+					return appleAIResponse{Language: " en\n"}, nil
+				case "translate":
+					return appleAIResponse{Translations: request.Texts}, nil
+				default:
+					t.Fatalf("unexpected Apple operation: %q", request.Operation)
+					return appleAIResponse{}, nil
+				}
+			}
+			translator, err := s.subtitleTranslator(SubtitleTranslationProviderApple, SubtitleTranslationConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			input := filepath.Join(dir, "input.srt")
+			if err := os.WriteFile(input, []byte(buildLongSubtitle(131)), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.translateSRTWithProgress(context.Background(), input, filepath.Join(dir, "output.srt"), source, "zh", translator, nil); err != nil {
+				t.Fatal(err)
+			}
+			if source != "en" {
+				if len(requests) != 4 || requests[0].Operation != "detect_text_language" {
+					t.Fatalf("expected one detection then three translation batches, got %d requests", len(requests))
+				}
+				texts := requests[0].Texts
+				if len(texts) != 120 || texts[0] != "Line 1" || texts[59] != "Line 65" || texts[119] != "Line 131" {
+					t.Fatalf("expected a sample of 120 texts across the full subtitle, got %v", texts)
+				}
+				requests = requests[1:]
+			}
+			if len(requests) != 3 {
+				t.Fatalf("expected three translation batches, got %d", len(requests))
+			}
+			for i, request := range requests {
+				if request.Operation != "translate" || request.Source != "en" || request.Target != "zh" || len(request.Texts) != []int{50, 50, 31}[i] {
+					t.Fatalf("unexpected batch %d: %+v", i, request)
+				}
+			}
+		})
+	}
+}
+
 func TestAppleOnlyEngineStatus(t *testing.T) {
 	s := NewSubtitleService(t.TempDir())
 	s.appleRunner = func(context.Context, appleAIRequest) (appleAIResponse, error) {

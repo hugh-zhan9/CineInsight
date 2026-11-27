@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -14,6 +15,7 @@ import (
 //   - 同目录，文件名以「视频基本名 + .」开头（大小写不敏感，与 macOS/Windows 文件系统一致）；
 //   - 扩展名为 srt / ass / ssa / vtt（大小写不敏感）；
 //   - 排除与视频同名的 .srt 本身（那是「同名字幕」，不算旁挂）；
+//   - 排除属于同目录下基本名更长的视频的字幕；同基本名的视频仍共享；
 //   - 排除应用自己的临时文件：生成流程的 pending 文件（现行的隐藏名
 //     `.<基本名>.cineinsight-pending.srt` 与旧名 `<基本名>.cineinsight-pending.srt`，按后缀一并排除）、
 //     写入器的 .cineinsight-tmp-* 临时文件、翻译流程的 _translated_temp.srt；
@@ -76,8 +78,9 @@ var readSubtitleSidecarDir = os.ReadDir
 type subtitleSidecarDirListing struct {
 	directory string
 	// names 与 lower 一一对应。
-	names []string
-	lower []string
+	names      []string
+	lower      []string
+	videoBases map[string]struct{}
 }
 
 // readSubtitleSidecarDirListing 读 directory 一次。目录不存在按「没有」处理（空列表）；
@@ -93,11 +96,18 @@ func readSubtitleSidecarDirListing(directory string) (*subtitleSidecarDirListing
 	}
 	type entryName struct{ name, lower string }
 	kept := make([]entryName, 0, len(entries))
+	videoExtensions := ConfiguredVideoExtensions()
+	listing.videoBases = make(map[string]struct{})
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		kept = append(kept, entryName{name: entry.Name(), lower: strings.ToLower(entry.Name())})
+		lower := strings.ToLower(entry.Name())
+		ext := filepath.Ext(lower)
+		if slices.Contains(videoExtensions, ext) {
+			listing.videoBases[strings.TrimSuffix(lower, ext)] = struct{}{}
+		}
+		kept = append(kept, entryName{name: entry.Name(), lower: lower})
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].lower < kept[j].lower })
 	listing.names = make([]string, len(kept))
@@ -113,16 +123,24 @@ func readSubtitleSidecarDirListing(directory string) (*subtitleSidecarDirListing
 // （悬空链接、指向目录的链接都不算）。
 func (l *subtitleSidecarDirListing) sidecarSubtitles(videoPath string, firstOnly bool) []string {
 	// 旁挂字幕的名字一定以「视频基本名 + .」开头（大小写不敏感）：只看这一段前缀的候选。
-	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath)))
 	if base == "" {
 		return nil
 	}
-	prefix := strings.ToLower(base) + "."
+	prefix := base + "."
 	var names []string
+candidate:
 	for index := sort.SearchStrings(l.lower, prefix); index < len(l.lower) && strings.HasPrefix(l.lower[index], prefix); index++ {
 		name := l.names[index]
 		if !IsSidecarSubtitleName(videoPath, name) {
 			continue
+		}
+		// 逐段去掉点号后缀，只查比分配目标更具体的视频基本名。
+		subBase := strings.TrimSuffix(l.lower[index], filepath.Ext(l.lower[index]))
+		for otherBase := subBase; len(otherBase) > len(base); otherBase = strings.TrimSuffix(otherBase, filepath.Ext(otherBase)) {
+			if _, ok := l.videoBases[otherBase]; ok {
+				continue candidate
+			}
 		}
 		if info, err := os.Stat(filepath.Join(l.directory, name)); err != nil || !info.Mode().IsRegular() {
 			continue

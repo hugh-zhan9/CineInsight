@@ -82,6 +82,13 @@ func detectionTests() {
     check(detectedLanguage([Candidate(language:"en-US",confidence:0.69)],calibrated:true) == nil, "below 0.7 the user picks")
     check(detectedLanguage([Candidate(language:"en-US",confidence:0.9),Candidate(language:"de-DE",confidence:0.85)],calibrated:true) == nil, "a lead under 0.1 makes the user pick")
     check(detectedLanguage([],calibrated:true) == nil, "no candidates, no language")
+    let winner=clear[0]
+    let weak=Candidate(language:"de-DE",confidence:0.7)
+    let close=Candidate(language:"de-DE",confidence:0.9)
+    check(detectionCalibration([(weak,false),(winner,true)]), "a distant uncalibrated runner-up does not invalidate a calibrated winner")
+    check(!detectionCalibration([(winner,true),(close,false)]), "a close uncalibrated runner-up invalidates calibration")
+    check(!detectionCalibration([(weak,true),(winner,false)]), "a calibrated runner-up cannot calibrate the winner")
+    check(!detectionCalibration([]), "no candidates, no calibration")
 }
 func collectorTests() {
     var en=WordCollector(spaced:true)

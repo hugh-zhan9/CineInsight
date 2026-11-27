@@ -12,7 +12,7 @@ import (
 	"video-master/models"
 )
 
-const cropDetectionAlgorithm = 2
+const cropDetectionAlgorithm = 3
 
 var errCropDetectionConflict = errors.New("crop_detection_conflict")
 

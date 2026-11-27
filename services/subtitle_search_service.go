@@ -391,6 +391,7 @@ func ensureSubtitleIndexForVideo(video models.Video) error {
 // 扫描与搜索命中的就地刷新不写它，免得每条视频都多读一次整个目录。
 func ensureSubtitleIndexForVideoOn(db *gorm.DB, video models.Video, sidecars *subtitleSidecarDirCache) error {
 	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	var parseErr error
 	if _, err := os.Stat(srtPath); err != nil {
 		if !os.IsNotExist(err) {
 			return err
@@ -402,28 +403,41 @@ func ensureSubtitleIndexForVideoOn(db *gorm.DB, video models.Video, sidecars *su
 			return err
 		}
 	} else {
-		current, err := isSubtitleIndexCurrentOn(db, video, srtPath)
-		if err != nil || !current {
-			segments, err := subtitleparser.ParseFile(srtPath)
-			if err != nil {
-				return err
-			}
-			if err := replaceSubtitleIndexOn(db, video, srtPath, segments); err != nil {
+		current, stateErr := isSubtitleIndexCurrentOn(db, video, srtPath)
+		if stateErr != nil || !current {
+			var segments []subtitleparser.Segment
+			segments, parseErr = subtitleparser.ParseFile(srtPath)
+			if parseErr != nil {
+				if sidecars != nil && errors.Is(stateErr, gorm.ErrRecordNotFound) {
+					if err := upsertSubtitleIndexStateTx(db, video.ID, srtPath, 0, 0, 0); err != nil {
+						if errors.Is(err, database.ErrMaintenance) {
+							return err
+						}
+						return parseErr
+					}
+				}
+			} else if err := replaceSubtitleIndexOn(db, video, srtPath, segments); err != nil {
 				return err
 			}
 		}
 	}
 	if sidecars == nil {
-		return nil
+		return parseErr
 	}
 	hasSidecar, err := sidecars.hasSidecar(video.Path)
-	if err != nil {
-		// 目录读不了就不知道有没有旁挂字幕：保留原值，不把它当成「没有」。
+	// 目录读不了就不知道有没有旁挂字幕：保留原值，不把它当成「没有」。
+	if err == nil {
+		err = db.Model(&models.SubtitleIndexState{}).
+			Where("video_id = ? AND has_sidecar <> ?", video.ID, hasSidecar).
+			Update("has_sidecar", hasSidecar).Error
+	}
+	if errors.Is(err, database.ErrMaintenance) {
 		return err
 	}
-	return db.Model(&models.SubtitleIndexState{}).
-		Where("video_id = ? AND has_sidecar <> ?", video.ID, hasSidecar).
-		Update("has_sidecar", hasSidecar).Error
+	if parseErr != nil {
+		return parseErr
+	}
+	return err
 }
 
 func indexSubtitleFileForVideoID(videoID uint, srtPath string) error {

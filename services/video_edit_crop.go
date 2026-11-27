@@ -274,21 +274,6 @@ func (s *VideoEditService) cropRangeHasFrame(ctx context.Context, sc *editSource
 	return false, nil
 }
 
-// editCropUnion 保守保留所有有效取样框的并集，不因某一暗场缩小有效画面。
-func editCropUnion(rects []EditCropRect) *EditCropRect {
-	if len(rects) == 0 {
-		return nil
-	}
-	r := rects[0]
-	right, bottom := r.X+r.Width, r.Y+r.Height
-	for _, other := range rects[1:] {
-		r.X, r.Y = min(r.X, other.X), min(r.Y, other.Y)
-		right, bottom = max(right, other.X+other.Width), max(bottom, other.Y+other.Height)
-	}
-	r.Width, r.Height = right-r.X, bottom-r.Y
-	return &r
-}
-
 func (s *VideoEditService) analyzeCrops(ctx context.Context, projectID uint, recipe *EditRecipe, result *EditAnalysisResult) error {
 	ffmpeg, err := s.findFFmpeg()
 	if err != nil {
@@ -348,12 +333,12 @@ func (s *VideoEditService) detectCropSource(ctx context.Context, ffmpeg string, 
 		return EditCropResult{}, editError("analysis_failed", "无法确定画面尺寸")
 	}
 	sampleW, sampleH := editCropSampleSize(width, height)
-	samples := []EditCropRect{}
+	observations := make([]editCropWindowObservation, 0, editCropSampleWindows)
 	for sample := 0; sample < editCropSampleWindows; sample++ {
 		if err := ctx.Err(); err != nil {
 			return EditCropResult{}, err
 		}
-		at := sc.probe.DurationMS * int64(sample+1) / (editCropSampleWindows + 1)
+		at := sc.probe.DurationMS * (80 + int64(sample)*84) / 1000
 		runCtx, cancel := context.WithTimeout(ctx, videoEditProbeTimeout)
 		raw, _, runErr := s.runOutput(runCtx, ffmpeg, []string{"-nostdin", "-hide_banner", "-v", "error", "-threads", "2", "-filter_threads", "1", "-ss", editSeconds(at), "-i", sc.path,
 			"-map", fmt.Sprintf("0:%d", sc.probe.Video.Index), "-an", "-sn", "-vf", fmt.Sprintf("scale=%d:%d:flags=area:out_range=full,setsar=1,format=yuv420p", sampleW, sampleH),
@@ -362,8 +347,8 @@ func (s *VideoEditService) detectCropSource(ctx context.Context, ffmpeg string, 
 		if runErr != nil {
 			return EditCropResult{}, editError("analysis_failed", "《%s》检测黑边失败：%s", sc.video.Name, scrubEditPaths(runErr.Error(), sc.path))
 		}
-		if r := editCropWindow(raw, sampleW, sampleH); r != nil {
-			samples = append(samples, editCropMapToDisplay(*r, sampleW, sampleH, width, height))
+		if obs := editCropWindowObs(raw, sampleW, sampleH); obs != nil {
+			observations = append(observations, *obs)
 		}
 		if progress != nil {
 			progress(float64(sample+1) / editCropSampleWindows)
@@ -374,15 +359,9 @@ func (s *VideoEditService) detectCropSource(ctx context.Context, ffmpeg string, 
 		return EditCropResult{}, editError("source_changed", "《%s》检测期间来源发生变化", sc.video.Name)
 	}
 	// 检测已核实的画布同时供手动编辑使用，不依赖另一轮导出预检是否成功。
-	detection := EditCropResult{VideoID: sc.video.ID, Status: "undetected",
+	status, rect := editCropResolve(observations, sampleW, sampleH, width, height)
+	detection := EditCropResult{VideoID: sc.video.ID, Status: status, Rect: rect, Applied: status == "detected" || status == "no_borders",
 		DisplayWidth: width, DisplayHeight: height, DurationMS: sc.probe.DurationMS,
 		SourceVersion: editCropSourceVersion(size, modTime)}
-	if len(samples) >= 3 {
-		detection.Rect = editCropUnion(samples)
-		detection.Status, detection.Applied = "detected", true
-		if *detection.Rect == (EditCropRect{Width: width, Height: height}) {
-			detection.Status = "no_borders"
-		}
-	}
 	return detection, ctx.Err()
 }

@@ -57,7 +57,7 @@ struct ModernSpeech: SpeechEngine {
                 }
                 segments.append(contentsOf:words)
             }
-            return Transcript(segments:segments,confidence:weight > 0 ? weighted/weight : 0)
+            return Transcript(segments:segments,confidence:weight > 0 ? weighted/weight : nil)
         }
         do {
             let file=try AVAudioFile(forReading:URL(fileURLWithPath:path))

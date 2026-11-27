@@ -113,6 +113,29 @@ func TestTranslateSubtitleFileKeepsOriginalWhenTranslationFails(t *testing.T) {
 	}
 }
 
+func TestTranslateSubtitleFileUncertainSourceStopsBeforeTranslation(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)
+	service := NewSubtitleService(t.TempDir())
+	var operations []string
+	service.appleRunner = func(_ context.Context, request appleAIRequest) (appleAIResponse, error) {
+		operations = append(operations, request.Operation)
+		return appleAIResponse{Language: " \n", Translations: request.Texts}, nil
+	}
+	_, err := service.TranslateSubtitleFile(context.Background(), videoPath,
+		SubtitleTranslateRequest{VideoID: videoID, TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
+		SubtitleTranslationConfig{})
+	if err == nil || !strings.Contains(err.Error(), "apple_language_uncertain") {
+		t.Fatalf("expected uncertain source language, got %v", err)
+	}
+	if len(operations) != 1 || operations[0] != "detect_text_language" {
+		t.Fatalf("expected only the detection request, got %v", operations)
+	}
+	if got := mustReadSubtitle(t, srtPath); got != translatableSubtitle {
+		t.Fatalf("original subtitle changed: %q", got)
+	}
+}
+
 func TestTranslateSubtitleFileRejectsInvalidRequests(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	videoID, videoPath, _ := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)

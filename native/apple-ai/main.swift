@@ -29,24 +29,36 @@ func speechEngine() -> any SpeechEngine {
     return LegacySpeech()
 }
 
-/// Candidates best first. `calibrated` is false when any was ranked without a transcription confidence.
+/// Candidates best first, with calibration determined by the winner and runner-up.
 func detect(_ path: String, engine: any SpeechEngine) async throws -> (candidates: [Candidate], calibrated: Bool) {
-    var candidates=[Candidate](), calibrated=true
+    var scored = [(candidate: Candidate, calibrated: Bool)]()
+    var lastError: Error?
     for locale in try await engine.detectionLocales() {
         try Task.checkCancellation()
-        let transcript=try await engine.transcribe(path,locale:locale)
-        let text=transcript.segments.map(\.text).joined()
-        guard text.filter({ $0.isLetter }).count >= 8 else { continue }
-        let recognizer=NLLanguageRecognizer(); recognizer.processString(text)
-        let hypotheses=recognizer.languageHypotheses(withMaximum:3)
-        let key=languageKey(locale)
-        let consistency=hypotheses.filter { languageKey(Locale(identifier:$0.key.rawValue))==key }.map(\.value).max() ?? 0
-        if let score=candidateScore(confidence:transcript.confidence,consistency:consistency) {
-            candidates.append(Candidate(language:locale.identifier,confidence:score))
-            if transcript.confidence == nil { calibrated=false }
+        do {
+            let transcript=try await engine.transcribe(path,locale:locale)
+            let text=transcript.segments.map(\.text).joined()
+            guard text.filter({ $0.isLetter }).count >= 8 else { continue }
+            let recognizer=NLLanguageRecognizer(); recognizer.processString(text)
+            let hypotheses=recognizer.languageHypotheses(withMaximum:3)
+            let key=languageKey(locale)
+            let consistency=hypotheses.filter { languageKey(Locale(identifier:$0.key.rawValue))==key }.map(\.value).max() ?? 0
+            if let score=candidateScore(confidence:transcript.confidence,consistency:consistency) {
+                scored.append((Candidate(language:locale.identifier,confidence:score), transcript.confidence != nil))
+            }
+        } catch {
+            if error is CancellationError { throw error }
+            if let failure = error as? Failure,
+               ["apple_speech_permission_denied", "apple_speech_dictation_missing", "apple_speech_language_missing"].contains(failure.code) {
+                throw error
+            }
+            lastError = error
+            continue
         }
     }
-    return (candidates.sorted { $0.confidence > $1.confidence },calibrated)
+    if scored.isEmpty, let error = lastError { throw error }
+    scored.sort { $0.candidate.confidence > $1.candidate.confidence }
+    return (scored.map(\.candidate), detectionCalibration(scored))
 }
 
 @main struct AppleAI {
@@ -78,6 +90,9 @@ func detect(_ path: String, engine: any SpeechEngine) async throws -> (candidate
                     emit(Response(error:"apple_language_uncertain",candidates:detection.candidates)); return
                 }
                 emit(Response(language:language,candidates:detection.candidates))
+            case "detect_text_language":
+                let source = try translationSource(request)
+                emit(Response(language: source.minimalIdentifier))
             case "transcribe":
                 guard let path=request.path else { try fail("apple_invalid_request") }
                 let locale=try await speech.locale(for:request.source ?? "")

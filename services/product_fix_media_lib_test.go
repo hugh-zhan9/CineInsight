@@ -248,6 +248,68 @@ func TestMEDIA08SidecarSubtitleRules(t *testing.T) {
 	}
 }
 
+func TestMEDIA08SidecarSubtitleUsesSpecificVideoBase(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"movie.mp4", "movie.part2.MP4", "movie.part2.srt", "movie.part2.zh.srt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if found, err := HasSidecarSubtitle(filepath.Join(dir, "movie.mp4")); err != nil || found {
+		t.Fatalf("movie.mp4 should not claim the sibling's subtitles: %v, %v", found, err)
+	}
+	if names, err := ListSidecarSubtitles(filepath.Join(dir, "movie.part2.MP4")); err != nil || !reflect.DeepEqual(names, []string{"movie.part2.zh.srt"}) {
+		t.Fatalf("movie.part2.MP4 sidecars: %v, %v", names, err)
+	}
+
+	for _, name := range []string{"movie.mkv", "movie.zh.srt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"movie.mp4", "movie.mkv"} {
+		if names, err := ListSidecarSubtitles(filepath.Join(dir, name)); err != nil || !reflect.DeepEqual(names, []string{"movie.zh.srt"}) {
+			t.Fatalf("%s should share the same-base subtitle: %v, %v", name, names, err)
+		}
+	}
+}
+
+func TestMEDIA08RefreshesSidecarsWhenSameNameSRTCannotBeRead(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := t.TempDir()
+	video := models.Video{Name: "movie.mp4", Path: filepath.Join(dir, "movie.mp4"), Directory: dir}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	if err := os.Mkdir(srtPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sidecarPath := filepath.Join(dir, "movie.zh.srt")
+	if err := os.WriteFile(sidecarPath, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []bool{true, false} {
+		if !want {
+			if err := os.Remove(sidecarPath); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err := ensureSubtitleIndexForVideoOn(database.DB, video, newSubtitleSidecarDirCache())
+		var readErr *os.PathError
+		if !errors.As(err, &readErr) || readErr.Path != srtPath {
+			t.Fatalf("expected the SRT read error, got %v", err)
+		}
+		var state models.SubtitleIndexState
+		if err := database.DB.Where("video_id = ?", video.ID).First(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+		if state.HasSidecar != want || state.SegmentCount != 0 {
+			t.Fatalf("expected has_sidecar=%v and segment_count=0, got %+v", want, state)
+		}
+	}
+}
+
 func TestMEDIA08MissingSidecarErrorUsesSharedRules(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	dir := t.TempDir()

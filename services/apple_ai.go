@@ -214,9 +214,7 @@ func (s *SubtitleService) detectAppleLanguage(ctx context.Context, path string) 
 	if ffmpeg == "" {
 		return AppleLanguageDetection{}, errors.New("缺少 FFmpeg，无法提取语言检测音频")
 	}
-	// Bound the probe independently of full-file transcription. Silence/intro music can require manual selection.
-	cmd := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-i", path, "-t", "30", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", sample, "-y")
-	if err = cmd.Run(); err != nil {
+	if err = s.extractLanguageProbeAudio(ctx, ffmpeg, path, sample); err != nil {
 		if ctx.Err() != nil {
 			return AppleLanguageDetection{}, ctx.Err()
 		}
@@ -234,6 +232,41 @@ func (s *SubtitleService) detectAppleLanguage(ctx context.Context, path string) 
 	}
 	return result, nil
 }
+
+func (s *SubtitleService) probeMediaDurationSeconds(ctx context.Context, path string) (float64, bool) {
+	ffprobe := s.findBinary("ffprobe")
+	if ffprobe == "" {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
+	if err != nil {
+		return 0, false
+	}
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	return duration, err == nil && duration > 0 && !math.IsInf(duration, 0)
+}
+
+func appleLanguageProbeOffsets(duration float64) [3]float64 {
+	return [3]float64{duration * 0.15, duration * 0.45, math.Min(duration*0.75, duration-12)}
+}
+
+func (s *SubtitleService) extractLanguageProbeAudio(ctx context.Context, ffmpeg, path, sample string) error {
+	if duration, ok := s.probeMediaDurationSeconds(ctx, path); ok && duration > 45 {
+		args := []string{"-v", "error"}
+		for _, offset := range appleLanguageProbeOffsets(duration) {
+			args = append(args, "-ss", strconv.FormatFloat(offset, 'f', -1, 64), "-t", "12", "-i", path)
+		}
+		args = append(args, "-filter_complex", "[0:a][1:a][2:a]concat=n=3:v=0:a=1[a]", "-map", "[a]",
+			"-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", sample, "-y")
+		if err := exec.CommandContext(ctx, ffmpeg, args...).Run(); err == nil || ctx.Err() != nil {
+			return err
+		}
+	}
+	return exec.CommandContext(ctx, ffmpeg, "-v", "error", "-i", path, "-t", "30", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", sample, "-y").Run()
+}
+
 func (s *SubtitleService) transcribeApple(ctx context.Context, path, source string) (string, []subtitleparser.Segment, error) {
 	if source == "" || source == "auto" {
 		detection, err := s.detectAppleLanguage(ctx, path)

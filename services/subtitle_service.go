@@ -932,23 +932,34 @@ func (s *SubtitleService) validateSRT(srtPath string) error {
 		return fmt.Errorf("语音识别未产生有效字幕，视频可能没有清晰的语音内容")
 	}
 
-	maxCount := 0
-	maxLine := ""
-	for line, count := range lineCounts {
-		if count > maxCount {
-			maxCount = count
-			maxLine = line
+	if totalLines >= 4 {
+		maxCount, secondCount := 0, 0
+		maxLine := ""
+		for line, count := range lineCounts {
+			if count > maxCount {
+				secondCount, maxCount = maxCount, count
+				maxLine = line
+			} else if count > secondCount {
+				secondCount = count
+			}
 		}
-	}
 
-	repeatRatio := float64(maxCount) / float64(totalLines)
-	log.Printf("[Subtitle] validateSRT: totalLines=%d maxCount=%d ratio=%.2f maxLine=%q", totalLines, maxCount, repeatRatio, maxLine)
+		repeatRatio := float64(maxCount) / float64(totalLines)
+		log.Printf("[Subtitle] validateSRT: totalLines=%d maxCount=%d ratio=%.2f maxLine=%q", totalLines, maxCount, repeatRatio, maxLine)
 
-	if repeatRatio > 0.85 {
-		return &SubtitleValidationError{
-			Code:          SubtitleValidationCodeHallucinationDetected,
-			Message:       fmt.Sprintf("检测到异常输出（疑似模型幻觉），字幕内容重复率 %.0f%%。可选择强制生成保留结果", repeatRatio*100),
-			ForceEligible: true,
+		if maxCount >= 4 && repeatRatio > 0.85 {
+			return &SubtitleValidationError{
+				Code:          SubtitleValidationCodeHallucinationDetected,
+				Message:       fmt.Sprintf("检测到异常输出（疑似模型幻觉），字幕内容重复率 %.0f%%。可选择强制生成保留结果", repeatRatio*100),
+				ForceEligible: true,
+			}
+		}
+		if totalLines >= 8 && maxCount >= 4 && secondCount >= 4 && float64(maxCount+secondCount)/float64(totalLines) > 0.85 {
+			return &SubtitleValidationError{
+				Code:          SubtitleValidationCodeHallucinationDetected,
+				Message:       "检测到周期重复异常输出（疑似模型幻觉），可选择强制生成保留结果",
+				ForceEligible: true,
+			}
 		}
 	}
 
@@ -1066,6 +1077,14 @@ func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPat
 	}
 	if len(entries) == 0 {
 		return 0, fmt.Errorf("字幕文件为空")
+	}
+	if sourceLang == "" || sourceLang == "auto" {
+		if detector, ok := translator.(subtitleSourceLanguageDetector); ok {
+			sourceLang, err = detector.DetectSourceLanguage(ctx, sampleSubtitleTexts(entries))
+			if err != nil {
+				return 0, err
+			}
+		}
 	}
 
 	// 分批调用系统翻译，每批保留原字幕条目顺序。
